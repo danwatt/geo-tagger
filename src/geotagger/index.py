@@ -105,7 +105,7 @@ def update_geotag(photo_id: int, lat: float | None, lng: float | None,
     db.commit()
 
 
-def get_photos(geotagged: str = "all", bbox: str | None = None) -> list[sqlite3.Row]:
+def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str | None = None, date_to: str | None = None) -> list[sqlite3.Row]:
     db = get_db()
     clauses = []
     params: list = []
@@ -119,6 +119,27 @@ def get_photos(geotagged: str = "all", bbox: str | None = None) -> list[sqlite3.
             min_lng, min_lat, max_lng, max_lat = map(float, bbox.split(","))
             clauses.append("lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?")
             params += [min_lat, max_lat, min_lng, max_lng]
+        except ValueError:
+            pass
+    if date_from:
+        # Convert YYYY-MM-DD to Unix timestamp (start of day)
+        try:
+            from datetime import datetime
+            dt = datetime.strptime(date_from, "%Y-%m-%d")
+            ts = int(dt.timestamp())
+            clauses.append("photo_datetime >= ?")
+            params.append(ts)
+        except ValueError:
+            pass
+    if date_to:
+        # Convert YYYY-MM-DD to Unix timestamp (end of day)
+        try:
+            from datetime import datetime
+            dt = datetime.strptime(date_to, "%Y-%m-%d")
+            # Add 24 hours to include the entire day
+            ts = int(dt.timestamp()) + 86400
+            clauses.append("photo_datetime < ?")
+            params.append(ts)
         except ValueError:
             pass
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""

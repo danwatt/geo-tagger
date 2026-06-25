@@ -10,6 +10,10 @@
 <body>
 <div id="toolbar">
   <div class="toolbar-group">
+    <button id="select-month-btn">Select Month</button>
+    <span id="selected-month-label">No month selected</span>
+  </div>
+  <div class="toolbar-group">
     <label>Show:</label>
     <select id="filter-select">
       <option value="all">All</option>
@@ -71,6 +75,15 @@
 </div>
 
 <div id="status-bar"></div>
+
+<!-- Month Picker Modal -->
+<div id="month-picker-modal" class="modal" style="display:none">
+  <div class="modal-content">
+    <span class="modal-close">&times;</span>
+    <h2>Select Month</h2>
+    <div id="month-picker-list"></div>
+  </div>
+</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="app.js"></script>

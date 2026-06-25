@@ -10,6 +10,8 @@ let guessMarker = null;        // temporary guess pin (amber ?)
 let guessSourceMarkers = [];   // source photo pins shown during guess
 let guessPending = null;       // { lat, lng } awaiting apply/dismiss
 let accuracyCircle = null;     // L.circle shown for selected photo's GPS accuracy
+let selectedYear = null;
+let selectedMonth = null;
 
 /* ── Date range filter state ── */
 let dateRangeMin = 0;   // Unix ts — absolute min across all photos
@@ -83,8 +85,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindToolbar();
   bindTimeline();
   await checkStatus();
-  // Auto-load photos if already scanned
-  await loadPhotos(true);
+  setStatus("Click 'Select Month' to begin");
 });
 
 async function checkStatus() {
@@ -161,7 +162,10 @@ function addBasemapControl() {
 }
 
 function bindToolbar() {
-  document.getElementById("filter-select").addEventListener("change", () => loadPhotos());
+  document.getElementById("select-month-btn").addEventListener("click", showMonthPicker);
+  document.getElementById("filter-select").addEventListener("change", () => {
+    if (selectedYear && selectedMonth) loadPhotos();
+  });
   document.getElementById("place-search-btn").addEventListener("click", doPlaceSearch);
   document.getElementById("place-search").addEventListener("keydown", (e) => {
     if (e.key === "Enter") doPlaceSearch();
@@ -169,13 +173,187 @@ function bindToolbar() {
   document.getElementById("apply-latlng-btn").addEventListener("click", doApplyLatLng);
   document.getElementById("copy-location-btn").addEventListener("click", doCopyLocation);
   document.getElementById("remove-geotag-btn").addEventListener("click", doRemoveGeotag);
+
+  // Modal close handlers
+  document.querySelector(".modal-close").addEventListener("click", hideMonthPicker);
+  document.getElementById("month-picker-modal").addEventListener("click", (e) => {
+    if (e.target.id === "month-picker-modal") hideMonthPicker();
+  });
+}
+
+/* ── Month Picker ── */
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
+                     "July", "August", "September", "October", "November", "December"];
+
+async function showMonthPicker() {
+  try {
+    const res = await fetch("/api/stats/months");
+    const data = await res.json();
+
+    const list = document.getElementById("month-picker-list");
+    list.innerHTML = "";
+
+    if (!data.months || data.months.length === 0) {
+      list.innerHTML = "<p>No photos found with timestamps.</p>";
+      document.getElementById("month-picker-modal").style.display = "flex";
+      return;
+    }
+
+    // Group by year
+    const byYear = {};
+    data.months.forEach(m => {
+      if (!byYear[m.year]) byYear[m.year] = [];
+      byYear[m.year].push(m);
+    });
+
+    // Render years (most recent first)
+    const years = Object.keys(byYear).map(Number).sort((a, b) => b - a);
+    years.forEach(year => {
+      const yearSection = document.createElement("div");
+      yearSection.className = "month-year-section";
+
+      const yearHeader = document.createElement("div");
+      yearHeader.className = "month-year-header";
+      yearHeader.textContent = year;
+      yearSection.appendChild(yearHeader);
+
+      // Render months (most recent first)
+      byYear[year].sort((a, b) => b.month - a.month).forEach(m => {
+        const item = document.createElement("div");
+        item.className = "month-item";
+        item.dataset.year = m.year;
+        item.dataset.month = m.month;
+
+        const monthName = document.createElement("div");
+        monthName.className = "month-name";
+        monthName.textContent = MONTH_NAMES[m.month - 1];
+
+        const counts = document.createElement("div");
+        counts.className = "month-counts";
+        counts.innerHTML = `
+          <span class="count-badge count-total">${m.total} total</span>
+          <span class="count-badge count-geotagged">${m.geotagged} geotagged</span>
+          <span class="count-badge count-not-geotagged">${m.not_geotagged} not geotagged</span>
+        `;
+
+        item.appendChild(monthName);
+        item.appendChild(counts);
+        item.addEventListener("click", () => selectMonth(m.year, m.month));
+
+        yearSection.appendChild(item);
+      });
+
+      list.appendChild(yearSection);
+    });
+
+    document.getElementById("month-picker-modal").style.display = "flex";
+  } catch (e) {
+    console.error("Failed to load month stats:", e);
+    setStatus("Error loading months: " + e.message, true);
+  }
+}
+
+function hideMonthPicker() {
+  document.getElementById("month-picker-modal").style.display = "none";
+}
+
+async function selectMonth(year, month) {
+  selectedYear = year;
+  selectedMonth = month;
+  hideMonthPicker();
+
+  // Update label
+  document.getElementById("selected-month-label").textContent =
+    `${MONTH_NAMES[month - 1]} ${year}`;
+
+  // Load daily histogram for this month
+  await loadMonthHistogram(year, month);
+
+  // Load photos for this month
+  await loadPhotos(true);
+}
+
+/* ── Load month histogram ── */
+async function loadMonthHistogram(year, month) {
+  try {
+    const res = await fetch(`/api/stats/dates?year=${year}&month=${month}`);
+    const data = await res.json();
+
+    if (data.dates && data.dates.length > 0) {
+      buildHistogramFromDateStats(data.dates);
+    } else {
+      document.getElementById("timeline").style.display = "none";
+    }
+  } catch (e) {
+    console.error("Failed to load month histogram:", e);
+  }
+}
+
+/* ── Build histogram from date statistics ── */
+function buildHistogramFromDateStats(dateStats) {
+  if (dateStats.length === 0) {
+    document.getElementById("timeline").style.display = "none";
+    return;
+  }
+  document.getElementById("timeline").style.display = "";
+
+  // Convert date strings to timestamps
+  const dataWithTs = dateStats.map(d => ({
+    date: d.date,
+    count: d.count,
+    ts: new Date(d.date + "T00:00:00").getTime() / 1000
+  }));
+
+  dateRangeMin = Math.min(...dataWithTs.map(d => d.ts));
+  dateRangeMax = Math.max(...dataWithTs.map(d => d.ts));
+  dateFilterLo = dateRangeMin;
+  dateFilterHi = dateRangeMax;
+
+  // Reset sliders
+  document.getElementById("range-lo").value = 0;
+  document.getElementById("range-hi").value = 1000;
+
+  // For a single month, always use daily buckets
+  const bucketSecs = 86400;  // daily
+  const bucketCount = Math.ceil((dateRangeMax - dateRangeMin) / bucketSecs) + 1;
+  const counts = new Array(bucketCount).fill(0);
+
+  // Aggregate counts into buckets
+  dataWithTs.forEach(d => {
+    const idx = Math.floor((d.ts - dateRangeMin) / bucketSecs);
+    if (idx >= 0 && idx < bucketCount) {
+      counts[idx] += d.count;
+    }
+  });
+
+  histBuckets = counts.map((count, i) => ({
+    ts: dateRangeMin + i * bucketSecs,
+    count
+  }));
+
+  renderHistogram();
+  updateHistogramLabels();
 }
 
 /* ── Load photos ── */
 async function loadPhotos(fitMap = false) {
+  if (!selectedYear || !selectedMonth) {
+    setStatus("Please select a month first", true);
+    return;
+  }
+
   const filter = document.getElementById("filter-select").value;
+
+  // Calculate date range for selected month
+  const dateFrom = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-01`;
+  // Calculate last day of month
+  const lastDay = new Date(selectedYear, selectedMonth, 0).getDate();
+  const dateTo = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${lastDay}`;
+
   try {
-    const res = await fetch(`/api/photos?geotagged=${filter}`);
+    let url = `/api/photos?geotagged=${filter}&date_from=${dateFrom}&date_to=${dateTo}`;
+
+    const res = await fetch(url);
     photos = await res.json();
     // Pre-assign colors so the legend order is stable
     photos.forEach(p => camColor(p.camera));
