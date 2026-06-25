@@ -58,6 +58,15 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
             scanned_at REAL NOT NULL
         )
     """)
+    _db.execute("""
+        CREATE TABLE IF NOT EXISTS places (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL,
+            bounds TEXT NOT NULL,
+            created_at REAL NOT NULL
+        )
+    """)
     _db.commit()
     return _db
 
@@ -219,3 +228,28 @@ def is_fresh(path: str, mtime: float, sidecar_path: str | None, sidecar_mtime: f
     if row["camera"] is None or row["photo_datetime"] is None or row["gps_accuracy"] is None:
         return False
     return True
+
+
+# ── Places ──
+
+def get_places() -> list[sqlite3.Row]:
+    """Return all saved places."""
+    return get_db().execute("SELECT * FROM places ORDER BY name").fetchall()
+
+
+def create_place(name: str, place_type: str, bounds: str) -> int:
+    """Create a new place and return its ID."""
+    db = get_db()
+    cursor = db.execute(
+        "INSERT INTO places (name, type, bounds, created_at) VALUES (?, ?, ?, ?)",
+        (name, place_type, bounds, time.time())
+    )
+    db.commit()
+    return cursor.lastrowid
+
+
+def delete_place(place_id: int):
+    """Delete a place by ID."""
+    db = get_db()
+    db.execute("DELETE FROM places WHERE id=?", (place_id,))
+    db.commit()

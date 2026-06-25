@@ -247,6 +247,11 @@ class GeotagRequest(BaseModel):
 class RemoveGeotagRequest(BaseModel):
     ids: list[int]
 
+class CreatePlaceRequest(BaseModel):
+    name: str
+    type: str  # "rectangle" or "circle"
+    bounds: str  # JSON string with bounds data
+
 # ── API routes ────────────────────────────────────────────────────────────────
 
 @app.get("/api/status")
@@ -519,6 +524,36 @@ async def api_geotag_remove(req: RemoveGeotagRequest):
         index.update_geotag(photo_id, None, None, "none", str(sc), sc_mtime)
         results.append({"id": photo_id, "geotag_source": "none"})
     return results
+
+
+@app.get("/api/places")
+async def api_get_places():
+    """Get all saved places."""
+    places = index.get_places()
+    return [
+        {
+            "id": p["id"],
+            "name": p["name"],
+            "type": p["type"],
+            "bounds": p["bounds"],
+            "created_at": p["created_at"]
+        }
+        for p in places
+    ]
+
+
+@app.post("/api/places")
+async def api_create_place(req: CreatePlaceRequest):
+    """Create a new place."""
+    place_id = index.create_place(req.name, req.type, req.bounds)
+    return {"id": place_id, "name": req.name, "type": req.type, "bounds": req.bounds}
+
+
+@app.delete("/api/places/{place_id}")
+async def api_delete_place(place_id: int):
+    """Delete a place."""
+    index.delete_place(place_id)
+    return {"success": True}
 
 
 # ── Static files (must be last) ───────────────────────────────────────────────

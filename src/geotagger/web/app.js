@@ -13,6 +13,12 @@ let accuracyCircle = null;     // L.circle shown for selected photo's GPS accura
 let selectedYear = null;
 let selectedMonth = null;
 
+/* ── Places state ── */
+let places = [];
+let placeShapes = {};  // place_id -> L.Rectangle or L.Circle
+let drawingMode = null;  // null | "rectangle" | "circle"
+let drawingShape = null;  // temporary shape being drawn
+
 /* ── Date range filter state ── */
 let dateRangeMin = 0;   // Unix ts — absolute min across all photos
 let dateRangeMax = 0;   // Unix ts — absolute max across all photos
@@ -85,6 +91,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindToolbar();
   bindTimeline();
   await checkStatus();
+  await loadPlaces();
   setStatus("Click 'Select Month' to begin");
 });
 
@@ -173,6 +180,11 @@ function bindToolbar() {
   document.getElementById("apply-latlng-btn").addEventListener("click", doApplyLatLng);
   document.getElementById("copy-location-btn").addEventListener("click", doCopyLocation);
   document.getElementById("remove-geotag-btn").addEventListener("click", doRemoveGeotag);
+
+  // Places
+  document.getElementById("places-select").addEventListener("change", onPlaceSelected);
+  document.getElementById("draw-rectangle-btn").addEventListener("click", () => startDrawing("rectangle"));
+  document.getElementById("draw-circle-btn").addEventListener("click", () => startDrawing("circle"));
 
   // Modal close handlers
   document.querySelector(".modal-close").addEventListener("click", hideMonthPicker);
@@ -271,6 +283,214 @@ async function selectMonth(year, month) {
 
   // Load photos for this month
   await loadPhotos(true);
+}
+
+/* ── Places Management ── */
+
+async function loadPlaces() {
+  try {
+    const res = await fetch("/api/places");
+    places = await res.json();
+
+    // Update dropdown
+    const select = document.getElementById("places-select");
+    select.innerHTML = '<option value="">Select a place...</option>';
+    places.forEach(p => {
+      const option = document.createElement("option");
+      option.value = p.id;
+      option.textContent = p.name;
+      select.appendChild(option);
+    });
+
+    // Display all places on map
+    renderPlaces();
+  } catch (e) {
+    console.error("Failed to load places:", e);
+  }
+}
+
+function renderPlaces() {
+  // Clear existing shapes
+  Object.values(placeShapes).forEach(shape => map.removeLayer(shape));
+  placeShapes = {};
+
+  // Render each place
+  places.forEach(p => {
+    const bounds = JSON.parse(p.bounds);
+    let shape;
+
+    if (p.type === "rectangle") {
+      shape = L.rectangle([[bounds.south, bounds.west], [bounds.north, bounds.east]], {
+        color: "#4a90d9",
+        weight: 2,
+        fillOpacity: 0.1
+      });
+    } else if (p.type === "circle") {
+      shape = L.circle([bounds.lat, bounds.lng], {
+        radius: bounds.radius,
+        color: "#4a90d9",
+        weight: 2,
+        fillOpacity: 0.1
+      });
+    }
+
+    if (shape) {
+      shape.bindTooltip(p.name, { permanent: false, direction: "top" });
+      shape.on("contextmenu", () => confirmDeletePlace(p));
+      shape.addTo(map);
+      placeShapes[p.id] = shape;
+    }
+  });
+}
+
+function onPlaceSelected(e) {
+  const placeId = parseInt(e.target.value);
+  if (!placeId) return;
+
+  const place = places.find(p => p.id === placeId);
+  if (!place) return;
+
+  const bounds = JSON.parse(place.bounds);
+
+  if (place.type === "rectangle") {
+    map.fitBounds([[bounds.south, bounds.west], [bounds.north, bounds.east]], { padding: [50, 50] });
+  } else if (place.type === "circle") {
+    map.setView([bounds.lat, bounds.lng], 13);
+  }
+
+  // Reset dropdown
+  setTimeout(() => { e.target.value = ""; }, 100);
+}
+
+function startDrawing(type) {
+  if (drawingMode) {
+    stopDrawing();
+  }
+
+  drawingMode = type;
+  setStatus(`Drawing ${type}... Click and drag on the map`, false);
+  map.getContainer().style.cursor = "crosshair";
+
+  // Set up drawing handlers
+  map.once("mousedown", onDrawStart);
+}
+
+function stopDrawing() {
+  drawingMode = null;
+  map.getContainer().style.cursor = "";
+  map.off("mousedown", onDrawStart);
+  map.off("mousemove", onDrawMove);
+  map.off("mouseup", onDrawEnd);
+
+  if (drawingShape) {
+    map.removeLayer(drawingShape);
+    drawingShape = null;
+  }
+}
+
+let drawStartLatLng = null;
+
+function onDrawStart(e) {
+  drawStartLatLng = e.latlng;
+
+  if (drawingMode === "rectangle") {
+    drawingShape = L.rectangle([e.latlng, e.latlng], {
+      color: "#e0a040",
+      weight: 2,
+      fillOpacity: 0.2
+    }).addTo(map);
+  } else if (drawingMode === "circle") {
+    drawingShape = L.circle(e.latlng, {
+      radius: 0,
+      color: "#e0a040",
+      weight: 2,
+      fillOpacity: 0.2
+    }).addTo(map);
+  }
+
+  map.on("mousemove", onDrawMove);
+  map.once("mouseup", onDrawEnd);
+}
+
+function onDrawMove(e) {
+  if (!drawingShape || !drawStartLatLng) return;
+
+  if (drawingMode === "rectangle") {
+    drawingShape.setBounds([drawStartLatLng, e.latlng]);
+  } else if (drawingMode === "circle") {
+    const radius = drawStartLatLng.distanceTo(e.latlng);
+    drawingShape.setRadius(radius);
+  }
+}
+
+async function onDrawEnd(e) {
+  map.off("mousemove", onDrawMove);
+
+  if (!drawingShape || !drawStartLatLng) {
+    stopDrawing();
+    return;
+  }
+
+  // Prompt for name
+  const name = prompt(`Name this ${drawingMode}:`);
+  if (!name) {
+    stopDrawing();
+    return;
+  }
+
+  // Calculate bounds
+  let boundsData;
+  if (drawingMode === "rectangle") {
+    const bounds = drawingShape.getBounds();
+    boundsData = {
+      north: bounds.getNorth(),
+      south: bounds.getSouth(),
+      east: bounds.getEast(),
+      west: bounds.getWest()
+    };
+  } else if (drawingMode === "circle") {
+    boundsData = {
+      lat: drawingShape.getLatLng().lat,
+      lng: drawingShape.getLatLng().lng,
+      radius: drawingShape.getRadius()
+    };
+  }
+
+  // Save to backend
+  try {
+    const res = await fetch("/api/places", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: name,
+        type: drawingMode,
+        bounds: JSON.stringify(boundsData)
+      })
+    });
+
+    if (!res.ok) throw new Error("Failed to save place");
+
+    setStatus(`Place "${name}" saved`, false);
+    await loadPlaces();  // Reload to get the new place
+  } catch (err) {
+    setStatus(`Error saving place: ${err.message}`, true);
+  }
+
+  stopDrawing();
+}
+
+async function confirmDeletePlace(place) {
+  if (!confirm(`Delete place "${place.name}"?`)) return;
+
+  try {
+    const res = await fetch(`/api/places/${place.id}`, { method: "DELETE" });
+    if (!res.ok) throw new Error("Failed to delete place");
+
+    setStatus(`Place "${place.name}" deleted`, false);
+    await loadPlaces();
+  } catch (err) {
+    setStatus(`Error deleting place: ${err.message}`, true);
+  }
 }
 
 /* ── Load month histogram ── */
@@ -393,7 +613,14 @@ function fitMapToPhotos() {
 function renderLegend() {
   const legend = document.getElementById("cam-legend");
   legend.innerHTML = "";
+
+  // Get unique cameras from currently loaded photos (filtered by month)
+  const currentCameras = new Set(photos.map(p => p.camera || "Unknown"));
+
+  // Only show cameras that are in the current month's photos
   Object.entries(camColorMap).forEach(([cam, color]) => {
+    if (!currentCameras.has(cam)) return;  // Skip cameras not in current selection
+
     const item = document.createElement("div");
     item.className = "cam-legend-item" + (hiddenCameras.has(cam) ? " dimmed" : "");
     item.title = `Click to hide/show ${cam}`;

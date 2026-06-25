@@ -1,8 +1,11 @@
 import calendar
+import logging
 from datetime import datetime
 from pathlib import Path
 from geotagger.config import SIDECAR_MODE
 from geotagger.exiftool_session import get_et
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_exif_datetime(s: str) -> int | None:
@@ -83,6 +86,9 @@ def read_gps(image_path: Path) -> tuple[float, float, str] | tuple[None, None, s
 
 def write_gps(image_path: Path, lat: float, lng: float) -> Path:
     """Write GPS to sidecar (creating it if needed). Returns sidecar path."""
+    # Read existing coordinates before updating
+    old_lat, old_lng, _ = read_gps(image_path)
+
     et = get_et()
     sc = sidecar_path(image_path)
     et.execute(
@@ -91,11 +97,21 @@ def write_gps(image_path: Path, lat: float, lng: float) -> Path:
         f"-XMP:GPSLongitude={lng}",
         str(sc),
     )
+
+    # Log the change
+    if old_lat is not None and old_lng is not None:
+        logger.info(f"Updated GPS for {image_path.name}: ({old_lat:.6f}, {old_lng:.6f}) → ({lat:.6f}, {lng:.6f})")
+    else:
+        logger.info(f"Added GPS to {image_path.name}: ({lat:.6f}, {lng:.6f})")
+
     return sc
 
 
 def remove_gps(image_path: Path) -> Path:
     """Remove GPS from sidecar. Returns sidecar path."""
+    # Read existing coordinates before removing
+    old_lat, old_lng, _ = read_gps(image_path)
+
     et = get_et()
     sc = sidecar_path(image_path)
     if sc.exists():
@@ -105,4 +121,11 @@ def remove_gps(image_path: Path) -> Path:
             "-XMP:GPSLongitude=",
             str(sc),
         )
+
+    # Log the removal
+    if old_lat is not None and old_lng is not None:
+        logger.info(f"Removed GPS from {image_path.name}: ({old_lat:.6f}, {old_lng:.6f}) → (none)")
+    else:
+        logger.info(f"Remove GPS called on {image_path.name}: (already had no GPS)")
+
     return sc
