@@ -186,14 +186,14 @@ async function doScan() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || res.statusText);
     setStatus(`Scanned ${data.count} files. ${data.warnings.length ? data.warnings.join(" | ") : ""}`);
-    await loadPhotos();
+    await loadPhotos(true);
   } catch (err) {
     setStatus("Scan error: " + err.message, true);
   }
 }
 
 /* ── Load photos ── */
-async function loadPhotos() {
+async function loadPhotos(fitMap = false) {
   const filter = document.getElementById("filter-select").value;
   try {
     const res = await fetch(`/api/photos?geotagged=${filter}`);
@@ -202,14 +202,14 @@ async function loadPhotos() {
     photos.forEach(p => camColor(p.camera));
     renderLegend();
     buildHistogram();
-    applyFilters();
+    applyFilters(fitMap);
   } catch (err) {
     setStatus("Load error: " + err.message, true);
   }
 }
 
 /* ── Apply all active filters → filteredPhotos ── */
-function applyFilters() {
+function applyFilters(fitMap = false) {
   filteredPhotos = photos.filter(p => {
     if (hiddenCameras.has(p.camera || "Unknown")) return false;
     if (dateRangeMin !== dateRangeMax) {
@@ -222,6 +222,14 @@ function applyFilters() {
   renderMarkers();
   drawHistogram();
   setStatus(`Showing ${filteredPhotos.length} of ${photos.length} photos`);
+  if (fitMap) fitMapToPhotos();
+}
+
+function fitMapToPhotos() {
+  const tagged = filteredPhotos.filter(p => p.lat != null);
+  if (tagged.length === 0) return;
+  const bounds = L.latLngBounds(tagged.map(p => [p.lat, p.lng]));
+  map.flyToBounds(bounds, { padding: [40, 40], duration: 1.2, maxZoom: 16 });
 }
 
 /* ── Camera legend ── */
@@ -294,6 +302,8 @@ function handleThumbClick(e, id, idx) {
   lastClickedIndex = idx;
   refreshSelectionUI();
   showDetail(id);
+  const photo = filteredPhotos[idx];
+  if (photo?.lat != null) map.flyTo([photo.lat, photo.lng], Math.max(map.getZoom(), 14), { duration: 0.6 });
 }
 
 function refreshSelectionUI() {
