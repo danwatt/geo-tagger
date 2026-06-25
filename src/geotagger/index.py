@@ -152,7 +152,7 @@ def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str |
         except ValueError:
             pass
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-    return db.execute(f"SELECT * FROM photos {where} ORDER BY filename", params).fetchall()
+    return db.execute(f"SELECT * FROM photos {where} ORDER BY photo_datetime, filename", params).fetchall()
 
 
 def get_photo(photo_id: int) -> sqlite3.Row | None:
@@ -252,4 +252,11 @@ def delete_place(place_id: int):
     """Delete a place by ID."""
     db = get_db()
     db.execute("DELETE FROM places WHERE id=?", (place_id,))
+    db.commit()
+
+
+def update_place(place_id: int, bounds: str):
+    """Update a place's bounds."""
+    db = get_db()
+    db.execute("UPDATE places SET bounds=? WHERE id=?", (bounds, place_id))
     db.commit()

@@ -565,6 +565,17 @@ async def api_delete_place(place_id: int):
     return {"success": True}
 
 
+class UpdatePlaceRequest(BaseModel):
+    bounds: str
+
+
+@app.patch("/api/places/{place_id}")
+async def api_update_place(place_id: int, req: UpdatePlaceRequest):
+    """Update a place's bounds."""
+    index.update_place(place_id, req.bounds)
+    return {"success": True}
+
+
 class UpdateTimesRequest(BaseModel):
     updates: dict[int, int]  # photo_id -> offset in seconds
 

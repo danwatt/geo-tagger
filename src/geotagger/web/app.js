@@ -328,24 +328,89 @@ function renderPlaces() {
       shape = L.rectangle([[bounds.south, bounds.west], [bounds.north, bounds.east]], {
         color: "#4a90d9",
         weight: 2,
-        fillOpacity: 0.1
+        fillOpacity: 0.1,
+        draggable: true
       });
     } else if (p.type === "circle") {
       shape = L.circle([bounds.lat, bounds.lng], {
         radius: bounds.radius,
         color: "#4a90d9",
         weight: 2,
-        fillOpacity: 0.1
+        fillOpacity: 0.1,
+        draggable: true
       });
     }
 
     if (shape) {
       shape.bindTooltip(p.name, { permanent: false, direction: "top" });
       shape.on("contextmenu", () => confirmDeletePlace(p));
+
+      // Enable editing on click
+      shape.on("click", () => enableShapeEditing(shape, p));
+
+      // Save new position when dragged
+      shape.on("dragend", () => updatePlaceBounds(p));
+
       shape.addTo(map);
       placeShapes[p.id] = shape;
     }
   });
+}
+
+let editingShape = null;
+
+function enableShapeEditing(shape, place) {
+  // For now, shapes can be dragged to reposition
+  // To resize, users should delete and redraw
+  setStatus(`Drag to reposition "${place.name}". Right-click to delete.`, false);
+}
+
+function disableShapeEditing() {
+  if (editingShape) {
+    editingShape.setStyle({ color: "#4a90d9", weight: 2 });
+    editingShape.off("dragend");
+    editingShape = null;
+  }
+}
+
+async function updatePlaceBounds(place) {
+  const shape = placeShapes[place.id];
+  if (!shape) return;
+
+  let boundsData;
+  if (place.type === "rectangle") {
+    const bounds = shape.getBounds();
+    boundsData = {
+      north: bounds.getNorth(),
+      south: bounds.getSouth(),
+      east: bounds.getEast(),
+      west: bounds.getWest()
+    };
+  } else if (place.type === "circle") {
+    boundsData = {
+      lat: shape.getLatLng().lat,
+      lng: shape.getLatLng().lng,
+      radius: shape.getRadius()
+    };
+  }
+
+  try {
+    // Update the place on the backend
+    await fetch(`/api/places/${place.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bounds: JSON.stringify(boundsData) })
+    });
+
+    // Update local state
+    place.bounds = JSON.stringify(boundsData);
+    setStatus(`Updated ${place.name}`);
+
+    // Re-enable normal mode
+    disableShapeEditing();
+  } catch (err) {
+    setStatus("Failed to update place: " + err.message, true);
+  }
 }
 
 function onPlaceSelected(e) {
@@ -373,8 +438,11 @@ function startDrawing(type) {
   }
 
   drawingMode = type;
-  setStatus(`Drawing ${type}... Click and drag on the map`, false);
+  setStatus(`Drawing ${type}... Click, hold, and drag to set size, then release`, false);
   map.getContainer().style.cursor = "crosshair";
+
+  // Disable map dragging while drawing
+  map.dragging.disable();
 
   // Set up drawing handlers
   map.once("mousedown", onDrawStart);
@@ -386,6 +454,9 @@ function stopDrawing() {
   map.off("mousedown", onDrawStart);
   map.off("mousemove", onDrawMove);
   map.off("mouseup", onDrawEnd);
+
+  // Re-enable map dragging
+  map.dragging.enable();
 
   if (drawingShape) {
     map.removeLayer(drawingShape);
@@ -432,6 +503,24 @@ async function onDrawEnd(e) {
   map.off("mousemove", onDrawMove);
 
   if (!drawingShape || !drawStartLatLng) {
+    stopDrawing();
+    return;
+  }
+
+  // Check minimum size (allow down to ~10 square meters)
+  let tooSmall = false;
+  if (drawingMode === "rectangle") {
+    const bounds = drawingShape.getBounds();
+    const width = Math.abs(bounds.getEast() - bounds.getWest());
+    const height = Math.abs(bounds.getNorth() - bounds.getSouth());
+    // 0.00003 degrees ≈ 3.3 meters at equator
+    tooSmall = width < 0.00003 || height < 0.00003;
+  } else if (drawingMode === "circle") {
+    tooSmall = drawingShape.getRadius() < 2;  // 2 meters minimum
+  }
+
+  if (tooSmall) {
+    alert("Shape is too small. Please drag to create a larger shape.");
     stopDrawing();
     return;
   }
