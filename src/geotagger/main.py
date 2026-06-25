@@ -197,6 +197,47 @@ async def api_geotag(req: GeotagRequest):
     return results
 
 
+@app.get("/api/guess/{photo_id}")
+async def api_guess(photo_id: int, window: int = 900):
+    """Return a guessed lat/lng from nearby-in-time geotagged photos (±window seconds)."""
+    row = index.get_photo(photo_id)
+    if not row:
+        raise HTTPException(404)
+    if row["lat"] is not None:
+        raise HTTPException(400, "Photo already has a geotag")
+    ts = row["photo_datetime"]
+    if not ts or ts <= 0:
+        raise HTTPException(400, "Photo has no timestamp — cannot guess location")
+
+    db = index.get_db()
+    nearby = db.execute("""
+        SELECT lat, lng, filename, photo_datetime FROM photos
+        WHERE lat IS NOT NULL
+          AND photo_datetime > 0
+          AND photo_datetime BETWEEN ? AND ?
+          AND id != ?
+        ORDER BY ABS(photo_datetime - ?) ASC
+        LIMIT 50
+    """, (ts - window, ts + window, photo_id, ts)).fetchall()
+
+    if not nearby:
+        raise HTTPException(404, detail="No geotagged photos found within 15 minutes")
+
+    weights = [1.0 / (abs(r["photo_datetime"] - ts) + 1) for r in nearby]
+    total_w = sum(weights)
+    avg_lat = sum(r["lat"] * w for r, w in zip(nearby, weights)) / total_w
+    avg_lng = sum(r["lng"] * w for r, w in zip(nearby, weights)) / total_w
+    return {
+        "lat": avg_lat,
+        "lng": avg_lng,
+        "source_count": len(nearby),
+        "window_sec": window,
+        "sources": [{"filename": r["filename"], "lat": r["lat"], "lng": r["lng"],
+                     "delta_sec": abs(r["photo_datetime"] - ts),
+                     "is_before": r["photo_datetime"] < ts} for r in nearby],
+    }
+
+
 @app.post("/api/geotag/remove")
 async def api_geotag_remove(req: RemoveGeotagRequest):
     results = []

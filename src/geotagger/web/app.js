@@ -6,6 +6,9 @@ let lastClickedIndex = -1;
 let markersById = {};
 let focusedPhotoId = null;
 let map;
+let guessMarker = null;        // temporary guess pin (amber ?)
+let guessSourceMarkers = [];   // source photo pins shown during guess
+let guessPending = null;       // { lat, lng } awaiting apply/dismiss
 
 /* ── Date range filter state ── */
 let dateRangeMin = 0;   // Unix ts — absolute min across all photos
@@ -348,7 +351,14 @@ function addOrUpdateMarker(photo) {
   const marker = L.marker([photo.lat, photo.lng], {
     draggable: true,
     icon: makePinIcon(color),
-  }).addTo(map).bindPopup(photo.filename);
+  }).addTo(map);
+
+  marker.on("click", () => {
+    selectedIds.clear();
+    selectedIds.add(photo.id);
+    refreshSelectionUI();
+    showDetail(photo.id);
+  });
 
   marker.on("dragend", async () => {
     const ll = marker.getLatLng();
@@ -451,6 +461,7 @@ async function doPlaceSearch() {
 /* ── Detail pane ── */
 async function showDetail(id) {
   focusedPhotoId = id;
+  dismissGuess();
   try {
     const res = await fetch(`/api/photo/${id}`);
     const data = await res.json();
@@ -474,9 +485,151 @@ async function showDetail(id) {
     table.innerHTML = rows.map(([k, v]) =>
       `<tr><td>${k}</td><td>${v ?? "—"}</td></tr>`
     ).join("");
+
+    // Show guess bar only for untagged photos that have a timestamp
+    const guessBar = document.getElementById("guess-bar");
+    guessBar.style.display = (data.lat == null && data.datetime) ? "" : "none";
+    document.getElementById("guess-result").style.display = "none";
   } catch (err) {
     // ignore
   }
+}
+
+/* ── Guess location ── */
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("guess-btn").addEventListener("click", doGuess);
+  document.getElementById("guess-apply-btn").addEventListener("click", applyGuess);
+  document.getElementById("guess-dismiss-btn").addEventListener("click", dismissGuess);
+});
+
+async function doGuess() {
+  if (!focusedPhotoId) return;
+  document.getElementById("guess-btn").disabled = true;
+  document.getElementById("guess-btn").textContent = "Searching…";
+  dismissGuess(false);   // clear old pin but keep button
+
+  try {
+    const res = await fetch(`/api/guess/${focusedPhotoId}`);
+    const data = await res.json();
+    if (!res.ok) {
+      setStatus(data.detail || "No nearby geotagged photos found", true);
+      return;
+    }
+
+    guessPending = { lat: data.lat, lng: data.lng };
+
+    // Place source photo pins (before=blue, after=green, brightness by proximity)
+    data.sources.forEach(src => {
+      const icon = makeSourcePinIcon(src.delta_sec, src.is_before, data.window_sec);
+      const mins = src.delta_sec < 60
+        ? `${src.delta_sec}s`
+        : `${Math.round(src.delta_sec / 60)}min`;
+      const direction = src.is_before ? "before" : "after";
+      const m = L.marker([src.lat, src.lng], { icon, interactive: true })
+        .addTo(map)
+        .bindTooltip(`${src.filename}<br>${mins} ${direction}`, { direction: "top" });
+      guessSourceMarkers.push(m);
+    });
+
+    // Place the centre-of-mass guess pin on top — draggable for manual refinement
+    guessMarker = L.marker([data.lat, data.lng], {
+      icon: makeGuessPinIcon(),
+      draggable: true,
+      zIndexOffset: 1000,
+    }).addTo(map);
+
+    guessMarker.on("dragend", () => {
+      const ll = guessMarker.getLatLng();
+      guessPending = { lat: ll.lat, lng: ll.lng };
+    });
+
+    // Fit map to show all source pins + guess pin
+    const allPoints = [
+      [data.lat, data.lng],
+      ...data.sources.map(s => [s.lat, s.lng]),
+    ];
+    map.flyToBounds(L.latLngBounds(allPoints).pad(0.3), { duration: 1, maxZoom: 16 });
+
+    // Build summary text
+    const srcList = data.sources.slice(0, 3)
+      .map(s => {
+        const mins = s.delta_sec < 60 ? `${s.delta_sec}s` : `${Math.round(s.delta_sec / 60)}min`;
+        return `${s.filename} (${mins} ${s.is_before ? "before" : "after"})`;
+      })
+      .join(", ");
+    const more = data.source_count > 3 ? ` +${data.source_count - 3} more` : "";
+    document.getElementById("guess-summary").textContent =
+      `Based on ${data.source_count} nearby photo${data.source_count > 1 ? "s" : ""}: ${srcList}${more}`;
+    document.getElementById("guess-result").style.display = "";
+  } catch (err) {
+    setStatus("Guess error: " + err.message, true);
+  } finally {
+    document.getElementById("guess-btn").disabled = false;
+    document.getElementById("guess-btn").textContent = "Guess location";
+  }
+}
+
+async function applyGuess() {
+  if (!guessPending || !focusedPhotoId) return;
+  await geotag([focusedPhotoId], guessPending.lat, guessPending.lng);
+  dismissGuess();
+  showDetail(focusedPhotoId);
+}
+
+function dismissGuess(hideResult = true) {
+  if (guessMarker) { guessMarker.remove(); guessMarker = null; }
+  guessSourceMarkers.forEach(m => m.remove());
+  guessSourceMarkers = [];
+  guessPending = null;
+  if (hideResult) document.getElementById("guess-result").style.display = "none";
+}
+
+function makeSourcePinIcon(deltaSec, isBefore, windowSec = 900) {
+  // proximity 1 = very close in time, 0 = at the edge of the window
+  const proximity = Number.isFinite(deltaSec / windowSec)
+    ? Math.max(0, 1 - deltaSec / windowSec)
+    : 0.5;
+
+  // Before: blue family  hsl(210, sat, lightness)
+  // After:  green family hsl(145, sat, lightness)
+  // Vivid when close (high proximity), muted when far
+  const hue = isBefore ? 210 : 145;
+  const sat = Math.round(40 + proximity * 55);       // 40% → 95%
+  const lit = Math.round(28 + proximity * 38);        // 28% → 66%
+  const fill = `hsl(${hue},${sat}%,${lit}%)`;
+  const stroke = `hsl(${hue},${Math.max(20, sat - 20)}%,${Math.min(90, lit + 25)}%)`;
+
+  // Small circle pin — clearly distinct from the teardrop confirmed pins
+  const r = Math.round(7 + proximity * 4);  // 7–11px radius, closer = larger
+  const sz = (r + 3) * 2;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${sz}" height="${sz}" viewBox="0 0 ${sz} ${sz}">
+    <circle cx="${sz/2}" cy="${sz/2}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="2"/>
+  </svg>`;
+  return L.divIcon({
+    html: svg,
+    className: "",
+    iconSize: [sz, sz],
+    iconAnchor: [sz / 2, sz / 2],
+    tooltipAnchor: [0, -(sz / 2)],
+  });
+}
+
+function makeGuessPinIcon() {
+  // Dashed-outline pin in amber to distinguish from confirmed pins
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="38" viewBox="0 0 28 38">
+    <path d="M14 1C7.373 1 2 6.373 2 13c0 9 12 24 12 24S26 22 26 13C26 6.373 20.627 1 14 1z"
+          fill="#f0a500" fill-opacity="0.85"
+          stroke="#fff" stroke-width="2" stroke-dasharray="4 3"/>
+    <circle cx="14" cy="13" r="5" fill="rgba(255,255,255,0.4)"/>
+    <text x="14" y="17" text-anchor="middle" font-size="9" fill="white" font-family="sans-serif">?</text>
+  </svg>`;
+  return L.divIcon({
+    html: svg,
+    className: "",
+    iconSize: [28, 38],
+    iconAnchor: [14, 38],
+    popupAnchor: [0, -38],
+  });
 }
 
 /* ── Timeline histogram ── */

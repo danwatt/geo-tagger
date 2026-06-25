@@ -196,6 +196,37 @@ select {
 }
 #detail-meta td:first-child { color: #888; width: 40%; }
 
+/* ── Guess location bar ── */
+#guess-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  background: #252525;
+  border-radius: 5px;
+  border: 1px solid #383838;
+}
+#guess-result {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#guess-summary {
+  font-size: 11px;
+  color: #aaa;
+  line-height: 1.4;
+}
+.guess-actions {
+  display: flex;
+  gap: 6px;
+}
+button.primary {
+  background: #2a4a6e;
+  border-color: #4a90d9;
+  color: #7ab8f5;
+}
+button.primary:hover { background: #1e3a5e; }
+
 /* ── Status bar ── */
 #status-bar {
   height: 22px;
