@@ -96,7 +96,7 @@ async def api_scan(req: ScanRequest):
                 mtime=stat.st_mtime, size=stat.st_size,
                 lat=meta["lat"], lng=meta["lng"], geotag_source=meta["geotag_source"],
                 sidecar_path=sc_path_str, sidecar_mtime=sc_mtime,
-                camera=meta["camera"],
+                camera=meta["camera"], photo_datetime=meta["photo_datetime"],
             )
             count += 1
         except Exception as e:
@@ -116,7 +116,7 @@ async def api_photos(
         {
             "id": r["id"], "filename": r["filename"], "media_type": r["media_type"],
             "lat": r["lat"], "lng": r["lng"], "geotag_source": r["geotag_source"],
-            "camera": r["camera"],
+            "camera": r["camera"], "photo_datetime": r["photo_datetime"],
         }
         for r in rows
     ]

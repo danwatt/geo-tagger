@@ -1,10 +1,51 @@
 /* ── State ── */
-let photos = [];
+let photos = [];          // full list from API
+let filteredPhotos = [];  // after camera hide + date range filter
 let selectedIds = new Set();
 let lastClickedIndex = -1;
 let markersById = {};
 let focusedPhotoId = null;
 let map;
+
+/* ── Date range filter state ── */
+let dateRangeMin = 0;   // Unix ts — absolute min across all photos
+let dateRangeMax = 0;   // Unix ts — absolute max across all photos
+let dateFilterLo = 0;   // current low handle value
+let dateFilterHi = 0;   // current high handle value
+let histBuckets = [];   // [{ts, count}] for drawing
+
+/* ── Basemap definitions ── */
+const BASEMAPS = {
+  street: {
+    label: "Street",
+    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    options: {
+      attribution: "© OpenStreetMap contributors",
+      maxZoom: 19,
+    },
+  },
+  satellite: {
+    label: "Satellite",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    options: {
+      attribution: "Tiles © Esri — Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community",
+      maxZoom: 19,
+    },
+  },
+  hybrid: {
+    label: "Hybrid",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    overlayUrl: "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+    options: {
+      attribution: "Tiles © Esri",
+      maxZoom: 19,
+    },
+  },
+};
+
+let activeBasemap = "street";
+let baseTileLayer = null;
+let overlayTileLayer = null;
 
 /* ── Camera colors ── */
 const CAM_PALETTE = [
@@ -36,6 +77,7 @@ function camColor(camera) {
 document.addEventListener("DOMContentLoaded", async () => {
   initMap();
   bindToolbar();
+  bindTimeline();
   await checkStatus();
 });
 
@@ -53,10 +95,8 @@ async function checkStatus() {
 
 function initMap() {
   map = L.map("map").setView([20, 0], 2);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution: "© OpenStreetMap contributors",
-    maxZoom: 19,
-  }).addTo(map);
+  setBasemap("street");
+  addBasemapControl();
 
   const mapPane = document.getElementById("map-pane");
 
@@ -75,6 +115,43 @@ function initMap() {
     const latlng = map.containerPointToLatLng(point);
     await geotag(ids, latlng.lat, latlng.lng);
   });
+}
+
+function setBasemap(key) {
+  activeBasemap = key;
+  const def = BASEMAPS[key];
+
+  if (baseTileLayer) { map.removeLayer(baseTileLayer); baseTileLayer = null; }
+  if (overlayTileLayer) { map.removeLayer(overlayTileLayer); overlayTileLayer = null; }
+
+  baseTileLayer = L.tileLayer(def.url, def.options).addTo(map);
+  if (def.overlayUrl) {
+    overlayTileLayer = L.tileLayer(def.overlayUrl, { maxZoom: 19, opacity: 1 }).addTo(map);
+  }
+
+  // Update button states
+  document.querySelectorAll(".basemap-btn").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.key === key);
+  });
+}
+
+function addBasemapControl() {
+  const BasemapControl = L.Control.extend({
+    options: { position: "bottomright" },
+    onAdd() {
+      const div = L.DomUtil.create("div", "basemap-control");
+      L.DomEvent.disableClickPropagation(div);
+      Object.entries(BASEMAPS).forEach(([key, def]) => {
+        const btn = L.DomUtil.create("button", "basemap-btn", div);
+        btn.textContent = def.label;
+        btn.dataset.key = key;
+        if (key === activeBasemap) btn.classList.add("active");
+        L.DomEvent.on(btn, "click", () => setBasemap(key));
+      });
+      return div;
+    },
+  });
+  new BasemapControl().addTo(map);
 }
 
 function bindToolbar() {
@@ -121,12 +198,27 @@ async function loadPhotos() {
     // Pre-assign colors so the legend order is stable
     photos.forEach(p => camColor(p.camera));
     renderLegend();
-    renderGrid();
-    renderMarkers();
-    setStatus(`${photos.length} photos`);
+    buildHistogram();
+    applyFilters();
   } catch (err) {
     setStatus("Load error: " + err.message, true);
   }
+}
+
+/* ── Apply all active filters → filteredPhotos ── */
+function applyFilters() {
+  filteredPhotos = photos.filter(p => {
+    if (hiddenCameras.has(p.camera || "Unknown")) return false;
+    if (dateRangeMin !== dateRangeMax) {
+      const ts = p.photo_datetime || 0;
+      if (ts > 0 && (ts < dateFilterLo || ts > dateFilterHi)) return false;
+    }
+    return true;
+  });
+  renderGrid();
+  renderMarkers();
+  drawHistogram();
+  setStatus(`Showing ${filteredPhotos.length} of ${photos.length} photos`);
 }
 
 /* ── Camera legend ── */
@@ -141,7 +233,7 @@ function renderLegend() {
     item.addEventListener("click", () => {
       hiddenCameras.has(cam) ? hiddenCameras.delete(cam) : hiddenCameras.add(cam);
       item.classList.toggle("dimmed");
-      renderGrid();
+      applyFilters();
     });
     legend.appendChild(item);
   });
@@ -151,9 +243,8 @@ function renderLegend() {
 function renderGrid() {
   const grid = document.getElementById("grid");
   grid.innerHTML = "";
-  photos.forEach((photo, idx) => {
+  filteredPhotos.forEach((photo, idx) => {
     const camKey = photo.camera || "Unknown";
-    if (hiddenCameras.has(camKey)) return;
 
     const cell = document.createElement("div");
     cell.className = "thumb-cell" +
@@ -238,12 +329,12 @@ function makePinIcon(color) {
 }
 
 function renderMarkers() {
-  Object.values(markersById).forEach((m) => m.remove());
-  markersById = {};
-  photos.forEach((photo) => {
-    if (photo.lat != null && photo.lng != null) {
-      addOrUpdateMarker(photo);
-    }
+  const visibleIds = new Set(filteredPhotos.map(p => p.id));
+  Object.entries(markersById).forEach(([id, m]) => {
+    if (!visibleIds.has(Number(id))) { m.remove(); delete markersById[id]; }
+  });
+  filteredPhotos.forEach((photo) => {
+    if (photo.lat != null && photo.lng != null) addOrUpdateMarker(photo);
   });
 }
 
@@ -387,6 +478,160 @@ async function showDetail(id) {
     // ignore
   }
 }
+
+/* ── Timeline histogram ── */
+function bindTimeline() {
+  const lo = document.getElementById("range-lo");
+  const hi = document.getElementById("range-hi");
+
+  function onInput() {
+    // Prevent handles from crossing
+    if (Number(lo.value) > Number(hi.value)) {
+      if (this === lo) lo.value = hi.value;
+      else hi.value = lo.value;
+    }
+    updateDateFilter();
+    applyFilters();
+  }
+
+  lo.addEventListener("input", onInput);
+  hi.addEventListener("input", onInput);
+}
+
+function buildHistogram() {
+  const tsList = photos.map(p => p.photo_datetime).filter(ts => ts && ts > 0);
+  if (tsList.length < 2) {
+    // Hide timeline if there's no date data
+    document.getElementById("timeline").style.display = "none";
+    dateRangeMin = dateRangeMax = 0;
+    dateFilterLo = dateFilterHi = 0;
+    histBuckets = [];
+    return;
+  }
+  document.getElementById("timeline").style.display = "";
+
+  dateRangeMin = Math.min(...tsList);
+  dateRangeMax = Math.max(...tsList);
+  dateFilterLo = dateRangeMin;
+  dateFilterHi = dateRangeMax;
+
+  // Reset sliders
+  document.getElementById("range-lo").value = 0;
+  document.getElementById("range-hi").value = 1000;
+
+  // Choose bucket granularity
+  const spanDays = (dateRangeMax - dateRangeMin) / 86400;
+  let bucketSecs;
+  if (spanDays <= 90)       bucketSecs = 86400;        // daily
+  else if (spanDays <= 365) bucketSecs = 86400 * 7;    // weekly
+  else                      bucketSecs = 86400 * 30;   // monthly
+
+  const bucketCount = Math.ceil((dateRangeMax - dateRangeMin) / bucketSecs) + 1;
+  const counts = new Array(bucketCount).fill(0);
+  tsList.forEach(ts => {
+    const idx = Math.floor((ts - dateRangeMin) / bucketSecs);
+    if (idx >= 0 && idx < bucketCount) counts[idx]++;
+  });
+
+  histBuckets = counts.map((count, i) => ({
+    ts: dateRangeMin + i * bucketSecs,
+    count,
+  }));
+
+  updateDateLabels();
+  drawHistogram();
+}
+
+function updateDateFilter() {
+  const lo = Number(document.getElementById("range-lo").value) / 1000;
+  const hi = Number(document.getElementById("range-hi").value) / 1000;
+  const span = dateRangeMax - dateRangeMin;
+  dateFilterLo = Math.round(dateRangeMin + lo * span);
+  dateFilterHi = Math.round(dateRangeMin + hi * span);
+  updateDateLabels();
+}
+
+function updateDateLabels() {
+  document.getElementById("hist-label-lo").textContent = fmtDate(dateFilterLo);
+  document.getElementById("hist-label-hi").textContent = fmtDate(dateFilterHi);
+}
+
+function fmtDate(ts) {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+function drawHistogram() {
+  const canvas = document.getElementById("hist-canvas");
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+
+  // Size canvas to its CSS size
+  const cssW = canvas.offsetWidth;
+  const cssH = canvas.offsetHeight;
+  if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+    canvas.width = cssW * dpr;
+    canvas.height = cssH * dpr;
+    ctx.scale(dpr, dpr);
+  }
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  if (!histBuckets.length || dateRangeMin === dateRangeMax) return;
+
+  const n = histBuckets.length;
+  const maxCount = Math.max(...histBuckets.map(b => b.count), 1);
+  const barW = cssW / n;
+  const span = dateRangeMax - dateRangeMin;
+
+  histBuckets.forEach((bucket, i) => {
+    const h = (bucket.count / maxCount) * cssH * 0.92;
+    const x = i * barW;
+    const inRange = bucket.ts >= dateFilterLo && bucket.ts <= dateFilterHi;
+
+    // Count photos in this bucket by camera for color stacking
+    const camCounts = {};
+    filteredPhotos
+      .filter(p => {
+        if (!p.photo_datetime || p.photo_datetime <= 0) return false;
+        const bucketSecs = span / n;
+        const bIdx = Math.floor((p.photo_datetime - dateRangeMin) / bucketSecs);
+        return bIdx === i;
+      })
+      .forEach(p => {
+        const c = p.camera || "Unknown";
+        camCounts[c] = (camCounts[c] || 0) + 1;
+      });
+
+    if (inRange && Object.keys(camCounts).length > 0) {
+      // Stacked color bars
+      let yOffset = cssH;
+      Object.entries(camCounts).forEach(([cam, cnt]) => {
+        const segH = (cnt / maxCount) * cssH * 0.92;
+        yOffset -= segH;
+        ctx.fillStyle = camColor(cam);
+        ctx.fillRect(x + 0.5, yOffset, barW - 1, segH);
+      });
+    } else {
+      // Out-of-range or undated: dim gray bar
+      const barH = (bucket.count / maxCount) * cssH * 0.92;
+      ctx.fillStyle = inRange ? "#444" : "#2a2a2a";
+      ctx.fillRect(x + 0.5, cssH - barH, barW - 1, barH);
+    }
+  });
+
+  // Draw range boundary lines
+  const loX = ((dateFilterLo - dateRangeMin) / span) * cssW;
+  const hiX = ((dateFilterHi - dateRangeMin) / span) * cssW;
+  ctx.strokeStyle = "rgba(255,255,255,0.2)";
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(loX, 0); ctx.lineTo(loX, cssH); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(hiX, 0); ctx.lineTo(hiX, cssH); ctx.stroke();
+}
+
+window.addEventListener("resize", () => {
+  if (histBuckets.length) drawHistogram();
+});
 
 /* ── Status ── */
 function setStatus(msg, isError = false) {

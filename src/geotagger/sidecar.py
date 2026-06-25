@@ -1,6 +1,20 @@
+import calendar
+from datetime import datetime
 from pathlib import Path
 from geotagger.config import SIDECAR_MODE
 from geotagger.exiftool_session import get_et
+
+
+def _parse_exif_datetime(s: str) -> int | None:
+    """Parse '2024:10:02 14:23:45' → Unix timestamp, or None."""
+    if not s:
+        return None
+    try:
+        # ExifTool format: 'YYYY:MM:DD HH:MM:SS'
+        dt = datetime.strptime(s.strip(), "%Y:%m:%d %H:%M:%S")
+        return int(calendar.timegm(dt.timetuple()))
+    except Exception:
+        return None
 
 
 def sidecar_path(image_path: Path) -> Path:
@@ -33,6 +47,8 @@ def read_metadata(image_path: Path) -> dict:
         "GPS:GPSLatitude", "GPS:GPSLongitude",
         "EXIF:Make", "EXIF:Model",
         "QuickTime:Make", "QuickTime:Model",
+        "EXIF:DateTimeOriginal", "QuickTime:CreateDate",
+        "XMP:DateTimeOriginal",
     ])
     row = result[0] if result else {}
 
@@ -46,7 +62,13 @@ def read_metadata(image_path: Path) -> dict:
     model = (row.get("EXIF:Model") or row.get("QuickTime:Model") or "").strip()
     camera = f"{make} {model}".strip() or None
 
-    return {"lat": lat, "lng": lng, "geotag_source": source, "camera": camera}
+    raw_dt = (row.get("EXIF:DateTimeOriginal")
+              or row.get("XMP:DateTimeOriginal")
+              or row.get("QuickTime:CreateDate"))
+    photo_datetime = _parse_exif_datetime(str(raw_dt)) if raw_dt else 0
+
+    return {"lat": lat, "lng": lng, "geotag_source": source,
+            "camera": camera, "photo_datetime": photo_datetime}
 
 
 def read_gps(image_path: Path) -> tuple[float, float, str] | tuple[None, None, str]:
