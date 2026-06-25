@@ -211,7 +211,7 @@ async def api_guess(photo_id: int, window: int = 900):
 
     db = index.get_db()
     nearby = db.execute("""
-        SELECT lat, lng, filename, photo_datetime FROM photos
+        SELECT id, lat, lng, filename, photo_datetime FROM photos
         WHERE lat IS NOT NULL
           AND photo_datetime > 0
           AND photo_datetime BETWEEN ? AND ?
@@ -232,7 +232,8 @@ async def api_guess(photo_id: int, window: int = 900):
         "lng": avg_lng,
         "source_count": len(nearby),
         "window_sec": window,
-        "sources": [{"filename": r["filename"], "lat": r["lat"], "lng": r["lng"],
+        "sources": [{"id": r["id"], "filename": r["filename"],
+                     "lat": r["lat"], "lng": r["lng"],
                      "delta_sec": abs(r["photo_datetime"] - ts),
                      "is_before": r["photo_datetime"] < ts} for r in nearby],
     }

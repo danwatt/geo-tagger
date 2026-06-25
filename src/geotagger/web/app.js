@@ -525,9 +525,15 @@ async function doGuess() {
         ? `${src.delta_sec}s`
         : `${Math.round(src.delta_sec / 60)}min`;
       const direction = src.is_before ? "before" : "after";
+      const popupHtml = `
+        <div class="source-popup">
+          <img src="/api/thumbnail/${src.id}" alt="${src.filename}"/>
+          <div class="source-popup-label">${src.filename}</div>
+          <div class="source-popup-time">${mins} ${direction}</div>
+        </div>`;
       const m = L.marker([src.lat, src.lng], { icon, interactive: true })
         .addTo(map)
-        .bindTooltip(`${src.filename}<br>${mins} ${direction}`, { direction: "top" });
+        .bindPopup(popupHtml, { maxWidth: 160, className: "source-popup-wrap" });
       guessSourceMarkers.push(m);
     });
 
