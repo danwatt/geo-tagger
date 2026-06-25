@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv python *)",
+      "Bash(py -0)",
+      "Bash(python3.13 --version)",
+      "PowerShell(New-Item -ItemType Directory -Force \"C:\\\\Users\\\\danwa\\\\PycharmProjects\\\\geo-tagger\\\\src\\\\geotagger\\\\web\")",
+      "PowerShell(New-Item -ItemType Directory -Force \"C:\\\\Users\\\\danwa\\\\PycharmProjects\\\\geo-tagger\\\\scripts\")",
+      "PowerShell(New-Item -ItemType Directory -Force \"C:\\\\Users\\\\danwa\\\\PycharmProjects\\\\geo-tagger\\\\tools\")"
+    ]
+  }
+}

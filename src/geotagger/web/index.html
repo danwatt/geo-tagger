@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Geo-Tagger</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+<div id="toolbar">
+  <div class="toolbar-group">
+    <input id="dir-input" type="text" placeholder="Directory path…" />
+    <button id="scan-btn">Scan</button>
+  </div>
+  <div class="toolbar-group">
+    <label>Show:</label>
+    <select id="filter-select">
+      <option value="all">All</option>
+      <option value="yes">Geotagged</option>
+      <option value="no">Not geotagged</option>
+    </select>
+  </div>
+  <div class="toolbar-group">
+    <input id="place-search" type="text" placeholder="Search place…" />
+    <button id="place-search-btn">Go</button>
+  </div>
+  <div class="toolbar-group">
+    <input id="lat-input" type="text" placeholder="Lat" style="width:90px"/>
+    <input id="lng-input" type="text" placeholder="Lng" style="width:90px"/>
+    <button id="apply-latlng-btn">Apply to selection</button>
+  </div>
+  <div class="toolbar-group">
+    <button id="copy-location-btn">Copy location to selection</button>
+    <button id="remove-geotag-btn" class="danger">Remove geotag</button>
+  </div>
+</div>
+
+<div id="cam-legend"></div>
+
+<div id="main">
+  <div id="map-pane">
+    <div id="map"></div>
+  </div>
+  <div id="grid-pane">
+    <div id="grid"></div>
+  </div>
+  <div id="detail-pane">
+    <div id="detail-placeholder">Select a photo to view details</div>
+    <div id="detail-content" style="display:none">
+      <img id="detail-img" src="" alt="Preview"/>
+      <table id="detail-meta"></table>
+    </div>
+  </div>
+</div>
+
+<div id="status-bar"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

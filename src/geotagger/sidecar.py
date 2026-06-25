@@ -1,0 +1,81 @@
+from pathlib import Path
+from geotagger.config import SIDECAR_MODE
+from geotagger.exiftool_session import get_et
+
+
+def sidecar_path(image_path: Path) -> Path:
+    if SIDECAR_MODE == "fullname":
+        return image_path.parent / (image_path.name + ".xmp")
+    return image_path.parent / (image_path.stem + ".xmp")
+
+
+def read_metadata(image_path: Path) -> dict:
+    """Return dict with keys: lat, lng, geotag_source, camera."""
+    et = get_et()
+    sc = sidecar_path(image_path)
+
+    lat = lng = None
+    source = "none"
+
+    # Try sidecar first for GPS
+    if sc.exists():
+        result = et.get_tags([str(sc)], tags=["XMP:GPSLatitude", "XMP:GPSLongitude"])
+        if result:
+            row = result[0]
+            _lat = row.get("XMP:GPSLatitude")
+            _lng = row.get("XMP:GPSLongitude")
+            if _lat is not None and _lng is not None:
+                lat, lng, source = float(_lat), float(_lng), "sidecar"
+
+    # Read embedded GPS + camera in one call
+    result = et.get_tags([str(image_path)], tags=[
+        "Composite:GPSLatitude", "Composite:GPSLongitude",
+        "GPS:GPSLatitude", "GPS:GPSLongitude",
+        "EXIF:Make", "EXIF:Model",
+        "QuickTime:Make", "QuickTime:Model",
+    ])
+    row = result[0] if result else {}
+
+    if source == "none":
+        _lat = row.get("Composite:GPSLatitude") or row.get("GPS:GPSLatitude")
+        _lng = row.get("Composite:GPSLongitude") or row.get("GPS:GPSLongitude")
+        if _lat is not None and _lng is not None:
+            lat, lng, source = float(_lat), float(_lng), "embedded"
+
+    make = (row.get("EXIF:Make") or row.get("QuickTime:Make") or "").strip()
+    model = (row.get("EXIF:Model") or row.get("QuickTime:Model") or "").strip()
+    camera = f"{make} {model}".strip() or None
+
+    return {"lat": lat, "lng": lng, "geotag_source": source, "camera": camera}
+
+
+def read_gps(image_path: Path) -> tuple[float, float, str] | tuple[None, None, str]:
+    m = read_metadata(image_path)
+    return m["lat"], m["lng"], m["geotag_source"]
+
+
+def write_gps(image_path: Path, lat: float, lng: float) -> Path:
+    """Write GPS to sidecar (creating it if needed). Returns sidecar path."""
+    et = get_et()
+    sc = sidecar_path(image_path)
+    et.execute(
+        "-overwrite_original",
+        f"-XMP:GPSLatitude={lat}",
+        f"-XMP:GPSLongitude={lng}",
+        str(sc),
+    )
+    return sc
+
+
+def remove_gps(image_path: Path) -> Path:
+    """Remove GPS from sidecar. Returns sidecar path."""
+    et = get_et()
+    sc = sidecar_path(image_path)
+    if sc.exists():
+        et.execute(
+            "-overwrite_original",
+            "-XMP:GPSLatitude=",
+            "-XMP:GPSLongitude=",
+            str(sc),
+        )
+    return sc
