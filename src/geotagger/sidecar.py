@@ -129,3 +129,34 @@ def remove_gps(image_path: Path) -> Path:
         logger.info(f"Remove GPS called on {image_path.name}: (already had no GPS)")
 
     return sc
+
+
+def write_datetime(image_path: Path, timestamp: int) -> Path:
+    """Write DateTimeOriginal to sidecar (creating it if needed). Returns sidecar path."""
+    # Read existing timestamp from image metadata
+    m = read_metadata(image_path)
+    old_ts = m["photo_datetime"]
+
+    # Convert Unix timestamp to EXIF format: "YYYY:MM:DD HH:MM:SS"
+    dt = datetime.fromtimestamp(timestamp)
+    exif_datetime = dt.strftime("%Y:%m:%d %H:%M:%S")
+
+    et = get_et()
+    sc = sidecar_path(image_path)
+    et.execute(
+        "-overwrite_original",
+        f"-XMP:DateTimeOriginal={exif_datetime}",
+        str(sc),
+    )
+
+    # Log the change
+    if old_ts and old_ts != 0:
+        old_dt = datetime.fromtimestamp(old_ts)
+        old_str = old_dt.strftime("%Y-%m-%d %H:%M:%S")
+        new_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+        diff_seconds = timestamp - old_ts
+        logger.info(f"Updated DateTimeOriginal for {image_path.name}: {old_str} → {new_str} ({diff_seconds:+d}s)")
+    else:
+        logger.info(f"Set DateTimeOriginal for {image_path.name}: {dt.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    return sc

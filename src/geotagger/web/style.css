@@ -51,6 +51,11 @@ button {
   font-size: 12px;
 }
 button:hover { background: #4a4a4a; }
+button.active {
+  background: #2a4a6e;
+  border-color: #4a90d9;
+  color: #7ab8f5;
+}
 button.danger { border-color: #a33; color: #f88; }
 button.danger:hover { background: #500; }
 

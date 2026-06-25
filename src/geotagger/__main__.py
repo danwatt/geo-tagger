@@ -36,6 +36,11 @@ def main():
         default=4,
         help="Number of worker threads for thumbnail generation (default: 4)"
     )
+    parser.add_argument(
+        "--no-scan",
+        action="store_true",
+        help="Skip automatic directory scanning at startup (assumes database is up-to-date)"
+    )
 
     args = parser.parse_args()
 
@@ -45,6 +50,10 @@ def main():
 
     # Set worker threads
     os.environ["GEOTAGGER_WORKERS"] = str(args.workers)
+
+    # Set no-scan flag
+    if args.no_scan:
+        os.environ["GEOTAGGER_NO_SCAN"] = "1"
 
     # Store scan directories in environment for main.py to pick up
     if args.scan_dirs:

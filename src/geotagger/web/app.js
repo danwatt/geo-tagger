@@ -169,6 +169,11 @@ function addBasemapControl() {
 }
 
 function bindToolbar() {
+  // View navigation
+  document.getElementById("timesync-view-btn").addEventListener("click", () => {
+    window.location.href = "/timesync.html";
+  });
+
   document.getElementById("select-month-btn").addEventListener("click", showMonthPicker);
   document.getElementById("filter-select").addEventListener("change", () => {
     if (selectedYear && selectedMonth) loadPhotos();

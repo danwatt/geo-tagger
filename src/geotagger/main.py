@@ -199,6 +199,8 @@ async def lifespan(app):
     set_executor_workers(max_workers)
 
     async with _et_lifespan(app):
+        no_scan = os.environ.get("GEOTAGGER_NO_SCAN") == "1"
+
         # Check for pre-configured scan directories
         scan_dirs_env = os.environ.get("GEOTAGGER_SCAN_DIRS")
         if scan_dirs_env:
@@ -207,19 +209,23 @@ async def lifespan(app):
                 # Initialize DB and thumbnails once (not tied to a specific root)
                 index.init_db()
                 thumbnails.init_thumbs()
-                print(f"Initialized cache with {len(scan_dirs)} scan directories")
 
-                # Scan all directories
-                for scan_dir in scan_dirs:
-                    print(f"Scanning {scan_dir}...")
-                    count, skipped, warnings = _scan_directory(scan_dir)
-                    if warnings:
-                        print(f"  Warnings: {len(warnings)}")
-                        for w in warnings[:5]:  # Show first 5 warnings
-                            print(f"    {w}")
+                if no_scan:
+                    print(f"Skipping scan (--no-scan), using existing database")
+                else:
+                    print(f"Initialized cache with {len(scan_dirs)} scan directories")
 
-                # Save the list of scanned directories
-                index.save_last_scan_roots([str(d) for d in scan_dirs])
+                    # Scan all directories
+                    for scan_dir in scan_dirs:
+                        print(f"Scanning {scan_dir}...")
+                        count, skipped, warnings = _scan_directory(scan_dir)
+                        if warnings:
+                            print(f"  Warnings: {len(warnings)}")
+                            for w in warnings[:5]:  # Show first 5 warnings
+                                print(f"    {w}")
+
+                    # Save the list of scanned directories
+                    index.save_last_scan_roots([str(d) for d in scan_dirs])
             except Exception as e:
                 print(f"Auto-scan failed: {e}")
         else:
@@ -230,7 +236,10 @@ async def lifespan(app):
                 try:
                     index.init_db(root)
                     thumbnails.init_thumbs(root)
-                    print(f"Auto-loaded index from {root}")
+                    if no_scan:
+                        print(f"Skipping scan (--no-scan), loaded index from {root}")
+                    else:
+                        print(f"Auto-loaded index from {root}")
                 except Exception as e:
                     print(f"Auto-load failed: {e}")
         yield
@@ -554,6 +563,49 @@ async def api_delete_place(place_id: int):
     """Delete a place."""
     index.delete_place(place_id)
     return {"success": True}
+
+
+class UpdateTimesRequest(BaseModel):
+    updates: dict[int, int]  # photo_id -> offset in seconds
+
+
+@app.post("/api/photos/update-times")
+async def api_update_times(req: UpdateTimesRequest):
+    """Batch update photo timestamps by applying offsets."""
+    loop = asyncio.get_running_loop()
+    updated = await loop.run_in_executor(_executor, _update_photo_times, req.updates)
+    return {"updated": updated}
+
+
+def _update_photo_times(updates: dict[int, int]) -> int:
+    """Apply time offsets to photos and write to sidecars."""
+    from geotagger.sidecar import write_datetime
+
+    updated = 0
+    for photo_id, offset_seconds in updates.items():
+        photo = index.get_photo(photo_id)
+        if not photo:
+            continue
+
+        # Calculate new timestamp
+        original_dt = photo["photo_datetime"]
+        if not original_dt or original_dt == 0:
+            continue
+
+        new_dt = original_dt + offset_seconds
+
+        # Write to sidecar
+        photo_path = Path(photo["path"])
+        write_datetime(photo_path, new_dt)
+
+        # Update database
+        db = index.get_db()
+        db.execute("UPDATE photos SET photo_datetime=? WHERE id=?", (new_dt, photo_id))
+        db.commit()
+
+        updated += 1
+
+    return updated
 
 
 # ── Static files (must be last) ───────────────────────────────────────────────
