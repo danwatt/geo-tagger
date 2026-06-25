@@ -15,8 +15,15 @@ def get_exiftool_path() -> str:
 
 EXIFTOOL_PATH: str = get_exiftool_path()
 
-# Cache directory relative to the scanned root (set at scan time)
-CACHE_DIR_NAME = ".geotagger"
+# Cache directory: can be absolute path or relative to scanned root
+# If GEOTAGGER_CACHE_DIR is set, use that as an absolute path
+# Otherwise, use CACHE_DIR_NAME relative to the scanned root
+def get_cache_dir() -> Path | None:
+    """Get the cache directory from environment, if set."""
+    cache_dir_env = os.environ.get("GEOTAGGER_CACHE_DIR")
+    return Path(cache_dir_env) if cache_dir_env else None
+
+CACHE_DIR_NAME = ".geotagger"  # Used when get_cache_dir() returns None
 
 # Thumbnail and preview dimensions
 THUMB_SIZE = 256

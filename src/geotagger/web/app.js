@@ -83,6 +83,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindToolbar();
   bindTimeline();
   await checkStatus();
+  // Auto-load photos if already scanned
+  await loadPhotos(true);
 });
 
 async function checkStatus() {
@@ -159,10 +161,6 @@ function addBasemapControl() {
 }
 
 function bindToolbar() {
-  document.getElementById("scan-btn").addEventListener("click", doScan);
-  document.getElementById("dir-input").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") doScan();
-  });
   document.getElementById("filter-select").addEventListener("change", () => loadPhotos());
   document.getElementById("place-search-btn").addEventListener("click", doPlaceSearch);
   document.getElementById("place-search").addEventListener("keydown", (e) => {
@@ -171,26 +169,6 @@ function bindToolbar() {
   document.getElementById("apply-latlng-btn").addEventListener("click", doApplyLatLng);
   document.getElementById("copy-location-btn").addEventListener("click", doCopyLocation);
   document.getElementById("remove-geotag-btn").addEventListener("click", doRemoveGeotag);
-}
-
-/* ── Scan ── */
-async function doScan() {
-  const dir = document.getElementById("dir-input").value.trim();
-  if (!dir) return;
-  setStatus("Scanning…");
-  try {
-    const res = await fetch("/api/scan", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ directory: dir }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || res.statusText);
-    setStatus(`Scanned ${data.count} files. ${data.warnings.length ? data.warnings.join(" | ") : ""}`);
-    await loadPhotos(true);
-  } catch (err) {
-    setStatus("Scan error: " + err.message, true);
-  }
 }
 
 /* ── Load photos ── */

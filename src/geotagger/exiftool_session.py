@@ -1,9 +1,11 @@
 from contextlib import asynccontextmanager
+import threading
 import exiftool
 from geotagger.config import EXIFTOOL_PATH
 
 _et: exiftool.ExifToolHelper | None = None
 _et_error: str | None = None
+_et_lock = threading.Lock()
 
 
 def get_et() -> exiftool.ExifToolHelper:
@@ -12,6 +14,11 @@ def get_et() -> exiftool.ExifToolHelper:
     if _et is None:
         raise RuntimeError("ExifTool session not started")
     return _et
+
+
+def get_et_lock() -> threading.Lock:
+    """Get the lock for thread-safe ExifTool access."""
+    return _et_lock
 
 
 def exiftool_status() -> dict:

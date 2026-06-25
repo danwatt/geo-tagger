@@ -3,15 +3,25 @@ import io
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
-from geotagger.config import THUMB_SIZE, PREVIEW_SIZE, CACHE_DIR_NAME, VIDEO_EXTENSIONS
-from geotagger.exiftool_session import get_et
+from geotagger.config import THUMB_SIZE, PREVIEW_SIZE, CACHE_DIR_NAME, get_cache_dir, VIDEO_EXTENSIONS
+from geotagger.exiftool_session import get_et, get_et_lock
 
 _thumbs_dir: Path | None = None
 
 
-def init_thumbs(root: Path):
+def init_thumbs(root: Path | None = None):
+    """Initialize thumbnails directory. If CACHE_DIR is set, use that; otherwise use root / CACHE_DIR_NAME."""
     global _thumbs_dir
-    _thumbs_dir = root / CACHE_DIR_NAME / "thumbs"
+
+    cache_dir_from_env = get_cache_dir()
+    if cache_dir_from_env:
+        cache_dir = cache_dir_from_env
+    elif root:
+        cache_dir = root / CACHE_DIR_NAME
+    else:
+        raise RuntimeError("Must specify root directory or set GEOTAGGER_CACHE_DIR")
+
+    _thumbs_dir = cache_dir / "thumbs"
     _thumbs_dir.mkdir(parents=True, exist_ok=True)
 
 
@@ -27,13 +37,16 @@ def _cache_key(path: Path, mtime: float, size: int) -> str:
 
 def _extract_embedded_preview(path: Path) -> bytes | None:
     et = get_et()
-    for tag in ("-PreviewImage", "-JpgFromRaw", "-ThumbnailImage"):
-        try:
-            data = et.execute("-b", tag, str(path), raw_bytes=True)
-            if data and len(data) > 100:
-                return data
-        except Exception:
-            pass
+    lock = get_et_lock()
+
+    with lock:
+        for tag in ("-PreviewImage", "-JpgFromRaw", "-ThumbnailImage"):
+            try:
+                data = et.execute("-b", tag, str(path), raw_bytes=True)
+                if data and len(data) > 100:
+                    return data
+            except Exception:
+                pass
     return None
 
 
@@ -127,10 +140,25 @@ def _stamp_play_icon(img: Image.Image):
     img.paste(Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB"), (0, 0))
 
 
+def thumbnail_exists(path: Path, mtime: float, size: int) -> bool:
+    """Check if a thumbnail already exists in the cache."""
+    try:
+        thumbs = _get_thumbs_dir()
+        key = _cache_key(path, mtime, size)
+        subdir = thumbs / key[:2]
+        cached = subdir / (key + "_thumb.jpg")
+        return cached.exists()
+    except Exception:
+        return False
+
+
 def get_thumbnail(path: Path, mtime: float, size: int) -> bytes:
     thumbs = _get_thumbs_dir()
-    key = _cache_key(path, mtime, size) + "_thumb.jpg"
-    cached = thumbs / key
+    key = _cache_key(path, mtime, size)
+    # Use first 2 chars of hash as subdirectory
+    subdir = thumbs / key[:2]
+    subdir.mkdir(exist_ok=True)
+    cached = subdir / (key + "_thumb.jpg")
     if cached.exists():
         return cached.read_bytes()
     is_video = path.suffix.lower() in VIDEO_EXTENSIONS
@@ -141,8 +169,11 @@ def get_thumbnail(path: Path, mtime: float, size: int) -> bytes:
 
 def get_preview(path: Path, mtime: float, size: int) -> bytes:
     thumbs = _get_thumbs_dir()
-    key = _cache_key(path, mtime, size) + "_preview.jpg"
-    cached = thumbs / key
+    key = _cache_key(path, mtime, size)
+    # Use first 2 chars of hash as subdirectory
+    subdir = thumbs / key[:2]
+    subdir.mkdir(exist_ok=True)
+    cached = subdir / (key + "_preview.jpg")
     if cached.exists():
         return cached.read_bytes()
     is_video = path.suffix.lower() in VIDEO_EXTENSIONS

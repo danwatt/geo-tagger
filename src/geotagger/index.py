@@ -1,16 +1,25 @@
 import sqlite3
 import time
 from pathlib import Path
-from geotagger.config import CACHE_DIR_NAME
+from geotagger.config import CACHE_DIR_NAME, get_cache_dir
 
 _db: sqlite3.Connection | None = None
 _db_path: Path | None = None
 
 
-def init_db(root: Path) -> sqlite3.Connection:
+def init_db(root: Path | None = None) -> sqlite3.Connection:
+    """Initialize the database. If CACHE_DIR is set, use that; otherwise use root / CACHE_DIR_NAME."""
     global _db, _db_path
-    cache_dir = root / CACHE_DIR_NAME
-    cache_dir.mkdir(exist_ok=True)
+
+    cache_dir_from_env = get_cache_dir()
+    if cache_dir_from_env:
+        cache_dir = cache_dir_from_env
+    elif root:
+        cache_dir = root / CACHE_DIR_NAME
+    else:
+        raise RuntimeError("Must specify root directory or set GEOTAGGER_CACHE_DIR")
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
     _db_path = cache_dir / "index.db"
     _db = sqlite3.connect(str(_db_path), check_same_thread=False)
     _db.row_factory = sqlite3.Row
@@ -127,24 +136,48 @@ def record_scan_root(root: str):
     db.commit()
 
 
-def get_last_scan_root() -> str | None:
-    """Return the last scanned root stored in the index DB, if the DB exists."""
-    # We can't use get_db() here since _db may not be initialized yet — search for the DB file
-    import os
-    # Check common locations: env var or a known default cache name
-    # We store this in a tiny sentinel file next to the script to avoid a chicken-and-egg problem
+def get_last_scan_roots() -> list[str]:
+    """Return the last scanned roots. Works with both old and new cache directory setups."""
+    # If using global cache directory, check there
+    cache_dir = get_cache_dir()
+    if cache_dir:
+        sentinel = cache_dir / ".last_scan_roots"
+        if sentinel.exists():
+            return [line.strip() for line in sentinel.read_text().splitlines() if line.strip()]
+        return []
+
+    # Legacy support: check project-level sentinel
     sentinel = Path(__file__).parent.parent.parent / ".geotagger_last_root"
     if sentinel.exists():
         root = sentinel.read_text().strip()
         db_path = Path(root) / CACHE_DIR_NAME / "index.db"
         if db_path.exists():
-            return root
-    return None
+            return [root]
+    return []
+
+
+def get_last_scan_root() -> str | None:
+    """Return the first (primary) last scanned root, for backward compatibility."""
+    roots = get_last_scan_roots()
+    return roots[0] if roots else None
+
+
+def save_last_scan_roots(roots: list[str]):
+    """Save the list of scanned roots."""
+    cache_dir = get_cache_dir()
+    if cache_dir:
+        sentinel = cache_dir / ".last_scan_roots"
+        sentinel.write_text("\n".join(roots))
+    else:
+        # Legacy: only save first root
+        sentinel = Path(__file__).parent.parent.parent / ".geotagger_last_root"
+        if roots:
+            sentinel.write_text(roots[0])
 
 
 def save_last_scan_root(root: str):
-    sentinel = Path(__file__).parent.parent.parent / ".geotagger_last_root"
-    sentinel.write_text(root)
+    """Save a single scan root, for backward compatibility."""
+    save_last_scan_roots([root])
 
 
 def is_fresh(path: str, mtime: float, sidecar_path: str | None, sidecar_mtime: float | None) -> bool:
