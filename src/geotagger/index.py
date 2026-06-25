@@ -40,6 +40,8 @@ def init_db(root: Path) -> sqlite3.Connection:
         _db.execute("ALTER TABLE photos ADD COLUMN camera TEXT")
     if "photo_datetime" not in cols:
         _db.execute("ALTER TABLE photos ADD COLUMN photo_datetime INTEGER")
+    if "gps_accuracy" not in cols:
+        _db.execute("ALTER TABLE photos ADD COLUMN gps_accuracy REAL")
     _db.execute("""
         CREATE TABLE IF NOT EXISTS scans (
             id INTEGER PRIMARY KEY,
@@ -62,22 +64,25 @@ def upsert_photo(
     mtime: float, size: int, lat, lng, geotag_source: str,
     sidecar_path: str | None, sidecar_mtime: float | None,
     camera: str | None = None, photo_datetime: int | None = None,
+    gps_accuracy: float | None = None,
 ):
     db = get_db()
     db.execute("""
         INSERT INTO photos
             (path, filename, dir, ext, media_type, mtime, size, lat, lng,
-             geotag_source, sidecar_path, sidecar_mtime, camera, photo_datetime, scanned_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             geotag_source, sidecar_path, sidecar_mtime, camera, photo_datetime,
+             gps_accuracy, scanned_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(path) DO UPDATE SET
             filename=excluded.filename, dir=excluded.dir, ext=excluded.ext,
             media_type=excluded.media_type, mtime=excluded.mtime, size=excluded.size,
             lat=excluded.lat, lng=excluded.lng, geotag_source=excluded.geotag_source,
             sidecar_path=excluded.sidecar_path, sidecar_mtime=excluded.sidecar_mtime,
             camera=excluded.camera, photo_datetime=excluded.photo_datetime,
-            scanned_at=excluded.scanned_at
+            gps_accuracy=excluded.gps_accuracy, scanned_at=excluded.scanned_at
     """, (path, filename, dir_, ext, media_type, mtime, size, lat, lng,
-          geotag_source, sidecar_path, sidecar_mtime, camera, photo_datetime, time.time()))
+          geotag_source, sidecar_path, sidecar_mtime, camera, photo_datetime,
+          gps_accuracy, time.time()))
     db.commit()
 
 
@@ -145,7 +150,7 @@ def save_last_scan_root(root: str):
 def is_fresh(path: str, mtime: float, sidecar_path: str | None, sidecar_mtime: float | None) -> bool:
     """Return True if the indexed row is up-to-date (no re-scan needed)."""
     row = get_db().execute(
-        "SELECT mtime, sidecar_path, sidecar_mtime, camera, photo_datetime FROM photos WHERE path=?", (path,)
+        "SELECT mtime, sidecar_path, sidecar_mtime, camera, photo_datetime, gps_accuracy FROM photos WHERE path=?", (path,)
     ).fetchone()
     if not row:
         return False
@@ -156,7 +161,7 @@ def is_fresh(path: str, mtime: float, sidecar_path: str | None, sidecar_mtime: f
     if sidecar_mtime is not None and row["sidecar_mtime"] is not None:
         if abs(row["sidecar_mtime"] - sidecar_mtime) > 1:
             return False
-    # Re-index if metadata was never fully read (NULL = not yet indexed; 0 = checked, absent)
-    if row["camera"] is None or row["photo_datetime"] is None:
+    # Re-index if metadata was never fully read (NULL = not yet indexed)
+    if row["camera"] is None or row["photo_datetime"] is None or row["gps_accuracy"] is None:
         return False
     return True

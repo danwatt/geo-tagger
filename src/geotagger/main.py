@@ -97,6 +97,7 @@ async def api_scan(req: ScanRequest):
                 lat=meta["lat"], lng=meta["lng"], geotag_source=meta["geotag_source"],
                 sidecar_path=sc_path_str, sidecar_mtime=sc_mtime,
                 camera=meta["camera"], photo_datetime=meta["photo_datetime"],
+                gps_accuracy=meta["gps_accuracy"],
             )
             count += 1
         except Exception as e:
@@ -117,6 +118,7 @@ async def api_photos(
             "id": r["id"], "filename": r["filename"], "media_type": r["media_type"],
             "lat": r["lat"], "lng": r["lng"], "geotag_source": r["geotag_source"],
             "camera": r["camera"], "photo_datetime": r["photo_datetime"],
+            "gps_accuracy": r["gps_accuracy"] if r["gps_accuracy"] and r["gps_accuracy"] > 0 else None,
         }
         for r in rows
     ]
@@ -176,6 +178,7 @@ async def api_photo(photo_id: int):
         "camera": f"{extra.get('EXIF:Make', '')} {extra.get('EXIF:Model', '')}".strip() or None,
         "datetime": extra.get("EXIF:DateTimeOriginal"),
         "dimensions": extra.get("Composite:ImageSize"),
+        "gps_accuracy": row["gps_accuracy"] if row["gps_accuracy"] and row["gps_accuracy"] > 0 else None,
     }
 
 

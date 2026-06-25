@@ -49,6 +49,7 @@ def read_metadata(image_path: Path) -> dict:
         "QuickTime:Make", "QuickTime:Model",
         "EXIF:DateTimeOriginal", "QuickTime:CreateDate",
         "XMP:DateTimeOriginal",
+        "EXIF:GPSHPositioningError",
     ])
     row = result[0] if result else {}
 
@@ -67,8 +68,12 @@ def read_metadata(image_path: Path) -> dict:
               or row.get("QuickTime:CreateDate"))
     photo_datetime = _parse_exif_datetime(str(raw_dt)) if raw_dt else 0
 
+    raw_acc = row.get("EXIF:GPSHPositioningError")
+    gps_accuracy = float(raw_acc) if raw_acc is not None else -1.0
+
     return {"lat": lat, "lng": lng, "geotag_source": source,
-            "camera": camera, "photo_datetime": photo_datetime}
+            "camera": camera, "photo_datetime": photo_datetime,
+            "gps_accuracy": gps_accuracy}
 
 
 def read_gps(image_path: Path) -> tuple[float, float, str] | tuple[None, None, str]:

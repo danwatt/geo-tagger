@@ -9,6 +9,7 @@ let map;
 let guessMarker = null;        // temporary guess pin (amber ?)
 let guessSourceMarkers = [];   // source photo pins shown during guess
 let guessPending = null;       // { lat, lng } awaiting apply/dismiss
+let accuracyCircle = null;     // L.circle shown for selected photo's GPS accuracy
 
 /* ── Date range filter state ── */
 let dateRangeMin = 0;   // Unix ts — absolute min across all photos
@@ -303,6 +304,7 @@ function handleThumbClick(e, id, idx) {
   refreshSelectionUI();
   showDetail(id);
   const photo = filteredPhotos[idx];
+  showAccuracyCircle(photo);
   if (photo?.lat != null) map.flyTo([photo.lat, photo.lng], Math.max(map.getZoom(), 14), { duration: 0.6 });
 }
 
@@ -368,6 +370,7 @@ function addOrUpdateMarker(photo) {
     selectedIds.add(photo.id);
     refreshSelectionUI();
     showDetail(photo.id);
+    showAccuracyCircle(photo);
   });
 
   marker.on("dragend", async () => {
@@ -488,6 +491,7 @@ async function showDetail(id) {
       ["Dimensions", data.dimensions || "—"],
       ["Latitude", data.lat != null ? data.lat.toFixed(6) : "—"],
       ["Longitude", data.lng != null ? data.lng.toFixed(6) : "—"],
+      ["GPS accuracy", data.gps_accuracy != null ? `±${data.gps_accuracy.toFixed(1)} m` : "—"],
       ["Geotag source", data.geotag_source],
       ["Sidecar", data.sidecar_path ? data.sidecar_path.split(/[\\/]/).pop() : "none"],
     ];
@@ -628,6 +632,22 @@ function makeSourcePinIcon(deltaSec, isBefore, windowSec = 900) {
     iconAnchor: [sz / 2, sz / 2],
     tooltipAnchor: [0, -(sz / 2)],
   });
+}
+
+/* ── GPS accuracy circle ── */
+function showAccuracyCircle(photo) {
+  if (accuracyCircle) { accuracyCircle.remove(); accuracyCircle = null; }
+  if (photo?.lat == null || !(photo.gps_accuracy > 0)) return;
+  const color = camColor(photo.camera);
+  accuracyCircle = L.circle([photo.lat, photo.lng], {
+    radius: photo.gps_accuracy,
+    color,
+    fillColor: color,
+    fillOpacity: 0.12,
+    weight: 1.5,
+    opacity: 0.5,
+    interactive: false,
+  }).addTo(map);
 }
 
 function makeGuessPinIcon() {
