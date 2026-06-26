@@ -26,6 +26,11 @@ def main():
         help="Host to bind to (default: 127.0.0.1)"
     )
     parser.add_argument(
+        "--network",
+        action="store_true",
+        help="Bind to all network interfaces (0.0.0.0) to allow access from local network"
+    )
+    parser.add_argument(
         "--port",
         type=int,
         help="Port to bind to (default: 8000)"
@@ -69,10 +74,57 @@ def main():
     # Import config after setting env vars
     from geotagger.config import HOST, PORT
 
+    # Determine host to bind to
+    if args.network:
+        bind_host = "0.0.0.0"
+        print("Binding to all network interfaces (0.0.0.0) - accessible from local network")
+    elif args.host:
+        bind_host = args.host
+    else:
+        bind_host = HOST
+
+    bind_port = args.port if args.port else PORT
+
+    # Print access information
+    if bind_host == "0.0.0.0":
+        import socket
+        print(f"\nBinding to 0.0.0.0:{bind_port}")
+        print(f"Server will be accessible at:")
+        print(f"  - http://localhost:{bind_port} (this computer)")
+
+        # Try to get all local IP addresses
+        try:
+            hostname = socket.gethostname()
+            # Get all IP addresses associated with this host
+            ip_list = socket.getaddrinfo(hostname, None, socket.AF_INET)
+            ips = set()
+            for addr_info in ip_list:
+                ip = addr_info[4][0]
+                if not ip.startswith("127."):
+                    ips.add(ip)
+
+            if ips:
+                for ip in sorted(ips):
+                    print(f"  - http://{ip}:{bind_port} (from local network)")
+            else:
+                # Fallback
+                local_ip = socket.gethostbyname(hostname)
+                print(f"  - http://{local_ip}:{bind_port} (from local network)")
+        except Exception as e:
+            print(f"  Could not determine local IP: {e}")
+
+        print("\nNOTE: If you cannot connect from another device:")
+        print("  1. Check Windows Firewall - you may need to allow port", bind_port)
+        print("  2. Ensure devices are on the same network")
+        print("  3. Try accessing from this computer first using the IP above")
+        print()
+    else:
+        print(f"Server accessible at: http://{bind_host}:{bind_port}")
+
     uvicorn.run(
         "geotagger.main:app",
-        host=args.host if args.host else HOST,
-        port=args.port if args.port else PORT,
+        host=bind_host,
+        port=bind_port,
         reload=False,
         limit_concurrency=None,  # Remove connection limit
         backlog=2048,  # Increase connection backlog
