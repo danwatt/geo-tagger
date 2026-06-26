@@ -67,6 +67,56 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
             created_at REAL NOT NULL
         )
     """)
+
+    # Create R*Tree spatial index for photo locations
+    # R*Tree uses min/max bounds, so for a point we use same value for min and max
+    _db.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS photos_spatial USING rtree(
+            id,              -- references photos.id
+            min_lat, max_lat,
+            min_lng, max_lng
+        )
+    """)
+
+    # Create triggers to keep the spatial index in sync
+    # Insert trigger
+    _db.execute("""
+        CREATE TRIGGER IF NOT EXISTS photos_spatial_insert AFTER INSERT ON photos
+        WHEN NEW.lat IS NOT NULL AND NEW.lng IS NOT NULL
+        BEGIN
+            INSERT INTO photos_spatial (id, min_lat, max_lat, min_lng, max_lng)
+            VALUES (NEW.id, NEW.lat, NEW.lat, NEW.lng, NEW.lng);
+        END
+    """)
+
+    # Update trigger
+    _db.execute("""
+        CREATE TRIGGER IF NOT EXISTS photos_spatial_update AFTER UPDATE ON photos
+        BEGIN
+            DELETE FROM photos_spatial WHERE id = OLD.id;
+            INSERT INTO photos_spatial (id, min_lat, max_lat, min_lng, max_lng)
+            SELECT NEW.id, NEW.lat, NEW.lat, NEW.lng, NEW.lng
+            WHERE NEW.lat IS NOT NULL AND NEW.lng IS NOT NULL;
+        END
+    """)
+
+    # Delete trigger
+    _db.execute("""
+        CREATE TRIGGER IF NOT EXISTS photos_spatial_delete AFTER DELETE ON photos
+        BEGIN
+            DELETE FROM photos_spatial WHERE id = OLD.id;
+        END
+    """)
+
+    # Populate spatial index for existing photos (migration)
+    _db.execute("""
+        INSERT OR IGNORE INTO photos_spatial (id, min_lat, max_lat, min_lng, max_lng)
+        SELECT id, lat, lat, lng, lng FROM photos WHERE lat IS NOT NULL AND lng IS NOT NULL
+    """)
+
+    # Create index on photo_datetime for fast time-based queries
+    _db.execute("CREATE INDEX IF NOT EXISTS idx_photos_datetime ON photos(photo_datetime)")
+
     _db.commit()
     return _db
 
@@ -157,6 +207,42 @@ def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str |
 
 def get_photo(photo_id: int) -> sqlite3.Row | None:
     return get_db().execute("SELECT * FROM photos WHERE id=?", (photo_id,)).fetchone()
+
+
+def get_photos_in_bbox(min_lat: float, max_lat: float, min_lng: float, max_lng: float) -> list[sqlite3.Row]:
+    """Get photos within a bounding box using the spatial index."""
+    db = get_db()
+    # R*Tree requires queries in the form: max_X >= min_query AND min_X <= max_query
+    # This finds all items whose bounding box overlaps with the query bounding box
+    # Since we store points (min_lat = max_lat), this becomes: lat >= min_lat AND lat <= max_lat
+    return db.execute("""
+        SELECT photos.* FROM photos
+        INNER JOIN photos_spatial ON photos.id = photos_spatial.id
+        WHERE photos_spatial.max_lat >= ?
+          AND photos_spatial.min_lat <= ?
+          AND photos_spatial.max_lng >= ?
+          AND photos_spatial.min_lng <= ?
+        ORDER BY photo_datetime, filename
+    """, (min_lat, max_lat, min_lng, max_lng)).fetchall()
+
+
+def get_photos_by_time_range(min_time: int, max_time: int, has_geotag: bool | None = None) -> list[sqlite3.Row]:
+    """Get photos within a time range, optionally filtered by geotag presence."""
+    db = get_db()
+    clauses = ["photo_datetime BETWEEN ? AND ?"]
+    params = [min_time, max_time]
+
+    if has_geotag is True:
+        clauses.append("lat IS NOT NULL")
+    elif has_geotag is False:
+        clauses.append("lat IS NULL")
+
+    where = " AND ".join(clauses)
+    return db.execute(f"""
+        SELECT * FROM photos
+        WHERE {where}
+        ORDER BY photo_datetime, filename
+    """, params).fetchall()
 
 
 def record_scan_root(root: str):

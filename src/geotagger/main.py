@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -13,6 +14,14 @@ from pydantic import BaseModel
 from geotagger.exiftool_session import lifespan as _et_lifespan, exiftool_status
 from geotagger import index, scanner, sidecar, thumbnails
 from geotagger.exiftool_session import get_et, get_et_lock
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 # Thread pool for blocking I/O operations (thumbnail generation, etc.)
 # This will be initialized with the configured number of workers
@@ -373,6 +382,131 @@ async def api_photos(
         }
         for r in rows
     ]
+
+
+@app.get("/api/photos/by-area")
+async def api_photos_by_area(
+    lat: float = Query(...),
+    lng: float = Query(...),
+    radius: float = Query(...),
+    geotagged: str = Query("all", pattern="^(all|yes|no)$"),
+):
+    """Get photos within a circular area, plus nearby non-geotagged photos within 15 minutes."""
+    t_start = time.time()
+    logger.info(f"Area query: lat={lat}, lng={lng}, radius={radius}m, filter={geotagged}")
+
+    from math import radians, cos, sin, asin, sqrt
+
+    def haversine(lat1, lon1, lat2, lon2):
+        """Calculate distance in meters between two points."""
+        R = 6371000  # Earth radius in meters
+        lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+        c = 2 * asin(sqrt(a))
+        return R * c
+
+    # Calculate bounding box for the radius
+    t0 = time.time()
+    # Approximate: 1 degree latitude ≈ 111km
+    lat_offset = radius / 111000.0
+    # Longitude varies by latitude
+    lng_offset = radius / (111000.0 * cos(radians(lat)))
+
+    min_lat = lat - lat_offset
+    max_lat = lat + lat_offset
+    min_lng = lng - lng_offset
+    max_lng = lng + lng_offset
+    logger.info(f"  Bbox calculation: {(time.time() - t0)*1000:.2f}ms")
+
+    # Use spatial index to get candidate photos in bounding box (much faster!)
+    t1 = time.time()
+    bbox_photos = index.get_photos_in_bbox(min_lat, max_lat, min_lng, max_lng)
+    logger.info(f"  Spatial index query: {(time.time() - t1)*1000:.2f}ms, found {len(bbox_photos)} candidates")
+
+    # Filter to exact circle using Haversine
+    t2 = time.time()
+    photos_in_area = []
+    times_in_area = []
+
+    for r in bbox_photos:
+        dist = haversine(lat, lng, r["lat"], r["lng"])
+        if dist <= radius:
+            photos_in_area.append(r)
+            if r["photo_datetime"] and r["photo_datetime"] > 0:
+                times_in_area.append(r["photo_datetime"])
+    logger.info(f"  Haversine filtering: {(time.time() - t2)*1000:.2f}ms, {len(photos_in_area)} in circle")
+
+    # Add non-geotagged photos within 15 minutes of any photo in the area
+    if times_in_area:
+        import bisect
+
+        t3 = time.time()
+        time_window = 15 * 60  # 15 minutes in seconds
+
+        # Sort times for efficient binary search
+        times_sorted = sorted(times_in_area)
+
+        # Query a broader time range to get candidates
+        min_time = min(times_in_area) - time_window
+        max_time = max(times_in_area) + time_window
+
+        # Efficiently query only photos in the time window that aren't geotagged
+        nearby_photos = index.get_photos_by_time_range(min_time, max_time, has_geotag=False)
+        logger.info(f"  Time range query: {(time.time() - t3)*1000:.2f}ms, found {len(nearby_photos)} non-geotagged in time window")
+
+        # Check each photo to see if it's within 15min of ANY specific photo in area
+        # Use binary search for O(n log m) instead of O(n*m)
+        t4 = time.time()
+        added = 0
+        for r in nearby_photos:
+            photo_time = r["photo_datetime"]
+            # Find insertion point in sorted times
+            idx = bisect.bisect_left(times_sorted, photo_time)
+
+            # Check the time at idx and idx-1 (closest times on either side)
+            found = False
+            if idx < len(times_sorted) and abs(times_sorted[idx] - photo_time) <= time_window:
+                found = True
+            elif idx > 0 and abs(times_sorted[idx - 1] - photo_time) <= time_window:
+                found = True
+
+            if found:
+                photos_in_area.append(r)
+                added += 1
+
+        logger.info(f"  Time proximity check (binary search): {(time.time() - t4)*1000:.2f}ms, added {added} photos")
+
+    # Apply geotagged filter
+    t5 = time.time()
+    before_filter = len(photos_in_area)
+    if geotagged == "yes":
+        photos_in_area = [r for r in photos_in_area if r["lat"] is not None]
+    elif geotagged == "no":
+        photos_in_area = [r for r in photos_in_area if r["lat"] is None]
+    logger.info(f"  Geotagged filter: {(time.time() - t5)*1000:.2f}ms, {before_filter} -> {len(photos_in_area)}")
+
+    # Sort by time, then filename
+    t6 = time.time()
+    photos_in_area.sort(key=lambda r: (r["photo_datetime"] or 0, r["filename"]))
+    logger.info(f"  Sort: {(time.time() - t6)*1000:.2f}ms")
+
+    # Build response
+    t7 = time.time()
+    result = [
+        {
+            "id": r["id"], "filename": r["filename"], "media_type": r["media_type"],
+            "lat": r["lat"], "lng": r["lng"], "geotag_source": r["geotag_source"],
+            "camera": r["camera"], "photo_datetime": r["photo_datetime"],
+            "gps_accuracy": r["gps_accuracy"] if r["gps_accuracy"] and r["gps_accuracy"] > 0 else None,
+        }
+        for r in photos_in_area
+    ]
+    logger.info(f"  Response build: {(time.time() - t7)*1000:.2f}ms")
+    logger.info(f"TOTAL: {(time.time() - t_start)*1000:.2f}ms, returning {len(result)} photos")
+
+    return result
 
 
 @app.get("/api/thumbnail/{photo_id}")

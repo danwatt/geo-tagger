@@ -16,8 +16,13 @@ let selectedMonth = null;
 /* ── Places state ── */
 let places = [];
 let placeShapes = {};  // place_id -> L.Rectangle or L.Circle
-let drawingMode = null;  // null | "rectangle" | "circle"
+let drawingMode = null;  // null | "rectangle" | "circle" | "area-select"
 let drawingShape = null;  // temporary shape being drawn
+
+/* ── Area selection state ── */
+let areaSelectMode = false;
+let areaSelectCircle = null;
+let areaSelectParams = null;  // { lat, lng, radius }
 
 /* ── Date range filter state ── */
 let dateRangeMin = 0;   // Unix ts — absolute min across all photos
@@ -175,8 +180,13 @@ function bindToolbar() {
   });
 
   document.getElementById("select-month-btn").addEventListener("click", showMonthPicker);
+  document.getElementById("select-area-btn").addEventListener("click", startAreaSelection);
   document.getElementById("filter-select").addEventListener("change", () => {
-    if (selectedYear && selectedMonth) loadPhotos();
+    if (selectedYear && selectedMonth) {
+      loadPhotos();
+    } else if (areaSelectParams) {
+      loadPhotosByArea(areaSelectParams.lat, areaSelectParams.lng, areaSelectParams.radius);
+    }
   });
   document.getElementById("place-search-btn").addEventListener("click", doPlaceSearch);
   document.getElementById("place-search").addEventListener("keydown", (e) => {
@@ -278,6 +288,14 @@ async function selectMonth(year, month) {
   selectedYear = year;
   selectedMonth = month;
   hideMonthPicker();
+
+  // Clear area selection
+  areaSelectParams = null;
+  if (areaSelectCircle) {
+    map.removeLayer(areaSelectCircle);
+    areaSelectCircle = null;
+  }
+  document.getElementById("selected-area-label").textContent = "";
 
   // Update label
   document.getElementById("selected-month-label").textContent =
@@ -584,6 +602,130 @@ async function confirmDeletePlace(place) {
     await loadPlaces();
   } catch (err) {
     setStatus(`Error deleting place: ${err.message}`, true);
+  }
+}
+
+/* ── Area Selection ── */
+function startAreaSelection() {
+  if (drawingMode) {
+    stopDrawing();
+  }
+
+  areaSelectMode = true;
+  drawingMode = "area-select";
+  setStatus("Draw a circle on the map to select photos in that area", false);
+  map.getContainer().style.cursor = "crosshair";
+
+  // Disable map dragging while drawing
+  map.dragging.disable();
+
+  // Set up drawing handlers
+  map.once("mousedown", onAreaSelectStart);
+}
+
+function onAreaSelectStart(e) {
+  drawStartLatLng = e.latlng;
+
+  drawingShape = L.circle(e.latlng, {
+    radius: 0,
+    color: "#e0a040",
+    weight: 2,
+    fillOpacity: 0.2
+  }).addTo(map);
+
+  map.on("mousemove", onAreaSelectMove);
+  map.once("mouseup", onAreaSelectEnd);
+}
+
+function onAreaSelectMove(e) {
+  if (!drawingShape || !drawStartLatLng) return;
+  const radius = drawStartLatLng.distanceTo(e.latlng);
+  drawingShape.setRadius(radius);
+}
+
+async function onAreaSelectEnd(e) {
+  map.off("mousemove", onAreaSelectMove);
+
+  if (!drawingShape || !drawStartLatLng) {
+    stopAreaSelection();
+    return;
+  }
+
+  const radius = drawingShape.getRadius();
+
+  // Check minimum size
+  if (radius < 2) {
+    alert("Area is too small. Please drag to create a larger area.");
+    stopAreaSelection();
+    return;
+  }
+
+  // Store the circle for display
+  if (areaSelectCircle) {
+    map.removeLayer(areaSelectCircle);
+  }
+  areaSelectCircle = drawingShape;
+  areaSelectCircle.setStyle({ color: "#4a90d9", weight: 2 });
+
+  // Clear drawing state
+  drawingShape = null;
+  drawingMode = null;
+  map.getContainer().style.cursor = "";
+  map.dragging.enable();
+
+  // Load photos in this area
+  const center = areaSelectCircle.getLatLng();
+
+  // Store params for filter changes
+  areaSelectParams = { lat: center.lat, lng: center.lng, radius: radius };
+
+  await loadPhotosByArea(center.lat, center.lng, radius);
+
+  // Update label
+  document.getElementById("selected-area-label").textContent =
+    `Area: ${(radius / 1000).toFixed(2)}km radius`;
+
+  // Clear month selection
+  selectedYear = null;
+  selectedMonth = null;
+  document.getElementById("selected-month-label").textContent = "No month selected";
+}
+
+function stopAreaSelection() {
+  areaSelectMode = false;
+  drawingMode = null;
+  map.getContainer().style.cursor = "";
+  map.dragging.enable();
+  map.off("mousedown", onAreaSelectStart);
+  map.off("mousemove", onAreaSelectMove);
+  map.off("mouseup", onAreaSelectEnd);
+
+  if (drawingShape) {
+    map.removeLayer(drawingShape);
+    drawingShape = null;
+  }
+}
+
+async function loadPhotosByArea(lat, lng, radius) {
+  const filter = document.getElementById("filter-select").value;
+
+  try {
+    setStatus("Loading photos in area...");
+    const res = await fetch(`/api/photos/by-area?lat=${lat}&lng=${lng}&radius=${radius}&geotagged=${filter}`);
+
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    photos = await res.json();
+
+    // Pre-assign colors so the legend order is stable
+    photos.forEach(p => camColor(p.camera));
+    renderLegend();
+    buildHistogram();
+    applyFilters(true);
+
+    setStatus(`Loaded ${photos.length} photos in area`);
+  } catch (err) {
+    setStatus("Load error: " + err.message, true);
   }
 }
 
