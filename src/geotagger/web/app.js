@@ -194,6 +194,9 @@ function bindToolbar() {
   document.getElementById("timesync-view-btn").addEventListener("click", () => {
     window.location.href = "/timesync.html";
   });
+  document.getElementById("people-view-btn").addEventListener("click", () => {
+    window.location.href = "/people.html";
+  });
 
   document.getElementById("select-month-btn").addEventListener("click", showMonthPicker);
   document.getElementById("select-area-btn").addEventListener("click", startAreaSelection);

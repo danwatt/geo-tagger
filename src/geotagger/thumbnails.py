@@ -180,3 +180,39 @@ def get_preview(path: Path, mtime: float, size: int) -> bytes:
     data = _make_thumbnail(path, PREVIEW_SIZE, is_video=is_video)
     cached.write_bytes(data)
     return data
+
+
+def get_face_crop(path: Path, mtime: float, size: int, bbox: tuple[float, float, float, float],
+                  margin: float = 0.4, out_size: int = 160) -> bytes:
+    """Return a square JPEG crop of one face, cropped from the cached preview.
+
+    bbox is normalized (0..1) to the preview. The crop is padded by `margin`
+    (fraction of the box size) and squared off, then cached on disk keyed by
+    the photo and the box so the grid loads fast.
+    """
+    thumbs = _get_thumbs_dir()
+    bbox_key = hashlib.sha1(",".join(f"{v:.4f}" for v in bbox).encode()).hexdigest()[:10]
+    key = _cache_key(path, mtime, size)
+    subdir = thumbs / key[:2]
+    subdir.mkdir(exist_ok=True)
+    cached = subdir / f"{key}_face_{bbox_key}.jpg"
+    if cached.exists():
+        return cached.read_bytes()
+
+    img = Image.open(io.BytesIO(get_preview(path, mtime, size))).convert("RGB")
+    w, h = img.size
+    x1, y1, x2, y2 = bbox[0] * w, bbox[1] * h, bbox[2] * w, bbox[3] * h
+    bw, bh = x2 - x1, y2 - y1
+    # Pad to a square box centred on the face so crops are uniform.
+    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+    half = max(bw, bh) * (1 + margin) / 2
+    left, top = int(max(0, cx - half)), int(max(0, cy - half))
+    right, bottom = int(min(w, cx + half)), int(min(h, cy + half))
+    crop = img.crop((left, top, right, bottom))
+    crop = crop.resize((out_size, out_size), Image.LANCZOS)
+
+    buf = io.BytesIO()
+    crop.save(buf, format="JPEG", quality=85)
+    data = buf.getvalue()
+    cached.write_bytes(data)
+    return data

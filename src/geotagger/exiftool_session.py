@@ -29,13 +29,22 @@ def exiftool_status() -> dict:
     return {"ok": True}
 
 
-@asynccontextmanager
-async def lifespan(app):
+def start_et() -> bool:
+    """Start the shared ExifTool session. Returns True if it's ready.
+
+    Safe to call multiple times (no-op if already started). Used by both the
+    server lifespan and standalone scripts so RAW/HEIC/video preview extraction
+    works in either context.
+    """
     global _et, _et_error
+    if _et is not None:
+        return True
     try:
         _et = exiftool.ExifToolHelper(executable=EXIFTOOL_PATH)
         version = _et.execute("-ver").strip()
+        _et_error = None
         print(f"ExifTool {version} ready ({EXIFTOOL_PATH})")
+        return True
     except FileNotFoundError:
         _et = None
         _et_error = (
@@ -43,11 +52,24 @@ async def lifespan(app):
             "Run: uv run python scripts/get_exiftool.py"
         )
         print(f"WARNING: {_et_error}")
+        return False
     except Exception as e:
         _et = None
         _et_error = str(e)
         print(f"WARNING: ExifTool startup failed: {e}")
-    yield
+        return False
+
+
+def stop_et():
+    """Terminate the shared ExifTool session if running."""
+    global _et
     if _et is not None:
         _et.terminate()
         _et = None
+
+
+@asynccontextmanager
+async def lifespan(app):
+    start_et()
+    yield
+    stop_et()

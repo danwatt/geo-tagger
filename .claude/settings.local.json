@@ -6,7 +6,8 @@
       "Bash(python3.13 --version)",
       "PowerShell(New-Item -ItemType Directory -Force \"C:\\\\Users\\\\danwa\\\\PycharmProjects\\\\geo-tagger\\\\src\\\\geotagger\\\\web\")",
       "PowerShell(New-Item -ItemType Directory -Force \"C:\\\\Users\\\\danwa\\\\PycharmProjects\\\\geo-tagger\\\\scripts\")",
-      "PowerShell(New-Item -ItemType Directory -Force \"C:\\\\Users\\\\danwa\\\\PycharmProjects\\\\geo-tagger\\\\tools\")"
+      "PowerShell(New-Item -ItemType Directory -Force \"C:\\\\Users\\\\danwa\\\\PycharmProjects\\\\geo-tagger\\\\tools\")",
+      "Bash(uv add *)"
     ]
   }
 }

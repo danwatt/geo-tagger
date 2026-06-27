@@ -1,0 +1,175 @@
+/* ── People page layout (mirrors the 3-pane #main of the geo page) ── */
+#people-main {
+  display: grid;
+  grid-template-columns: 220px 1fr 340px;
+  flex: 1;
+  overflow: hidden;
+}
+
+#scan-status { color: #888; font-size: 11px; }
+
+/* ── Left: people list ── */
+#people-pane {
+  display: flex;
+  flex-direction: column;
+  background: #1e1e1e;
+  border-right: 1px solid #333;
+  overflow: hidden;
+}
+.people-list { overflow-y: auto; flex: 1; padding: 6px; }
+
+.person-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px;
+  margin-bottom: 3px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+.person-item:hover { background: #2a2a2a; }
+.person-item.active {
+  background: #2a4a6e;
+  border-color: #4a90d9;
+  color: #cfe6ff;
+}
+.person-item .person-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.person-item .person-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: #aaa;
+  background: #383838;
+  border-radius: 10px;
+  padding: 1px 7px;
+}
+.person-item.active .person-count { background: #1e3a5e; color: #bcdcff; }
+.person-item .person-del {
+  flex-shrink: 0;
+  visibility: hidden;
+  color: #f88;
+  font-weight: bold;
+  padding: 0 2px;
+}
+.person-item:hover .person-del { visibility: visible; }
+
+.people-sep { height: 1px; background: #333; margin: 6px 4px; }
+
+.people-add {
+  margin: 6px;
+  flex-shrink: 0;
+}
+
+/* ── Center: faces grid (reuses #grid / .thumb-cell from style.css) ── */
+.thumb-cell .face-label {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: rgba(0,0,0,.6);
+  color: #eee;
+  font-size: 10px;
+  padding: 2px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* A clickable suggestion chip on unlabeled faces */
+.thumb-cell .face-suggest {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: rgba(42, 74, 110, .85);
+  color: #cfe6ff;
+  font-size: 10px;
+  padding: 2px 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.thumb-cell .face-suggest:hover { background: rgba(42, 74, 110, 1); }
+.thumb-cell .face-suggest .sug-check {
+  font-weight: bold;
+  color: #7ed87e;
+}
+.thumb-cell .face-suggest .sug-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.thumb-cell .face-score {
+  position: absolute;
+  top: 2px; right: 3px;
+  font-size: 9px;
+  color: #ccc;
+  background: rgba(0,0,0,.5);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+
+/* ── Event group headers in the guesses grid ── */
+.face-group-header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 4px 4px;
+  margin-top: 6px;
+  border-bottom: 1px solid #3a5a7a;
+  user-select: none;
+}
+.face-group-label { font-size: 12px; font-weight: 600; color: #7ab8f5; }
+.face-group-meta { color: #888; font-weight: 400; }
+.face-group-btns { display: flex; gap: 6px; flex-shrink: 0; }
+.face-group-header button { padding: 2px 9px; font-size: 11px; flex-shrink: 0; }
+
+/* Ignored faces are dimmed and badged */
+.thumb-cell.ignored img { opacity: 0.4; filter: grayscale(0.6); }
+.thumb-cell .face-label.ignored-label {
+  background: rgba(80, 80, 80, .8);
+  color: #ccc;
+  font-style: italic;
+}
+
+/* ── Right: face detail with bbox overlay ── */
+#face-photo-wrap { position: relative; line-height: 0; }
+#face-photo-wrap img { width: 100%; border-radius: 4px; display: block; }
+#face-box {
+  position: absolute;
+  border: 2px solid #7ab8f5;
+  box-shadow: 0 0 0 2px rgba(0,0,0,.5);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+#face-assign-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  background: #252525;
+  border-radius: 5px;
+  border: 1px solid #383838;
+}
+.face-assign-row { display: flex; gap: 6px; align-items: center; }
+.face-assign-row select { flex: 1; }
+
+#face-suggestion {
+  font-size: 12px;
+  color: #cfe6ff;
+  background: #2a4a6e;
+  border: 1px solid #4a90d9;
+  border-radius: 4px;
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+#face-suggestion .sug-text { color: #aaa; }
+#face-suggestion .sug-text b { color: #cfe6ff; }

@@ -51,6 +51,9 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
         _db.execute("ALTER TABLE photos ADD COLUMN photo_datetime INTEGER")
     if "gps_accuracy" not in cols:
         _db.execute("ALTER TABLE photos ADD COLUMN gps_accuracy REAL")
+    # Timestamp of last face-detection pass for this photo (NULL = never scanned)
+    if "faces_scanned_at" not in cols:
+        _db.execute("ALTER TABLE photos ADD COLUMN faces_scanned_at REAL")
     _db.execute("""
         CREATE TABLE IF NOT EXISTS scans (
             id INTEGER PRIMARY KEY,
@@ -67,6 +70,41 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
             created_at REAL NOT NULL
         )
     """)
+
+    # People the user has named. Faces get linked to a person once confirmed.
+    _db.execute("""
+        CREATE TABLE IF NOT EXISTS persons (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            created_at REAL NOT NULL
+        )
+    """)
+
+    # One row per detected face. bbox is normalized (0..1) to the detection
+    # image so it maps onto any rendition. embedding is a raw float32 vector.
+    # A face is in exactly one state: labeled (person_id set), ignored
+    # (ignored=1, e.g. background strangers or false detections), or unlabeled
+    # (person_id NULL and ignored=0 — the work queue).
+    _db.execute("""
+        CREATE TABLE IF NOT EXISTS faces (
+            id INTEGER PRIMARY KEY,
+            photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+            person_id INTEGER REFERENCES persons(id) ON DELETE SET NULL,
+            bbox TEXT NOT NULL,
+            det_score REAL NOT NULL,
+            embedding BLOB NOT NULL,
+            source TEXT NOT NULL DEFAULT 'detected',
+            ignored INTEGER NOT NULL DEFAULT 0,
+            created_at REAL NOT NULL
+        )
+    """)
+    # Migrate faces tables that predate the ignored flag.
+    face_cols = {r[1] for r in _db.execute("PRAGMA table_info(faces)").fetchall()}
+    if "ignored" not in face_cols:
+        _db.execute("ALTER TABLE faces ADD COLUMN ignored INTEGER NOT NULL DEFAULT 0")
+    _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id)")
+    _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id)")
+    _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_ignored ON faces(ignored)")
 
     # Create R*Tree spatial index for photo locations
     # R*Tree uses min/max bounds, so for a point we use same value for min and max
@@ -345,4 +383,195 @@ def update_place(place_id: int, bounds: str):
     """Update a place's bounds."""
     db = get_db()
     db.execute("UPDATE places SET bounds=? WHERE id=?", (bounds, place_id))
+    db.commit()
+
+
+# ── Faces & persons ──
+
+def get_unscanned_photo_ids() -> list[int]:
+    """Return ids of image photos that have not yet had a face-detection pass."""
+    rows = get_db().execute(
+        "SELECT id FROM photos WHERE media_type='image' AND faces_scanned_at IS NULL"
+    ).fetchall()
+    return [r["id"] for r in rows]
+
+
+def replace_faces(photo_id: int, faces: list[dict]):
+    """Replace all detected faces for a photo in one transaction and mark it scanned.
+
+    Each face dict: {bbox: str, det_score: float, embedding: bytes}.
+    Manually-confirmed assignments are not touched here because detection always
+    re-runs from scratch; assignments live by face id and are reapplied by the
+    caller if it chooses to. For a first pass, faces start unassigned.
+    """
+    db = get_db()
+    db.execute("DELETE FROM faces WHERE photo_id=? AND source='detected'", (photo_id,))
+    now = time.time()
+    db.executemany(
+        """INSERT INTO faces (photo_id, person_id, bbox, det_score, embedding, source, created_at)
+           VALUES (?, NULL, ?, ?, ?, 'detected', ?)""",
+        [(photo_id, f["bbox"], f["det_score"], f["embedding"], now) for f in faces],
+    )
+    db.execute("UPDATE photos SET faces_scanned_at=? WHERE id=?", (now, photo_id))
+    db.commit()
+
+
+def get_faces_for_photo(photo_id: int) -> list[sqlite3.Row]:
+    return get_db().execute(
+        """SELECT f.id, f.photo_id, f.person_id, f.bbox, f.det_score, f.source,
+                  f.embedding, p.name AS person_name
+           FROM faces f LEFT JOIN persons p ON p.id = f.person_id
+           WHERE f.photo_id=? ORDER BY f.det_score DESC""",
+        (photo_id,),
+    ).fetchall()
+
+
+def get_face(face_id: int) -> sqlite3.Row | None:
+    return get_db().execute("SELECT * FROM faces WHERE id=?", (face_id,)).fetchone()
+
+
+def get_labeled_faces() -> list[sqlite3.Row]:
+    """All faces that have been assigned to a person (the recognition gallery)."""
+    return get_db().execute(
+        "SELECT id, person_id, embedding FROM faces WHERE person_id IS NOT NULL"
+    ).fetchall()
+
+
+def list_faces(scope: str = "unlabeled", person_id: int | None = None,
+               limit: int = 500) -> list[sqlite3.Row]:
+    """List faces across the whole library for the people UI.
+
+    scope: 'unlabeled' (person_id IS NULL), 'person' (a specific person),
+    or 'all'. Joins the photo filename and includes the embedding so the
+    caller can compute recognition suggestions.
+    """
+    clause = ""
+    params: list = []
+    if scope == "unlabeled":
+        clause = "WHERE f.person_id IS NULL AND f.ignored = 0"
+    elif scope == "ignored":
+        clause = "WHERE f.ignored = 1"
+    elif scope == "person" and person_id is not None:
+        clause = "WHERE f.person_id = ?"
+        params.append(person_id)
+    return get_db().execute(
+        f"""SELECT f.id, f.photo_id, f.person_id, f.bbox, f.det_score, f.embedding,
+                   f.ignored, p.name AS person_name, ph.filename, ph.photo_datetime
+            FROM faces f
+            LEFT JOIN persons p ON p.id = f.person_id
+            JOIN photos ph ON ph.id = f.photo_id
+            {clause}
+            ORDER BY f.det_score DESC
+            LIMIT ?""",
+        params + [limit],
+    ).fetchall()
+
+
+def count_faces(scope: str = "unlabeled", person_id: int | None = None) -> int:
+    if scope == "unlabeled":
+        return get_db().execute(
+            "SELECT COUNT(*) FROM faces WHERE person_id IS NULL AND ignored = 0"
+        ).fetchone()[0]
+    if scope == "ignored":
+        return get_db().execute("SELECT COUNT(*) FROM faces WHERE ignored = 1").fetchone()[0]
+    if scope == "person" and person_id is not None:
+        return get_db().execute(
+            "SELECT COUNT(*) FROM faces WHERE person_id = ?", (person_id,)
+        ).fetchone()[0]
+    return get_db().execute("SELECT COUNT(*) FROM faces").fetchone()[0]
+
+
+def get_face_with_photo(face_id: int) -> sqlite3.Row | None:
+    """Face row joined with its photo's path/mtime/size (for cropping)."""
+    return get_db().execute(
+        """SELECT f.id, f.bbox, f.photo_id, ph.path, ph.mtime, ph.size
+           FROM faces f JOIN photos ph ON ph.id = f.photo_id
+           WHERE f.id = ?""",
+        (face_id,),
+    ).fetchone()
+
+
+def assign_faces(face_ids: list[int], person_id: int | None):
+    """Bulk confirm (or clear, with None) the identity of several faces.
+
+    Labeling or clearing always lifts the ignored flag (see assign_face).
+    """
+    if not face_ids:
+        return
+    db = get_db()
+    db.executemany(
+        "UPDATE faces SET person_id=?, ignored=0 WHERE id=?",
+        [(person_id, fid) for fid in face_ids],
+    )
+    db.commit()
+
+
+def set_faces_ignored(face_ids: list[int], ignored: bool):
+    """Mark faces as ignored (hidden from the queue) or restore them.
+
+    Ignoring also clears any person assignment so the three states stay
+    mutually exclusive; restoring returns the face to the unlabeled queue.
+    """
+    if not face_ids:
+        return
+    db = get_db()
+    if ignored:
+        db.executemany(
+            "UPDATE faces SET ignored=1, person_id=NULL WHERE id=?",
+            [(fid,) for fid in face_ids],
+        )
+    else:
+        db.executemany(
+            "UPDATE faces SET ignored=0 WHERE id=?",
+            [(fid,) for fid in face_ids],
+        )
+    db.commit()
+
+
+def get_unlabeled_faces() -> list[sqlite3.Row]:
+    return get_db().execute(
+        "SELECT id, photo_id, embedding FROM faces WHERE person_id IS NULL"
+    ).fetchall()
+
+
+def assign_face(face_id: int, person_id: int | None):
+    """Confirm (or clear, with None) the identity of a single face.
+
+    Labeling or clearing always lifts the ignored flag, keeping the three
+    face states (labeled / unlabeled / ignored) mutually exclusive.
+    """
+    db = get_db()
+    db.execute("UPDATE faces SET person_id=?, ignored=0 WHERE id=?", (person_id, face_id))
+    db.commit()
+
+
+def create_person(name: str) -> int:
+    db = get_db()
+    cursor = db.execute(
+        "INSERT INTO persons (name, created_at) VALUES (?, ?)", (name, time.time())
+    )
+    db.commit()
+    return cursor.lastrowid
+
+
+def get_or_create_person(name: str) -> int:
+    db = get_db()
+    row = db.execute("SELECT id FROM persons WHERE name=?", (name,)).fetchone()
+    if row:
+        return row["id"]
+    return create_person(name)
+
+
+def get_persons() -> list[sqlite3.Row]:
+    """All persons with a count of confirmed faces each."""
+    return get_db().execute(
+        """SELECT p.id, p.name, p.created_at, COUNT(f.id) AS face_count
+           FROM persons p LEFT JOIN faces f ON f.person_id = p.id
+           GROUP BY p.id ORDER BY p.name"""
+    ).fetchall()
+
+
+def delete_person(person_id: int):
+    db = get_db()
+    db.execute("DELETE FROM persons WHERE id=?", (person_id,))
     db.commit()

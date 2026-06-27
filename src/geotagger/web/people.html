@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>People - Geo-Tagger</title>
+<link rel="stylesheet" href="style.css"/>
+<link rel="stylesheet" href="people.css"/>
+</head>
+<body>
+<div id="toolbar">
+  <div class="toolbar-group">
+    <button id="geocode-view-btn">📍 Geocode View</button>
+    <button id="timesync-view-btn">🕐 Time Sync View</button>
+    <button id="people-view-btn" class="active">🙂 People</button>
+  </div>
+  <div class="toolbar-group">
+    <button id="scan-btn">Scan faces</button>
+    <span id="scan-status"></span>
+  </div>
+  <div class="toolbar-group">
+    <button id="deselect-all-btn">Deselect all</button>
+  </div>
+  <div class="toolbar-group">
+    <label>Assign selection:</label>
+    <select id="assign-person-select">
+      <option value="">Choose person…</option>
+    </select>
+    <button id="assign-btn" class="primary">Assign</button>
+    <button id="assign-new-btn">New person…</button>
+    <button id="unassign-btn" class="danger">Unassign</button>
+  </div>
+  <div class="toolbar-group">
+    <button id="confirm-suggested-btn" title="Confirm the suggested name for every selected face">✓ Accept suggestions</button>
+    <button id="ignore-btn" title="Hide selected faces from the queue (background strangers, false detections)">🚫 Ignore</button>
+  </div>
+  <div class="toolbar-group">
+    <label>Review guesses for:</label>
+    <select id="guess-person-select">
+      <option value="">Choose person…</option>
+    </select>
+    <button id="review-guesses-btn" title="Show every face guessed to be this person, all pre-selected, so you can approve the good ones at once">🔮 Review</button>
+    <label>Group by:</label>
+    <select id="group-gap-select" title="Start a new event group when photos are more than this far apart in time">
+      <option value="21600">6 hours</option>
+      <option value="86400" selected>1 day</option>
+      <option value="259200">3 days</option>
+      <option value="604800">1 week</option>
+      <option value="2592000">1 month</option>
+    </select>
+  </div>
+</div>
+
+<div id="people-main">
+  <!-- Left: people list -->
+  <div id="people-pane">
+    <div class="people-list" id="people-list"></div>
+    <button id="add-person-btn" class="people-add">＋ Add person</button>
+  </div>
+
+  <!-- Center: faces grid -->
+  <div id="grid-pane">
+    <div id="grid"></div>
+  </div>
+
+  <!-- Right: detail -->
+  <div id="detail-pane">
+    <div id="detail-placeholder">Select a face to view details</div>
+    <div id="detail-content" style="display:none">
+      <div id="face-photo-wrap">
+        <img id="detail-img" src="" alt="Source photo"/>
+        <div id="face-box"></div>
+      </div>
+      <table id="detail-meta"></table>
+      <div id="face-assign-bar">
+        <div id="face-suggestion" style="display:none"></div>
+        <div class="face-assign-row">
+          <select id="detail-person-select">
+            <option value="">Choose person…</option>
+          </select>
+          <button id="detail-assign-btn" class="primary">Assign</button>
+        </div>
+        <div class="face-assign-row">
+          <button id="detail-new-btn">New person…</button>
+          <button id="detail-unassign-btn" class="danger">Unassign</button>
+          <button id="detail-ignore-btn">🚫 Ignore</button>
+          <button id="detail-open-photo-btn">Open photo ↗</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="status-bar"></div>
+
+<script src="people.js"></script>
+</body>
+</html>

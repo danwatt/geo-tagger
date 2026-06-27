@@ -9,6 +9,8 @@ dependencies = [
     "pillow",
     "pillow-heif",
     "av",
+    "insightface>=1.0.1",
+    "onnxruntime>=1.27.0",
 ]
 
 [project.scripts]

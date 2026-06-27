@@ -12,8 +12,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from geotagger.exiftool_session import lifespan as _et_lifespan, exiftool_status
-from geotagger import index, scanner, sidecar, thumbnails
+from geotagger import index, scanner, sidecar, thumbnails, faces
 from geotagger.exiftool_session import get_et, get_et_lock
+from geotagger.config import FACE_SUGGEST_SCAN_CAP
 
 # Configure logging
 logging.basicConfig(
@@ -218,6 +219,7 @@ async def lifespan(app):
                 # Initialize DB and thumbnails once (not tied to a specific root)
                 index.init_db()
                 thumbnails.init_thumbs()
+                faces.init_faces()
 
                 if no_scan:
                     print(f"Skipping scan (--no-scan), using existing database")
@@ -245,6 +247,7 @@ async def lifespan(app):
                 try:
                     index.init_db(root)
                     thumbnails.init_thumbs(root)
+                    faces.init_faces(root)
                     if no_scan:
                         print(f"Skipping scan (--no-scan), loaded index from {root}")
                     else:
@@ -775,6 +778,241 @@ def _update_photo_times(updates: dict[int, int]) -> int:
         updated += 1
 
     return updated
+
+
+# ── Faces & persons ───────────────────────────────────────────────────────────
+
+class CreatePersonRequest(BaseModel):
+    name: str
+
+class AssignFaceRequest(BaseModel):
+    person_id: int | None = None  # None clears the assignment
+    name: str | None = None       # convenience: create/lookup a person by name
+
+class BulkAssignRequest(BaseModel):
+    face_ids: list[int]
+    person_id: int | None = None
+    name: str | None = None
+    clear: bool = False           # set True to unassign the faces
+
+class IgnoreFacesRequest(BaseModel):
+    face_ids: list[int]
+    ignored: bool = True          # False restores faces to the unlabeled queue
+
+class ScanFacesRequest(BaseModel):
+    limit: int = 50  # photos processed per call; repeat to continue
+
+
+@app.get("/api/persons")
+async def api_get_persons():
+    return [
+        {"id": p["id"], "name": p["name"], "face_count": p["face_count"],
+         "created_at": p["created_at"]}
+        for p in index.get_persons()
+    ]
+
+
+@app.post("/api/persons")
+async def api_create_person(req: CreatePersonRequest):
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(400, "Name required")
+    person_id = index.get_or_create_person(name)
+    return {"id": person_id, "name": name}
+
+
+@app.delete("/api/persons/{person_id}")
+async def api_delete_person(person_id: int):
+    index.delete_person(person_id)
+    return {"success": True}
+
+
+def _face_item(r) -> dict:
+    """Build the JSON-safe face dict (without a suggestion) from a DB row."""
+    return {
+        "id": r["id"],
+        "photo_id": r["photo_id"],
+        "filename": r["filename"],
+        "bbox": [float(v) for v in r["bbox"].split(",")],
+        "det_score": r["det_score"],
+        "person_id": r["person_id"],
+        "person_name": r["person_name"],
+        "ignored": bool(r["ignored"]),
+        "photo_datetime": r["photo_datetime"],
+        "suggestion": None,
+    }
+
+
+def _person_name(person_id: int) -> str | None:
+    row = index.get_db().execute("SELECT name FROM persons WHERE id=?", (person_id,)).fetchone()
+    return row["name"] if row else None
+
+
+@app.get("/api/faces")
+async def api_list_faces(
+    scope: str = Query("unlabeled", pattern="^(unlabeled|person|ignored|suggested|all)$"),
+    person_id: int | None = Query(None),
+    limit: int = Query(500, ge=1, le=2000),
+):
+    """List faces. scope=unlabeled attaches a recognition suggestion to each face;
+    scope=suggested returns only unlabeled faces whose *best* guess is `person_id`,
+    ranked by confidence — for quickly approving one person's guesses in bulk."""
+    if scope == "suggested":
+        if not person_id:
+            raise HTTPException(400, "person_id is required for scope=suggested")
+        gallery = faces.build_gallery()
+        name = _person_name(person_id)
+        scored = []
+        if len(gallery) > 0:
+            for r in index.list_faces("unlabeled", None, FACE_SUGGEST_SCAN_CAP):
+                match = faces.suggest_person(faces.decode_embedding(r["embedding"]), gallery)
+                if match and match[0] == person_id:
+                    scored.append((r, match[1]))
+        scored.sort(key=lambda t: t[1], reverse=True)
+        out = []
+        for r, score in scored[:limit]:
+            item = _face_item(r)
+            item["suggestion"] = {"person_id": person_id, "person_name": name,
+                                  "score": round(score, 4)}
+            out.append(item)
+        return {"faces": out, "total": len(scored), "returned": len(out)}
+
+    rows = index.list_faces(scope=scope, person_id=person_id, limit=limit)
+    gallery = faces.build_gallery() if scope == "unlabeled" else None
+    out = []
+    for r in rows:
+        item = _face_item(r)
+        if gallery is not None and len(gallery) > 0:
+            match = faces.suggest_person(faces.decode_embedding(r["embedding"]), gallery)
+            if match:
+                pid, score = match
+                item["suggestion"] = {"person_id": pid, "person_name": _person_name(pid),
+                                      "score": round(score, 4)}
+        out.append(item)
+    return {
+        "faces": out,
+        "total": index.count_faces(scope=scope, person_id=person_id),
+        "returned": len(out),
+    }
+
+
+@app.get("/api/faces/{face_id}/crop")
+async def api_face_crop(face_id: int):
+    row = index.get_face_with_photo(face_id)
+    if not row:
+        raise HTTPException(404)
+    bbox = tuple(float(v) for v in row["bbox"].split(","))
+    try:
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(
+            _executor, thumbnails.get_face_crop,
+            Path(row["path"]), row["mtime"], row["size"], bbox,
+        )
+        return Response(content=data, media_type="image/jpeg")
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/faces/assign")
+async def api_bulk_assign(req: BulkAssignRequest):
+    person_id = None if req.clear else req.person_id
+    if person_id is None and not req.clear and req.name and req.name.strip():
+        person_id = index.get_or_create_person(req.name.strip())
+    index.assign_faces(req.face_ids, person_id)
+    return {"assigned": len(req.face_ids), "person_id": person_id}
+
+
+@app.post("/api/faces/ignore")
+async def api_ignore_faces(req: IgnoreFacesRequest):
+    """Hide faces from the unlabeled queue (background strangers, false detections),
+    or restore them with ignored=false."""
+    index.set_faces_ignored(req.face_ids, req.ignored)
+    return {"updated": len(req.face_ids), "ignored": req.ignored}
+
+
+@app.get("/api/photos/{photo_id}/faces")
+async def api_photo_faces(photo_id: int):
+    """List faces in a photo with assigned person and a recognition suggestion."""
+    if not index.get_photo(photo_id):
+        raise HTTPException(404)
+    gallery = faces.build_gallery()
+    rows = index.get_faces_for_photo(photo_id)
+    out = []
+    for r in rows:
+        item = {
+            "id": r["id"],
+            "bbox": [float(v) for v in r["bbox"].split(",")],
+            "det_score": r["det_score"],
+            "person_id": r["person_id"],
+            "person_name": r["person_name"],
+            "suggestion": None,
+        }
+        # Only suggest for not-yet-assigned faces.
+        if r["person_id"] is None and len(gallery) > 0:
+            vec = faces.decode_embedding(r["embedding"])
+            match = faces.suggest_person(vec, gallery)
+            if match:
+                pid, score = match
+                person = index.get_db().execute(
+                    "SELECT name FROM persons WHERE id=?", (pid,)
+                ).fetchone()
+                item["suggestion"] = {
+                    "person_id": pid,
+                    "person_name": person["name"] if person else None,
+                    "score": round(score, 4),
+                }
+        out.append(item)
+    return out
+
+
+@app.post("/api/faces/{face_id}/assign")
+async def api_assign_face(face_id: int, req: AssignFaceRequest):
+    if not index.get_face(face_id):
+        raise HTTPException(404)
+    person_id = req.person_id
+    if person_id is None and req.name and req.name.strip():
+        person_id = index.get_or_create_person(req.name.strip())
+    index.assign_face(face_id, person_id)
+    return {"face_id": face_id, "person_id": person_id}
+
+
+def _scan_faces_batch(photo_ids: list[int]) -> dict:
+    """Run detection over a list of photo ids (blocking; called in executor)."""
+    processed = 0
+    total_faces = 0
+    errors = []
+    for pid in photo_ids:
+        row = index.get_photo(pid)
+        if not row:
+            continue
+        try:
+            total_faces += faces.detect_and_store(row)
+            processed += 1
+        except Exception as e:
+            errors.append(f"{row['filename']}: {e}")
+    return {"processed": processed, "faces_found": total_faces, "errors": errors}
+
+
+@app.post("/api/faces/scan")
+async def api_faces_scan(req: ScanFacesRequest):
+    """Detect faces for up to `limit` not-yet-scanned photos. Repeat to continue."""
+    pending = index.get_unscanned_photo_ids()
+    batch = pending[: max(1, req.limit)]
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(_executor, _scan_faces_batch, batch)
+    result["remaining"] = len(pending) - result["processed"]
+    return result
+
+
+@app.get("/api/faces/scan/status")
+async def api_faces_scan_status():
+    remaining = len(index.get_unscanned_photo_ids())
+    return {
+        "remaining_photos": remaining,
+        "total_faces": index.count_faces("all"),
+        "unlabeled_faces": index.count_faces("unlabeled"),
+        "ignored_faces": index.count_faces("ignored"),
+    }
 
 
 # ── Static files (must be last) ───────────────────────────────────────────────

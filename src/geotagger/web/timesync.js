@@ -163,6 +163,9 @@ function bindToolbar() {
   document.getElementById("geocode-view-btn").addEventListener("click", () => {
     window.location.href = "/";
   });
+  document.getElementById("people-view-btn").addEventListener("click", () => {
+    window.location.href = "/people.html";
+  });
 
   // Month picker
   document.getElementById("select-month-btn").addEventListener("click", showMonthPicker);
