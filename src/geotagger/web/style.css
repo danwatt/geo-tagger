@@ -127,6 +127,31 @@ select {
   right: 0;
   height: 4px;
 }
+/* ── Grid dividers ── */
+.grid-year-divider,
+.grid-month-divider {
+  grid-column: 1 / -1;
+  padding: 4px 4px 2px;
+  user-select: none;
+  pointer-events: none;
+}
+
+.grid-year-divider {
+  font-size: 13px;
+  font-weight: 700;
+  color: #7ab8f5;
+  border-bottom: 1px solid #3a5a7a;
+  margin-top: 6px;
+}
+
+.grid-month-divider {
+  font-size: 11px;
+  font-weight: 500;
+  color: #888;
+  border-bottom: 1px solid #2e2e2e;
+  margin-top: 4px;
+}
+
 /* Camera legend */
 #cam-legend {
   padding: 6px 10px;

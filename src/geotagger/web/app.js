@@ -97,6 +97,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindTimeline();
   await checkStatus();
   await loadPlaces();
+  await fitMapToAllLocations();
   setStatus("Click 'Select Month' to begin");
 });
 
@@ -134,6 +135,21 @@ function initMap() {
     const latlng = map.containerPointToLatLng(point);
     await geotag(ids, latlng.lat, latlng.lng);
   });
+}
+
+async function fitMapToAllLocations() {
+  try {
+    const res = await fetch("/api/stats/bounds");
+    const data = await res.json();
+    if (data.has_data) {
+      map.fitBounds(
+        [[data.min_lat, data.min_lng], [data.max_lat, data.max_lng]],
+        { padding: [40, 40], maxZoom: 14 }
+      );
+    }
+  } catch (e) {
+    // keep default world view
+  }
 }
 
 function setBasemap(key) {
@@ -181,13 +197,15 @@ function bindToolbar() {
 
   document.getElementById("select-month-btn").addEventListener("click", showMonthPicker);
   document.getElementById("select-area-btn").addEventListener("click", startAreaSelection);
-  document.getElementById("filter-select").addEventListener("change", () => {
+  function reloadCurrentView() {
     if (selectedYear && selectedMonth) {
       loadPhotos();
     } else if (areaSelectParams) {
       loadPhotosByArea(areaSelectParams.lat, areaSelectParams.lng, areaSelectParams.radius);
     }
-  });
+  }
+  document.getElementById("filter-select").addEventListener("change", reloadCurrentView);
+  document.getElementById("window-select").addEventListener("change", reloadCurrentView);
   document.getElementById("place-search-btn").addEventListener("click", doPlaceSearch);
   document.getElementById("place-search").addEventListener("keydown", (e) => {
     if (e.key === "Enter") doPlaceSearch();
@@ -708,10 +726,11 @@ function stopAreaSelection() {
 
 async function loadPhotosByArea(lat, lng, radius) {
   const filter = document.getElementById("filter-select").value;
+  const window = document.getElementById("window-select").value;
 
   try {
     setStatus("Loading photos in area...");
-    const res = await fetch(`/api/photos/by-area?lat=${lat}&lng=${lng}&radius=${radius}&geotagged=${filter}`);
+    const res = await fetch(`/api/photos/by-area?lat=${lat}&lng=${lng}&radius=${radius}&geotagged=${filter}&window=${window}`);
 
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
@@ -874,8 +893,31 @@ function renderLegend() {
 function renderGrid() {
   const grid = document.getElementById("grid");
   grid.innerHTML = "";
+
+  let curYear = null;
+  let curMonth = null;
+
   filteredPhotos.forEach((photo, idx) => {
-    const camKey = photo.camera || "Unknown";
+    if (photo.photo_datetime) {
+      const d = new Date(photo.photo_datetime * 1000);
+      const year = d.getFullYear();
+      const month = d.getMonth();  // 0-based
+
+      if (year !== curYear) {
+        curYear = year;
+        curMonth = month;
+        const div = document.createElement("div");
+        div.className = "grid-year-divider";
+        div.textContent = year;
+        grid.appendChild(div);
+      } else if (month !== curMonth) {
+        curMonth = month;
+        const div = document.createElement("div");
+        div.className = "grid-month-divider";
+        div.textContent = MONTH_NAMES[month];
+        grid.appendChild(div);
+      }
+    }
 
     const cell = document.createElement("div");
     cell.className = "thumb-cell" +
@@ -1142,7 +1184,8 @@ async function doGuess() {
   dismissGuess(false);   // clear old pin but keep button
 
   try {
-    const res = await fetch(`/api/guess/${focusedPhotoId}`);
+    const window = document.getElementById("window-select").value;
+    const res = await fetch(`/api/guess/${focusedPhotoId}?window=${window}`);
     const data = await res.json();
     if (!res.ok) {
       setStatus(data.detail || "No nearby geotagged photos found", true);

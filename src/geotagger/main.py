@@ -328,6 +328,29 @@ async def api_stats_months():
         raise HTTPException(500, str(e))
 
 
+@app.get("/api/stats/bounds")
+async def api_stats_bounds():
+    """Get the bounding box of all geotagged photos."""
+    try:
+        db = index.get_db()
+        row = db.execute("""
+            SELECT MIN(lat) as min_lat, MAX(lat) as max_lat,
+                   MIN(lng) as min_lng, MAX(lng) as max_lng
+            FROM photos WHERE lat IS NOT NULL
+        """).fetchone()
+        if not row or row["min_lat"] is None:
+            return {"has_data": False}
+        return {
+            "has_data": True,
+            "min_lat": row["min_lat"],
+            "max_lat": row["max_lat"],
+            "min_lng": row["min_lng"],
+            "max_lng": row["max_lng"],
+        }
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 @app.get("/api/stats/dates")
 async def api_stats_dates(year: int | None = Query(None), month: int | None = Query(None)):
     """Get photo counts grouped by date, optionally filtered by year/month."""
@@ -390,8 +413,9 @@ async def api_photos_by_area(
     lng: float = Query(...),
     radius: float = Query(...),
     geotagged: str = Query("all", pattern="^(all|yes|no)$"),
+    window: int = Query(900, ge=0),
 ):
-    """Get photos within a circular area, plus nearby non-geotagged photos within 15 minutes."""
+    """Get photos within a circular area, plus nearby non-geotagged photos within the time window."""
     t_start = time.time()
     logger.info(f"Area query: lat={lat}, lng={lng}, radius={radius}m, filter={geotagged}")
 
@@ -443,7 +467,7 @@ async def api_photos_by_area(
         import bisect
 
         t3 = time.time()
-        time_window = 15 * 60  # 15 minutes in seconds
+        time_window = window
 
         # Sort times for efficient binary search
         times_sorted = sorted(times_in_area)
