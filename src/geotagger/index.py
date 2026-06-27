@@ -109,6 +109,10 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id)")
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id)")
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_ignored ON faces(ignored)")
+    # Serves the people-UI queue queries: filter (ignored, person_id) then return
+    # rows already ordered by det_score, so SQLite skips the temp-b-tree sort and
+    # only touches the LIMIT rows instead of reading every unlabeled embedding.
+    _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_queue ON faces(ignored, person_id, det_score)")
 
     # Create R*Tree spatial index for photo locations
     # R*Tree uses min/max bounds, so for a point we use same value for min and max

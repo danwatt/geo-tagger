@@ -216,3 +216,59 @@ def suggest_person(vec: np.ndarray, photo_datetime, gallery: Gallery,
     if ranked and ranked[0][1] >= threshold:
         return ranked[0]
     return None
+
+
+def suggest_persons_batch(rows, gallery: Gallery,
+                          threshold: float = FACE_MATCH_THRESHOLD
+                          ) -> list[tuple[int, float] | None]:
+    """Vectorized ``suggest_person`` for many faces at once.
+
+    ``rows`` is a sequence of DB rows each carrying an ``embedding`` blob and a
+    ``photo_datetime``. Returns one ``(person_id, score)`` (or ``None``) per row,
+    equivalent to calling ``suggest_person`` on each — but the N cosine lookups
+    collapse into a single matmul per chunk and the per-person reduction is
+    vectorized, instead of an N×gallery Python loop. The age penalty/exclusion
+    rules from ``match_embedding`` are applied identically across the batch.
+    """
+    n = len(rows)
+    if n == 0 or len(gallery) == 0:
+        return [None] * n
+
+    unknowns = np.stack([decode_embedding(r["embedding"]) for r in rows])  # (N, 512)
+    times = np.array([float(r["photo_datetime"]) if r["photo_datetime"] else np.nan
+                      for r in rows], dtype=np.float64)
+
+    pids = gallery.person_ids
+    uniq = np.unique(pids)
+    groups = [np.nonzero(pids == p)[0] for p in uniq]   # gallery rows per person
+    has_birth = ~np.isnan(gallery.birth_times)
+    age_f = (gallery.face_times - gallery.birth_times) / YEAR_SECONDS
+    can_penalize = has_birth & ~np.isnan(gallery.face_times)
+
+    results: list[tuple[int, float] | None] = [None] * n
+    CHUNK = 1024  # caps the (gallery × chunk) score matrix to a few tens of MB
+    for c0 in range(0, n, CHUNK):
+        c1 = min(c0 + CHUNK, n)
+        scores = (gallery.embeddings @ unknowns[c0:c1].T).astype(np.float64)  # (G, u)
+        tu = times[c0:c1]
+        dated = ~np.isnan(tu)
+        if dated.any():
+            age_u = (tu[None, :] - gallery.birth_times[:, None]) / YEAR_SECONDS
+            penalty = FACE_AGE_PENALTY_PER_YEAR * np.minimum(
+                np.abs(age_u - age_f[:, None]), FACE_AGE_PENALTY_CAP_YEARS)
+            scores = np.where(can_penalize[:, None] & dated[None, :], scores - penalty, scores)
+            excluded = (has_birth[:, None] & dated[None, :]) & (age_u < -FACE_BIRTH_TOLERANCE_YEARS)
+            scores = np.where(excluded, -np.inf, scores)
+
+        # Best example per person, then the best person, for each face in the chunk.
+        per_person = np.full((len(uniq), c1 - c0), -np.inf)
+        for i, g in enumerate(groups):
+            per_person[i] = scores[g].max(axis=0)
+        best_i = per_person.argmax(axis=0)
+        best_score = per_person[best_i, np.arange(per_person.shape[1])]
+        best_pid = uniq[best_i]
+        for j in range(c1 - c0):
+            s = best_score[j]
+            if np.isfinite(s) and s >= threshold:
+                results[c0 + j] = (int(best_pid[j]), float(s))
+    return results

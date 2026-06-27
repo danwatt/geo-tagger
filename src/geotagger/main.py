@@ -865,6 +865,12 @@ def _person_name(person_id: int) -> str | None:
     return row["name"] if row else None
 
 
+def _person_name_map() -> dict[int, str]:
+    """All person ids → names in one query, for labeling a batch of suggestions."""
+    return {r["id"]: r["name"]
+            for r in index.get_db().execute("SELECT id, name FROM persons").fetchall()}
+
+
 @app.get("/api/faces")
 async def api_list_faces(
     scope: str = Query("unlabeled", pattern="^(unlabeled|person|ignored|suggested|all)$"),
@@ -881,9 +887,8 @@ async def api_list_faces(
         name = _person_name(person_id)
         scored = []
         if len(gallery) > 0:
-            for r in index.list_faces("unlabeled", None, FACE_SUGGEST_SCAN_CAP):
-                match = faces.suggest_person(faces.decode_embedding(r["embedding"]),
-                                             r["photo_datetime"], gallery)
+            rows = index.list_faces("unlabeled", None, FACE_SUGGEST_SCAN_CAP)
+            for r, match in zip(rows, faces.suggest_persons_batch(rows, gallery)):
                 if match and match[0] == person_id:
                     scored.append((r, match[1]))
         scored.sort(key=lambda t: t[1], reverse=True)
@@ -897,16 +902,16 @@ async def api_list_faces(
 
     rows = index.list_faces(scope=scope, person_id=person_id, limit=limit)
     gallery = faces.build_gallery() if scope == "unlabeled" else None
+    matches = (faces.suggest_persons_batch(rows, gallery)
+               if gallery is not None and len(gallery) > 0 else [None] * len(rows))
+    names = _person_name_map() if any(matches) else {}
     out = []
-    for r in rows:
+    for r, match in zip(rows, matches):
         item = _face_item(r)
-        if gallery is not None and len(gallery) > 0:
-            match = faces.suggest_person(faces.decode_embedding(r["embedding"]),
-                                         r["photo_datetime"], gallery)
-            if match:
-                pid, score = match
-                item["suggestion"] = {"person_id": pid, "person_name": _person_name(pid),
-                                      "score": round(score, 4)}
+        if match:
+            pid, score = match
+            item["suggestion"] = {"person_id": pid, "person_name": names.get(pid),
+                                  "score": round(score, 4)}
         out.append(item)
     return {
         "faces": out,
