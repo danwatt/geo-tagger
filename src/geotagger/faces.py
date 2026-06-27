@@ -19,7 +19,7 @@ from geotagger import index, thumbnails
 from geotagger.config import (
     CACHE_DIR_NAME, get_cache_dir,
     FACE_MODEL_NAME, FACE_DET_SIZE, FACE_DET_THRESHOLD,
-    FACE_MATCH_THRESHOLD, FACE_PROVIDERS,
+    FACE_MATCH_THRESHOLD, FACE_AMBIGUITY_MARGIN, FACE_SUGGEST_SCAN_CAP, FACE_PROVIDERS,
     FACE_BIRTH_TOLERANCE_YEARS, FACE_AGE_PENALTY_PER_YEAR, FACE_AGE_PENALTY_CAP_YEARS,
 )
 
@@ -159,18 +159,66 @@ class Gallery:
         return len(self.person_ids)
 
 
+def _embeddings_matrix(rows) -> np.ndarray:
+    """Decode many rows' embedding blobs into one (N, 512) float32 matrix.
+
+    Joining the raw bytes and viewing them once is far cheaper than stacking N
+    individual ``frombuffer`` arrays — it's the per-call decode cost on the
+    suggestion hot path. The result is a read-only view over the joined buffer;
+    callers only ever read it (or fancy-index it, which copies).
+    """
+    buf = b"".join(r["embedding"] for r in rows)
+    return np.frombuffer(buf, dtype=np.float32).reshape(len(rows), EMBED_DIM)
+
+
+# Decoded embedding matrices are expensive to rebuild (SQLite blob reads + numpy
+# decode) and the people UI refetches constantly, so both the labeled gallery and
+# the unlabeled scan are cached and keyed on index.faces_generation() — any
+# assign/ignore/scan/birth-date change bumps it and the next call rebuilds.
+_gallery_cache: tuple[int, "Gallery"] | None = None
+_unlabeled_cache: tuple[int, int, list, np.ndarray, np.ndarray] | None = None
+
+
 def build_gallery() -> Gallery:
-    """Load all confirmed faces into a matrix for matching."""
+    """Load all confirmed faces into a matrix for matching (cached, see above)."""
+    global _gallery_cache
+    gen = index.faces_generation()
+    if _gallery_cache is not None and _gallery_cache[0] == gen:
+        return _gallery_cache[1]
+
     labeled = index.get_labeled_faces()
     if not labeled:
         z = np.zeros((0,), np.float64)
-        return Gallery(np.zeros((0, EMBED_DIM), np.float32), np.zeros((0,), np.int64), z, z)
-    embs = np.stack([decode_embedding(r["embedding"]) for r in labeled])
-    pids = np.array([r["person_id"] for r in labeled], dtype=np.int64)
-    ftimes = np.array([float(r["photo_datetime"]) if r["photo_datetime"] else np.nan
-                       for r in labeled], dtype=np.float64)
-    births = np.array([_birth_ts(r["birth_date"]) for r in labeled], dtype=np.float64)
-    return Gallery(embs, pids, ftimes, births)
+        gallery = Gallery(np.zeros((0, EMBED_DIM), np.float32), np.zeros((0,), np.int64), z, z)
+    else:
+        embs = _embeddings_matrix(labeled)
+        pids = np.array([r["person_id"] for r in labeled], dtype=np.int64)
+        ftimes = np.array([float(r["photo_datetime"]) if r["photo_datetime"] else np.nan
+                           for r in labeled], dtype=np.float64)
+        births = np.array([_birth_ts(r["birth_date"]) for r in labeled], dtype=np.float64)
+        gallery = Gallery(embs, pids, ftimes, births)
+    _gallery_cache = (gen, gallery)
+    return gallery
+
+
+def get_unlabeled_matrix(scan_cap: int = FACE_SUGGEST_SCAN_CAP
+                         ) -> tuple[list, np.ndarray, np.ndarray]:
+    """Cached (rows, embeddings, times) for the unlabeled queue.
+
+    The suggested-faces review refetches after every accept; without caching,
+    each call re-reads up to ``scan_cap`` embedding blobs from SQLite and
+    re-decodes them into a (N, 512) matrix. Keyed on the faces-table generation
+    (and the cap), so a single assign/ignore/scan invalidates it.
+    """
+    global _unlabeled_cache
+    gen = index.faces_generation()
+    if (_unlabeled_cache is not None
+            and _unlabeled_cache[0] == gen and _unlabeled_cache[1] == scan_cap):
+        return _unlabeled_cache[2], _unlabeled_cache[3], _unlabeled_cache[4]
+    rows = index.list_faces("unlabeled", None, scan_cap)
+    unknowns, times = _stack_rows(rows)
+    _unlabeled_cache = (gen, scan_cap, rows, unknowns, times)
+    return rows, unknowns, times
 
 
 def match_embedding(vec: np.ndarray, photo_datetime, gallery: Gallery) -> list[tuple[int, float]]:
@@ -218,8 +266,63 @@ def suggest_person(vec: np.ndarray, photo_datetime, gallery: Gallery,
     return None
 
 
+CHUNK = 1024  # caps each (gallery × unknown-chunk) score matrix to a few tens of MB
+
+
+def _stack_rows(rows) -> tuple[np.ndarray, np.ndarray]:
+    """Decode a sequence of face rows into an (N, 512) embedding matrix and an
+    (N,) array of photo times (epoch secs, NaN where undated)."""
+    unknowns = _embeddings_matrix(rows)
+    times = np.array([float(r["photo_datetime"]) if r["photo_datetime"] else np.nan
+                      for r in rows], dtype=np.float64)
+    return unknowns, times
+
+
+def _adjusted_cosines(emb: np.ndarray, ftimes: np.ndarray, births: np.ndarray,
+                      unknowns: np.ndarray, times: np.ndarray) -> np.ndarray:
+    """Age-adjusted cosine matrix between gallery rows and a chunk of unknowns.
+
+    ``emb`` is (M, 512); ``unknowns`` is (u, 512). Returns (M, u). Applies the
+    same per-example age penalty and birth-date exclusion as ``match_embedding``,
+    so any reduction over the result matches the single-face path.
+    """
+    scores = (emb @ unknowns.T).astype(np.float64)   # (M, u) cosine
+    dated = ~np.isnan(times)
+    if dated.any():
+        has_birth = ~np.isnan(births)
+        age_f = (ftimes - births) / YEAR_SECONDS
+        can_penalize = has_birth & ~np.isnan(ftimes)
+        age_u = (times[None, :] - births[:, None]) / YEAR_SECONDS
+        penalty = FACE_AGE_PENALTY_PER_YEAR * np.minimum(
+            np.abs(age_u - age_f[:, None]), FACE_AGE_PENALTY_CAP_YEARS)
+        scores = np.where(can_penalize[:, None] & dated[None, :], scores - penalty, scores)
+        excluded = (has_birth[:, None] & dated[None, :]) & (age_u < -FACE_BIRTH_TOLERANCE_YEARS)
+        scores = np.where(excluded, -np.inf, scores)
+    return scores
+
+
+def _person_groups(gallery: Gallery) -> tuple[np.ndarray, list[np.ndarray]]:
+    """Unique person ids and, for each, the gallery row indices belonging to them."""
+    uniq = np.unique(gallery.person_ids)
+    groups = [np.nonzero(gallery.person_ids == p)[0] for p in uniq]
+    return uniq, groups
+
+
+def _best_per_person(gallery: Gallery, uniq: np.ndarray, groups: list[np.ndarray],
+                     unknowns: np.ndarray, times: np.ndarray) -> np.ndarray:
+    """(len(uniq), u) matrix: each person's single best age-adjusted score per unknown."""
+    scores = _adjusted_cosines(gallery.embeddings, gallery.face_times,
+                               gallery.birth_times, unknowns, times)
+    per_person = np.full((len(uniq), unknowns.shape[0]), -np.inf)
+    for i, g in enumerate(groups):
+        per_person[i] = scores[g].max(axis=0)
+    return per_person
+
+
 def suggest_persons_batch(rows, gallery: Gallery,
-                          threshold: float = FACE_MATCH_THRESHOLD
+                          threshold: float = FACE_MATCH_THRESHOLD,
+                          unknowns: np.ndarray | None = None,
+                          times: np.ndarray | None = None
                           ) -> list[tuple[int, float] | None]:
     """Vectorized ``suggest_person`` for many faces at once.
 
@@ -227,43 +330,22 @@ def suggest_persons_batch(rows, gallery: Gallery,
     ``photo_datetime``. Returns one ``(person_id, score)`` (or ``None``) per row,
     equivalent to calling ``suggest_person`` on each — but the N cosine lookups
     collapse into a single matmul per chunk and the per-person reduction is
-    vectorized, instead of an N×gallery Python loop. The age penalty/exclusion
-    rules from ``match_embedding`` are applied identically across the batch.
+    vectorized, instead of an N×gallery Python loop. Pass ``unknowns``/``times``
+    (e.g. from ``get_unlabeled_matrix``) to skip decoding the embeddings again.
     """
     n = len(rows)
     if n == 0 or len(gallery) == 0:
         return [None] * n
 
-    unknowns = np.stack([decode_embedding(r["embedding"]) for r in rows])  # (N, 512)
-    times = np.array([float(r["photo_datetime"]) if r["photo_datetime"] else np.nan
-                      for r in rows], dtype=np.float64)
-
-    pids = gallery.person_ids
-    uniq = np.unique(pids)
-    groups = [np.nonzero(pids == p)[0] for p in uniq]   # gallery rows per person
-    has_birth = ~np.isnan(gallery.birth_times)
-    age_f = (gallery.face_times - gallery.birth_times) / YEAR_SECONDS
-    can_penalize = has_birth & ~np.isnan(gallery.face_times)
+    if unknowns is None or times is None:
+        unknowns, times = _stack_rows(rows)
+    uniq, groups = _person_groups(gallery)
 
     results: list[tuple[int, float] | None] = [None] * n
-    CHUNK = 1024  # caps the (gallery × chunk) score matrix to a few tens of MB
     for c0 in range(0, n, CHUNK):
         c1 = min(c0 + CHUNK, n)
-        scores = (gallery.embeddings @ unknowns[c0:c1].T).astype(np.float64)  # (G, u)
-        tu = times[c0:c1]
-        dated = ~np.isnan(tu)
-        if dated.any():
-            age_u = (tu[None, :] - gallery.birth_times[:, None]) / YEAR_SECONDS
-            penalty = FACE_AGE_PENALTY_PER_YEAR * np.minimum(
-                np.abs(age_u - age_f[:, None]), FACE_AGE_PENALTY_CAP_YEARS)
-            scores = np.where(can_penalize[:, None] & dated[None, :], scores - penalty, scores)
-            excluded = (has_birth[:, None] & dated[None, :]) & (age_u < -FACE_BIRTH_TOLERANCE_YEARS)
-            scores = np.where(excluded, -np.inf, scores)
-
         # Best example per person, then the best person, for each face in the chunk.
-        per_person = np.full((len(uniq), c1 - c0), -np.inf)
-        for i, g in enumerate(groups):
-            per_person[i] = scores[g].max(axis=0)
+        per_person = _best_per_person(gallery, uniq, groups, unknowns[c0:c1], times[c0:c1])
         best_i = per_person.argmax(axis=0)
         best_score = per_person[best_i, np.arange(per_person.shape[1])]
         best_pid = uniq[best_i]
@@ -272,3 +354,92 @@ def suggest_persons_batch(rows, gallery: Gallery,
             if np.isfinite(s) and s >= threshold:
                 results[c0 + j] = (int(best_pid[j]), float(s))
     return results
+
+
+def _rank_from_matrix(unknowns: np.ndarray, times: np.ndarray, gallery: Gallery,
+                      threshold: float = FACE_MATCH_THRESHOLD
+                      ) -> list[list[tuple[int, float]]]:
+    """Full per-face ranking from an already-decoded embedding matrix.
+
+    Returns, for each unknown, every person whose best example clears
+    ``threshold`` as a ``(person_id, score)`` list ordered best-first. Working
+    from a matrix (not DB rows) lets callers reuse embeddings they already
+    decoded instead of decoding them twice.
+    """
+    n = unknowns.shape[0]
+    if n == 0 or len(gallery) == 0:
+        return [[] for _ in range(n)]
+
+    uniq, groups = _person_groups(gallery)
+    results: list[list[tuple[int, float]]] = [[] for _ in range(n)]
+    for c0 in range(0, n, CHUNK):
+        c1 = min(c0 + CHUNK, n)
+        per_person = _best_per_person(gallery, uniq, groups, unknowns[c0:c1], times[c0:c1])
+        for j in range(c1 - c0):
+            col = per_person[:, j]
+            order = np.argsort(col)[::-1]   # descending; -inf sinks to the end
+            results[c0 + j] = [(int(uniq[i]), float(col[i])) for i in order
+                               if np.isfinite(col[i]) and col[i] >= threshold]
+    return results
+
+
+def rank_persons_batch(rows, gallery: Gallery,
+                       threshold: float = FACE_MATCH_THRESHOLD
+                       ) -> list[list[tuple[int, float]]]:
+    """Like ``suggest_persons_batch`` but keeps the full ranking per face,
+    decoding ``rows`` then delegating to ``_rank_from_matrix``."""
+    if len(rows) == 0 or len(gallery) == 0:
+        return [[] for _ in range(len(rows))]
+    unknowns, times = _stack_rows(rows)
+    return _rank_from_matrix(unknowns, times, gallery, threshold)
+
+
+def suggest_for_person(rows, gallery: Gallery, person_id: int,
+                       threshold: float = FACE_MATCH_THRESHOLD,
+                       margin: float = FACE_AMBIGUITY_MARGIN,
+                       unknowns: np.ndarray | None = None,
+                       times: np.ndarray | None = None) -> list[tuple]:
+    """Faces from ``rows`` whose best match across all persons is ``person_id``,
+    each paired with its score and any ambiguous alternatives.
+
+    A face can only be a suggestion for this person if its score against the
+    person's *own* examples clears the threshold, so we compute that cheap
+    single-person gate first and run the full all-persons ranking only on the few
+    candidates that pass — the win that makes the accept→refetch loop fast. An
+    *alternative* is another person whose own best example scores within
+    ``margin`` of ``person_id``'s: a near-tie that often means the face is really
+    that look-alike family member. Returns ``(row, score, alternatives)`` tuples
+    (unordered), where ``alternatives`` is a possibly-empty ``(person_id, score)``
+    list, best-first.
+
+    Pass ``unknowns``/``times`` (the decoded embedding matrix and photo times for
+    ``rows``, e.g. from ``get_unlabeled_matrix``) to skip decoding here and in the
+    ranking step entirely.
+    """
+    sel = gallery.person_ids == person_id
+    if not sel.any() or len(rows) == 0:
+        return []
+
+    if unknowns is None or times is None:
+        unknowns, times = _stack_rows(rows)
+    emb, ft, bt = gallery.embeddings[sel], gallery.face_times[sel], gallery.birth_times[sel]
+    best = np.full(len(rows), -np.inf)
+    for c0 in range(0, len(rows), CHUNK):
+        c1 = min(c0 + CHUNK, len(rows))
+        best[c0:c1] = _adjusted_cosines(emb, ft, bt, unknowns[c0:c1], times[c0:c1]).max(axis=0)
+
+    cand = np.nonzero(best >= threshold)[0]
+    if len(cand) == 0:
+        return []
+    cand_rows = [rows[i] for i in cand]
+    # Rank from the embeddings we already decoded instead of re-reading cand_rows.
+    ranked = _rank_from_matrix(unknowns[cand], times[cand], gallery, threshold)
+
+    out = []
+    for row, persons in zip(cand_rows, ranked):
+        if not persons or persons[0][0] != person_id:
+            continue
+        top = persons[0][1]
+        alternatives = [(pid, s) for pid, s in persons[1:] if s >= top - margin]
+        out.append((row, top, alternatives))
+    return out

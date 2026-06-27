@@ -8,6 +8,9 @@
 
 #scan-status { color: #888; font-size: 11px; }
 
+#suggested-only-label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+#suggested-only-chk { cursor: pointer; margin: 0; }
+
 /* ── Left: people list ── */
 #people-pane {
   display: flex;
@@ -101,11 +104,55 @@
   font-weight: bold;
   color: #7ed87e;
 }
-.thumb-cell .face-suggest .sug-name {
+.thumb-cell .sug-name {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Stack of clickable chips (top suggestion + ambiguous alternatives) */
+.thumb-cell .face-chips {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  display: flex;
+  flex-direction: column;
+}
+.thumb-cell .face-chips .face-suggest { position: static; }
+
+/* Amber "could be this other person instead" chip */
+.thumb-cell .face-alt {
+  background: rgba(140, 92, 20, .9);
+  color: #ffe2b8;
+  font-size: 10px;
+  padding: 2px 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.thumb-cell .face-alt:hover { background: rgba(170, 112, 24, 1); }
+.thumb-cell .face-alt .alt-arrow { font-weight: bold; color: #ffd596; }
+
+/* Ambiguous faces get an amber ring so they stand out among confident guesses */
+.thumb-cell.ambiguous { box-shadow: inset 0 0 0 2px #d39a2e; }
+
+/* Recently-tagged: the name doubles as a one-click un-tag */
+.thumb-cell .face-untag {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: rgba(0, 0, 0, .6);
+  color: #eee;
+  font-size: 10px;
+  padding: 2px 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  cursor: pointer;
+}
+.thumb-cell .face-untag:hover { background: rgba(122, 32, 32, .92); color: #ffdcdc; }
+.thumb-cell .face-untag .untag-x { flex-shrink: 0; font-weight: bold; color: #f0a3a3; }
+.thumb-cell .face-untag:hover .untag-x { color: #fff; }
 .thumb-cell .face-score {
   position: absolute;
   top: 2px; right: 3px;
@@ -133,6 +180,21 @@
 .face-group-btns { display: flex; gap: 6px; flex-shrink: 0; }
 .face-group-header button { padding: 2px 9px; font-size: 11px; flex-shrink: 0; }
 
+/* Per-person action bar: "Find more photos of <name>" */
+.person-scope-header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 4px 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid #333;
+  user-select: none;
+}
+.person-scope-label { font-size: 12px; color: #aaa; }
+.person-scope-header button { flex-shrink: 0; }
+
 /* Month header (unlabeled queue) — like the geocode month divider, but interactive */
 .face-month-header {
   grid-column: 1 / -1;
@@ -149,6 +211,22 @@
   user-select: none;
 }
 .face-month-header .month-accept-btn { padding: 1px 8px; font-size: 10px; flex-shrink: 0; }
+
+/* Per-person sub-header within a month (suggested-only view) — indented + lighter */
+.face-person-subhdr {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: #9ab;
+  padding: 2px 4px 2px 16px;
+  margin-top: 2px;
+  border-left: 2px solid #3a5a7a;
+  user-select: none;
+}
+.face-person-subhdr .subhdr-accept-btn { padding: 1px 8px; font-size: 10px; flex-shrink: 0; }
 
 /* Ignored faces are dimmed and badged */
 .thumb-cell.ignored img { opacity: 0.4; filter: grayscale(0.6); }
@@ -192,9 +270,35 @@
   border-radius: 4px;
   padding: 6px 8px;
   display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#face-suggestion .sug-primary {
+  display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 #face-suggestion .sug-text { color: #aaa; }
 #face-suggestion .sug-text b { color: #cfe6ff; }
+
+/* Ambiguous alternatives offered below the primary suggestion */
+#face-suggestion .sug-alts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  border-top: 1px solid rgba(255, 255, 255, .12);
+  padding-top: 8px;
+}
+#face-suggestion .sug-alts-label { color: #e0b878; }
+#face-suggestion .alt-btn {
+  background: #6b4716;
+  border: 1px solid #c8901f;
+  color: #ffe2b8;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+#face-suggestion .alt-btn:hover { background: #855a1c; }

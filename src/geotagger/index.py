@@ -6,6 +6,21 @@ from geotagger.config import CACHE_DIR_NAME, get_cache_dir
 _db: sqlite3.Connection | None = None
 _db_path: Path | None = None
 
+# Bumped on every change to face/person data that affects recognition. faces.py
+# caches decoded embedding matrices keyed on this, rebuilding only when it moves.
+_faces_generation = 0
+
+
+def faces_generation() -> int:
+    """Current face-data generation (see _faces_generation)."""
+    return _faces_generation
+
+
+def bump_faces_generation():
+    """Invalidate cached recognition data after a face/person mutation."""
+    global _faces_generation
+    _faces_generation += 1
+
 
 def init_db(root: Path | None = None) -> sqlite3.Connection:
     """Initialize the database. If CACHE_DIR is set, use that; otherwise use root / CACHE_DIR_NAME."""
@@ -51,6 +66,9 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
         _db.execute("ALTER TABLE photos ADD COLUMN photo_datetime INTEGER")
     if "gps_accuracy" not in cols:
         _db.execute("ALTER TABLE photos ADD COLUMN gps_accuracy REAL")
+    # EXIF orientation 1..8 for display rotation (NULL = not yet read)
+    if "orientation" not in cols:
+        _db.execute("ALTER TABLE photos ADD COLUMN orientation INTEGER")
     # Timestamp of last face-detection pass for this photo (NULL = never scanned)
     if "faces_scanned_at" not in cols:
         _db.execute("ALTER TABLE photos ADD COLUMN faces_scanned_at REAL")
@@ -99,13 +117,18 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
             embedding BLOB NOT NULL,
             source TEXT NOT NULL DEFAULT 'detected',
             ignored INTEGER NOT NULL DEFAULT 0,
-            created_at REAL NOT NULL
+            created_at REAL NOT NULL,
+            assigned_at REAL
         )
     """)
-    # Migrate faces tables that predate the ignored flag.
+    # Migrate faces tables that predate later columns.
     face_cols = {r[1] for r in _db.execute("PRAGMA table_info(faces)").fetchall()}
     if "ignored" not in face_cols:
         _db.execute("ALTER TABLE faces ADD COLUMN ignored INTEGER NOT NULL DEFAULT 0")
+    # When a face was tagged to a person (NULL = unlabeled). Distinct from
+    # created_at (when the face was detected); powers tag-order views and undo.
+    if "assigned_at" not in face_cols:
+        _db.execute("ALTER TABLE faces ADD COLUMN assigned_at REAL")
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id)")
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id)")
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_ignored ON faces(ignored)")
@@ -113,6 +136,8 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     # rows already ordered by det_score, so SQLite skips the temp-b-tree sort and
     # only touches the LIMIT rows instead of reading every unlabeled embedding.
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_queue ON faces(ignored, person_id, det_score)")
+    # Serves tag-order / "recently tagged" / undo queries (ORDER BY assigned_at DESC).
+    _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_assigned_at ON faces(assigned_at)")
 
     # Create R*Tree spatial index for photo locations
     # R*Tree uses min/max bounds, so for a point we use same value for min and max
@@ -178,25 +203,26 @@ def upsert_photo(
     mtime: float, size: int, lat, lng, geotag_source: str,
     sidecar_path: str | None, sidecar_mtime: float | None,
     camera: str | None = None, photo_datetime: int | None = None,
-    gps_accuracy: float | None = None,
+    gps_accuracy: float | None = None, orientation: int | None = None,
 ):
     db = get_db()
     db.execute("""
         INSERT INTO photos
             (path, filename, dir, ext, media_type, mtime, size, lat, lng,
              geotag_source, sidecar_path, sidecar_mtime, camera, photo_datetime,
-             gps_accuracy, scanned_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             gps_accuracy, orientation, scanned_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(path) DO UPDATE SET
             filename=excluded.filename, dir=excluded.dir, ext=excluded.ext,
             media_type=excluded.media_type, mtime=excluded.mtime, size=excluded.size,
             lat=excluded.lat, lng=excluded.lng, geotag_source=excluded.geotag_source,
             sidecar_path=excluded.sidecar_path, sidecar_mtime=excluded.sidecar_mtime,
             camera=excluded.camera, photo_datetime=excluded.photo_datetime,
-            gps_accuracy=excluded.gps_accuracy, scanned_at=excluded.scanned_at
+            gps_accuracy=excluded.gps_accuracy, orientation=excluded.orientation,
+            scanned_at=excluded.scanned_at
     """, (path, filename, dir_, ext, media_type, mtime, size, lat, lng,
           geotag_source, sidecar_path, sidecar_mtime, camera, photo_datetime,
-          gps_accuracy, time.time()))
+          gps_accuracy, orientation, time.time()))
     db.commit()
 
 
@@ -345,7 +371,7 @@ def save_last_scan_root(root: str):
 def is_fresh(path: str, mtime: float, sidecar_path: str | None, sidecar_mtime: float | None) -> bool:
     """Return True if the indexed row is up-to-date (no re-scan needed)."""
     row = get_db().execute(
-        "SELECT mtime, sidecar_path, sidecar_mtime, camera, photo_datetime, gps_accuracy FROM photos WHERE path=?", (path,)
+        "SELECT mtime, sidecar_path, sidecar_mtime, camera, photo_datetime, gps_accuracy, orientation FROM photos WHERE path=?", (path,)
     ).fetchone()
     if not row:
         return False
@@ -356,8 +382,10 @@ def is_fresh(path: str, mtime: float, sidecar_path: str | None, sidecar_mtime: f
     if sidecar_mtime is not None and row["sidecar_mtime"] is not None:
         if abs(row["sidecar_mtime"] - sidecar_mtime) > 1:
             return False
-    # Re-index if metadata was never fully read (NULL = not yet indexed)
-    if row["camera"] is None or row["photo_datetime"] is None or row["gps_accuracy"] is None:
+    # Re-index if metadata was never fully read (NULL = not yet indexed).
+    # orientation is included so existing libraries backfill it on the next scan.
+    if (row["camera"] is None or row["photo_datetime"] is None
+            or row["gps_accuracy"] is None or row["orientation"] is None):
         return False
     return True
 
@@ -422,13 +450,16 @@ def replace_faces(photo_id: int, faces: list[dict]):
     )
     db.execute("UPDATE photos SET faces_scanned_at=? WHERE id=?", (now, photo_id))
     db.commit()
+    bump_faces_generation()
 
 
 def get_faces_for_photo(photo_id: int) -> list[sqlite3.Row]:
     return get_db().execute(
         """SELECT f.id, f.photo_id, f.person_id, f.bbox, f.det_score, f.source,
-                  f.embedding, p.name AS person_name
-           FROM faces f LEFT JOIN persons p ON p.id = f.person_id
+                  f.embedding, f.assigned_at, p.name AS person_name, ph.orientation
+           FROM faces f
+           LEFT JOIN persons p ON p.id = f.person_id
+           JOIN photos ph ON ph.id = f.photo_id
            WHERE f.photo_id=? ORDER BY f.det_score DESC""",
         (photo_id,),
     ).fetchall()
@@ -440,10 +471,15 @@ def get_face(face_id: int) -> sqlite3.Row | None:
 
 def get_labeled_faces() -> list[sqlite3.Row]:
     """All faces assigned to a person (the recognition gallery), with each
-    example's photo date and the person's birth date for age-aware matching."""
+    example's photo date and the person's birth date for age-aware matching.
+
+    INDEXED BY forces the labeled rows (a few % of the table) to be found through
+    idx_faces_person; without the hint the planner full-scans the faces table —
+    reading every unlabeled face's embedding blob — which is ~6x slower here.
+    """
     return get_db().execute(
         """SELECT f.person_id, f.embedding, ph.photo_datetime, p.birth_date
-           FROM faces f
+           FROM faces f INDEXED BY idx_faces_person
            JOIN photos ph ON ph.id = f.photo_id
            JOIN persons p ON p.id = f.person_id
            WHERE f.person_id IS NOT NULL"""
@@ -460,6 +496,8 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
     """
     clause = ""
     params: list = []
+    # 'recent' is ordered by tag time, newest first; the rest by detection score.
+    order_by = "f.det_score DESC"
     if scope == "unlabeled":
         clause = "WHERE f.person_id IS NULL AND f.ignored = 0"
     elif scope == "ignored":
@@ -467,14 +505,18 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
     elif scope == "person" and person_id is not None:
         clause = "WHERE f.person_id = ?"
         params.append(person_id)
+    elif scope == "recent":
+        clause = "WHERE f.assigned_at IS NOT NULL AND f.person_id IS NOT NULL"
+        order_by = "f.assigned_at DESC"
     return get_db().execute(
         f"""SELECT f.id, f.photo_id, f.person_id, f.bbox, f.det_score, f.embedding,
-                   f.ignored, p.name AS person_name, ph.filename, ph.photo_datetime
+                   f.ignored, f.assigned_at, p.name AS person_name, ph.filename,
+                   ph.photo_datetime, ph.orientation
             FROM faces f
             LEFT JOIN persons p ON p.id = f.person_id
             JOIN photos ph ON ph.id = f.photo_id
             {clause}
-            ORDER BY f.det_score DESC
+            ORDER BY {order_by}
             LIMIT ?""",
         params + [limit],
     ).fetchall()
@@ -487,6 +529,10 @@ def count_faces(scope: str = "unlabeled", person_id: int | None = None) -> int:
         ).fetchone()[0]
     if scope == "ignored":
         return get_db().execute("SELECT COUNT(*) FROM faces WHERE ignored = 1").fetchone()[0]
+    if scope == "recent":
+        return get_db().execute(
+            "SELECT COUNT(*) FROM faces WHERE assigned_at IS NOT NULL AND person_id IS NOT NULL"
+        ).fetchone()[0]
     if scope == "person" and person_id is not None:
         return get_db().execute(
             "SELECT COUNT(*) FROM faces WHERE person_id = ?", (person_id,)
@@ -497,7 +543,7 @@ def count_faces(scope: str = "unlabeled", person_id: int | None = None) -> int:
 def get_face_with_photo(face_id: int) -> sqlite3.Row | None:
     """Face row joined with its photo's path/mtime/size (for cropping)."""
     return get_db().execute(
-        """SELECT f.id, f.bbox, f.photo_id, ph.path, ph.mtime, ph.size
+        """SELECT f.id, f.bbox, f.photo_id, ph.path, ph.mtime, ph.size, ph.orientation
            FROM faces f JOIN photos ph ON ph.id = f.photo_id
            WHERE f.id = ?""",
         (face_id,),
@@ -507,16 +553,20 @@ def get_face_with_photo(face_id: int) -> sqlite3.Row | None:
 def assign_faces(face_ids: list[int], person_id: int | None):
     """Bulk confirm (or clear, with None) the identity of several faces.
 
-    Labeling or clearing always lifts the ignored flag (see assign_face).
+    Labeling or clearing always lifts the ignored flag (see assign_face). Faces
+    confirmed together share one assigned_at, so a batch reads as a single tag
+    action for ordering and undo; clearing nulls the timestamp.
     """
     if not face_ids:
         return
     db = get_db()
+    now = time.time() if person_id is not None else None
     db.executemany(
-        "UPDATE faces SET person_id=?, ignored=0 WHERE id=?",
-        [(person_id, fid) for fid in face_ids],
+        "UPDATE faces SET person_id=?, ignored=0, assigned_at=? WHERE id=?",
+        [(person_id, now, fid) for fid in face_ids],
     )
     db.commit()
+    bump_faces_generation()
 
 
 def set_faces_ignored(face_ids: list[int], ignored: bool):
@@ -530,7 +580,7 @@ def set_faces_ignored(face_ids: list[int], ignored: bool):
     db = get_db()
     if ignored:
         db.executemany(
-            "UPDATE faces SET ignored=1, person_id=NULL WHERE id=?",
+            "UPDATE faces SET ignored=1, person_id=NULL, assigned_at=NULL WHERE id=?",
             [(fid,) for fid in face_ids],
         )
     else:
@@ -539,6 +589,7 @@ def set_faces_ignored(face_ids: list[int], ignored: bool):
             [(fid,) for fid in face_ids],
         )
     db.commit()
+    bump_faces_generation()
 
 
 def get_unlabeled_faces() -> list[sqlite3.Row]:
@@ -554,8 +605,11 @@ def assign_face(face_id: int, person_id: int | None):
     face states (labeled / unlabeled / ignored) mutually exclusive.
     """
     db = get_db()
-    db.execute("UPDATE faces SET person_id=?, ignored=0 WHERE id=?", (person_id, face_id))
+    now = time.time() if person_id is not None else None
+    db.execute("UPDATE faces SET person_id=?, ignored=0, assigned_at=? WHERE id=?",
+               (person_id, now, face_id))
     db.commit()
+    bump_faces_generation()
 
 
 def create_person(name: str) -> int:
@@ -589,9 +643,11 @@ def set_person_birth_date(person_id: int, birth_date: str | None):
     db = get_db()
     db.execute("UPDATE persons SET birth_date=? WHERE id=?", (birth_date, person_id))
     db.commit()
+    bump_faces_generation()  # gallery birth_times feed suggestion scores
 
 
 def delete_person(person_id: int):
     db = get_db()
     db.execute("DELETE FROM persons WHERE id=?", (person_id,))
     db.commit()
+    bump_faces_generation()  # their faces revert to unlabeled

@@ -53,6 +53,7 @@ def read_metadata(image_path: Path) -> dict:
         "EXIF:DateTimeOriginal", "QuickTime:CreateDate",
         "XMP:DateTimeOriginal",
         "EXIF:GPSHPositioningError",
+        "EXIF:Orientation#",  # '#' → numeric 1..8 rather than "Rotate 90 CW"
     ])
     row = result[0] if result else {}
 
@@ -74,9 +75,18 @@ def read_metadata(image_path: Path) -> dict:
     raw_acc = row.get("EXIF:GPSHPositioningError")
     gps_accuracy = float(raw_acc) if raw_acc is not None else -1.0
 
+    # EXIF orientation 1..8 (how to rotate/flip for display); 1 = as-stored.
+    raw_orient = row.get("EXIF:Orientation")
+    try:
+        orientation = int(raw_orient) if raw_orient is not None else 1
+    except (TypeError, ValueError):
+        orientation = 1
+    if orientation not in range(1, 9):
+        orientation = 1
+
     return {"lat": lat, "lng": lng, "geotag_source": source,
             "camera": camera, "photo_datetime": photo_datetime,
-            "gps_accuracy": gps_accuracy}
+            "gps_accuracy": gps_accuracy, "orientation": orientation}
 
 
 def read_gps(image_path: Path) -> tuple[float, float, str] | tuple[None, None, str]:

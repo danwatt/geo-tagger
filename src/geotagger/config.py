@@ -54,6 +54,10 @@ FACE_DET_THRESHOLD = float(os.environ.get("GEOTAGGER_FACE_DET_THRESHOLD", "0.5")
 FACE_MATCH_THRESHOLD = float(os.environ.get("GEOTAGGER_FACE_MATCH_THRESHOLD", "0.35"))
 # Max unlabeled faces to scan when gathering a person's guesses (scope=suggested).
 FACE_SUGGEST_SCAN_CAP = int(os.environ.get("GEOTAGGER_FACE_SUGGEST_SCAN_CAP", "5000"))
+# When reviewing one person's guesses, another person whose own best example
+# scores within this cosine margin of the top match is flagged as an ambiguous
+# alternative ("could be this family member instead") — a near-tie, not a clear win.
+FACE_AMBIGUITY_MARGIN = float(os.environ.get("GEOTAGGER_FACE_AMBIGUITY_MARGIN", "0.05"))
 
 # ── Age-aware recognition (uses person birth dates + photo dates) ──
 # A dated photo taken more than this many years before a person's birth excludes

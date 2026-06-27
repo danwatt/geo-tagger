@@ -11,6 +11,8 @@ let scopePersonId = null;       // when scope === "person"
 let scanning = false;
 let stopScanRequested = false;
 
+let suggestedOnly = false;      // Unlabeled queue: hide faces with no guess
+
 let groupGapSeconds = 86400;    // event grouping gap in the guesses view (1 day)
 
 const FACE_LIMIT = 1000;
@@ -42,6 +44,10 @@ function bindToolbar() {
 
   document.getElementById("scan-btn").addEventListener("click", toggleScan);
   document.getElementById("deselect-all-btn").addEventListener("click", deselectAll);
+  document.getElementById("suggested-only-chk").addEventListener("change", (e) => {
+    suggestedOnly = e.target.checked;
+    if (scope === "unlabeled") loadFaces();
+  });
 
   document.getElementById("assign-btn").addEventListener("click", () => {
     const pid = parseInt(document.getElementById("assign-person-select").value);
@@ -95,7 +101,8 @@ async function loadPersons() {
     const status = await sRes.json();
 
     const totalFaces = status.total_faces || 0;
-    renderPeopleList(status.unlabeled_faces || 0, totalFaces, status.ignored_faces || 0);
+    renderPeopleList(status.unlabeled_faces || 0, totalFaces,
+                     status.ignored_faces || 0, status.tagged_faces || 0);
     populatePersonSelects();
     updateScanStatus(status.remaining_photos, totalFaces);
   } catch (err) {
@@ -103,11 +110,12 @@ async function loadPersons() {
   }
 }
 
-function renderPeopleList(unlabeledCount, allCount, ignoredCount) {
+function renderPeopleList(unlabeledCount, allCount, ignoredCount, taggedCount) {
   const list = document.getElementById("people-list");
   list.innerHTML = "";
 
   list.appendChild(makeScopeItem("Unlabeled", unlabeledCount, "unlabeled", null));
+  list.appendChild(makeScopeItem("Recently tagged", taggedCount, "recent", null));
   list.appendChild(makeScopeItem("All faces", allCount, "all", null));
   list.appendChild(makeScopeItem("Ignored", ignoredCount, "ignored", null));
 
@@ -218,6 +226,7 @@ async function loadFaces() {
     if ((scope === "person" || scope === "suggested") && scopePersonId) {
       url += `&person_id=${scopePersonId}`;
     }
+    if (scope === "unlabeled" && suggestedOnly) url += "&suggested_only=true";
     const res = await fetch(url);
     const data = await res.json();
     faces = data.faces;
@@ -230,10 +239,23 @@ async function loadFaces() {
       focusedFaceId = faces.length ? faces[0].id : null;
       document.getElementById("assign-person-select").value = scopePersonId;
       document.getElementById("detail-person-select").value = scopePersonId;
-    } else if (scope === "unlabeled" || scope === "person") {
-      // Oldest first so the year/month dividers read top-to-bottom like the
-      // geocode grid; undated faces (0) sort to the top with no divider.
+    } else if (scope === "recent") {
+      // Newest tag first (the server already orders this way; keep it explicit).
+      faces.sort((a, b) => (b.assigned_at || 0) - (a.assigned_at || 0));
+    } else if (scope === "unlabeled") {
+      // Oldest first so the year/month dividers read top-to-bottom. In "Only
+      // suggested" mode, cluster each month by suggested person (date secondary)
+      // — month stays the primary key so the month grouping/range-select hold.
+      faces.sort(suggestedOnly
+        ? byMonthThenPersonThenDate
+        : (a, b) => (a.photo_datetime || 0) - (b.photo_datetime || 0));
+    } else if (scope === "person") {
       faces.sort((a, b) => (a.photo_datetime || 0) - (b.photo_datetime || 0));
+    }
+
+    // Keep the toolbar's "Review guesses for" aimed at whoever you're viewing.
+    if ((scope === "person" || scope === "suggested") && scopePersonId) {
+      document.getElementById("guess-person-select").value = scopePersonId;
     }
 
     updateActionButtons();
@@ -246,12 +268,30 @@ async function loadFaces() {
         setStatus(`No guesses for ${personName} yet — label a few of their faces ` +
                   `first so recognition has examples to match against.`);
       } else {
-        setStatus(`${data.returned} guesses for ${personName}, all selected. ` +
+        const ambiguous = faces.filter(f => f.alternatives && f.alternatives.length).length;
+        const ambigNote = ambiguous
+          ? `${ambiguous} (amber) may be someone else — check those. ` : "";
+        setStatus(`${data.returned} guesses for ${personName}, all selected. ${ambigNote}` +
                   `Click any wrong ones to deselect, then Assign to approve the rest.`);
       }
+    } else if (scope === "recent") {
+      if (data.returned === 0) {
+        setStatus("Nothing tagged yet. Faces you assign to a person will show up here, newest first.");
+      } else {
+        let msg = `${data.returned} recently tagged face(s), newest first — ` +
+                  `click a name to un-tag, or use “Untag all” on a batch.`;
+        if (data.total > data.returned) msg += ` (showing first ${data.returned})`;
+        setStatus(msg);
+      }
+    } else if (scope === "unlabeled" && suggestedOnly && data.total === 0) {
+      setStatus("No unlabeled faces have a recognition guess yet — uncheck " +
+                "“Only suggested” to see the rest, or label a few faces so " +
+                "recognition has examples to match against.");
     } else {
       const label = scope === "person" ? personName : scope;
-      let msg = `${data.returned} of ${data.total} faces — ${label}`;
+      const what = (scope === "unlabeled" && suggestedOnly)
+        ? "suggested face(s) — Unlabeled" : `faces — ${label}`;
+      let msg = `${data.returned} of ${data.total} ${what}`;
       if (data.total > data.returned) msg += ` (showing first ${data.returned})`;
       setStatus(msg);
     }
@@ -277,6 +317,17 @@ function renderGrid() {
     return;
   }
 
+  // Recently tagged: group by tag-batch (shared assigned_at), newest first,
+  // each batch header offering a one-click "Untag all".
+  if (scope === "recent") {
+    let idx = 0;
+    computeTagBatches(faces).forEach(group => {
+      grid.appendChild(makeTagBatchHeader(group));
+      group.faces.forEach(face => { grid.appendChild(makeFaceCell(face, idx)); idx++; });
+    });
+    return;
+  }
+
   // Unlabeled queue: year dividers + a per-month header carrying an "Accept all"
   // button that confirms the suggestions for just that month's faces.
   if (scope === "unlabeled") {
@@ -290,13 +341,25 @@ function renderGrid() {
         grid.appendChild(yd);
       }
       grid.appendChild(makeMonthHeader(group));
-      group.faces.forEach(face => { grid.appendChild(makeFaceCell(face, idx)); idx++; });
+      // In "Only suggested" mode the month is clustered by person; when more than
+      // one person appears, give each a sub-header with its own "Accept all".
+      const runs = suggestedOnly ? computePersonRuns(group.faces) : null;
+      if (runs && runs.length > 1) {
+        runs.forEach(run => {
+          grid.appendChild(makePersonRunHeader(run));
+          run.faces.forEach(face => { grid.appendChild(makeFaceCell(face, idx)); idx++; });
+        });
+      } else {
+        group.faces.forEach(face => { grid.appendChild(makeFaceCell(face, idx)); idx++; });
+      }
     });
     return;
   }
 
-  // Per-person view: geocode-style year/month dividers (no per-month actions).
+  // Per-person view: an action bar to hunt for more of this person, then
+  // geocode-style year/month dividers (no per-month actions).
   if (scope === "person") {
+    grid.appendChild(makePersonHeader());
     let curYear = null, curMonth = null;
     faces.forEach((face, idx) => {
       if (face.photo_datetime) {
@@ -323,6 +386,47 @@ function renderGrid() {
   }
 
   faces.forEach((face, idx) => grid.appendChild(makeFaceCell(face, idx)));
+}
+
+// Action bar atop a person's photos: jump to recognition's untagged guesses for them.
+function makePersonHeader() {
+  const name = persons.find(p => p.id === scopePersonId)?.name || "this person";
+  const bar = document.createElement("div");
+  bar.className = "person-scope-header";
+
+  const label = document.createElement("span");
+  label.className = "person-scope-label";
+  label.textContent = `${faces.length} tagged photo(s) of ${name}`;
+
+  const btn = document.createElement("button");
+  btn.className = "primary";
+  btn.textContent = `🔍 Find more photos of ${name}`;
+  btn.title = "Show untagged faces that recognition thinks are this person, " +
+    "so you can confirm them in bulk";
+  btn.addEventListener("click", () => selectScope("suggested", scopePersonId));
+
+  bar.appendChild(label);
+  bar.appendChild(btn);
+  return bar;
+}
+
+// Sort key for a face's calendar month ("YYYY-MM"; undated sorts first), so the
+// month grouping stays contiguous regardless of any secondary ordering.
+function monthKey(f) {
+  if (!f.photo_datetime) return "0000-00";
+  const d = new Date(f.photo_datetime * 1000);
+  return `${d.getFullYear()}-${String(d.getMonth()).padStart(2, "0")}`;
+}
+
+// Month → suggested person (alphabetical) → date. Clusters each month's faces by
+// who they're guessed to be while keeping months in chronological order.
+function byMonthThenPersonThenDate(a, b) {
+  const ma = monthKey(a), mb = monthKey(b);
+  if (ma !== mb) return ma < mb ? -1 : 1;
+  const an = ((a.suggestion && a.suggestion.person_name) || "￿").toLowerCase();
+  const bn = ((b.suggestion && b.suggestion.person_name) || "￿").toLowerCase();
+  if (an !== bn) return an < bn ? -1 : 1;
+  return (a.photo_datetime || 0) - (b.photo_datetime || 0);
 }
 
 /* ── Month grouping (unlabeled queue) ── */
@@ -370,6 +474,45 @@ function makeMonthHeader(group) {
   return header;
 }
 
+// Runs of consecutive same-suggested-person faces within an already-clustered month.
+function computePersonRuns(list) {
+  const runs = [];
+  let cur = null;
+  list.forEach(f => {
+    const pid = f.suggestion ? f.suggestion.person_id : null;
+    if (!cur || cur.person_id !== pid) {
+      cur = { person_id: pid, person_name: f.suggestion ? f.suggestion.person_name : null, faces: [] };
+      runs.push(cur);
+    }
+    cur.faces.push(f);
+  });
+  return runs;
+}
+
+// Per-person sub-header inside a month, with an "Accept all" scoped to that person.
+function makePersonRunHeader(run) {
+  const header = document.createElement("div");
+  header.className = "face-person-subhdr";
+
+  const label = document.createElement("span");
+  label.textContent = run.person_name || "No suggestion";
+  header.appendChild(label);
+
+  const acceptable = run.faces.filter(f => f.suggestion && !f.person_name && !f.ignored);
+  if (acceptable.length > 0) {
+    const btn = document.createElement("button");
+    btn.className = "subhdr-accept-btn";
+    btn.textContent = `Accept all (${acceptable.length})`;
+    btn.title = `Confirm ${run.person_name} for these ${acceptable.length} face(s)`;
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      acceptSuggestionsFor(run.faces, run.person_name);
+    });
+    header.appendChild(btn);
+  }
+  return header;
+}
+
 function makeFaceCell(face, idx) {
   const cell = document.createElement("div");
   cell.className = "thumb-cell" +
@@ -393,27 +536,145 @@ function makeFaceCell(face, idx) {
     label.className = "face-label ignored-label";
     label.textContent = "Ignored";
     cell.appendChild(label);
+  } else if (face.person_name && scope === "recent") {
+    // In the recently-tagged view the name is a one-click un-tag.
+    const chip = document.createElement("div");
+    chip.className = "face-untag";
+    chip.title = `Click to un-tag ${face.person_name}`;
+    chip.innerHTML =
+      `<span class="sug-name">${face.person_name}</span>` +
+      `<span class="untag-x">✕</span>`;
+    chip.addEventListener("click", (e) => {
+      e.stopPropagation();
+      untagFaces([face.id]);
+    });
+    cell.appendChild(chip);
   } else if (face.person_name) {
     const label = document.createElement("div");
     label.className = "face-label";
     label.textContent = face.person_name;
     cell.appendChild(label);
   } else if (face.suggestion) {
-    const chip = document.createElement("div");
-    chip.className = "face-suggest";
-    chip.title = `Click to confirm: ${face.suggestion.person_name} (${face.suggestion.score})`;
-    chip.innerHTML =
-      `<span class="sug-check">✓</span>` +
-      `<span class="sug-name">${face.suggestion.person_name}?</span>`;
-    chip.addEventListener("click", (e) => {
-      e.stopPropagation();
-      confirmFace(face.id, face.suggestion.person_id);
-    });
-    cell.appendChild(chip);
+    const alts = face.alternatives || [];
+    if (alts.length) {
+      // Near-tie with another person — flag it and offer a one-click reassign.
+      cell.classList.add("ambiguous");
+      const wrap = document.createElement("div");
+      wrap.className = "face-chips";
+      wrap.appendChild(makeSuggestChip(face));
+      alts.slice(0, 2).forEach(alt => wrap.appendChild(makeAltChip(face, alt)));
+      cell.appendChild(wrap);
+    } else {
+      cell.appendChild(makeSuggestChip(face));
+    }
   }
 
   cell.addEventListener("click", (e) => handleCellClick(e, face, idx));
   return cell;
+}
+
+// Green chip confirming the face as its top-suggested person.
+function makeSuggestChip(face) {
+  const chip = document.createElement("div");
+  chip.className = "face-suggest";
+  chip.title = `Click to confirm: ${face.suggestion.person_name} (${face.suggestion.score})`;
+  chip.innerHTML =
+    `<span class="sug-check">✓</span>` +
+    `<span class="sug-name">${face.suggestion.person_name}?</span>`;
+  chip.addEventListener("click", (e) => {
+    e.stopPropagation();
+    confirmFace(face.id, face.suggestion.person_id);
+  });
+  return chip;
+}
+
+// Amber chip tagging the face as a runner-up person instead of the suggestion.
+function makeAltChip(face, alt) {
+  const chip = document.createElement("div");
+  chip.className = "face-alt";
+  chip.title = `Click to tag as ${alt.person_name} instead (${alt.score})`;
+  chip.innerHTML =
+    `<span class="alt-arrow">→</span>` +
+    `<span class="sug-name">${alt.person_name}?</span>`;
+  chip.addEventListener("click", (e) => {
+    e.stopPropagation();
+    confirmFace(face.id, alt.person_id);
+  });
+  return chip;
+}
+
+/* ── Tag-batch grouping (recently tagged view) ── */
+function computeTagBatches(list) {
+  // `list` is newest-first by assigned_at; faces tagged together share a value.
+  const groups = [];
+  let cur = null;
+  list.forEach(f => {
+    if (!cur || cur.ts !== f.assigned_at) { cur = { ts: f.assigned_at, faces: [] }; groups.push(cur); }
+    cur.faces.push(f);
+  });
+  return groups;
+}
+
+function formatRelativeTime(ts) {
+  if (!ts) return "unknown time";
+  const sec = Date.now() / 1000 - ts;
+  if (sec < 45) return "just now";
+  if (sec < 3600) return `${Math.round(sec / 60)} min ago`;
+  if (sec < 86400) return `${Math.round(sec / 3600)} hr ago`;
+  if (sec < 7 * 86400) return `${Math.round(sec / 86400)} days ago`;
+  return new Date(ts * 1000).toLocaleString();
+}
+
+function makeTagBatchHeader(group) {
+  const header = document.createElement("div");
+  header.className = "face-group-header";
+
+  const names = [...new Set(group.faces.map(f => f.person_name).filter(Boolean))];
+  const who = names.length === 1 ? names[0]
+            : names.length === 2 ? names.join(" & ")
+            : `${names.length} people`;
+  const label = document.createElement("span");
+  label.className = "face-group-label";
+  label.innerHTML = `${who} ` +
+    `<span class="face-group-meta">· ${formatRelativeTime(group.ts)} · ` +
+    `${group.faces.length} face(s)</span>`;
+
+  const btns = document.createElement("div");
+  btns.className = "face-group-btns";
+  const untagAll = document.createElement("button");
+  untagAll.className = "danger";
+  untagAll.textContent = `Untag all (${group.faces.length})`;
+  untagAll.title = "Un-tag every face tagged in this batch (returns them to Unlabeled)";
+  untagAll.addEventListener("click", (e) => {
+    e.stopPropagation();
+    untagFaces(group.faces.map(f => f.id), who);
+  });
+  btns.appendChild(untagAll);
+
+  header.appendChild(label);
+  header.appendChild(btns);
+  return header;
+}
+
+// Clear the person assignment on faces, returning them to the unlabeled queue.
+async function untagFaces(ids, who) {
+  if (!ids.length) return;
+  if (ids.length > 1 && !confirm(`Un-tag ${ids.length} face(s)${who ? ` (${who})` : ""}?`)) return;
+  try {
+    const res = await fetch("/api/faces/assign", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ face_ids: ids, clear: true }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    setStatus(`Un-tagged ${ids.length} face(s).`);
+    selectedIds.clear();
+    if (ids.includes(focusedFaceId)) focusedFaceId = null;
+    await loadPersons();
+    await loadFaces();
+  } catch (err) {
+    setStatus("Un-tag failed: " + err.message, true);
+  }
 }
 
 /* ── Event grouping (guesses view) ── */
@@ -578,15 +839,40 @@ function updateDetail() {
     face.ignored ? "↩ Restore" : "🚫 Ignore";
 
   const sug = document.getElementById("face-suggestion");
+  const alts = face.alternatives || [];
   if (!face.person_name && face.suggestion) {
     sug.style.display = "flex";
-    sug.innerHTML =
+    sug.innerHTML = "";
+
+    const primary = document.createElement("div");
+    primary.className = "sug-primary";
+    primary.innerHTML =
       `<span class="sug-text">Looks like <b>${face.suggestion.person_name}</b> ` +
-      `(${face.suggestion.score})</span>` +
-      `<button class="primary" id="sug-confirm-btn">Confirm</button>`;
-    document.getElementById("sug-confirm-btn").addEventListener("click", () => {
-      confirmFace(face.id, face.suggestion.person_id);
-    });
+      `(${face.suggestion.score})</span>`;
+    const confirmBtn = document.createElement("button");
+    confirmBtn.className = "primary";
+    confirmBtn.textContent = "Confirm";
+    confirmBtn.addEventListener("click", () => confirmFace(face.id, face.suggestion.person_id));
+    primary.appendChild(confirmBtn);
+    sug.appendChild(primary);
+
+    if (alts.length) {
+      const altWrap = document.createElement("div");
+      altWrap.className = "sug-alts";
+      const label = document.createElement("span");
+      label.className = "sug-alts-label";
+      label.textContent = "…or maybe:";
+      altWrap.appendChild(label);
+      alts.forEach(alt => {
+        const b = document.createElement("button");
+        b.className = "alt-btn";
+        b.textContent = `${alt.person_name} (${alt.score})`;
+        b.title = `Tag this face as ${alt.person_name} instead`;
+        b.addEventListener("click", () => confirmFace(face.id, alt.person_id));
+        altWrap.appendChild(b);
+      });
+      sug.appendChild(altWrap);
+    }
   } else {
     sug.style.display = "none";
   }
@@ -640,6 +926,13 @@ function updateActionButtons() {
   // The ignore button restores in the Ignored scope, ignores elsewhere.
   document.getElementById("ignore-btn").textContent =
     scope === "ignored" ? "↩ Restore" : "🚫 Ignore";
+
+  // "Only suggested" applies to the Unlabeled queue only.
+  const chk = document.getElementById("suggested-only-chk");
+  chk.checked = suggestedOnly;
+  chk.disabled = scope !== "unlabeled";
+  document.getElementById("suggested-only-label").style.opacity =
+    scope === "unlabeled" ? "1" : "0.45";
 }
 
 async function assignSelectedToNewPerson() {

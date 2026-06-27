@@ -122,7 +122,7 @@ def _scan_directory(root: Path, show_progress: bool = True, generate_thumbnails:
                     lat=meta["lat"], lng=meta["lng"], geotag_source=meta["geotag_source"],
                     sidecar_path=sc_path_str, sidecar_mtime=sc_mtime,
                     camera=meta["camera"], photo_datetime=meta["photo_datetime"],
-                    gps_accuracy=meta["gps_accuracy"],
+                    gps_accuracy=meta["gps_accuracy"], orientation=meta["orientation"],
                 )
                 was_indexed = True
 
@@ -549,7 +549,8 @@ async def api_thumbnail(photo_id: int):
             thumbnails.get_thumbnail,
             Path(row["path"]),
             row["mtime"],
-            row["size"]
+            row["size"],
+            row["orientation"],
         )
         return Response(content=data, media_type="image/jpeg")
     except Exception as e:
@@ -569,10 +570,11 @@ async def api_preview(photo_id: int):
         loop = asyncio.get_event_loop()
         data = await loop.run_in_executor(
             _executor,
-            thumbnails.get_preview,
+            thumbnails.get_preview_oriented,
             Path(row["path"]),
             row["mtime"],
-            row["size"]
+            row["size"],
+            row["orientation"],
         )
         return Response(content=data, media_type="image/jpeg")
     except Exception as e:
@@ -777,6 +779,8 @@ def _update_photo_times(updates: dict[int, int]) -> int:
 
         updated += 1
 
+    if updated:
+        index.bump_faces_generation()  # photo times feed age-aware suggestion scores
     return updated
 
 
@@ -850,19 +854,16 @@ def _face_item(r) -> dict:
         "id": r["id"],
         "photo_id": r["photo_id"],
         "filename": r["filename"],
-        "bbox": [float(v) for v in r["bbox"].split(",")],
+        "bbox": thumbnails.orient_bbox(r["bbox"].split(","), r["orientation"]),
         "det_score": r["det_score"],
         "person_id": r["person_id"],
         "person_name": r["person_name"],
         "ignored": bool(r["ignored"]),
         "photo_datetime": r["photo_datetime"],
+        "assigned_at": r["assigned_at"],
         "suggestion": None,
+        "alternatives": [],
     }
-
-
-def _person_name(person_id: int) -> str | None:
-    row = index.get_db().execute("SELECT name FROM persons WHERE id=?", (person_id,)).fetchone()
-    return row["name"] if row else None
 
 
 def _person_name_map() -> dict[int, str]:
@@ -873,30 +874,54 @@ def _person_name_map() -> dict[int, str]:
 
 @app.get("/api/faces")
 async def api_list_faces(
-    scope: str = Query("unlabeled", pattern="^(unlabeled|person|ignored|suggested|all)$"),
+    scope: str = Query("unlabeled", pattern="^(unlabeled|person|ignored|suggested|recent|all)$"),
     person_id: int | None = Query(None),
     limit: int = Query(500, ge=1, le=2000),
+    suggested_only: bool = Query(False),
 ):
     """List faces. scope=unlabeled attaches a recognition suggestion to each face;
     scope=suggested returns only unlabeled faces whose *best* guess is `person_id`,
-    ranked by confidence — for quickly approving one person's guesses in bulk."""
+    ranked by confidence — for quickly approving one person's guesses in bulk.
+    suggested_only (scope=unlabeled) drops faces with no guess, scanning up to the
+    suggest cap so it finds matches beyond the first detection-ranked page."""
+    if scope == "unlabeled" and suggested_only:
+        gallery = faces.build_gallery()
+        out, total = [], 0
+        if len(gallery) > 0:
+            rows, unknowns, times = faces.get_unlabeled_matrix(FACE_SUGGEST_SCAN_CAP)
+            matches = faces.suggest_persons_batch(rows, gallery, unknowns=unknowns, times=times)
+            names = _person_name_map()
+            scored = [(r, m) for r, m in zip(rows, matches) if m]
+            scored.sort(key=lambda rm: rm[1][1], reverse=True)  # most confident first
+            total = len(scored)
+            for r, (pid, score) in scored[:limit]:
+                item = _face_item(r)
+                item["suggestion"] = {"person_id": pid, "person_name": names.get(pid),
+                                      "score": round(score, 4)}
+                out.append(item)
+        return {"faces": out, "total": total, "returned": len(out)}
+
     if scope == "suggested":
         if not person_id:
             raise HTTPException(400, "person_id is required for scope=suggested")
         gallery = faces.build_gallery()
-        name = _person_name(person_id)
+        names = _person_name_map()
+        name = names.get(person_id)
         scored = []
         if len(gallery) > 0:
-            rows = index.list_faces("unlabeled", None, FACE_SUGGEST_SCAN_CAP)
-            for r, match in zip(rows, faces.suggest_persons_batch(rows, gallery)):
-                if match and match[0] == person_id:
-                    scored.append((r, match[1]))
+            rows, unknowns, times = faces.get_unlabeled_matrix(FACE_SUGGEST_SCAN_CAP)
+            scored = faces.suggest_for_person(rows, gallery, person_id,
+                                              unknowns=unknowns, times=times)
         scored.sort(key=lambda t: t[1], reverse=True)
         out = []
-        for r, score in scored[:limit]:
+        for r, score, alts in scored[:limit]:
             item = _face_item(r)
             item["suggestion"] = {"person_id": person_id, "person_name": name,
                                   "score": round(score, 4)}
+            item["alternatives"] = [
+                {"person_id": pid, "person_name": names.get(pid), "score": round(s, 4)}
+                for pid, s in alts
+            ]
             out.append(item)
         return {"faces": out, "total": len(scored), "returned": len(out)}
 
@@ -929,8 +954,10 @@ async def api_face_crop(face_id: int):
     try:
         loop = asyncio.get_running_loop()
         data = await loop.run_in_executor(
-            _executor, thumbnails.get_face_crop,
-            Path(row["path"]), row["mtime"], row["size"], bbox,
+            _executor,
+            lambda: thumbnails.get_face_crop(
+                Path(row["path"]), row["mtime"], row["size"], bbox,
+                orientation=row["orientation"]),
         )
         return Response(content=data, media_type="image/jpeg")
     except Exception as e:
@@ -967,10 +994,11 @@ async def api_photo_faces(photo_id: int):
     for r in rows:
         item = {
             "id": r["id"],
-            "bbox": [float(v) for v in r["bbox"].split(",")],
+            "bbox": thumbnails.orient_bbox(r["bbox"].split(","), r["orientation"]),
             "det_score": r["det_score"],
             "person_id": r["person_id"],
             "person_name": r["person_name"],
+            "assigned_at": r["assigned_at"],
             "suggestion": None,
         }
         # Only suggest for not-yet-assigned faces.
@@ -1038,6 +1066,7 @@ async def api_faces_scan_status():
         "total_faces": index.count_faces("all"),
         "unlabeled_faces": index.count_faces("unlabeled"),
         "ignored_faces": index.count_faces("ignored"),
+        "tagged_faces": index.count_faces("recent"),
     }
 
 

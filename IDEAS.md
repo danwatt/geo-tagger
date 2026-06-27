@@ -8,10 +8,15 @@ Parked ideas for geo-tagger, to revisit later.
   find other faces that match it and bulk-ignore (or bulk-suggest) them. Turns a
   single ignore of a recurring background stranger into a one-click sweep.
 
-- **Ambiguity abstention in suggestions** — when the top two candidate people score
-  within a small margin of each other, show no suggestion (or flag it "A or B?")
-  instead of confidently guessing. Cheap, independent of birth dates, and especially
-  helps look-alike siblings. Deferred 2026-06-26 alongside the birth-date/age work.
+- **Ambiguity detection in suggestions** — when the top two candidate people score
+  within a small margin of each other, flag it "A or B?" instead of confidently
+  guessing. Cheap, independent of birth dates, and especially helps look-alike
+  siblings.
+  - *Done 2026-06-27 for the per-person review view (scope=suggested):* each guess
+    now carries near-tie `alternatives`, shown as an amber ring + one-click
+    "tag as the other person" chip (config `FACE_AMBIGUITY_MARGIN`, default 0.05).
+  - *Still open:* surface the same ambiguity in the unlabeled queue and the
+    per-photo face list (abstain / show "A or B?" rather than a lone suggestion).
 
 - **Keyboard-driven rapid tagging** — shortcuts in the People grid to triage fast:
   e.g. number keys to assign to the top suggestion / a recent person, `x` to ignore,
