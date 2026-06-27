@@ -20,7 +20,10 @@ from geotagger.config import (
     CACHE_DIR_NAME, get_cache_dir,
     FACE_MODEL_NAME, FACE_DET_SIZE, FACE_DET_THRESHOLD,
     FACE_MATCH_THRESHOLD, FACE_PROVIDERS,
+    FACE_BIRTH_TOLERANCE_YEARS, FACE_AGE_PENALTY_PER_YEAR, FACE_AGE_PENALTY_CAP_YEARS,
 )
+
+YEAR_SECONDS = 365.25 * 86400
 
 _model_dir: Path | None = None
 _app = None  # insightface.app.FaceAnalysis, loaded lazily
@@ -129,12 +132,28 @@ def detect_and_store(photo_row) -> int:
 
 # ── Recognition (nearest-neighbour over labeled faces) ──
 
-class Gallery:
-    """In-memory matrix of confirmed-face embeddings for fast cosine matching."""
+def _birth_ts(birth_date: str | None) -> float:
+    """ISO YYYY-MM-DD → epoch seconds (UTC, matching photo_datetime), or NaN."""
+    if not birth_date:
+        return float("nan")
+    try:
+        import calendar
+        from datetime import datetime
+        return float(calendar.timegm(datetime.strptime(birth_date[:10], "%Y-%m-%d").timetuple()))
+    except Exception:
+        return float("nan")
 
-    def __init__(self, embeddings: np.ndarray, person_ids: np.ndarray):
-        self.embeddings = embeddings  # (N, 512), each row L2-normalized
-        self.person_ids = person_ids  # (N,) int
+
+class Gallery:
+    """In-memory matrix of confirmed-face embeddings for fast cosine matching,
+    plus each example's photo time and its person's birth time for age math."""
+
+    def __init__(self, embeddings: np.ndarray, person_ids: np.ndarray,
+                 face_times: np.ndarray, birth_times: np.ndarray):
+        self.embeddings = embeddings    # (N, 512), each row L2-normalized
+        self.person_ids = person_ids    # (N,) int
+        self.face_times = face_times     # (N,) epoch secs, NaN if undated
+        self.birth_times = birth_times   # (N,) epoch secs, NaN if person has no birth date
 
     def __len__(self) -> int:
         return len(self.person_ids)
@@ -144,32 +163,56 @@ def build_gallery() -> Gallery:
     """Load all confirmed faces into a matrix for matching."""
     labeled = index.get_labeled_faces()
     if not labeled:
-        return Gallery(np.zeros((0, EMBED_DIM), np.float32), np.zeros((0,), np.int64))
+        z = np.zeros((0,), np.float64)
+        return Gallery(np.zeros((0, EMBED_DIM), np.float32), np.zeros((0,), np.int64), z, z)
     embs = np.stack([decode_embedding(r["embedding"]) for r in labeled])
     pids = np.array([r["person_id"] for r in labeled], dtype=np.int64)
-    return Gallery(embs, pids)
+    ftimes = np.array([float(r["photo_datetime"]) if r["photo_datetime"] else np.nan
+                       for r in labeled], dtype=np.float64)
+    births = np.array([_birth_ts(r["birth_date"]) for r in labeled], dtype=np.float64)
+    return Gallery(embs, pids, ftimes, births)
 
 
-def match_embedding(vec: np.ndarray, gallery: Gallery) -> list[tuple[int, float]]:
-    """Rank persons for an embedding by best cosine similarity. Best first.
+def match_embedding(vec: np.ndarray, photo_datetime, gallery: Gallery) -> list[tuple[int, float]]:
+    """Rank persons for an embedding by best (age-adjusted) cosine similarity.
 
-    Embeddings are already L2-normalized, so the dot product is the cosine.
-    Each person is scored by their single most-similar confirmed face.
+    Embeddings are L2-normalized, so the dot product is the cosine. When the
+    unknown face is dated and a candidate has a birth date, two age rules apply:
+    a photo predating the person's birth excludes them outright, and examples
+    taken at a very different age than the unknown are penalized — so a baby
+    photo is matched against baby examples, not 5-year-old ones.
+    Each person is scored by their single best example after adjustment.
     """
     if len(gallery) == 0:
         return []
-    sims = gallery.embeddings @ vec  # (N,)
+    adjusted = (gallery.embeddings @ vec).astype(np.float64)  # cosine per example
+
+    if photo_datetime:
+        tu = float(photo_datetime)
+        births = gallery.birth_times
+        has_birth = ~np.isnan(births)
+        age_u = (tu - births) / YEAR_SECONDS                     # unknown's age for each person
+        excluded = has_birth & (age_u < -FACE_BIRTH_TOLERANCE_YEARS)
+        age_f = (gallery.face_times - births) / YEAR_SECONDS      # each example's age
+        gap = np.abs(age_u - age_f)
+        penalty = FACE_AGE_PENALTY_PER_YEAR * np.minimum(gap, FACE_AGE_PENALTY_CAP_YEARS)
+        can_penalize = has_birth & ~np.isnan(gallery.face_times)
+        adjusted = np.where(can_penalize, adjusted - penalty, adjusted)
+        adjusted = np.where(excluded, -np.inf, adjusted)
+
     best: dict[int, float] = {}
-    for pid, s in zip(gallery.person_ids.tolist(), sims.tolist()):
-        if s > best.get(pid, -1.0):
+    for pid, s in zip(gallery.person_ids.tolist(), adjusted.tolist()):
+        if s > best.get(pid, -np.inf):
             best[pid] = s
-    return sorted(best.items(), key=lambda kv: kv[1], reverse=True)
+    ranked = [(pid, s) for pid, s in best.items() if np.isfinite(s)]
+    ranked.sort(key=lambda kv: kv[1], reverse=True)
+    return ranked
 
 
-def suggest_person(vec: np.ndarray, gallery: Gallery,
+def suggest_person(vec: np.ndarray, photo_datetime, gallery: Gallery,
                    threshold: float = FACE_MATCH_THRESHOLD) -> tuple[int, float] | None:
     """Return (person_id, score) if the top match clears the threshold, else None."""
-    ranked = match_embedding(vec, gallery)
+    ranked = match_embedding(vec, photo_datetime, gallery)
     if ranked and ranked[0][1] >= threshold:
         return ranked[0]
     return None

@@ -54,6 +54,15 @@ FACE_DET_THRESHOLD = float(os.environ.get("GEOTAGGER_FACE_DET_THRESHOLD", "0.5")
 FACE_MATCH_THRESHOLD = float(os.environ.get("GEOTAGGER_FACE_MATCH_THRESHOLD", "0.35"))
 # Max unlabeled faces to scan when gathering a person's guesses (scope=suggested).
 FACE_SUGGEST_SCAN_CAP = int(os.environ.get("GEOTAGGER_FACE_SUGGEST_SCAN_CAP", "5000"))
+
+# ── Age-aware recognition (uses person birth dates + photo dates) ──
+# A dated photo taken more than this many years before a person's birth excludes
+# that person from suggestions (grace absorbs birth/clock imprecision).
+FACE_BIRTH_TOLERANCE_YEARS = float(os.environ.get("GEOTAGGER_FACE_BIRTH_TOLERANCE_YEARS", "0.5"))
+# Cosine penalty per year of age gap between an unknown face and a labeled
+# example (prefers same-age examples), capped to avoid dominating the score.
+FACE_AGE_PENALTY_PER_YEAR = float(os.environ.get("GEOTAGGER_FACE_AGE_PENALTY_PER_YEAR", "0.02"))
+FACE_AGE_PENALTY_CAP_YEARS = float(os.environ.get("GEOTAGGER_FACE_AGE_PENALTY_CAP_YEARS", "10"))
 # ONNX Runtime execution providers (comma-separated). Default CPU everywhere.
 FACE_PROVIDERS = [
     p.strip() for p in

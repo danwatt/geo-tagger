@@ -8,6 +8,11 @@ Parked ideas for geo-tagger, to revisit later.
   find other faces that match it and bulk-ignore (or bulk-suggest) them. Turns a
   single ignore of a recurring background stranger into a one-click sweep.
 
+- **Ambiguity abstention in suggestions** — when the top two candidate people score
+  within a small margin of each other, show no suggestion (or flag it "A or B?")
+  instead of confidently guessing. Cheap, independent of birth dates, and especially
+  helps look-alike siblings. Deferred 2026-06-26 alongside the birth-date/age work.
+
 - **Keyboard-driven rapid tagging** — shortcuts in the People grid to triage fast:
   e.g. number keys to assign to the top suggestion / a recent person, `x` to ignore,
   arrow keys to move the focus. Aimed at quickly working through a large unlabeled queue.

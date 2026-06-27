@@ -785,6 +785,9 @@ def _update_photo_times(updates: dict[int, int]) -> int:
 class CreatePersonRequest(BaseModel):
     name: str
 
+class UpdatePersonRequest(BaseModel):
+    birth_date: str | None = None  # ISO YYYY-MM-DD, or null to clear
+
 class AssignFaceRequest(BaseModel):
     person_id: int | None = None  # None clears the assignment
     name: str | None = None       # convenience: create/lookup a person by name
@@ -807,9 +810,23 @@ class ScanFacesRequest(BaseModel):
 async def api_get_persons():
     return [
         {"id": p["id"], "name": p["name"], "face_count": p["face_count"],
-         "created_at": p["created_at"]}
+         "birth_date": p["birth_date"], "created_at": p["created_at"]}
         for p in index.get_persons()
     ]
+
+
+@app.patch("/api/persons/{person_id}")
+async def api_update_person(person_id: int, req: UpdatePersonRequest):
+    """Set or clear a person's birth date (ISO YYYY-MM-DD) for age-aware suggestions."""
+    birth = req.birth_date.strip() if req.birth_date else None
+    if birth:
+        try:
+            from datetime import datetime
+            datetime.strptime(birth, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(400, "birth_date must be in YYYY-MM-DD format")
+    index.set_person_birth_date(person_id, birth)
+    return {"id": person_id, "birth_date": birth}
 
 
 @app.post("/api/persons")
@@ -865,7 +882,8 @@ async def api_list_faces(
         scored = []
         if len(gallery) > 0:
             for r in index.list_faces("unlabeled", None, FACE_SUGGEST_SCAN_CAP):
-                match = faces.suggest_person(faces.decode_embedding(r["embedding"]), gallery)
+                match = faces.suggest_person(faces.decode_embedding(r["embedding"]),
+                                             r["photo_datetime"], gallery)
                 if match and match[0] == person_id:
                     scored.append((r, match[1]))
         scored.sort(key=lambda t: t[1], reverse=True)
@@ -883,7 +901,8 @@ async def api_list_faces(
     for r in rows:
         item = _face_item(r)
         if gallery is not None and len(gallery) > 0:
-            match = faces.suggest_person(faces.decode_embedding(r["embedding"]), gallery)
+            match = faces.suggest_person(faces.decode_embedding(r["embedding"]),
+                                         r["photo_datetime"], gallery)
             if match:
                 pid, score = match
                 item["suggestion"] = {"person_id": pid, "person_name": _person_name(pid),
@@ -933,8 +952,10 @@ async def api_ignore_faces(req: IgnoreFacesRequest):
 @app.get("/api/photos/{photo_id}/faces")
 async def api_photo_faces(photo_id: int):
     """List faces in a photo with assigned person and a recognition suggestion."""
-    if not index.get_photo(photo_id):
+    photo = index.get_photo(photo_id)
+    if not photo:
         raise HTTPException(404)
+    photo_dt = photo["photo_datetime"]
     gallery = faces.build_gallery()
     rows = index.get_faces_for_photo(photo_id)
     out = []
@@ -950,7 +971,7 @@ async def api_photo_faces(photo_id: int):
         # Only suggest for not-yet-assigned faces.
         if r["person_id"] is None and len(gallery) > 0:
             vec = faces.decode_embedding(r["embedding"])
-            match = faces.suggest_person(vec, gallery)
+            match = faces.suggest_person(vec, photo_dt, gallery)
             if match:
                 pid, score = match
                 person = index.get_db().execute(

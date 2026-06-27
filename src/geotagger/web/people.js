@@ -125,6 +125,22 @@ function renderPeopleList(unlabeledCount, allCount, ignoredCount) {
 
   persons.forEach(p => {
     const item = makeScopeItem(p.name, p.face_count, "person", p.id);
+    if (p.birth_date) {
+      const b = document.createElement("span");
+      b.className = "person-birth";
+      b.textContent = ` b.${p.birth_date.slice(0, 4)}`;
+      item.querySelector(".person-name").appendChild(b);
+    }
+
+    const edit = document.createElement("span");
+    edit.className = "person-edit";
+    edit.textContent = "✎";
+    edit.title = `Set birth date for ${p.name} (improves age-aware suggestions)`;
+    edit.addEventListener("click", (e) => {
+      e.stopPropagation();
+      editPersonBirth(p.id, p.name, p.birth_date);
+    });
+
     const del = document.createElement("span");
     del.className = "person-del";
     del.textContent = "×";
@@ -133,6 +149,8 @@ function renderPeopleList(unlabeledCount, allCount, ignoredCount) {
       e.stopPropagation();
       deletePerson(p.id, p.name);
     });
+
+    item.appendChild(edit);
     item.appendChild(del);
     list.appendChild(item);
   });
@@ -212,7 +230,7 @@ async function loadFaces() {
       focusedFaceId = faces.length ? faces[0].id : null;
       document.getElementById("assign-person-select").value = scopePersonId;
       document.getElementById("detail-person-select").value = scopePersonId;
-    } else if (scope === "unlabeled") {
+    } else if (scope === "unlabeled" || scope === "person") {
       // Oldest first so the year/month dividers read top-to-bottom like the
       // geocode grid; undated faces (0) sort to the top with no divider.
       faces.sort((a, b) => (a.photo_datetime || 0) - (b.photo_datetime || 0));
@@ -259,8 +277,26 @@ function renderGrid() {
     return;
   }
 
-  // In the unlabeled queue, group by year then month like the geocode grid.
+  // Unlabeled queue: year dividers + a per-month header carrying an "Accept all"
+  // button that confirms the suggestions for just that month's faces.
   if (scope === "unlabeled") {
+    let idx = 0, curYear = null;
+    computeMonthGroups(faces).forEach(group => {
+      if (group.year !== null && group.year !== curYear) {
+        curYear = group.year;
+        const yd = document.createElement("div");
+        yd.className = "grid-year-divider";
+        yd.textContent = group.year;
+        grid.appendChild(yd);
+      }
+      grid.appendChild(makeMonthHeader(group));
+      group.faces.forEach(face => { grid.appendChild(makeFaceCell(face, idx)); idx++; });
+    });
+    return;
+  }
+
+  // Per-person view: geocode-style year/month dividers (no per-month actions).
+  if (scope === "person") {
     let curYear = null, curMonth = null;
     faces.forEach((face, idx) => {
       if (face.photo_datetime) {
@@ -287,6 +323,51 @@ function renderGrid() {
   }
 
   faces.forEach((face, idx) => grid.appendChild(makeFaceCell(face, idx)));
+}
+
+/* ── Month grouping (unlabeled queue) ── */
+function computeMonthGroups(list) {
+  // `list` is chronological with undated faces first (see loadFaces).
+  const groups = [];
+  let cur = null;
+  list.forEach(f => {
+    let year = null, month = null;
+    if (f.photo_datetime) {
+      const d = new Date(f.photo_datetime * 1000);
+      year = d.getFullYear();
+      month = d.getMonth();
+    }
+    if (!cur || cur.year !== year || cur.month !== month) {
+      cur = { year, month, faces: [] };
+      groups.push(cur);
+    }
+    cur.faces.push(f);
+  });
+  return groups;
+}
+
+function makeMonthHeader(group) {
+  const header = document.createElement("div");
+  header.className = "face-month-header";
+
+  const labelText = group.year === null ? "Undated" : MONTH_NAMES[group.month];
+  const label = document.createElement("span");
+  label.textContent = labelText;
+  header.appendChild(label);
+
+  const acceptable = group.faces.filter(f => f.suggestion && !f.person_name && !f.ignored);
+  if (acceptable.length > 0) {
+    const btn = document.createElement("button");
+    btn.className = "month-accept-btn";
+    btn.textContent = `Accept all (${acceptable.length})`;
+    btn.title = "Confirm the suggested name for every guessed face in this month";
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      acceptSuggestionsFor(group.faces, labelText);
+    });
+    header.appendChild(btn);
+  }
+  return header;
 }
 
 function makeFaceCell(face, idx) {
@@ -396,6 +477,21 @@ function makeGroupHeader(group) {
 
   const btns = document.createElement("div");
   btns.className = "face-group-btns";
+
+  // Approve this event's guesses outright (confirm the suggested name).
+  const acceptable = group.faces.filter(f => f.suggestion && !f.person_name && !f.ignored);
+  if (acceptable.length > 0) {
+    const btnAccept = document.createElement("button");
+    btnAccept.className = "primary";
+    btnAccept.textContent = `Accept all (${acceptable.length})`;
+    btnAccept.title = "Confirm the suggested name for every face in this group";
+    btnAccept.addEventListener("click", (e) => {
+      e.stopPropagation();
+      acceptSuggestionsFor(group.faces, formatGroupRange(group));
+    });
+    btns.appendChild(btnAccept);
+  }
+
   btns.appendChild(btnAll);
   btns.appendChild(btnOnly);
 
@@ -585,10 +681,16 @@ async function confirmFace(faceId, personId) {
 }
 
 async function acceptSuggestionsForSelection() {
-  const ids = selectionOrFocused();
-  const targets = faces.filter(f => ids.includes(f.id) && f.suggestion && !f.person_name);
+  const ids = new Set(selectionOrFocused());
+  await acceptSuggestionsFor(faces.filter(f => ids.has(f.id)));
+}
+
+async function acceptSuggestionsFor(faceList, label) {
+  // Accept the suggested identity for each guessed, not-yet-decided face.
+  const targets = faceList.filter(f => f.suggestion && !f.person_name && !f.ignored);
+  const where = label ? ` in ${label}` : "";
   if (targets.length === 0) {
-    setStatus("No selected faces have a suggestion to accept.", true);
+    setStatus(`No suggestions to accept${where}.`, true);
     return;
   }
   // Group by suggested person so we can bulk-assign each group.
@@ -604,7 +706,7 @@ async function acceptSuggestionsForSelection() {
         body: JSON.stringify({ face_ids: faceIds, person_id: parseInt(pid) }),
       });
     }
-    setStatus(`Accepted suggestions for ${targets.length} face(s).`);
+    setStatus(`Accepted suggestions for ${targets.length} face(s)${where}.`);
     selectedIds.clear();
     await loadPersons();
     await loadFaces();
@@ -626,6 +728,29 @@ async function addPerson() {
     await loadPersons();
   } catch (err) {
     setStatus("Could not add person: " + err.message, true);
+  }
+}
+
+async function editPersonBirth(personId, name, current) {
+  const val = prompt(`Birth date for ${name} (YYYY-MM-DD), or blank to clear:`, current || "");
+  if (val === null) return;  // cancelled
+  const birth = val.trim() || null;
+  try {
+    const res = await fetch(`/api/persons/${personId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ birth_date: birth }),
+    });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.detail || `HTTP ${res.status}`);
+    }
+    setStatus(birth ? `Set ${name}'s birth date to ${birth}.` : `Cleared ${name}'s birth date.`);
+    await loadPersons();
+    // Suggestions depend on birth dates, so refresh the current view.
+    if (scope === "unlabeled" || scope === "suggested") await loadFaces();
+  } catch (err) {
+    setStatus("Could not set birth date: " + err.message, true);
   }
 }
 

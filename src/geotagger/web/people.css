@@ -50,13 +50,18 @@
   padding: 1px 7px;
 }
 .person-item.active .person-count { background: #1e3a5e; color: #bcdcff; }
+.person-item .person-birth { color: #777; font-size: 10px; font-weight: 400; }
+.person-item.active .person-birth { color: #9fc4e8; }
+.person-item .person-edit,
 .person-item .person-del {
   flex-shrink: 0;
   visibility: hidden;
-  color: #f88;
-  font-weight: bold;
+  cursor: pointer;
   padding: 0 2px;
 }
+.person-item .person-edit { color: #8ab4d8; }
+.person-item .person-del { color: #f88; font-weight: bold; }
+.person-item:hover .person-edit,
 .person-item:hover .person-del { visibility: visible; }
 
 .people-sep { height: 1px; background: #333; margin: 6px 4px; }
@@ -128,6 +133,23 @@
 .face-group-btns { display: flex; gap: 6px; flex-shrink: 0; }
 .face-group-header button { padding: 2px 9px; font-size: 11px; flex-shrink: 0; }
 
+/* Month header (unlabeled queue) — like the geocode month divider, but interactive */
+.face-month-header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #888;
+  border-bottom: 1px solid #2e2e2e;
+  padding: 4px 4px 2px;
+  margin-top: 4px;
+  user-select: none;
+}
+.face-month-header .month-accept-btn { padding: 1px 8px; font-size: 10px; flex-shrink: 0; }
+
 /* Ignored faces are dimmed and badged */
 .thumb-cell.ignored img { opacity: 0.4; filter: grayscale(0.6); }
 .thumb-cell .face-label.ignored-label {
@@ -137,6 +159,9 @@
 }
 
 /* ── Right: face detail with bbox overlay ── */
+/* Stack the detail pane in one column: photo, then actions, then metadata. */
+#detail-content { display: flex; flex-direction: column; gap: 10px; }
+
 #face-photo-wrap { position: relative; line-height: 0; }
 #face-photo-wrap img { width: 100%; border-radius: 4px; display: block; }
 #face-box {

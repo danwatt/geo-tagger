@@ -72,13 +72,17 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     """)
 
     # People the user has named. Faces get linked to a person once confirmed.
+    # birth_date (ISO YYYY-MM-DD, optional) powers age-aware suggestions.
     _db.execute("""
         CREATE TABLE IF NOT EXISTS persons (
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
+            birth_date TEXT,
             created_at REAL NOT NULL
         )
     """)
+    if "birth_date" not in {r[1] for r in _db.execute("PRAGMA table_info(persons)").fetchall()}:
+        _db.execute("ALTER TABLE persons ADD COLUMN birth_date TEXT")
 
     # One row per detected face. bbox is normalized (0..1) to the detection
     # image so it maps onto any rendition. embedding is a raw float32 vector.
@@ -431,9 +435,14 @@ def get_face(face_id: int) -> sqlite3.Row | None:
 
 
 def get_labeled_faces() -> list[sqlite3.Row]:
-    """All faces that have been assigned to a person (the recognition gallery)."""
+    """All faces assigned to a person (the recognition gallery), with each
+    example's photo date and the person's birth date for age-aware matching."""
     return get_db().execute(
-        "SELECT id, person_id, embedding FROM faces WHERE person_id IS NOT NULL"
+        """SELECT f.person_id, f.embedding, ph.photo_datetime, p.birth_date
+           FROM faces f
+           JOIN photos ph ON ph.id = f.photo_id
+           JOIN persons p ON p.id = f.person_id
+           WHERE f.person_id IS NOT NULL"""
     ).fetchall()
 
 
@@ -565,10 +574,17 @@ def get_or_create_person(name: str) -> int:
 def get_persons() -> list[sqlite3.Row]:
     """All persons with a count of confirmed faces each."""
     return get_db().execute(
-        """SELECT p.id, p.name, p.created_at, COUNT(f.id) AS face_count
+        """SELECT p.id, p.name, p.birth_date, p.created_at, COUNT(f.id) AS face_count
            FROM persons p LEFT JOIN faces f ON f.person_id = p.id
            GROUP BY p.id ORDER BY p.name"""
     ).fetchall()
+
+
+def set_person_birth_date(person_id: int, birth_date: str | None):
+    """Set (or clear, with None) a person's ISO YYYY-MM-DD birth date."""
+    db = get_db()
+    db.execute("UPDATE persons SET birth_date=? WHERE id=?", (birth_date, person_id))
+    db.commit()
 
 
 def delete_person(person_id: int):
