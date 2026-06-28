@@ -39,6 +39,9 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     _db = sqlite3.connect(str(_db_path), check_same_thread=False)
     _db.row_factory = sqlite3.Row
     _db.execute("PRAGMA journal_mode=WAL")
+    # 64 MB page cache — default 2 MB is far too small for 93K embedding blobs.
+    # Negative value = kibibytes; positive = pages (4 KB each).
+    _db.execute("PRAGMA cache_size = -65536")
     _db.execute("""
         CREATE TABLE IF NOT EXISTS photos (
             id INTEGER PRIMARY KEY,
@@ -451,8 +454,19 @@ def replace_faces(photo_id: int, faces: list[dict]):
     Manually-confirmed assignments are not touched here because detection always
     re-runs from scratch; assignments live by face id and are reapplied by the
     caller if it chooses to. For a first pass, faces start unassigned.
+
+    Intentionally does NOT call bump_faces_generation(): the labeled gallery only
+    contains confirmed faces (unaffected by detection), so there is nothing to
+    rebuild there. The unlabeled suggestion matrix is pruned in place via
+    drop_from_unlabeled_cache so the cache survives the scan. Newly detected
+    faces will appear in the suggestion matrix on the next full rebuild (triggered
+    by the next label/ignore action by the user).
     """
     db = get_db()
+    # Capture old face IDs so we can prune them from the in-memory cache below.
+    old_ids = [r[0] for r in db.execute(
+        "SELECT id FROM faces WHERE photo_id=? AND source='detected'", (photo_id,)
+    ).fetchall()]
     db.execute("DELETE FROM faces WHERE photo_id=? AND source='detected'", (photo_id,))
     now = time.time()
     db.executemany(
@@ -462,7 +476,10 @@ def replace_faces(photo_id: int, faces: list[dict]):
     )
     db.execute("UPDATE photos SET faces_scanned_at=? WHERE id=?", (now, photo_id))
     db.commit()
-    bump_faces_generation()
+    # Prune replaced faces from the cache (re-tags to current generation in place).
+    if old_ids:
+        from geotagger import faces as _faces
+        _faces.drop_from_unlabeled_cache(old_ids)
 
 
 def get_faces_for_photo(photo_id: int) -> list[sqlite3.Row]:

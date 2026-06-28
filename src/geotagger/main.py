@@ -959,15 +959,33 @@ async def api_list_faces(
     if scope == "suggested":
         if not person_id:
             raise HTTPException(400, "person_id is required for scope=suggested")
+        _t0 = time.perf_counter()
         gallery = faces.build_gallery()
+        _t1 = time.perf_counter()
         names = _person_name_map()
         name = names.get(person_id)
         scored = []
+        _unlabeled_n = 0
         if len(gallery) > 0:
-            rows, unknowns, times = faces.get_unlabeled_matrix(FACE_SUGGEST_SCAN_CAP)
-            scored = faces.suggest_for_person(rows, gallery, person_id,
-                                              unknowns=unknowns, times=times)
+            rows, unknowns, _u_times = faces.get_unlabeled_matrix(FACE_SUGGEST_SCAN_CAP)
+            _t2 = time.perf_counter()
+            _unlabeled_n = len(rows)
+            loop = asyncio.get_running_loop()
+            scored = await loop.run_in_executor(
+                _executor,
+                lambda: faces.suggest_for_person(rows, gallery, person_id,
+                                                 unknowns=unknowns, times=_u_times),
+            )
+            _t3 = time.perf_counter()
+        else:
+            _t2 = _t3 = time.perf_counter()
         scored.sort(key=lambda t: t[1], reverse=True)
+        logger.info(
+            "scope=suggested person_id=%d gallery=%d unlabeled=%d candidates=%d "
+            "build_gallery=%.3fs get_matrix=%.3fs suggest=%.3fs total=%.3fs",
+            person_id, len(gallery), _unlabeled_n, len(scored),
+            _t1 - _t0, _t2 - _t1, _t3 - _t2, _t3 - _t0,
+        )
         out = []
         for r, score, alts in scored[:limit]:
             item = _face_item(r)
