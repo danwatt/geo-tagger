@@ -69,6 +69,14 @@
 
 .people-sep { height: 1px; background: #333; margin: 6px 4px; }
 
+.family-group-header {
+  padding: 10px 8px 2px;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.07em;
+  text-transform: uppercase; color: #555;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  user-select: none;
+}
+
 .people-add {
   margin: 6px;
   flex-shrink: 0;
@@ -162,6 +170,39 @@
   border-radius: 3px;
   padding: 0 3px;
 }
+
+/* ── Discover view: cluster cards ── */
+.cluster-card {
+  grid-column: 1 / -1;
+  background: #252525;
+  border: 1px solid #383838;
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 10px;
+}
+.cluster-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.cluster-title { font-size: 13px; font-weight: 600; color: #cfe6ff; }
+.cluster-meta { color: #888; font-weight: 400; font-size: 11px; }
+.cluster-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.cluster-actions button { padding: 3px 10px; font-size: 11px; }
+.cluster-faces { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.cluster-faces img {
+  width: 64px; height: 64px;
+  object-fit: cover;
+  border-radius: 3px;
+  background: #1a1a1a;
+  cursor: pointer;
+  border: 2px solid transparent;
+}
+.cluster-faces img:hover { border-color: #555; }
+.cluster-faces img.focused { border-color: #4a90d9; }
+.cluster-more { color: #888; font-size: 11px; padding: 0 6px; }
 
 /* ── Event group headers in the guesses grid ── */
 .face-group-header {

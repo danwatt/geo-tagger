@@ -52,12 +52,28 @@ FACE_DET_THRESHOLD = float(os.environ.get("GEOTAGGER_FACE_DET_THRESHOLD", "0.5")
 # Cosine-similarity threshold for calling two faces the same person.
 # ArcFace normed embeddings: ~0.28 is permissive, ~0.4 is confident.
 FACE_MATCH_THRESHOLD = float(os.environ.get("GEOTAGGER_FACE_MATCH_THRESHOLD", "0.35"))
-# Max unlabeled faces to scan when gathering a person's guesses (scope=suggested).
-FACE_SUGGEST_SCAN_CAP = int(os.environ.get("GEOTAGGER_FACE_SUGGEST_SCAN_CAP", "5000"))
+# Max unlabeled faces to scan when gathering a person's guesses (scope=suggested
+# / "Only suggested"). 0 = exhaustive (scan every unlabeled face). Set a positive
+# value to bound the scan if a very large library makes the first scan too slow.
+FACE_SUGGEST_SCAN_CAP = int(os.environ.get("GEOTAGGER_FACE_SUGGEST_SCAN_CAP", "0"))
 # When reviewing one person's guesses, another person whose own best example
 # scores within this cosine margin of the top match is flagged as an ambiguous
 # alternative ("could be this family member instead") — a near-tie, not a clear win.
 FACE_AMBIGUITY_MARGIN = float(os.environ.get("GEOTAGGER_FACE_AMBIGUITY_MARGIN", "0.05"))
+# Minimum detector confidence for a face to be offered as a *suggestion*. Tiny /
+# blurry / profile faces (low det_score) have noisy embeddings that cause false
+# matches, so they're skipped when gathering guesses — but still detected, stored,
+# and taggable by hand. Lower it if too many real faces are excluded; 0 disables.
+FACE_SUGGEST_MIN_DET_SCORE = float(os.environ.get("GEOTAGGER_FACE_SUGGEST_MIN_DET_SCORE", "0.65"))
+
+# ── Unsupervised face clustering ("Discover" view) ──
+# Cosine similarity at/above which two unlabeled faces are linked into one group.
+# Tighter = purer groups; looser = more merging (and more risk of chaining).
+FACE_CLUSTER_THRESHOLD = float(os.environ.get("GEOTAGGER_FACE_CLUSTER_THRESHOLD", "0.5"))
+# Groups smaller than this are dropped as noise (strangers / one-off detections).
+FACE_CLUSTER_MIN_SIZE = int(os.environ.get("GEOTAGGER_FACE_CLUSTER_MIN_SIZE", "3"))
+# Cluster at most this many highest-detection-score unlabeled faces, to stay fast.
+FACE_CLUSTER_CAP = int(os.environ.get("GEOTAGGER_FACE_CLUSTER_CAP", "10000"))
 
 # ── Age-aware recognition (uses person birth dates + photo dates) ──
 # A dated photo taken more than this many years before a person's birth excludes

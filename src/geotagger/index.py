@@ -89,6 +89,15 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
         )
     """)
 
+    # Named family groups — a person can belong to one family.
+    _db.execute("""
+        CREATE TABLE IF NOT EXISTS families (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            created_at REAL NOT NULL
+        )
+    """)
+
     # People the user has named. Faces get linked to a person once confirmed.
     # birth_date (ISO YYYY-MM-DD, optional) powers age-aware suggestions.
     _db.execute("""
@@ -99,8 +108,11 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
             created_at REAL NOT NULL
         )
     """)
-    if "birth_date" not in {r[1] for r in _db.execute("PRAGMA table_info(persons)").fetchall()}:
+    _person_cols = {r[1] for r in _db.execute("PRAGMA table_info(persons)").fetchall()}
+    if "birth_date" not in _person_cols:
         _db.execute("ALTER TABLE persons ADD COLUMN birth_date TEXT")
+    if "family_id" not in _person_cols:
+        _db.execute("ALTER TABLE persons ADD COLUMN family_id INTEGER REFERENCES families(id) ON DELETE SET NULL")
 
     # One row per detected face. bbox is normalized (0..1) to the detection
     # image so it maps onto any rendition. embedding is a raw float32 vector.
@@ -487,12 +499,14 @@ def get_labeled_faces() -> list[sqlite3.Row]:
 
 
 def list_faces(scope: str = "unlabeled", person_id: int | None = None,
-               limit: int = 500) -> list[sqlite3.Row]:
+               limit: int = 500, min_det_score: float | None = None) -> list[sqlite3.Row]:
     """List faces across the whole library for the people UI.
 
     scope: 'unlabeled' (person_id IS NULL), 'person' (a specific person),
     or 'all'. Joins the photo filename and includes the embedding so the
-    caller can compute recognition suggestions.
+    caller can compute recognition suggestions. ``min_det_score`` drops faces
+    below a detector-confidence floor (used by the suggestion scan to skip
+    unreliable tiny/blurry faces; the manual queues pass None to keep them).
     """
     clause = ""
     params: list = []
@@ -508,6 +522,9 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
     elif scope == "recent":
         clause = "WHERE f.assigned_at IS NOT NULL AND f.person_id IS NOT NULL"
         order_by = "f.assigned_at DESC"
+    if min_det_score is not None:
+        clause += (" AND " if clause else "WHERE ") + "f.det_score >= ?"
+        params.append(min_det_score)
     return get_db().execute(
         f"""SELECT f.id, f.photo_id, f.person_id, f.bbox, f.det_score, f.embedding,
                    f.ignored, f.assigned_at, p.name AS person_name, ph.filename,
@@ -567,6 +584,9 @@ def assign_faces(face_ids: list[int], person_id: int | None):
     )
     db.commit()
     bump_faces_generation()
+    if person_id is not None:  # labeled faces leave the unlabeled queue
+        from geotagger import faces as _faces
+        _faces.drop_from_unlabeled_cache(face_ids)
 
 
 def set_faces_ignored(face_ids: list[int], ignored: bool):
@@ -590,6 +610,9 @@ def set_faces_ignored(face_ids: list[int], ignored: bool):
         )
     db.commit()
     bump_faces_generation()
+    if ignored:  # ignored faces leave the unlabeled queue (restore re-adds → rebuild)
+        from geotagger import faces as _faces
+        _faces.drop_from_unlabeled_cache(face_ids)
 
 
 def get_unlabeled_faces() -> list[sqlite3.Row]:
@@ -610,6 +633,9 @@ def assign_face(face_id: int, person_id: int | None):
                (person_id, now, face_id))
     db.commit()
     bump_faces_generation()
+    if person_id is not None:  # labeled face leaves the unlabeled queue
+        from geotagger import faces as _faces
+        _faces.drop_from_unlabeled_cache([face_id])
 
 
 def create_person(name: str) -> int:
@@ -630,10 +656,13 @@ def get_or_create_person(name: str) -> int:
 
 
 def get_persons() -> list[sqlite3.Row]:
-    """All persons with a count of confirmed faces each."""
+    """All persons with a count of confirmed faces and family info."""
     return get_db().execute(
-        """SELECT p.id, p.name, p.birth_date, p.created_at, COUNT(f.id) AS face_count
-           FROM persons p LEFT JOIN faces f ON f.person_id = p.id
+        """SELECT p.id, p.name, p.birth_date, p.created_at, p.family_id,
+                  fam.name AS family_name, COUNT(f.id) AS face_count
+           FROM persons p
+           LEFT JOIN families fam ON fam.id = p.family_id
+           LEFT JOIN faces f ON f.person_id = p.id
            GROUP BY p.id ORDER BY p.name"""
     ).fetchall()
 
@@ -644,6 +673,54 @@ def set_person_birth_date(person_id: int, birth_date: str | None):
     db.execute("UPDATE persons SET birth_date=? WHERE id=?", (birth_date, person_id))
     db.commit()
     bump_faces_generation()  # gallery birth_times feed suggestion scores
+
+
+def rename_person(person_id: int, name: str):
+    """Rename a person; bumps the face-recognition generation."""
+    db = get_db()
+    db.execute("UPDATE persons SET name=? WHERE id=?", (name, person_id))
+    db.commit()
+    bump_faces_generation()
+
+
+def set_person_family(person_id: int, family_id: int | None):
+    """Assign (or clear, with None) a person's family membership."""
+    db = get_db()
+    db.execute("UPDATE persons SET family_id=? WHERE id=?", (family_id, person_id))
+    db.commit()
+
+
+# ── Families ──
+
+def get_families() -> list[sqlite3.Row]:
+    """All families with a count of member persons."""
+    return get_db().execute(
+        """SELECT f.id, f.name, f.created_at, COUNT(p.id) AS person_count
+           FROM families f LEFT JOIN persons p ON p.family_id = f.id
+           GROUP BY f.id ORDER BY f.name"""
+    ).fetchall()
+
+
+def create_family(name: str) -> int:
+    db = get_db()
+    cursor = db.execute(
+        "INSERT INTO families (name, created_at) VALUES (?, ?)", (name, time.time())
+    )
+    db.commit()
+    return cursor.lastrowid
+
+
+def rename_family(family_id: int, name: str):
+    db = get_db()
+    db.execute("UPDATE families SET name=? WHERE id=?", (name, family_id))
+    db.commit()
+
+
+def delete_family(family_id: int):
+    """Delete a family; member persons have their family_id NULLed by FK."""
+    db = get_db()
+    db.execute("DELETE FROM families WHERE id=?", (family_id,))
+    db.commit()
 
 
 def delete_person(person_id: int):

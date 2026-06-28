@@ -1,0 +1,150 @@
+/* people-manage.css — People Manager page */
+
+[hidden] { display: none !important; }
+
+body {
+  overflow: auto; /* this page scrolls, unlike the split-pane people view */
+  height: auto;
+}
+
+/* ── Header bar ── */
+#manage-bar {
+  display: flex; align-items: center; gap: 14px;
+  padding: 8px 14px;
+  background: #252525; border-bottom: 1px solid #333;
+  flex-shrink: 0; position: sticky; top: 0; z-index: 10;
+}
+#back-link {
+  color: #7ab8f5; text-decoration: none; font-size: 14px;
+  white-space: nowrap;
+}
+#back-link:hover { text-decoration: underline; }
+#manage-title { font-weight: 700; font-size: 15px; flex: 1; }
+#manage-counts { color: #888; font-size: 12px; }
+
+/* ── Main layout ── */
+#manage-main {
+  max-width: 960px; margin: 0 auto;
+  padding: 18px 16px 60px;
+  display: flex; flex-direction: column; gap: 24px;
+}
+
+/* ── Families section ── */
+#families-section {
+  background: #222; border: 1px solid #333; border-radius: 8px;
+  padding: 14px 16px;
+}
+#families-header {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
+}
+.section-label { font-weight: 700; font-size: 13px; color: #bbb; flex: 1; }
+#family-chips {
+  display: flex; flex-wrap: wrap; gap: 8px; min-height: 28px;
+  align-items: center;
+}
+.no-families-hint { color: #666; font-size: 12px; font-style: italic; }
+
+.family-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: #2a3a4e; border: 1px solid #4a6a8e;
+  border-radius: 20px; padding: 4px 10px 4px 12px;
+  font-size: 12px;
+}
+.family-name {
+  cursor: pointer; color: #9ab8d8;
+  max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.family-name:hover { color: #cde; text-decoration: underline; }
+.family-count {
+  background: #4a6a8e; color: #cde; border-radius: 10px;
+  padding: 1px 6px; font-size: 11px;
+}
+.family-del {
+  background: none; border: none; color: #666; cursor: pointer;
+  padding: 0 2px; font-size: 13px; line-height: 1;
+}
+.family-del:hover { color: #f88; background: none; }
+.family-rename-input {
+  background: #1a2a3e; border: 1px solid #4a90d9; border-radius: 4px;
+  color: #eee; padding: 2px 6px; font-size: 12px; width: 120px; outline: none;
+}
+
+/* ── Persons section ── */
+#persons-section {
+  background: #222; border: 1px solid #333; border-radius: 8px;
+  padding: 14px 16px;
+}
+#persons-toolbar {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap;
+}
+#person-search {
+  padding: 5px 10px; border: 1px solid #444; border-radius: 4px;
+  background: #333; color: #eee; font-size: 12px; width: 200px; outline: none;
+}
+#person-search:focus { border-color: #4a90d9; }
+#family-filter-sel {
+  padding: 4px 8px; border: 1px solid #444; border-radius: 4px;
+  background: #333; color: #eee; font-size: 12px;
+}
+#persons-count { color: #888; font-size: 12px; flex: 1; }
+
+/* ── Person table ── */
+#persons-table-wrap { overflow-x: auto; }
+#persons-table {
+  width: 100%; border-collapse: collapse; font-size: 12px;
+}
+#persons-table thead th {
+  text-align: left; padding: 6px 8px;
+  border-bottom: 1px solid #333; color: #888; font-weight: 600;
+  white-space: nowrap;
+}
+#persons-table tbody tr { border-bottom: 1px solid #2a2a2a; }
+#persons-table tbody tr:hover { background: #282828; }
+#persons-table tbody td { padding: 4px 8px; vertical-align: middle; }
+
+/* Column widths */
+.col-name  { width: 30%; min-width: 150px; }
+.col-birth { width: 140px; }
+.col-family { width: 26%; min-width: 140px; }
+.col-faces  { width: 60px; text-align: right; }
+.col-actions { width: 70px; text-align: right; }
+
+/* Inline editable fields — look like text until focused */
+.edit-input {
+  width: 100%; background: transparent; border: 1px solid transparent;
+  border-radius: 4px; color: #ddd; font-size: 12px;
+  padding: 3px 5px; outline: none; transition: border-color 0.1s;
+}
+.edit-input:hover { border-color: #444; }
+.edit-input:focus { border-color: #4a90d9; background: #1a1a1a; }
+
+input[type="date"].edit-input {
+  color-scheme: dark; /* dark calendar picker in Chrome/Edge */
+  width: 130px;
+}
+
+.family-sel {
+  width: 100%; background: #2a2a2a; border: 1px solid #3a3a3a;
+  border-radius: 4px; color: #ddd; font-size: 12px; padding: 3px 4px;
+}
+.family-sel:focus { outline: none; border-color: #4a90d9; }
+
+.col-faces { color: #888; }
+
+/* Delete button inside table */
+.del-btn {
+  background: none; border: 1px solid transparent; color: #666;
+  border-radius: 4px; padding: 2px 6px; font-size: 11px; cursor: pointer;
+}
+.del-btn:hover { border-color: #a33; color: #f88; background: #300; }
+
+#no-persons { color: #666; font-style: italic; padding: 20px 8px; font-size: 12px; }
+
+/* ── Toast ── */
+#toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+  background: #383838; color: #eee; padding: 8px 18px;
+  border-radius: 20px; font-size: 13px; z-index: 60;
+  max-width: 86vw; text-align: center; pointer-events: none;
+}
+#toast.err { background: #7a2a2a; }

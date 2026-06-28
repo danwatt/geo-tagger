@@ -19,7 +19,9 @@ from geotagger import index, thumbnails
 from geotagger.config import (
     CACHE_DIR_NAME, get_cache_dir,
     FACE_MODEL_NAME, FACE_DET_SIZE, FACE_DET_THRESHOLD,
-    FACE_MATCH_THRESHOLD, FACE_AMBIGUITY_MARGIN, FACE_SUGGEST_SCAN_CAP, FACE_PROVIDERS,
+    FACE_MATCH_THRESHOLD, FACE_AMBIGUITY_MARGIN, FACE_SUGGEST_SCAN_CAP,
+    FACE_SUGGEST_MIN_DET_SCORE, FACE_PROVIDERS,
+    FACE_CLUSTER_THRESHOLD, FACE_CLUSTER_MIN_SIZE,
     FACE_BIRTH_TOLERANCE_YEARS, FACE_AGE_PENALTY_PER_YEAR, FACE_AGE_PENALTY_CAP_YEARS,
 )
 
@@ -206,19 +208,46 @@ def get_unlabeled_matrix(scan_cap: int = FACE_SUGGEST_SCAN_CAP
     """Cached (rows, embeddings, times) for the unlabeled queue.
 
     The suggested-faces review refetches after every accept; without caching,
-    each call re-reads up to ``scan_cap`` embedding blobs from SQLite and
-    re-decodes them into a (N, 512) matrix. Keyed on the faces-table generation
-    (and the cap), so a single assign/ignore/scan invalidates it.
+    each call re-reads the embedding blobs from SQLite and re-decodes them into a
+    (N, 512) matrix. ``scan_cap`` <= 0 means scan *all* unlabeled faces (SQLite
+    ``LIMIT -1``); a positive cap keeps the top ``scan_cap`` by detection score.
+    Keyed on the faces-table generation (and the cap). Removals (assign/ignore)
+    prune this in place via ``drop_from_unlabeled_cache`` so the exhaustive read
+    happens once, not on every accept.
     """
     global _unlabeled_cache
     gen = index.faces_generation()
     if (_unlabeled_cache is not None
             and _unlabeled_cache[0] == gen and _unlabeled_cache[1] == scan_cap):
         return _unlabeled_cache[2], _unlabeled_cache[3], _unlabeled_cache[4]
-    rows = index.list_faces("unlabeled", None, scan_cap)
+    limit = scan_cap if scan_cap and scan_cap > 0 else -1   # -1 → unbounded
+    floor = FACE_SUGGEST_MIN_DET_SCORE if FACE_SUGGEST_MIN_DET_SCORE > 0 else None
+    rows = index.list_faces("unlabeled", None, limit, min_det_score=floor)
     unknowns, times = _stack_rows(rows)
     _unlabeled_cache = (gen, scan_cap, rows, unknowns, times)
     return rows, unknowns, times
+
+
+def drop_from_unlabeled_cache(face_ids):
+    """Prune just-labeled/ignored faces from the cached unlabeled matrix instead
+    of forcing a full re-read on the next scan, and re-tag the cache to the
+    current generation so it survives the accept loop.
+
+    Only valid for *removals* from the unlabeled set (assign-to-person, ignore).
+    Additions (unassign, restore, new detections) bump the generation without
+    calling this, so the next ``get_unlabeled_matrix`` rebuilds from scratch.
+    """
+    global _unlabeled_cache
+    if _unlabeled_cache is None:
+        return
+    _, scan_cap, rows, unknowns, times = _unlabeled_cache
+    drop = set(face_ids)
+    keep = [i for i, r in enumerate(rows) if r["id"] not in drop]
+    if len(keep) != len(rows):
+        idx = np.array(keep, dtype=np.int64)
+        rows = [rows[i] for i in keep]
+        unknowns, times = unknowns[idx], times[idx]
+    _unlabeled_cache = (index.faces_generation(), scan_cap, rows, unknowns, times)
 
 
 def match_embedding(vec: np.ndarray, photo_datetime, gallery: Gallery) -> list[tuple[int, float]]:
@@ -443,3 +472,53 @@ def suggest_for_person(rows, gallery: Gallery, person_id: int,
         alternatives = [(pid, s) for pid, s in persons[1:] if s >= top - margin]
         out.append((row, top, alternatives))
     return out
+
+
+# ── Unsupervised clustering (discover new people without a seed) ──
+
+def cluster_unlabeled(unknowns: np.ndarray,
+                      threshold: float = FACE_CLUSTER_THRESHOLD,
+                      min_size: int = FACE_CLUSTER_MIN_SIZE) -> list[list[int]]:
+    """Group row indices of ``unknowns`` ((N, 512), L2-normalized) into clusters of
+    likely same-person faces.
+
+    Builds a cosine-similarity graph (edge when sim >= ``threshold``) in chunks and
+    takes its connected components via union-find. Returns clusters (lists of row
+    indices) with at least ``min_size`` members, largest first; sparser faces drop
+    out as noise. Pure numpy/Python, so it's safe to run off the event loop.
+
+    Connected components can over-merge by chaining (A~B~C), so ``threshold`` is
+    kept fairly tight; a graph-relabel method (e.g. Chinese Whispers) would resist
+    that better if it becomes a problem.
+    """
+    n = unknowns.shape[0]
+    if n == 0:
+        return []
+
+    parent = list(range(n))
+
+    def find(x: int) -> int:
+        root = x
+        while parent[root] != root:
+            root = parent[root]
+        while parent[x] != root:        # path compression
+            parent[x], x = root, parent[x]
+        return root
+
+    for c0 in range(0, n, CHUNK):
+        c1 = min(c0 + CHUNK, n)
+        sims = unknowns[c0:c1] @ unknowns.T          # (chunk, N) cosine
+        ii, jj = np.nonzero(sims >= threshold)
+        gi = ii + c0
+        upper = jj > gi                               # one edge per pair, skip self
+        for a, b in zip(gi[upper].tolist(), jj[upper].tolist()):
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+
+    groups: dict[int, list[int]] = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+    clusters = [idxs for idxs in groups.values() if len(idxs) >= min_size]
+    clusters.sort(key=len, reverse=True)
+    return clusters

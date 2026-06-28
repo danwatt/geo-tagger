@@ -12,6 +12,7 @@ let scanning = false;
 let stopScanRequested = false;
 
 let suggestedOnly = false;      // Unlabeled queue: hide faces with no guess
+let clusters = [];              // discovered groups (Discover view)
 
 let groupGapSeconds = 86400;    // event grouping gap in the guesses view (1 day)
 
@@ -40,6 +41,12 @@ function bindToolbar() {
   });
   document.getElementById("timesync-view-btn").addEventListener("click", () => {
     window.location.href = "/timesync.html";
+  });
+  document.getElementById("quicktag-view-btn").addEventListener("click", () => {
+    window.location.href = "/tag.html";
+  });
+  document.getElementById("manage-view-btn").addEventListener("click", () => {
+    window.location.href = "/people-manage.html";
   });
 
   document.getElementById("scan-btn").addEventListener("click", toggleScan);
@@ -81,11 +88,11 @@ function bindToolbar() {
   document.getElementById("detail-new-btn").addEventListener("click", assignSelectedToNewPerson);
   document.getElementById("detail-unassign-btn").addEventListener("click", () => assignSelected(null, true));
   document.getElementById("detail-ignore-btn").addEventListener("click", () => {
-    const f = faces.find(x => x.id === focusedFaceId);
+    const f = findFace(focusedFaceId);
     ignoreSelected(!(f && f.ignored));  // toggle the focused face's ignored state
   });
   document.getElementById("detail-open-photo-btn").addEventListener("click", () => {
-    const f = faces.find(x => x.id === focusedFaceId);
+    const f = findFace(focusedFaceId);
     if (f) window.open(`/api/preview/${f.photo_id}`, "_blank");
   });
 }
@@ -115,6 +122,7 @@ function renderPeopleList(unlabeledCount, allCount, ignoredCount, taggedCount) {
   list.innerHTML = "";
 
   list.appendChild(makeScopeItem("Unlabeled", unlabeledCount, "unlabeled", null));
+  list.appendChild(makeScopeItem("Discover groups", null, "discover", null));
   list.appendChild(makeScopeItem("Recently tagged", taggedCount, "recent", null));
   list.appendChild(makeScopeItem("All faces", allCount, "all", null));
   list.appendChild(makeScopeItem("Ignored", ignoredCount, "ignored", null));
@@ -131,37 +139,70 @@ function renderPeopleList(unlabeledCount, allCount, ignoredCount, taggedCount) {
     return;
   }
 
-  persons.forEach(p => {
-    const item = makeScopeItem(p.name, p.face_count, "person", p.id);
-    if (p.birth_date) {
-      const b = document.createElement("span");
-      b.className = "person-birth";
-      b.textContent = ` b.${p.birth_date.slice(0, 4)}`;
-      item.querySelector(".person-name").appendChild(b);
+  // Group by family; persons without a family go last.
+  const familyMap = new Map(); // family_id -> { name, persons[] }
+  const noFamily = [];
+  persons.forEach((p) => {
+    if (p.family_id) {
+      if (!familyMap.has(p.family_id)) {
+        familyMap.set(p.family_id, { name: p.family_name, persons: [] });
+      }
+      familyMap.get(p.family_id).persons.push(p);
+    } else {
+      noFamily.push(p);
     }
-
-    const edit = document.createElement("span");
-    edit.className = "person-edit";
-    edit.textContent = "✎";
-    edit.title = `Set birth date for ${p.name} (improves age-aware suggestions)`;
-    edit.addEventListener("click", (e) => {
-      e.stopPropagation();
-      editPersonBirth(p.id, p.name, p.birth_date);
-    });
-
-    const del = document.createElement("span");
-    del.className = "person-del";
-    del.textContent = "×";
-    del.title = `Delete ${p.name}`;
-    del.addEventListener("click", (e) => {
-      e.stopPropagation();
-      deletePerson(p.id, p.name);
-    });
-
-    item.appendChild(edit);
-    item.appendChild(del);
-    list.appendChild(item);
   });
+
+  const sortedFamilies = [...familyMap.values()]
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const hasFamilies = sortedFamilies.length > 0;
+
+  sortedFamilies.forEach((fam) => {
+    list.appendChild(makeFamilyHeader(fam.name));
+    fam.persons.forEach((p) => list.appendChild(makePersonItem(p)));
+  });
+
+  if (noFamily.length > 0) {
+    // Only show the "Other" label when there are also family groups.
+    if (hasFamilies) list.appendChild(makeFamilyHeader("Other"));
+    noFamily.forEach((p) => list.appendChild(makePersonItem(p)));
+  }
+}
+
+function makeFamilyHeader(name) {
+  const hdr = document.createElement("div");
+  hdr.className = "family-group-header";
+  hdr.textContent = name;
+  return hdr;
+}
+
+function makePersonItem(p) {
+  const item = makeScopeItem(p.name, p.face_count, "person", p.id);
+  if (p.birth_date) {
+    const b = document.createElement("span");
+    b.className = "person-birth";
+    b.textContent = ` b.${p.birth_date.slice(0, 4)}`;
+    item.querySelector(".person-name").appendChild(b);
+  }
+  const edit = document.createElement("span");
+  edit.className = "person-edit";
+  edit.textContent = "✎";
+  edit.title = `Set birth date for ${p.name} (improves age-aware suggestions)`;
+  edit.addEventListener("click", (e) => {
+    e.stopPropagation();
+    editPersonBirth(p.id, p.name, p.birth_date);
+  });
+  const del = document.createElement("span");
+  del.className = "person-del";
+  del.textContent = "×";
+  del.title = `Delete ${p.name}`;
+  del.addEventListener("click", (e) => {
+    e.stopPropagation();
+    deletePerson(p.id, p.name);
+  });
+  item.appendChild(edit);
+  item.appendChild(del);
+  return item;
 }
 
 function makeScopeItem(name, count, itemScope, personId) {
@@ -173,13 +214,15 @@ function makeScopeItem(name, count, itemScope, personId) {
   const nameEl = document.createElement("span");
   nameEl.className = "person-name";
   nameEl.textContent = name;
-
-  const countEl = document.createElement("span");
-  countEl.className = "person-count";
-  countEl.textContent = count;
-
   item.appendChild(nameEl);
-  item.appendChild(countEl);
+
+  if (count !== null && count !== undefined && count !== "") {
+    const countEl = document.createElement("span");
+    countEl.className = "person-count";
+    countEl.textContent = count;
+    item.appendChild(countEl);
+  }
+
   item.addEventListener("click", () => selectScope(itemScope, personId));
   return item;
 }
@@ -221,6 +264,7 @@ async function selectScope(newScope, personId) {
 
 /* ── Faces grid ── */
 async function loadFaces() {
+  if (scope === "discover") { await loadClusters(); return; }
   try {
     let url = `/api/faces?scope=${scope}&limit=${FACE_LIMIT}`;
     if ((scope === "person" || scope === "suggested") && scopePersonId) {
@@ -800,12 +844,166 @@ function handleCellClick(e, face, idx) {
   updateDetail();
 }
 
+/* ── Discover view (unsupervised clusters of unlabeled faces) ── */
+async function loadClusters() {
+  selectedIds.clear();
+  focusedFaceId = null;
+  updateActionButtons();
+  updateDetail();
+  setStatus("Finding groups… this can take a few seconds on a large library.");
+  try {
+    const res = await fetch("/api/faces/clusters");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    clusters = data.clusters || [];
+    renderClusters();
+    if (!clusters.length) {
+      setStatus(`No groups found among ${data.scanned} clear unlabeled faces. ` +
+        `Tag a few faces and use “Find more”, or rescan if many are still pending.`);
+    } else {
+      setStatus(`${clusters.length} group(s) across ${data.grouped} of ${data.scanned} ` +
+        `faces. Name or assign each group, or Ignore it.`);
+    }
+  } catch (err) {
+    setStatus("Clustering failed: " + err.message, true);
+  }
+}
+
+function renderClusters() {
+  const grid = document.getElementById("grid");
+  grid.innerHTML = "";
+  clusters.forEach(cl => grid.appendChild(makeClusterCard(cl)));
+}
+
+function makeClusterCard(cl) {
+  const card = document.createElement("div");
+  card.className = "cluster-card";
+
+  const head = document.createElement("div");
+  head.className = "cluster-head";
+
+  const title = document.createElement("span");
+  title.className = "cluster-title";
+  title.textContent = cl.suggestion ? `Looks like ${cl.suggestion.person_name}` : "New group";
+  const meta = document.createElement("span");
+  meta.className = "cluster-meta";
+  meta.textContent = ` · ${cl.size} face(s)` +
+    (cl.suggestion ? ` · ${Math.round(cl.suggestion.score * 100)}% of group` : "");
+  title.appendChild(meta);
+
+  const actions = document.createElement("div");
+  actions.className = "cluster-actions";
+  if (cl.suggestion) {
+    const assignBtn = document.createElement("button");
+    assignBtn.className = "primary";
+    assignBtn.textContent = `✓ Assign to ${cl.suggestion.person_name}`;
+    assignBtn.addEventListener("click", () =>
+      clusterAssign(cl, { person_id: cl.suggestion.person_id }, cl.suggestion.person_name));
+    actions.appendChild(assignBtn);
+  }
+  const nameBtn = document.createElement("button");
+  nameBtn.className = cl.suggestion ? "" : "primary";
+  nameBtn.textContent = cl.suggestion ? "Name instead…" : "Name…";
+  nameBtn.addEventListener("click", () => {
+    const name = prompt(`Name this group of ${cl.size} face(s):`,
+                        cl.suggestion ? cl.suggestion.person_name : "");
+    if (name && name.trim()) clusterAssign(cl, { name: name.trim() }, name.trim());
+  });
+  actions.appendChild(nameBtn);
+
+  const ignoreBtn = document.createElement("button");
+  ignoreBtn.className = "danger";
+  ignoreBtn.textContent = "Ignore all";
+  ignoreBtn.addEventListener("click", () => clusterIgnore(cl));
+  actions.appendChild(ignoreBtn);
+
+  head.appendChild(title);
+  head.appendChild(actions);
+  card.appendChild(head);
+
+  const facesWrap = document.createElement("div");
+  facesWrap.className = "cluster-faces";
+  cl.sample.forEach(f => {
+    const img = document.createElement("img");
+    img.src = `/api/faces/${f.id}/crop`;
+    img.loading = "lazy";
+    img.title = `${f.filename} — click to preview`;
+    if (f.id === focusedFaceId) img.classList.add("focused");
+    // Preview-only: focus the face (show detail + bbox) without changing selection.
+    img.addEventListener("click", () => {
+      document.querySelectorAll(".cluster-faces img.focused")
+        .forEach(el => el.classList.remove("focused"));
+      img.classList.add("focused");
+      focusedFaceId = f.id;
+      updateDetail();
+    });
+    facesWrap.appendChild(img);
+  });
+  if (cl.size > cl.sample.length) {
+    const more = document.createElement("span");
+    more.className = "cluster-more";
+    more.textContent = `+${cl.size - cl.sample.length} more`;
+    facesWrap.appendChild(more);
+  }
+  card.appendChild(facesWrap);
+  return card;
+}
+
+async function clusterAssign(cl, who, label) {
+  try {
+    const res = await fetch("/api/faces/assign", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ face_ids: cl.face_ids, ...who }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    setStatus(`Assigned ${cl.face_ids.length} face(s) to ${label}.`);
+    clusters = clusters.filter(c => c !== cl);
+    if (cl.face_ids.includes(focusedFaceId)) { focusedFaceId = null; updateDetail(); }
+    renderClusters();
+    await loadPersons();
+  } catch (err) {
+    setStatus("Assign failed: " + err.message, true);
+  }
+}
+
+async function clusterIgnore(cl) {
+  if (!confirm(`Ignore all ${cl.size} face(s) in this group?`)) return;
+  try {
+    const res = await fetch("/api/faces/ignore", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ face_ids: cl.face_ids, ignored: true }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    setStatus(`Ignored ${cl.face_ids.length} face(s).`);
+    clusters = clusters.filter(c => c !== cl);
+    if (cl.face_ids.includes(focusedFaceId)) { focusedFaceId = null; updateDetail(); }
+    renderClusters();
+    await loadPersons();
+  } catch (err) {
+    setStatus("Ignore failed: " + err.message, true);
+  }
+}
+
 /* ── Detail pane ── */
+// Resolve the focused face from the current grid (faces[]) or, in the Discover
+// view, from a cluster's sample — both hold full face items.
+function findFace(id) {
+  const f = faces.find(x => x.id === id);
+  if (f) return f;
+  for (const cl of clusters) {
+    const s = cl.sample.find(x => x.id === id);
+    if (s) return s;
+  }
+  return null;
+}
+
 function updateDetail() {
   const placeholder = document.getElementById("detail-placeholder");
   const content = document.getElementById("detail-content");
 
-  const face = faces.find(f => f.id === focusedFaceId);
+  const face = findFace(focusedFaceId);
   if (!face) {
     placeholder.style.display = "block";
     content.style.display = "none";

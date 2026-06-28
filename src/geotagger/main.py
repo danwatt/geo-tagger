@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -14,7 +15,13 @@ from pydantic import BaseModel
 from geotagger.exiftool_session import lifespan as _et_lifespan, exiftool_status
 from geotagger import index, scanner, sidecar, thumbnails, faces
 from geotagger.exiftool_session import get_et, get_et_lock
-from geotagger.config import FACE_SUGGEST_SCAN_CAP
+from geotagger.config import (
+    FACE_SUGGEST_SCAN_CAP,
+    FACE_CLUSTER_THRESHOLD, FACE_CLUSTER_MIN_SIZE, FACE_CLUSTER_CAP,
+)
+
+# Most groups worth reviewing are the larger ones; cap the response/DOM.
+CLUSTER_DISPLAY_LIMIT = 100
 
 # Configure logging
 logging.basicConfig(
@@ -790,7 +797,12 @@ class CreatePersonRequest(BaseModel):
     name: str
 
 class UpdatePersonRequest(BaseModel):
+    name: str | None = None
     birth_date: str | None = None  # ISO YYYY-MM-DD, or null to clear
+    family_id: int | None = None   # family id, or null to clear
+
+class FamilyRequest(BaseModel):
+    name: str
 
 class AssignFaceRequest(BaseModel):
     person_id: int | None = None  # None clears the assignment
@@ -814,23 +826,66 @@ class ScanFacesRequest(BaseModel):
 async def api_get_persons():
     return [
         {"id": p["id"], "name": p["name"], "face_count": p["face_count"],
-         "birth_date": p["birth_date"], "created_at": p["created_at"]}
+         "birth_date": p["birth_date"], "created_at": p["created_at"],
+         "family_id": p["family_id"], "family_name": p["family_name"]}
         for p in index.get_persons()
     ]
 
 
 @app.patch("/api/persons/{person_id}")
 async def api_update_person(person_id: int, req: UpdatePersonRequest):
-    """Set or clear a person's birth date (ISO YYYY-MM-DD) for age-aware suggestions."""
-    birth = req.birth_date.strip() if req.birth_date else None
-    if birth:
-        try:
-            from datetime import datetime
-            datetime.strptime(birth, "%Y-%m-%d")
-        except ValueError:
-            raise HTTPException(400, "birth_date must be in YYYY-MM-DD format")
-    index.set_person_birth_date(person_id, birth)
-    return {"id": person_id, "birth_date": birth}
+    """Update a person's name, birth date, and/or family. Only fields present in
+    the request body are changed — send just the fields you want to update."""
+    from datetime import datetime as _dt
+    fields = req.model_fields_set
+    if "name" in fields:
+        name = (req.name or "").strip()
+        if not name:
+            raise HTTPException(400, "Name cannot be empty")
+        index.rename_person(person_id, name)
+    if "birth_date" in fields:
+        birth = req.birth_date.strip() if req.birth_date else None
+        if birth:
+            try:
+                _dt.strptime(birth, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(400, "birth_date must be in YYYY-MM-DD format")
+        index.set_person_birth_date(person_id, birth)
+    if "family_id" in fields:
+        index.set_person_family(person_id, req.family_id)
+    return {"id": person_id}
+
+
+# ── Family endpoints ──
+
+@app.get("/api/families")
+async def api_get_families():
+    return [{"id": f["id"], "name": f["name"], "person_count": f["person_count"]}
+            for f in index.get_families()]
+
+
+@app.post("/api/families")
+async def api_create_family(req: FamilyRequest):
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(400, "Name required")
+    family_id = index.create_family(name)
+    return {"id": family_id, "name": name, "person_count": 0}
+
+
+@app.patch("/api/families/{family_id}")
+async def api_rename_family(family_id: int, req: FamilyRequest):
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(400, "Name required")
+    index.rename_family(family_id, name)
+    return {"id": family_id, "name": name}
+
+
+@app.delete("/api/families/{family_id}")
+async def api_delete_family(family_id: int):
+    index.delete_family(family_id)
+    return {"success": True}
 
 
 @app.post("/api/persons")
@@ -1068,6 +1123,59 @@ async def api_faces_scan_status():
         "ignored_faces": index.count_faces("ignored"),
         "tagged_faces": index.count_faces("recent"),
     }
+
+
+def _compute_clusters(rows, unknowns, times, gallery, names, threshold, min_size, full):
+    """Cluster the unlabeled matrix into display-ready groups. Pure compute (no DB
+    access), so it's safe in the executor. Each group carries all its face ids (for
+    bulk assign), face items (a 24-face sample, or every face when ``full``), and a
+    majority-vote 'looks like <existing person>' hint when it matches a known
+    person."""
+    clusters_idx = faces.cluster_unlabeled(unknowns, threshold, min_size)[:CLUSTER_DISPLAY_LIMIT]
+    matches = (faces.suggest_persons_batch(rows, gallery, unknowns=unknowns, times=times)
+               if len(gallery) > 0 else [None] * len(rows))
+    out = []
+    for idxs in clusters_idx:
+        votes = Counter(matches[i][0] for i in idxs if matches[i])
+        suggestion = None
+        if votes:
+            pid, cnt = votes.most_common(1)[0]
+            if cnt >= max(2, len(idxs) // 2):   # a clear plurality of the group
+                suggestion = {"person_id": pid, "person_name": names.get(pid),
+                              "score": round(cnt / len(idxs), 2)}
+        sample_idx = idxs if full else idxs[:24]
+        out.append({
+            "size": len(idxs),
+            "face_ids": [rows[i]["id"] for i in idxs],
+            "sample": [_face_item(rows[i]) for i in sample_idx],
+            "suggestion": suggestion,
+        })
+    return out
+
+
+@app.get("/api/faces/clusters")
+async def api_face_clusters(
+    threshold: float = Query(FACE_CLUSTER_THRESHOLD, ge=0.1, le=1.0),
+    min_size: int = Query(FACE_CLUSTER_MIN_SIZE, ge=2),
+    cap: int = Query(FACE_CLUSTER_CAP, ge=0),
+    full: bool = Query(False),
+):
+    """Discover groups of likely same-person faces among the unlabeled queue, so a
+    new person can be named in one go (no seed example needed). Clusters the top
+    `cap` faces by detection score (they cluster cleanest); the rest are reachable
+    afterward via per-person 'Find more'. ``full`` returns every face item per
+    group (not just a 24-face sample) — total stays bounded by the cluster cap."""
+    gallery = faces.build_gallery()
+    rows, unknowns, times = faces.get_unlabeled_matrix()
+    if cap and 0 < cap < len(rows):
+        rows, unknowns, times = rows[:cap], unknowns[:cap], times[:cap]
+    names = _person_name_map()
+    loop = asyncio.get_running_loop()
+    clusters = await loop.run_in_executor(
+        _executor, _compute_clusters, rows, unknowns, times, gallery, names,
+        threshold, min_size, full)
+    return {"clusters": clusters, "scanned": len(rows),
+            "grouped": sum(c["size"] for c in clusters)}
 
 
 # ── Static files (must be last) ───────────────────────────────────────────────
