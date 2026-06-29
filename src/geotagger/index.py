@@ -600,7 +600,7 @@ def replace_faces(photo_id: int, faces: list[dict]):
 def get_faces_for_photo(photo_id: int) -> list[sqlite3.Row]:
     return get_db().execute(
         """SELECT f.id, f.photo_id, f.person_id, f.bbox, f.det_score, f.source,
-                  f.embedding, f.assigned_at, p.name AS person_name, ph.orientation
+                  f.embedding, f.assigned_at, f.ignored, p.name AS person_name, ph.orientation
            FROM faces f
            LEFT JOIN persons p ON p.id = f.person_id
            JOIN photos ph ON ph.id = f.photo_id
@@ -745,6 +745,52 @@ def set_faces_ignored(face_ids: list[int], ignored: bool):
     if ignored:  # ignored faces leave the unlabeled queue (restore re-adds → rebuild)
         from geotagger import faces as _faces
         _faces.drop_from_unlabeled_cache(face_ids)
+
+
+def get_crowd_photos(min_faces: int = 50) -> list[sqlite3.Row]:
+    """Return photos with at least `min_faces` detected faces, ordered by
+    photo_datetime. Each row includes per-state face counts."""
+    return get_db().execute(
+        """SELECT ph.id, ph.filename, ph.path, ph.photo_datetime, ph.orientation,
+                  COUNT(f.id)                                          AS total_faces,
+                  COUNT(CASE WHEN f.person_id IS NOT NULL THEN 1 END) AS labeled_faces,
+                  COUNT(CASE WHEN f.person_id IS NULL AND f.ignored=0 THEN 1 END) AS unlabeled_faces,
+                  COUNT(CASE WHEN f.ignored=1 THEN 1 END)             AS ignored_faces
+           FROM photos ph
+           JOIN faces f ON f.photo_id = ph.id
+           WHERE ph.media_type = 'image' AND ph.faces_scanned_at IS NOT NULL
+           GROUP BY ph.id
+           HAVING total_faces >= ?
+           ORDER BY ph.photo_datetime""",
+        (min_faces,),
+    ).fetchall()
+
+
+def ignore_unlabeled_in_photos(photo_ids: list[int]) -> int:
+    """Ignore all unlabeled (unassigned, not already ignored) faces in the
+    given photos. Returns the count of faces newly ignored."""
+    if not photo_ids:
+        return 0
+    db = get_db()
+    face_ids = [
+        r[0]
+        for r in db.execute(
+            f"SELECT id FROM faces WHERE photo_id IN ({','.join('?' * len(photo_ids))})"
+            " AND person_id IS NULL AND ignored = 0",
+            photo_ids,
+        ).fetchall()
+    ]
+    if not face_ids:
+        return 0
+    db.executemany(
+        "UPDATE faces SET ignored=1, person_id=NULL, assigned_at=NULL WHERE id=?",
+        [(fid,) for fid in face_ids],
+    )
+    db.commit()
+    bump_faces_generation()
+    from geotagger import faces as _faces
+    _faces.drop_from_unlabeled_cache(face_ids)
+    return len(face_ids)
 
 
 def get_unlabeled_faces() -> list[sqlite3.Row]:

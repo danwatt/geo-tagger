@@ -72,6 +72,10 @@ FACE_AMBIGUITY_MARGIN = float(os.environ.get("GEOTAGGER_FACE_AMBIGUITY_MARGIN", 
 # and taggable by hand. Lower it if too many real faces are excluded; 0 disables.
 FACE_SUGGEST_MIN_DET_SCORE = float(os.environ.get("GEOTAGGER_FACE_SUGGEST_MIN_DET_SCORE", "0.65"))
 
+# ── Large Crowd management ──
+# Photos with at least this many detected faces are treated as crowd photos.
+FACE_CROWD_MIN_SIZE = int(os.environ.get("GEOTAGGER_FACE_CROWD_MIN_SIZE", "50"))
+
 # ── Unsupervised face clustering ("Discover" view) ──
 # Cosine similarity at/above which two unlabeled faces are linked into one group.
 # Tighter = purer groups; looser = more merging (and more risk of chaining).

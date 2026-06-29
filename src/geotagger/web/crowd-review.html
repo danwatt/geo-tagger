@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crowd Review - Geo-Tagger</title>
+<link rel="stylesheet" href="style.css"/>
+<link rel="stylesheet" href="crowd-review.css"/>
+</head>
+<body>
+<div id="toolbar">
+  <div class="toolbar-group">
+    <button id="back-btn">← Crowds</button>
+  </div>
+  <div class="toolbar-group">
+    <button id="prev-btn" disabled>← Prev</button>
+    <span id="photo-counter" class="toolbar-label">—</span>
+    <button id="next-btn" disabled>Next →</button>
+  </div>
+  <div class="toolbar-group">
+    <span id="photo-filename" class="toolbar-label filename-label"></span>
+  </div>
+  <div class="toolbar-group">
+    <button id="ignore-unlabeled-btn" class="danger" disabled>Ignore unlabeled (—)</button>
+    <button id="done-next-btn" class="primary" disabled>Done &amp; next →</button>
+  </div>
+  <div class="toolbar-group">
+    <label title="Prev/Next skip photos where all faces are labeled or ignored">
+      <input type="checkbox" id="hide-done-chk" checked/> Skip completed
+    </label>
+  </div>
+</div>
+
+<div id="cr-main">
+  <!-- Left: face review sections (scrollable) -->
+  <div id="cr-faces">
+    <div id="section-tagged"></div>
+    <div id="section-suggested"></div>
+    <div id="section-unknown"></div>
+    <div id="section-ignored"></div>
+    <div id="cr-empty" style="display:none">No faces found for this photo.</div>
+  </div>
+
+  <!-- Right: full photo with bbox overlay -->
+  <div id="cr-photo-pane">
+    <div id="photo-container">
+      <img id="photo-full" src="" alt="Photo"/>
+      <div id="bbox-overlay"></div>
+    </div>
+  </div>
+</div>
+
+<div id="status-bar"></div>
+<script src="crowd-review.js"></script>
+</body>
+</html>

@@ -55,6 +55,21 @@
       <option value="2592000">1 month</option>
     </select>
   </div>
+  <div class="toolbar-group" id="crowd-controls" style="display:none">
+    <label title="Photos with at least this many detected faces are shown as crowd photos">Min faces:</label>
+    <input type="number" id="crowd-min-faces" value="50" min="2" max="9999" style="width:60px"/>
+    <label>Group gap:</label>
+    <select id="crowd-gap-select">
+      <option value="21600">6 hours</option>
+      <option value="86400" selected>1 day</option>
+      <option value="259200">3 days</option>
+      <option value="604800">1 week</option>
+    </select>
+    <button id="crowd-reload-btn">Reload</button>
+    <label title="Only show crowd photos that still have unlabeled faces">
+      <input type="checkbox" id="crowd-hide-done" checked/> Hide completed
+    </label>
+  </div>
 </div>
 
 <div id="people-main">

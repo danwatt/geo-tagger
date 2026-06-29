@@ -18,6 +18,7 @@ from geotagger.exiftool_session import get_et, get_et_lock
 from geotagger.config import (
     FACE_SUGGEST_SCAN_CAP,
     FACE_CLUSTER_THRESHOLD, FACE_CLUSTER_MIN_SIZE, FACE_CLUSTER_CAP,
+    FACE_CROWD_MIN_SIZE,
 )
 
 # Most groups worth reviewing are the larger ones; cap the response/DOM.
@@ -1372,10 +1373,11 @@ async def api_photo_faces(photo_id: int):
             "person_id": r["person_id"],
             "person_name": r["person_name"],
             "assigned_at": r["assigned_at"],
+            "ignored": bool(r["ignored"]),
             "suggestion": None,
         }
-        # Only suggest for not-yet-assigned faces.
-        if r["person_id"] is None and len(gallery) > 0:
+        # Only suggest for unassigned, non-ignored faces.
+        if r["person_id"] is None and not r["ignored"] and len(gallery) > 0:
             vec = faces.decode_embedding(r["embedding"])
             match = faces.suggest_person(vec, photo_dt, gallery)
             if match:
@@ -1494,6 +1496,65 @@ async def api_face_clusters(
         threshold, min_size, full)
     return {"clusters": clusters, "scanned": len(rows),
             "grouped": sum(c["size"] for c in clusters)}
+
+
+class CrowdIgnoreRequest(BaseModel):
+    photo_ids: list[int]
+
+
+@app.get("/api/crowds")
+async def api_crowds(
+    min_faces: int = Query(FACE_CROWD_MIN_SIZE, ge=1),
+    group_gap: int = Query(86400, ge=60),
+):
+    """Return crowd photos (>= min_faces detected faces) grouped by time gaps."""
+    rows = index.get_crowd_photos(min_faces)
+    groups: list[dict] = []
+    for row in rows:
+        ts = row["photo_datetime"] or 0
+        if groups and ts - groups[-1]["_last_ts"] <= group_gap:
+            g = groups[-1]
+        else:
+            g = {
+                "_last_ts": ts,
+                "label": _format_crowd_group_label(ts),
+                "photos": [],
+                "total_faces": 0,
+                "unlabeled_faces": 0,
+            }
+            groups.append(g)
+        g["_last_ts"] = ts
+        g["photos"].append({
+            "id": row["id"],
+            "filename": row["filename"],
+            "photo_datetime": row["photo_datetime"],
+            "orientation": row["orientation"],
+            "total_faces": row["total_faces"],
+            "labeled_faces": row["labeled_faces"],
+            "unlabeled_faces": row["unlabeled_faces"],
+            "ignored_faces": row["ignored_faces"],
+        })
+        g["total_faces"] += row["total_faces"]
+        g["unlabeled_faces"] += row["unlabeled_faces"]
+
+    for g in groups:
+        del g["_last_ts"]
+    return {"groups": groups, "photo_count": len(rows)}
+
+
+def _format_crowd_group_label(ts: int) -> str:
+    if not ts:
+        return "Unknown date"
+    from datetime import datetime, timezone
+    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    return f"{dt.strftime('%B')} {dt.day}, {dt.year}"
+
+
+@app.post("/api/crowds/ignore-unlabeled")
+async def api_crowds_ignore_unlabeled(req: CrowdIgnoreRequest):
+    """Ignore all unlabeled faces in the given crowd photos."""
+    count = index.ignore_unlabeled_in_photos(req.photo_ids)
+    return {"ignored": count}
 
 
 # ── Static files (must be last) ───────────────────────────────────────────────
