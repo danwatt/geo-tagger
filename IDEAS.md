@@ -4,17 +4,145 @@ Parked ideas for geo-tagger, to revisit later.
 
 ## Life Contexts
 
-I want to add the concept of a "context" to the app. A context primarily will be a geographic area,
-further defined by time blocks. For example, one might start their life out in City A. They move
-to City B during high school, go away to college in City C, then move back to City A for 10 years before
-moving to City D. City A is a geographic context, but has two distinct temporal contexts.
+Add the concept of a **Life Context** to the app. A context is the *where* and *when* of a
+chapter of life: you start out in City A, move to City B for high school, go away to college in
+City C, move back to City A for ten years, then move to City D. The goal is to narrow the search
+space for both **geo-tagging** (where was this untagged photo taken?) and **face recognition**
+(who is likely in it?).
 
-The idea in doing this would be to narrow down the search space for face and for geo-tagging.
+### Refined definition
 
-This will need its own screen to define the geographic contexts via a map and polygons. To keep things
-simple, if a city is in two temporal contexts, lets make that have two separate polygons. Each context
-thus is defined primarily by a polygon, and then optionally by a time range. Two contexts
-could overlap geographically as well as temporally (that is, a photo might exist in two contexts at the same time, and thats ok).
+A **Life Context** is a named pair of **(polygon, optional date range)**:
+
+- **Polygon** — the geographic area (the *where*). Required.
+- **Date range** — `start_date` and/or `end_date`, both optional. Either bound can be open
+  (`City D, 2020–present`). Photos with no timestamp match only the range-less part of the logic
+  (see below).
+- Contexts may **overlap** in space and in time. A photo can belong to several at once — that's
+  fine; we take the **union** of the matched contexts.
+- City A's childhood and City A's adulthood are **two separate context rows** (each with its own
+  polygon drawn on the map). Keeping each context self-contained — its own polygon, range, and
+  optional cast — is the simplest model and matches the mental picture. (A future normalization
+  could let two contexts share one named polygon; not needed for v1.)
+
+**The key asymmetry** that drives the implementation: a not-yet-located photo has no GPS, so
+**time is the only thing that can assign it to a context** (its `photo_datetime` falls inside the
+range). The polygon is then the spatial **answer/prior** the context hands back — not a filter on
+the input. For photos that *are* already geotagged, both time and polygon can be used to confirm
+membership.
+
+### Data model (`index.py`, mirrors the `places` table at line 86)
+
+```sql
+CREATE TABLE contexts (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    polygon TEXT NOT NULL,          -- JSON array of [lat, lng] vertices
+    start_ts INTEGER,               -- epoch secs, NULL = open start
+    end_ts INTEGER,                 -- epoch secs, NULL = open end
+    min_lat REAL, max_lat REAL,     -- cached polygon bbox for cheap prefilter
+    min_lng REAL, max_lng REAL,
+    created_at REAL NOT NULL
+);
+-- Optional "cast" of people present during this context (phase 2, faces):
+CREATE TABLE context_persons (
+    context_id INTEGER NOT NULL REFERENCES contexts(id) ON DELETE CASCADE,
+    person_id  INTEGER NOT NULL REFERENCES persons(id)  ON DELETE CASCADE,
+    PRIMARY KEY (context_id, person_id)
+);
+```
+
+Store the date range as epoch ints (`start_ts`/`end_ts`) so it compares directly against
+`photos.photo_datetime`; accept ISO `YYYY-MM-DD` from the UI and convert on write (the same
+pattern `get_photos` already uses, `index.py:270`). Cache the polygon's bbox so a context lookup
+can prefilter on min/max before running the exact point-in-polygon test.
+
+Add a small ray-casting helper (`point_in_polygon(lat, lng, verts) -> bool`) — SQLite has no
+native PIP, but at this scale (a handful of contexts, tens of thousands of photos) a Python test
+behind the bbox prefilter is plenty fast. Helper to add: `contexts_for_time(ts)` and
+`contexts_for_point_time(lat, lng, ts)`.
+
+### Backend API (`main.py`, mirrors the `/api/places` routes at line 716)
+
+- `GET /api/contexts` — list (with photo count and cast, like `/api/persons`).
+- `POST /api/contexts` — `{name, polygon, start_date?, end_date?}`; computes bbox + `*_ts`.
+- `PATCH /api/contexts/{id}` — update name/polygon/range/cast (model-fields-set pattern, like
+  `api_update_person` at line 843).
+- `DELETE /api/contexts/{id}`.
+
+### Pre-building contexts
+
+If possible, a script to build the contexts from the existing photos. This can be done by clustering photos,
+and looking for sudden changes in locations. For example, if most photos for 2000-2010 are in city A (with
+occasional photos outside the region due to vacation travel), and then suddenly most photos for 2010-2020 are in city B, we can
+create two contexts: one for city A, and one for city B. The script should be able to handle cases where
+the change in location is gradual, and create contexts for each distinct region.
+
+### Geo-tagging use (the concrete phase-1 win — extend `/api/guess`, `main.py:659`)
+
+Today `/api/guess` only averages geotagged photos within ±window and **returns 404 when there are
+no time-neighbors**. Fold contexts in:
+
+1. Look up the photo's contexts by `photo_datetime` (`contexts_for_time`).
+2. **Constrain** the time-neighbor average: if any neighbors fall inside the matched context
+   polygon(s), average only those (drops cross-trip contamination from a clock-skewed neighbor in
+   a different city). Tag the result `source: "time-neighbors"`.
+3. **Fallback** when there are *no* (in-polygon) neighbors: return the matched polygon's centroid
+   with `source: "context-centroid"` and low confidence. This is the big coverage gain — photos
+   that can't be guessed at all today get a coarse "somewhere in City A" the user can accept or
+   refine.
+4. Return which context(s) matched so the UI can show "in your *City C, college* context" and draw
+   the polygon. A `bulk geotag-by-time` queue (already a backlog item below) becomes far stronger
+   once every timestamped photo has at least a context-centroid guess.
+
+### Face use (phase 2 — soft prior in `faces.py`)
+
+Contexts narrow *people*, not embeddings, so make it a **soft score bonus**, never a hard filter
+(preserve recall when someone genuinely appears in a new chapter). The natural seam is the same
+per-person adjustment already done for age in `match_embedding` (`faces.py:356`) and
+`_best_per_person_f32` (`faces.py:421`): add a small additive bonus to the cosine for persons in
+the photo's context cast.
+
+Two ways to get the cast, pick one:
+
+- **Derived (recommended, zero data entry):** the cast = persons who already have labeled faces in
+  photos whose `photo_datetime` falls in the same context(s). Purely time-derived, needs no GPS and
+  no manual list; self-reinforcing as you tag. Risk: broad if a range spans years — keep the bonus
+  small.
+- **Manual:** the `context_persons` table above, edited on the contexts screen. More precise, more
+  upkeep. Can layer on top of the derived set.
+
+Config: `CONTEXT_PERSON_BONUS` (cosine units, e.g. `0.03`), env-overridable like the other face
+knobs in `config.py`.
+
+### Screen (`contexts.html` / `contexts.js` / `contexts.css`)
+
+Follow the existing multi-page pattern (`people.html`, `timesync.html`): a Leaflet map plus a
+sidebar list of contexts (name, date range, vertex/photo count, edit/delete).
+
+- **Polygon drawing:** the current code hand-rolls rectangle/circle drag (`app.js` ~line 500).
+  Vertex-by-vertex polygon editing is fiddly to hand-roll — pull in **Leaflet-Geoman**
+  (or Leaflet.draw) from a CDN for draw/edit/delete of polygons. Reuse the basemap/tile setup
+  from `app.js`.
+- **Form:** name, start date, end date (both optional), draw/edit polygon; optional people
+  multi-select for the manual cast.
+- **Nav:** add a `🗺️ Contexts` toolbar button to each page's toolbar and wire
+  `window.location.href = "/contexts.html"` (same as the other view buttons, e.g. `app.js:194`).
+  Add a `geocode-view-btn` back-link on the new page.
+
+### Build order
+
+1. `contexts` table + `point_in_polygon` / `contexts_for_*` helpers + CRUD API.
+2. Contexts screen (draw/list/edit/delete polygons with optional date range).
+3. Geo-tagging integration in `/api/guess` (constrain + centroid fallback) — highest value.
+4. Face soft-prior (derived cast first; manual cast optional later).
+
+### Possible refinements later
+
+- **Infer contexts** from already-geotagged photo density + time clustering, then let the user
+  name/adjust them — instead of drawing every one by hand.
+- Pairs naturally with **reverse-geocoding** (backlog below): name a context "Paris" by its
+  centroid automatically.
 
 
 
