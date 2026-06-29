@@ -92,6 +92,26 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
         )
     """)
 
+    _db.execute("""
+        CREATE TABLE IF NOT EXISTS contexts (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            polygon TEXT NOT NULL,
+            start_ts INTEGER,
+            end_ts INTEGER,
+            min_lat REAL, max_lat REAL,
+            min_lng REAL, max_lng REAL,
+            created_at REAL NOT NULL
+        )
+    """)
+    _db.execute("""
+        CREATE TABLE IF NOT EXISTS context_persons (
+            context_id INTEGER NOT NULL REFERENCES contexts(id) ON DELETE CASCADE,
+            person_id  INTEGER NOT NULL REFERENCES persons(id)  ON DELETE CASCADE,
+            PRIMARY KEY (context_id, person_id)
+        )
+    """)
+
     # Named family groups — a person can belong to one family.
     _db.execute("""
         CREATE TABLE IF NOT EXISTS families (
@@ -435,6 +455,101 @@ def update_place(place_id: int, bounds: str):
     db = get_db()
     db.execute("UPDATE places SET bounds=? WHERE id=?", (bounds, place_id))
     db.commit()
+
+
+# ── Contexts ──
+
+def get_contexts() -> list[sqlite3.Row]:
+    db = get_db()
+    return db.execute("""
+        SELECT c.*,
+               (SELECT COUNT(*) FROM photos p
+                WHERE (c.start_ts IS NULL OR p.photo_datetime >= c.start_ts)
+                  AND (c.end_ts   IS NULL OR p.photo_datetime <= c.end_ts)
+                  AND (c.min_lat IS NULL OR (
+                       p.lat BETWEEN c.min_lat AND c.max_lat AND
+                       p.lng BETWEEN c.min_lng AND c.max_lng))
+               ) AS photo_count_approx
+        FROM contexts c
+        ORDER BY c.name
+    """).fetchall()
+
+
+def get_context(context_id: int) -> sqlite3.Row | None:
+    return get_db().execute("SELECT * FROM contexts WHERE id=?", (context_id,)).fetchone()
+
+
+def create_context(name: str, polygon_json: str, start_ts: int | None, end_ts: int | None,
+                   min_lat: float, max_lat: float, min_lng: float, max_lng: float) -> int:
+    db = get_db()
+    cursor = db.execute(
+        """INSERT INTO contexts (name, polygon, start_ts, end_ts, min_lat, max_lat, min_lng, max_lng, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (name, polygon_json, start_ts, end_ts, min_lat, max_lat, min_lng, max_lng, time.time())
+    )
+    db.commit()
+    return cursor.lastrowid
+
+
+def update_context(context_id: int, **fields):
+    if not fields:
+        return
+    db = get_db()
+    set_clause = ", ".join(f"{k}=?" for k in fields)
+    db.execute(f"UPDATE contexts SET {set_clause} WHERE id=?", (*fields.values(), context_id))
+    db.commit()
+
+
+def delete_context(context_id: int):
+    db = get_db()
+    db.execute("DELETE FROM context_persons WHERE context_id=?", (context_id,))
+    db.execute("DELETE FROM contexts WHERE id=?", (context_id,))
+    db.commit()
+
+
+def get_context_persons(context_id: int) -> list[sqlite3.Row]:
+    return get_db().execute(
+        """SELECT p.id, p.name FROM persons p
+           JOIN context_persons cp ON cp.person_id = p.id
+           WHERE cp.context_id = ?
+           ORDER BY p.name""",
+        (context_id,)
+    ).fetchall()
+
+
+def set_context_persons(context_id: int, person_ids: list[int]):
+    db = get_db()
+    db.execute("DELETE FROM context_persons WHERE context_id=?", (context_id,))
+    if person_ids:
+        db.executemany(
+            "INSERT INTO context_persons (context_id, person_id) VALUES (?, ?)",
+            [(context_id, pid) for pid in person_ids]
+        )
+    db.commit()
+
+
+def contexts_for_time(ts: int) -> list[sqlite3.Row]:
+    return get_db().execute(
+        "SELECT * FROM contexts "
+        "WHERE (start_ts IS NULL OR start_ts <= ?) "
+        "  AND (end_ts   IS NULL OR end_ts   >= ?)",
+        (ts, ts),
+    ).fetchall()
+
+
+def contexts_for_point_time(lat: float, lng: float, ts: int) -> list[sqlite3.Row]:
+    import json as _json
+    from geotagger.contexts import point_in_polygon
+    rows = contexts_for_time(ts)
+    out = []
+    for r in rows:
+        if r["min_lat"] is not None and not (
+            r["min_lat"] <= lat <= r["max_lat"] and r["min_lng"] <= lng <= r["max_lng"]
+        ):
+            continue
+        if point_in_polygon(lat, lng, _json.loads(r["polygon"])):
+            out.append(r)
+    return out
 
 
 # ── Faces & persons ──

@@ -42,6 +42,9 @@ function bindToolbar() {
   document.getElementById("timesync-view-btn").addEventListener("click", () => {
     window.location.href = "/timesync.html";
   });
+  document.getElementById("contexts-view-btn").addEventListener("click", () => {
+    window.location.href = "/contexts.html";
+  });
   document.getElementById("quicktag-view-btn").addEventListener("click", () => {
     window.location.href = "/tag.html";
   });

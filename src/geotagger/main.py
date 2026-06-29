@@ -280,6 +280,20 @@ class CreatePlaceRequest(BaseModel):
     type: str  # "rectangle" or "circle"
     bounds: str  # JSON string with bounds data
 
+class CreateContextRequest(BaseModel):
+    name: str
+    polygon: list[list[float]]      # [[lat, lng], ...]
+    start_date: str | None = None   # ISO YYYY-MM-DD, optional
+    end_date: str | None = None
+    person_ids: list[int] | None = None
+
+class UpdateContextRequest(BaseModel):
+    name: str | None = None
+    polygon: list[list[float]] | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    person_ids: list[int] | None = None
+
 # ── API routes ────────────────────────────────────────────────────────────────
 
 @app.get("/api/status")
@@ -403,9 +417,88 @@ async def api_photos(
     bbox: str | None = Query(None),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
+    context_id: int | None = Query(None),
 ):
-    """Get photos, optionally filtered by date range (YYYY-MM-DD format)."""
-    rows = index.get_photos(geotagged=geotagged, bbox=bbox, date_from=date_from, date_to=date_to)
+    """Get photos, optionally filtered by date range or Life Context.
+
+    When context_id is supplied all other filtering is handled here:
+      - Geotagged photos: R*Tree bbox prefilter in SQL, then exact point-in-polygon
+        in Python.  Date range is also pushed into the SQL when the context has one.
+      - Untagged photos: included only when the context has a date range (otherwise
+        the entire untagged library would match with no constraint).
+      - No-date contexts: only geotagged photos inside the polygon are returned.
+    """
+    if context_id is not None:
+        import json as _json
+        from geotagger.contexts import point_in_polygon
+
+        ctx = index.get_context(context_id)
+        if ctx is None:
+            raise HTTPException(404, "Context not found")
+
+        verts        = _json.loads(ctx["polygon"])
+        min_lat      = ctx["min_lat"]
+        max_lat      = ctx["max_lat"]
+        min_lng      = ctx["min_lng"]
+        max_lng      = ctx["max_lng"]
+        start_ts     = ctx["start_ts"]
+        end_ts       = ctx["end_ts"]
+        has_bbox     = min_lat is not None
+        has_dates    = start_ts is not None or end_ts is not None
+
+        db = index.get_db()
+        rows: list = []
+
+        # ── Geotagged photos ──────────────────────────────────────────────────
+        # Use the R*Tree spatial index for the bbox prefilter, then do exact PIP
+        # in Python.  Also push the date range into SQL when available.
+        if geotagged != "no" and has_bbox:
+            # R*Tree stores point data as min==max, so the overlap check reduces
+            # to a simple range test on each axis.
+            sql = """
+                SELECT photos.* FROM photos
+                INNER JOIN photos_spatial ON photos.id = photos_spatial.id
+                WHERE photos_spatial.max_lat >= ? AND photos_spatial.min_lat <= ?
+                  AND photos_spatial.max_lng >= ? AND photos_spatial.min_lng <= ?
+            """
+            params: list = [min_lat, max_lat, min_lng, max_lng]
+            if start_ts is not None:
+                sql += " AND photos.photo_datetime >= ?"
+                params.append(start_ts)
+            if end_ts is not None:
+                sql += " AND photos.photo_datetime <= ?"
+                params.append(end_ts)
+            sql += " ORDER BY photos.photo_datetime, photos.filename"
+
+            candidates = db.execute(sql, params).fetchall()
+            # Exact point-in-polygon post-filter
+            rows += [r for r in candidates
+                     if point_in_polygon(r["lat"], r["lng"], verts)]
+
+        # ── Untagged photos ───────────────────────────────────────────────────
+        # Only included when the context has a date range — without one there is
+        # no constraint and we would return the entire untagged library.
+        if geotagged != "yes" and has_dates:
+            u_sql    = "SELECT * FROM photos WHERE lat IS NULL"
+            u_params: list = []
+            if start_ts is not None:
+                u_sql += " AND photo_datetime >= ?"
+                u_params.append(start_ts)
+            if end_ts is not None:
+                u_sql += " AND photo_datetime <= ?"
+                u_params.append(end_ts)
+            u_sql += " ORDER BY photo_datetime, filename"
+            rows += db.execute(u_sql, u_params).fetchall()
+
+        # Sort merged result by time then filename
+        rows.sort(key=lambda r: (r["photo_datetime"] or 0, r["filename"]))
+
+    else:
+        rows = index.get_photos(
+            geotagged=geotagged, bbox=bbox,
+            date_from=date_from, date_to=date_to,
+        )
+
     return [
         {
             "id": r["id"], "filename": r["filename"], "media_type": r["media_type"],
@@ -658,7 +751,10 @@ async def api_geotag(req: GeotagRequest):
 
 @app.get("/api/guess/{photo_id}")
 async def api_guess(photo_id: int, window: int = 900):
-    """Return a guessed lat/lng from nearby-in-time geotagged photos (±window seconds)."""
+    """Return a guessed lat/lng from nearby-in-time geotagged photos (±window seconds).
+    Falls back to the centroid of a matched Life Context when no time-neighbors exist."""
+    import json as _json
+    from geotagger.contexts import point_in_polygon, polygon_centroid
     row = index.get_photo(photo_id)
     if not row:
         raise HTTPException(404)
@@ -667,6 +763,11 @@ async def api_guess(photo_id: int, window: int = 900):
     ts = row["photo_datetime"]
     if not ts or ts <= 0:
         raise HTTPException(400, "Photo has no timestamp — cannot guess location")
+
+    # Look up matching contexts by timestamp (polygon is the answer, not a filter)
+    matched_contexts = index.contexts_for_time(ts)
+    ctx_payload = [{"id": c["id"], "name": c["name"], "polygon": _json.loads(c["polygon"])}
+                   for c in matched_contexts]
 
     db = index.get_db()
     nearby = db.execute("""
@@ -679,23 +780,55 @@ async def api_guess(photo_id: int, window: int = 900):
         LIMIT 50
     """, (ts - window, ts + window, photo_id, ts)).fetchall()
 
-    if not nearby:
-        raise HTTPException(404, detail="No geotagged photos found within 15 minutes")
+    # When contexts exist, constrain to in-polygon neighbors only
+    if nearby and matched_contexts:
+        in_ctx = [r for r in nearby if any(
+            point_in_polygon(r["lat"], r["lng"], _json.loads(c["polygon"]))
+            for c in matched_contexts
+        )]
+        if in_ctx:
+            nearby = in_ctx
 
-    weights = [1.0 / (abs(r["photo_datetime"] - ts) + 1) for r in nearby]
-    total_w = sum(weights)
-    avg_lat = sum(r["lat"] * w for r, w in zip(nearby, weights)) / total_w
-    avg_lng = sum(r["lng"] * w for r, w in zip(nearby, weights)) / total_w
-    return {
-        "lat": avg_lat,
-        "lng": avg_lng,
-        "source_count": len(nearby),
-        "window_sec": window,
-        "sources": [{"id": r["id"], "filename": r["filename"],
-                     "lat": r["lat"], "lng": r["lng"],
-                     "delta_sec": abs(r["photo_datetime"] - ts),
-                     "is_before": r["photo_datetime"] < ts} for r in nearby],
-    }
+    if nearby:
+        weights = [1.0 / (abs(r["photo_datetime"] - ts) + 1) for r in nearby]
+        total_w = sum(weights)
+        avg_lat = sum(r["lat"] * w for r, w in zip(nearby, weights)) / total_w
+        avg_lng = sum(r["lng"] * w for r, w in zip(nearby, weights)) / total_w
+        return {
+            "lat": avg_lat,
+            "lng": avg_lng,
+            "source": "time-neighbors",
+            "source_count": len(nearby),
+            "window_sec": window,
+            "sources": [{"id": r["id"], "filename": r["filename"],
+                         "lat": r["lat"], "lng": r["lng"],
+                         "delta_sec": abs(r["photo_datetime"] - ts),
+                         "is_before": r["photo_datetime"] < ts} for r in nearby],
+            "contexts": ctx_payload,
+        }
+
+    # No usable neighbors — fall back to context centroid if a context matched
+    if matched_contexts:
+        # Pick the most specific (smallest-area) context
+        def _area(c):
+            verts = _json.loads(c["polygon"])
+            lat_span = (c["max_lat"] or 0) - (c["min_lat"] or 0)
+            lng_span = (c["max_lng"] or 0) - (c["min_lng"] or 0)
+            return lat_span * lng_span
+        best = min(matched_contexts, key=_area)
+        verts = _json.loads(best["polygon"])
+        clat, clng = polygon_centroid(verts)
+        return {
+            "lat": clat,
+            "lng": clng,
+            "source": "context-centroid",
+            "source_count": 0,
+            "window_sec": window,
+            "sources": [],
+            "contexts": ctx_payload,
+        }
+
+    raise HTTPException(404, detail="No geotagged photos found within the time window")
 
 
 @app.post("/api/geotag/remove")
@@ -751,6 +884,160 @@ class UpdatePlaceRequest(BaseModel):
 async def api_update_place(place_id: int, req: UpdatePlaceRequest):
     """Update a place's bounds."""
     index.update_place(place_id, req.bounds)
+    return {"success": True}
+
+
+# ── Contexts ──
+
+def _date_to_ts_start(d: str) -> int:
+    # Use calendar.timegm (UTC struct_time) to avoid the Windows OSError for
+    # pre-1970 dates that hits datetime.timestamp() via the C mktime() call.
+    import calendar
+    from datetime import datetime
+    return calendar.timegm(datetime.strptime(d, "%Y-%m-%d").timetuple())
+
+def _date_to_ts_end(d: str) -> int:
+    return _date_to_ts_start(d) + 86400
+
+def _ts_to_date(ts: int | None) -> str | None:
+    if ts is None:
+        return None
+    from datetime import datetime, timedelta, timezone
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    return (epoch + timedelta(seconds=ts)).strftime("%Y-%m-%d")
+
+def _normalize_lng(lng: float) -> float:
+    """Wrap longitude into [-180, 180]. Leaflet can return values outside this range
+    when the user pans across the antimeridian."""
+    lng = lng % 360
+    if lng > 180:
+        lng -= 360
+    if lng < -180:
+        lng += 360
+    return lng
+
+def _validate_polygon(polygon: list[list[float]]):
+    if len(polygon) < 3:
+        raise HTTPException(400, "Polygon must have at least 3 vertices")
+    for pt in polygon:
+        if len(pt) != 2:
+            raise HTTPException(400, "Each polygon point must be [lat, lng]")
+        lat = pt[0]
+        pt[1] = _normalize_lng(pt[1])
+        if not (-90 <= lat <= 90):
+            raise HTTPException(400, f"Latitude {lat} out of range -90..90")
+
+def _context_row_to_dict(c, persons=None) -> dict:
+    import json as _json
+    return {
+        "id": c["id"],
+        "name": c["name"],
+        "polygon": _json.loads(c["polygon"]),
+        "start_date": _ts_to_date(c["start_ts"]),
+        "end_date": _ts_to_date(c["end_ts"]),
+        "start_ts": c["start_ts"],
+        "end_ts": c["end_ts"],
+        "photo_count_approx": c["photo_count_approx"] if "photo_count_approx" in c.keys() else None,
+        "created_at": c["created_at"],
+        "persons": [{"id": p["id"], "name": p["name"]} for p in (persons or [])],
+    }
+
+@app.get("/api/contexts")
+async def api_get_contexts():
+    contexts = index.get_contexts()
+    result = []
+    for c in contexts:
+        persons = index.get_context_persons(c["id"])
+        result.append(_context_row_to_dict(c, persons))
+    return result
+
+
+@app.post("/api/contexts")
+async def api_create_context(req: CreateContextRequest):
+    import json as _json
+    from datetime import datetime as _dt
+    _validate_polygon(req.polygon)
+    start_ts = end_ts = None
+    if req.start_date:
+        try:
+            start_ts = _date_to_ts_start(req.start_date)
+        except ValueError:
+            raise HTTPException(400, "start_date must be YYYY-MM-DD")
+    if req.end_date:
+        try:
+            end_ts = _date_to_ts_end(req.end_date)
+        except ValueError:
+            raise HTTPException(400, "end_date must be YYYY-MM-DD")
+    if start_ts is not None and end_ts is not None and start_ts > end_ts:
+        raise HTTPException(400, "start_date must be <= end_date")
+    from geotagger.contexts import polygon_bbox
+    min_lat, max_lat, min_lng, max_lng = polygon_bbox(req.polygon)
+    context_id = index.create_context(
+        req.name.strip(), _json.dumps(req.polygon),
+        start_ts, end_ts, min_lat, max_lat, min_lng, max_lng
+    )
+    if req.person_ids:
+        index.set_context_persons(context_id, req.person_ids)
+    c = index.get_context(context_id)
+    persons = index.get_context_persons(context_id)
+    return _context_row_to_dict(c, persons)
+
+
+@app.patch("/api/contexts/{context_id}")
+async def api_update_context(context_id: int, req: UpdateContextRequest):
+    import json as _json
+    c = index.get_context(context_id)
+    if not c:
+        raise HTTPException(404, "Context not found")
+    fields = req.model_fields_set
+    updates: dict = {}
+    if "name" in fields:
+        name = (req.name or "").strip()
+        if not name:
+            raise HTTPException(400, "Name cannot be empty")
+        updates["name"] = name
+    if "polygon" in fields and req.polygon is not None:
+        _validate_polygon(req.polygon)
+        from geotagger.contexts import polygon_bbox
+        min_lat, max_lat, min_lng, max_lng = polygon_bbox(req.polygon)
+        updates["polygon"] = _json.dumps(req.polygon)
+        updates["min_lat"] = min_lat
+        updates["max_lat"] = max_lat
+        updates["min_lng"] = min_lng
+        updates["max_lng"] = max_lng
+    if "start_date" in fields:
+        if req.start_date:
+            try:
+                updates["start_ts"] = _date_to_ts_start(req.start_date)
+            except ValueError:
+                raise HTTPException(400, "start_date must be YYYY-MM-DD")
+        else:
+            updates["start_ts"] = None
+    if "end_date" in fields:
+        if req.end_date:
+            try:
+                updates["end_ts"] = _date_to_ts_end(req.end_date)
+            except ValueError:
+                raise HTTPException(400, "end_date must be YYYY-MM-DD")
+        else:
+            updates["end_ts"] = None
+    # Validate start <= end using merged values
+    new_start = updates.get("start_ts", c["start_ts"])
+    new_end = updates.get("end_ts", c["end_ts"])
+    if new_start is not None and new_end is not None and new_start > new_end:
+        raise HTTPException(400, "start_date must be <= end_date")
+    if updates:
+        index.update_context(context_id, **updates)
+    if "person_ids" in fields:
+        index.set_context_persons(context_id, req.person_ids or [])
+    c = index.get_context(context_id)
+    persons = index.get_context_persons(context_id)
+    return _context_row_to_dict(c, persons)
+
+
+@app.delete("/api/contexts/{context_id}")
+async def api_delete_context(context_id: int):
+    index.delete_context(context_id)
     return {"success": True}
 
 

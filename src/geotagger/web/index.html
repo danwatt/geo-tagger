@@ -13,6 +13,7 @@
     <button id="geocode-view-btn" class="active">📍 Geocode View</button>
     <button id="timesync-view-btn">🕐 Time Sync View</button>
     <button id="people-view-btn">🙂 People</button>
+    <button id="contexts-view-btn">🗺️ Contexts</button>
   </div>
   <div class="toolbar-group">
     <button id="select-month-btn">Select Month</button>
@@ -30,6 +31,13 @@
       <option value="604800">Window: 1 week</option>
     </select>
     <span id="selected-area-label"></span>
+  </div>
+  <div class="toolbar-group">
+    <label>Context:</label>
+    <select id="context-filter-select">
+      <option value="">-- none --</option>
+    </select>
+    <span id="selected-context-label"></span>
   </div>
   <div class="toolbar-group">
     <label>Places:</label>

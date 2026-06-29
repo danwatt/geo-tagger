@@ -9,6 +9,7 @@ let map;
 let guessMarker = null;        // temporary guess pin (amber ?)
 let guessSourceMarkers = [];   // source photo pins shown during guess
 let guessPending = null;       // { lat, lng } awaiting apply/dismiss
+let guessContextLayers = [];   // context polygons shown during guess
 let accuracyCircle = null;     // L.circle shown for selected photo's GPS accuracy
 let selectedYear = null;
 let selectedMonth = null;
@@ -23,6 +24,10 @@ let drawingShape = null;  // temporary shape being drawn
 let areaSelectMode = false;
 let areaSelectCircle = null;
 let areaSelectParams = null;  // { lat, lng, radius }
+
+/* ── Context filter state ── */
+let contextFilterData = null;  // full context object from API when active
+let contextPolygonLayer = null;
 
 /* ── Date range filter state ── */
 let dateRangeMin = 0;   // Unix ts — absolute min across all photos
@@ -97,6 +102,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindTimeline();
   await checkStatus();
   await loadPlaces();
+  await loadContextsDropdown();
   await fitMapToAllLocations();
   setStatus("Click 'Select Month' to begin");
 });
@@ -197,11 +203,29 @@ function bindToolbar() {
   document.getElementById("people-view-btn").addEventListener("click", () => {
     window.location.href = "/people.html";
   });
+  document.getElementById("contexts-view-btn").addEventListener("click", () => {
+    window.location.href = "/contexts.html";
+  });
+
+  document.getElementById("context-filter-select").addEventListener("change", async (e) => {
+    const id = parseInt(e.target.value);
+    if (!id) {
+      clearContextFilter();
+      return;
+    }
+    // Find the context in the already-loaded list
+    const res = await fetch("/api/contexts");
+    const all = await res.json();
+    const ctx = all.find(c => c.id === id);
+    if (ctx) await loadPhotosByContext(ctx);
+  });
 
   document.getElementById("select-month-btn").addEventListener("click", showMonthPicker);
   document.getElementById("select-area-btn").addEventListener("click", startAreaSelection);
   function reloadCurrentView() {
-    if (selectedYear && selectedMonth) {
+    if (contextFilterData) {
+      loadPhotosByContext(contextFilterData);
+    } else if (selectedYear && selectedMonth) {
       loadPhotos();
     } else if (areaSelectParams) {
       loadPhotosByArea(areaSelectParams.lat, areaSelectParams.lng, areaSelectParams.radius);
@@ -310,13 +334,14 @@ async function selectMonth(year, month) {
   selectedMonth = month;
   hideMonthPicker();
 
-  // Clear area selection
+  // Clear area and context selections
   areaSelectParams = null;
   if (areaSelectCircle) {
     map.removeLayer(areaSelectCircle);
     areaSelectCircle = null;
   }
   document.getElementById("selected-area-label").textContent = "";
+  clearContextFilter();
 
   // Update label
   document.getElementById("selected-month-label").textContent =
@@ -626,6 +651,78 @@ async function confirmDeletePlace(place) {
   }
 }
 
+/* ── Context Filter ── */
+
+async function loadContextsDropdown() {
+  try {
+    const res = await fetch("/api/contexts");
+    if (!res.ok) return;
+    const contexts = await res.json();
+    const select = document.getElementById("context-filter-select");
+    // Preserve current value if possible
+    const currentVal = select.value;
+    select.innerHTML = '<option value="">-- none --</option>';
+    contexts.forEach(c => {
+      const opt = document.createElement("option");
+      opt.value = c.id;
+      const dateStr = c.start_date && c.end_date
+        ? ` (${c.start_date.slice(0,4)}–${c.end_date.slice(0,4)})`
+        : c.start_date ? ` (from ${c.start_date.slice(0,4)})`
+        : c.end_date   ? ` (until ${c.end_date.slice(0,4)})`
+        : "";
+      opt.textContent = c.name + dateStr;
+      select.appendChild(opt);
+    });
+    if (currentVal) select.value = currentVal;
+  } catch (e) {
+    console.error("Failed to load contexts for dropdown:", e);
+  }
+}
+
+async function loadPhotosByContext(ctx) {
+  contextFilterData = ctx;
+
+  // Draw / update the polygon layer
+  if (contextPolygonLayer) { map.removeLayer(contextPolygonLayer); contextPolygonLayer = null; }
+  if (ctx.polygon && ctx.polygon.length >= 3) {
+    contextPolygonLayer = L.polygon(ctx.polygon.map(v => [v[0], v[1]]), {
+      color: "#4a8", fillColor: "#4a8", fillOpacity: 0.08, weight: 2,
+    }).addTo(map).bindTooltip(ctx.name, { sticky: true });
+    map.fitBounds(contextPolygonLayer.getBounds().pad(0.15), { maxZoom: 12 });
+  }
+
+  // Update label
+  document.getElementById("selected-context-label").textContent = ctx.name;
+
+  const filter = document.getElementById("filter-select").value;
+  const url = `/api/photos?geotagged=${filter}&context_id=${ctx.id}`;
+
+  try {
+    setStatus(`Loading photos in context "${ctx.name}"…`);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    photos = await res.json();
+    photos.forEach(p => camColor(p.camera));
+    renderLegend();
+    buildHistogram();
+    applyFilters(false);  // don't re-fit map — we already zoomed to polygon
+    const tagged = photos.filter(p => p.lat != null).length;
+    const untagged = photos.length - tagged;
+    setStatus(`"${ctx.name}": ${photos.length} photos (${tagged} geotagged, ${untagged} untagged)`);
+  } catch (err) {
+    setStatus("Load error: " + err.message, true);
+  }
+}
+
+function clearContextFilter() {
+  if (contextPolygonLayer) { map.removeLayer(contextPolygonLayer); contextPolygonLayer = null; }
+  contextFilterData = null;
+  const sel = document.getElementById("context-filter-select");
+  if (sel) sel.value = "";
+  const lbl = document.getElementById("selected-context-label");
+  if (lbl) lbl.textContent = "";
+}
+
 /* ── Area Selection ── */
 function startAreaSelection() {
   if (drawingMode) {
@@ -706,10 +803,11 @@ async function onAreaSelectEnd(e) {
   document.getElementById("selected-area-label").textContent =
     `Area: ${(radius / 1000).toFixed(2)}km radius`;
 
-  // Clear month selection
+  // Clear month and context selections
   selectedYear = null;
   selectedMonth = null;
   document.getElementById("selected-month-label").textContent = "No month selected";
+  clearContextFilter();
 }
 
 function stopAreaSelection() {
@@ -1197,6 +1295,16 @@ async function doGuess() {
 
     guessPending = { lat: data.lat, lng: data.lng };
 
+    // Draw matched context polygons (faint green outline)
+    if (data.contexts && data.contexts.length) {
+      data.contexts.forEach(ctx => {
+        const layer = L.polygon(ctx.polygon.map(v => [v[0], v[1]]), {
+          color: "#4a8", fillColor: "#4a8", fillOpacity: 0.08, weight: 2, dashArray: "6,3",
+        }).addTo(map).bindTooltip(ctx.name, { sticky: true });
+        guessContextLayers.push(layer);
+      });
+    }
+
     // Place source photo pins (before=blue, after=green, brightness by proximity)
     data.sources.forEach(src => {
       const icon = makeSourcePinIcon(src.delta_sec, src.is_before, data.window_sec);
@@ -1228,23 +1336,29 @@ async function doGuess() {
       guessPending = { lat: ll.lat, lng: ll.lng };
     });
 
-    // Fit map to show all source pins + guess pin
-    const allPoints = [
-      [data.lat, data.lng],
-      ...data.sources.map(s => [s.lat, s.lng]),
-    ];
+    // Fit map to include source pins, context polygons, and the guess pin
+    const allPoints = [[data.lat, data.lng], ...data.sources.map(s => [s.lat, s.lng])];
+    if (data.contexts && data.contexts.length) {
+      data.contexts.forEach(ctx => ctx.polygon.forEach(v => allPoints.push([v[0], v[1]])));
+    }
     map.flyToBounds(L.latLngBounds(allPoints).pad(0.3), { duration: 1, maxZoom: 16 });
 
     // Build summary text
-    const srcList = data.sources.slice(0, 3)
-      .map(s => {
-        const mins = s.delta_sec < 60 ? `${s.delta_sec}s` : `${Math.round(s.delta_sec / 60)}min`;
-        return `${s.filename} (${mins} ${s.is_before ? "before" : "after"})`;
-      })
-      .join(", ");
-    const more = data.source_count > 3 ? ` +${data.source_count - 3} more` : "";
-    document.getElementById("guess-summary").textContent =
-      `Based on ${data.source_count} nearby photo${data.source_count > 1 ? "s" : ""}: ${srcList}${more}`;
+    let summaryText;
+    if (data.source === "context-centroid") {
+      const ctxNames = (data.contexts || []).map(c => c.name).join(", ");
+      summaryText = `No time neighbors — center of context: ${ctxNames}`;
+    } else {
+      const srcList = data.sources.slice(0, 3)
+        .map(s => {
+          const mins = s.delta_sec < 60 ? `${s.delta_sec}s` : `${Math.round(s.delta_sec / 60)}min`;
+          return `${s.filename} (${mins} ${s.is_before ? "before" : "after"})`;
+        })
+        .join(", ");
+      const more = data.source_count > 3 ? ` +${data.source_count - 3} more` : "";
+      summaryText = `Based on ${data.source_count} nearby photo${data.source_count > 1 ? "s" : ""}: ${srcList}${more}`;
+    }
+    document.getElementById("guess-summary").textContent = summaryText;
     document.getElementById("guess-result").style.display = "";
   } catch (err) {
     setStatus("Guess error: " + err.message, true);
@@ -1265,6 +1379,8 @@ function dismissGuess(hideResult = true) {
   if (guessMarker) { guessMarker.remove(); guessMarker = null; }
   guessSourceMarkers.forEach(m => m.remove());
   guessSourceMarkers = [];
+  guessContextLayers.forEach(l => l.remove());
+  guessContextLayers = [];
   guessPending = null;
   if (hideResult) document.getElementById("guess-result").style.display = "none";
 }

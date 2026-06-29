@@ -166,6 +166,9 @@ function bindToolbar() {
   document.getElementById("people-view-btn").addEventListener("click", () => {
     window.location.href = "/people.html";
   });
+  document.getElementById("contexts-view-btn").addEventListener("click", () => {
+    window.location.href = "/contexts.html";
+  });
 
   // Month picker
   document.getElementById("select-month-btn").addEventListener("click", showMonthPicker);

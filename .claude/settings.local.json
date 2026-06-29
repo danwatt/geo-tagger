@@ -9,7 +9,8 @@
       "PowerShell(New-Item -ItemType Directory -Force \"C:\\\\Users\\\\danwa\\\\PycharmProjects\\\\geo-tagger\\\\tools\")",
       "Bash(uv add *)",
       "Bash(node --check people.js)",
-      "Read(//c/temp/geotagger/prod/**)"
+      "Read(//c/temp/geotagger/prod/**)",
+      "Bash(uv run *)"
     ]
   }
 }
