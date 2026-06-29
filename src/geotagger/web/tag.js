@@ -2,10 +2,25 @@
  * group at a time: Accept all (as the suggested person, or a name you type),
  * Ignore all, or Skip. Tap a face for a full-photo preview with the box. */
 
-let queue = [];   // weekly groups (clusters split to <= 1 week each)
+let queue = [];   // groups (clusters split by date window)
 let pos = 0;      // index of the group currently shown
 let persons = []; // existing people, for the picker
 let pickerGroup = null;
+
+// ── Settings (persisted) ──────────────────────────────────────────────────────
+const SETTINGS_KEY = "quicktag_settings";
+const DEFAULTS = { threshold: 0.65, windowDays: 30 };
+
+function loadSettings() {
+  try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY)) }; }
+  catch { return { ...DEFAULTS }; }
+}
+
+function saveSettings(s) {
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch {}
+}
+
+let settings = loadSettings();
 
 // Persisted across sessions so "Use previous" survives a page reload.
 let prevPerson = (() => {
@@ -27,7 +42,7 @@ function renderPrevBtn() {
   }
 }
 
-const WEEK_SECONDS = 7 * 86400;
+const windowSeconds = () => settings.windowDays * 86400;
 
 const el = (id) => document.getElementById(id);
 
@@ -42,6 +57,34 @@ document.addEventListener("DOMContentLoaded", () => {
   el("picker-close").addEventListener("click", closePicker);
   el("picker").addEventListener("click", (e) => { if (e.target === el("picker")) closePicker(); });
   el("picker-search").addEventListener("input", (e) => renderPickerList(e.target.value));
+
+  // Settings panel
+  el("settings-btn").addEventListener("click", () => {
+    el("settings-panel").hidden = !el("settings-panel").hidden;
+  });
+
+  const slider = el("threshold-slider");
+  const valDisplay = el("threshold-val");
+  slider.value = settings.threshold;
+  valDisplay.textContent = settings.threshold;
+
+  let reloadTimer;
+  slider.addEventListener("input", () => {
+    settings.threshold = parseFloat(slider.value);
+    valDisplay.textContent = settings.threshold;
+    saveSettings(settings);
+    clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(loadGroups, 600);
+  });
+
+  const windowSel = el("window-select");
+  windowSel.value = settings.windowDays;
+  windowSel.addEventListener("change", () => {
+    settings.windowDays = parseInt(windowSel.value, 10);
+    saveSettings(settings);
+    loadGroups();
+  });
+
   loadPersons();
   loadGroups();
 });
@@ -62,7 +105,7 @@ async function loadGroups() {
   el("progress").textContent = "";
   try {
     // full=true → every face per group, so the grid can show them all.
-    const res = await fetch("/api/faces/clusters?full=true");
+    const res = await fetch(`/api/faces/clusters?full=true&threshold=${settings.threshold}`);
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
     // Split each person-group into chunks spanning at most one week.
@@ -84,7 +127,7 @@ function splitByWeek(cluster) {
   let cur = null;
   for (const f of faces) {
     const ts = f.photo_datetime || 0;
-    if (!cur || ts - cur.start > WEEK_SECONDS) {
+    if (!cur || ts - cur.start > windowSeconds()) {
       cur = { suggestion: cluster.suggestion, faces: [], start: ts };
       groups.push(cur);
     }

@@ -2,7 +2,28 @@
 
 Parked ideas for geo-tagger, to revisit later.
 
+## Life Contexts
+
+I want to add the concept of a "context" to the app. A context primarily will be a geographic area,
+further defined by time blocks. For example, one might start their life out in City A. They move
+to City B during high school, go away to college in City C, then move back to City A for 10 years before
+moving to City D. City A is a geographic context, but has two distinct temporal contexts.
+
+The idea in doing this would be to narrow down the search space for face and for geo-tagging.
+
+This will need its own screen to define the geographic contexts via a map and polygons. To keep things
+simple, if a city is in two temporal contexts, lets make that have two separate polygons. Each context
+thus is defined primarily by a polygon, and then optionally by a time range. Two contexts
+could overlap geographically as well as temporally (that is, a photo might exist in two contexts at the same time, and thats ok).
+
+
+
 ## Faces
+
+- **Large Crowd management**. I want the ability to find photos that appear to be of large crowds. The main thing I want to do with these
+is to ignore any background members of the crowd in bulk. Once the primary people have been identified, I have no further need to identify
+the background members of the crowd. Also, since these tend to be at events where multiple photos are taken, it would be helpful to group them together -
+likely by a date range window (same day, same week, etc). The crowd size should be adjustable, but we could start with a default of 50 total faces.
 
 - **Discover / cluster unlabeled faces** — *Done 2026-06-28.* "Discover groups"
   view clusters the unlabeled queue (cosine-graph + union-find connected

@@ -240,6 +240,11 @@ def _embeddings_matrix(rows) -> np.ndarray:
 # assign/ignore/scan/birth-date change bumps it and the next call rebuilds.
 _gallery_cache: tuple[int, "Gallery"] | None = None
 _unlabeled_cache: tuple[int, int, list, np.ndarray, np.ndarray] | None = None
+# Parallel to _unlabeled_cache rows: cached suggest_persons_batch output.
+# Keyed on (gen, scan_cap) and pruned in drop_from_unlabeled_cache so the
+# full matmul only runs when the generation actually changes, not on every
+# accept in the suggested-only review loop.
+_suggested_scores_cache: tuple[int, int, list] | None = None
 
 
 def build_gallery() -> Gallery:
@@ -289,6 +294,30 @@ def get_unlabeled_matrix(scan_cap: int = FACE_SUGGEST_SCAN_CAP
     return rows, unknowns, times
 
 
+def get_suggested_scores(scan_cap: int = FACE_SUGGEST_SCAN_CAP,
+                         ) -> tuple[list, list]:
+    """Cached (rows, match_scores) for the suggested-only review endpoint.
+
+    ``match_scores`` is parallel to ``rows``: each element is ``(person_id,
+    score)`` or ``None``. On a warm cache the matmul is skipped entirely;
+    ``drop_from_unlabeled_cache`` keeps both the row list and this scores list
+    in sync after each label/ignore action, so the rebuild only happens when
+    faces are added or the gallery changes.
+    """
+    global _suggested_scores_cache
+    gen = index.faces_generation()
+    rows, unknowns, times = get_unlabeled_matrix(scan_cap)
+    if (_suggested_scores_cache is not None
+            and _suggested_scores_cache[0] == gen
+            and _suggested_scores_cache[1] == scan_cap):
+        return rows, _suggested_scores_cache[2]
+    gallery = build_gallery()
+    scores = (suggest_persons_batch(rows, gallery, unknowns=unknowns, times=times)
+              if len(gallery) > 0 else [None] * len(rows))
+    _suggested_scores_cache = (gen, scan_cap, scores)
+    return rows, scores
+
+
 def drop_from_unlabeled_cache(face_ids):
     """Prune just-labeled/ignored faces from the cached unlabeled matrix instead
     of forcing a full re-read on the next scan, and re-tag the cache to the
@@ -298,16 +327,29 @@ def drop_from_unlabeled_cache(face_ids):
     Additions (unassign, restore, new detections) bump the generation without
     calling this, so the next ``get_unlabeled_matrix`` rebuilds from scratch.
     """
-    global _unlabeled_cache
+    global _unlabeled_cache, _suggested_scores_cache
     if _unlabeled_cache is None:
         return
-    _, scan_cap, rows, unknowns, times = _unlabeled_cache
+    old_gen, scan_cap, rows, unknowns, times = _unlabeled_cache
     drop = set(face_ids)
     keep = [i for i, r in enumerate(rows) if r["id"] not in drop]
     if len(keep) != len(rows):
         idx = np.array(keep, dtype=np.int64)
         rows = [rows[i] for i in keep]
         unknowns, times = unknowns[idx], times[idx]
+        # Prune the scores cache in parallel so the next suggested-only call
+        # doesn't trigger a full matmul rebuild just because we labeled some faces.
+        # Guard: scores must come from the same generation as the unlabeled rows —
+        # if they don't match (e.g. an unassign rebuilt the unlabeled cache without
+        # clearing the scores cache) the indices would be out of range.
+        if (_suggested_scores_cache is not None
+                and _suggested_scores_cache[0] == old_gen
+                and _suggested_scores_cache[1] == scan_cap):
+            _, _, scores = _suggested_scores_cache
+            scores = [scores[i] for i in keep]
+            _suggested_scores_cache = (index.faces_generation(), scan_cap, scores)
+        else:
+            _suggested_scores_cache = None
     _unlabeled_cache = (index.faces_generation(), scan_cap, rows, unknowns, times)
 
 

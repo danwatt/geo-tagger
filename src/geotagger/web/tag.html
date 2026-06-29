@@ -12,7 +12,25 @@
     <a id="back" href="/people.html" title="Full People view">‹</a>
     <span id="title">Quick Tag</span>
     <span id="progress"></span>
+    <button id="settings-btn" aria-label="Settings">⚙</button>
   </header>
+  <div id="settings-panel" hidden>
+    <label class="ctl">
+      <span class="ctl-label">Strictness</span>
+      <input type="range" id="threshold-slider" min="0.3" max="0.95" step="0.05">
+      <span id="threshold-val" class="ctl-val"></span>
+    </label>
+    <label class="ctl">
+      <span class="ctl-label">Date window</span>
+      <select id="window-select">
+        <option value="7">1 week</option>
+        <option value="14">2 weeks</option>
+        <option value="30">1 month</option>
+        <option value="60">2 months</option>
+        <option value="90">3 months</option>
+      </select>
+    </label>
+  </div>
 
   <main id="stage">
     <div id="loading" class="msg">Finding groups…</div>

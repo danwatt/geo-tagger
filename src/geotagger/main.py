@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -544,10 +544,13 @@ async def api_photos_by_area(
 
 
 @app.get("/api/thumbnail/{photo_id}")
-async def api_thumbnail(photo_id: int):
+async def api_thumbnail(photo_id: int, request: Request):
     row = index.get_photo(photo_id)
     if not row:
         raise HTTPException(404)
+    etag = f'"{photo_id}-{row["mtime"]}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304)
     try:
         # Run blocking I/O in thread pool
         loop = asyncio.get_event_loop()
@@ -559,7 +562,8 @@ async def api_thumbnail(photo_id: int):
             row["size"],
             row["orientation"],
         )
-        return Response(content=data, media_type="image/jpeg")
+        return Response(content=data, media_type="image/jpeg",
+                        headers={"Cache-Control": "max-age=86400", "ETag": etag})
     except Exception as e:
         import traceback
         print(f"Error generating thumbnail for {photo_id} ({row['path']}): {e}")
@@ -568,10 +572,13 @@ async def api_thumbnail(photo_id: int):
 
 
 @app.get("/api/preview/{photo_id}")
-async def api_preview(photo_id: int):
+async def api_preview(photo_id: int, request: Request):
     row = index.get_photo(photo_id)
     if not row:
         raise HTTPException(404)
+    etag = f'"{photo_id}-{row["mtime"]}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304)
     try:
         # Run blocking I/O in thread pool
         loop = asyncio.get_event_loop()
@@ -583,7 +590,8 @@ async def api_preview(photo_id: int):
             row["size"],
             row["orientation"],
         )
-        return Response(content=data, media_type="image/jpeg")
+        return Response(content=data, media_type="image/jpeg",
+                        headers={"Cache-Control": "max-age=86400", "ETag": etag})
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -940,20 +948,21 @@ async def api_list_faces(
     suggested_only (scope=unlabeled) drops faces with no guess, scanning up to the
     suggest cap so it finds matches beyond the first detection-ranked page."""
     if scope == "unlabeled" and suggested_only:
-        gallery = faces.build_gallery()
-        out, total = [], 0
-        if len(gallery) > 0:
-            rows, unknowns, times = faces.get_unlabeled_matrix(FACE_SUGGEST_SCAN_CAP)
-            matches = faces.suggest_persons_batch(rows, gallery, unknowns=unknowns, times=times)
-            names = _person_name_map()
-            scored = [(r, m) for r, m in zip(rows, matches) if m]
-            scored.sort(key=lambda rm: rm[1][1], reverse=True)  # most confident first
-            total = len(scored)
-            for r, (pid, score) in scored[:limit]:
-                item = _face_item(r)
-                item["suggestion"] = {"person_id": pid, "person_name": names.get(pid),
-                                      "score": round(score, 4)}
-                out.append(item)
+        loop = asyncio.get_running_loop()
+        rows, matches = await loop.run_in_executor(
+            _executor,
+            lambda: faces.get_suggested_scores(FACE_SUGGEST_SCAN_CAP),
+        )
+        names = _person_name_map()
+        scored = [(r, m) for r, m in zip(rows, matches) if m]
+        scored.sort(key=lambda rm: rm[1][1], reverse=True)  # most confident first
+        total = len(scored)
+        out = []
+        for r, (pid, score) in scored[:limit]:
+            item = _face_item(r)
+            item["suggestion"] = {"person_id": pid, "person_name": names.get(pid),
+                                  "score": round(score, 4)}
+            out.append(item)
         return {"faces": out, "total": total, "returned": len(out)}
 
     if scope == "suggested":
@@ -1019,11 +1028,14 @@ async def api_list_faces(
 
 
 @app.get("/api/faces/{face_id}/crop")
-async def api_face_crop(face_id: int):
+async def api_face_crop(face_id: int, request: Request):
     row = index.get_face_with_photo(face_id)
     if not row:
         raise HTTPException(404)
     bbox = tuple(float(v) for v in row["bbox"].split(","))
+    etag = f'"{face_id}-{row["mtime"]}-{row["bbox"]}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304)
     try:
         loop = asyncio.get_running_loop()
         data = await loop.run_in_executor(
@@ -1032,7 +1044,8 @@ async def api_face_crop(face_id: int):
                 Path(row["path"]), row["mtime"], row["size"], bbox,
                 orientation=row["orientation"]),
         )
-        return Response(content=data, media_type="image/jpeg")
+        return Response(content=data, media_type="image/jpeg",
+                        headers={"Cache-Control": "max-age=86400", "ETag": etag})
     except Exception as e:
         raise HTTPException(500, str(e))
 

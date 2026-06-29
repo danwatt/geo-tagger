@@ -344,19 +344,27 @@ async function loadFaces() {
   }
 }
 
+function makeGroupSection(groupIdx) {
+  const sec = document.createElement("div");
+  sec.className = `face-group-section group-tint-${groupIdx % 6}`;
+  return sec;
+}
+
 function renderGrid() {
   const grid = document.getElementById("grid");
   grid.innerHTML = "";
 
   // In the guesses view, lay faces out under event-group headers.
   if (scope === "suggested") {
-    let idx = 0;
+    let idx = 0, groupIdx = 0;
     computeTimeGroups(faces, groupGapSeconds).forEach(group => {
-      grid.appendChild(makeGroupHeader(group));
-      group.faces.forEach(face => {
-        grid.appendChild(makeFaceCell(face, idx));
-        idx++;
-      });
+      const sec = makeGroupSection(groupIdx++);
+      sec.appendChild(makeGroupHeader(group));
+      const cells = document.createElement("div");
+      cells.className = "face-group-cells";
+      group.faces.forEach(face => { cells.appendChild(makeFaceCell(face, idx)); idx++; });
+      sec.appendChild(cells);
+      grid.appendChild(sec);
     });
     return;
   }
@@ -364,10 +372,15 @@ function renderGrid() {
   // Recently tagged: group by tag-batch (shared assigned_at), newest first,
   // each batch header offering a one-click "Untag all".
   if (scope === "recent") {
-    let idx = 0;
+    let idx = 0, groupIdx = 0;
     computeTagBatches(faces).forEach(group => {
-      grid.appendChild(makeTagBatchHeader(group));
-      group.faces.forEach(face => { grid.appendChild(makeFaceCell(face, idx)); idx++; });
+      const sec = makeGroupSection(groupIdx++);
+      sec.appendChild(makeTagBatchHeader(group));
+      const cells = document.createElement("div");
+      cells.className = "face-group-cells";
+      group.faces.forEach(face => { cells.appendChild(makeFaceCell(face, idx)); idx++; });
+      sec.appendChild(cells);
+      grid.appendChild(sec);
     });
     return;
   }
@@ -375,7 +388,7 @@ function renderGrid() {
   // Unlabeled queue: year dividers + a per-month header carrying an "Accept all"
   // button that confirms the suggestions for just that month's faces.
   if (scope === "unlabeled") {
-    let idx = 0, curYear = null;
+    let idx = 0, curYear = null, groupIdx = 0;
     computeMonthGroups(faces).forEach(group => {
       if (group.year !== null && group.year !== curYear) {
         curYear = group.year;
@@ -390,11 +403,17 @@ function renderGrid() {
       const runs = suggestedOnly ? computePersonRuns(group.faces) : null;
       if (runs && runs.length > 1) {
         runs.forEach(run => {
-          grid.appendChild(makePersonRunHeader(run));
-          run.faces.forEach(face => { grid.appendChild(makeFaceCell(face, idx)); idx++; });
+          const sec = makeGroupSection(groupIdx++);
+          sec.appendChild(makePersonRunHeader(run));
+          const cells = document.createElement("div");
+          cells.className = "face-group-cells";
+          run.faces.forEach(face => { cells.appendChild(makeFaceCell(face, idx)); idx++; });
+          sec.appendChild(cells);
+          grid.appendChild(sec);
         });
       } else {
         group.faces.forEach(face => { grid.appendChild(makeFaceCell(face, idx)); idx++; });
+        groupIdx++;
       }
     });
     return;

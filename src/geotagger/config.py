@@ -75,7 +75,7 @@ FACE_SUGGEST_MIN_DET_SCORE = float(os.environ.get("GEOTAGGER_FACE_SUGGEST_MIN_DE
 # ── Unsupervised face clustering ("Discover" view) ──
 # Cosine similarity at/above which two unlabeled faces are linked into one group.
 # Tighter = purer groups; looser = more merging (and more risk of chaining).
-FACE_CLUSTER_THRESHOLD = float(os.environ.get("GEOTAGGER_FACE_CLUSTER_THRESHOLD", "0.5"))
+FACE_CLUSTER_THRESHOLD = float(os.environ.get("GEOTAGGER_FACE_CLUSTER_THRESHOLD", "0.65"))
 # Groups smaller than this are dropped as noise (strangers / one-off detections).
 FACE_CLUSTER_MIN_SIZE = int(os.environ.get("GEOTAGGER_FACE_CLUSTER_MIN_SIZE", "3"))
 # Cluster at most this many highest-detection-score unlabeled faces, to stay fast.
