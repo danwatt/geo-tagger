@@ -165,21 +165,61 @@ function render() {
   const grid = el("faces");
   grid.innerHTML = "";
   cl.faces.forEach((f) => {
-    const img = document.createElement("img");
-    img.src = `/api/faces/${f.id}/crop`;
-    img.loading = "lazy";
-    img.addEventListener("click", () => openPreview(f));
+    const img = faceCropImg(f);
+    img.addEventListener("click", () => openPreview(f));            // tap: full-photo preview
+    img.addEventListener("contextmenu", (e) => {                   // long-press / right-click: actions
+      e.preventDefault();
+      openFaceActions(img, f);
+    });
     grid.appendChild(img);
   });
+}
+
+/* ── Per-face quick actions ──
+ * Tapping a face opens the shared popup (a bottom sheet on phones). Acting on
+ * one face splits it out of the current group so you can correct a misclustered
+ * face without abandoning the whole group; the group's Accept/Ignore/Skip
+ * footer still acts on whatever faces remain. */
+function openFaceActions(anchor, f) {
+  openQuickActions(anchor, f, {
+    persons,
+    onAssign: (pid) => faceAction(f, "/api/faces/assign",
+      pid === null ? { face_ids: [f.id], clear: true } : { face_ids: [f.id], person_id: pid }),
+    onAssignNew: (name) => faceAction(f, "/api/faces/assign", { face_ids: [f.id], name }),
+    onIgnore: (ignored) => faceAction(f, "/api/faces/ignore", { face_ids: [f.id], ignored }),
+    onOpenPhoto: () => openPreview(f),
+  });
+}
+
+async function faceAction(f, url, body) {
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    removeFaceFromGroup(f.id);
+    if (url.includes("/assign")) loadPersons();   // pick up any newly-created person
+    toast("Updated");
+  } catch (e) {
+    toast("Failed: " + e.message, true);
+  }
+}
+
+function removeFaceFromGroup(id) {
+  const cl = queue[pos];
+  if (!cl) return;
+  cl.faces = cl.faces.filter((x) => x.id !== id);
+  cl.face_ids = cl.face_ids.filter((x) => x !== id);
+  if (!cl.faces.length) queue.splice(pos, 1);   // group emptied → drop it
+  render();
 }
 
 function dateRange(cl) {
   const ts = cl.faces.map((f) => f.photo_datetime).filter(Boolean);
   if (!ts.length) return "Undated";
-  const opt = { year: "numeric", month: "short", day: "numeric" };
-  const a = new Date(Math.min(...ts) * 1000).toLocaleDateString(undefined, opt);
-  const b = new Date(Math.max(...ts) * 1000).toLocaleDateString(undefined, opt);
-  return a === b ? a : `${a} – ${b}`;
+  return formatDateRange(Math.min(...ts), Math.max(...ts));
 }
 
 function showDone() {
@@ -322,12 +362,7 @@ async function act(url, body, msg) {
 /* ── Preview overlay ── */
 function openPreview(f) {
   el("overlay-img").src = `/api/preview/${f.photo_id}`;
-  const [x1, y1, x2, y2] = f.bbox;
-  const box = el("overlay-box");
-  box.style.left = x1 * 100 + "%";
-  box.style.top = y1 * 100 + "%";
-  box.style.width = (x2 - x1) * 100 + "%";
-  box.style.height = (y2 - y1) * 100 + "%";
+  applyBbox(el("overlay-box"), f.bbox);
   el("overlay").hidden = false;
 }
 

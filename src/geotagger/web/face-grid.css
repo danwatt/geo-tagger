@@ -1,0 +1,84 @@
+/* Shared face-grid styling: canonical thumbnail size, group headers, and the
+ * quick-action popup. Linked by people / crowd-review / tag. */
+
+:root { --face-size: 120px; }
+
+/* ── Group header (title + meta + action buttons) ──
+ * Built by faceGroupHeader() in face-grid.js. Default tint matches the People
+ * event-group headers; variant classes recolor it per context. */
+.face-group-header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  background: #1e2a3a;
+  border-bottom: 1px solid #3a5a7a;
+  border-radius: 4px 4px 0 0;
+  user-select: none;
+  flex-wrap: wrap;
+}
+.face-group-label { font-size: 12px; font-weight: 600; color: #9ab8d8; }
+.face-group-meta  { color: #567; font-weight: 400; }
+.face-group-btns  { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; }
+.face-group-header button { padding: 3px 10px; font-size: 11px; flex-shrink: 0; }
+
+/* Tint variants */
+.face-group-header.green  { background: #1c2d1c; border-bottom-color: #2a5a2a; }
+.face-group-header.green  .face-group-label { color: #8ec88e; }
+.face-group-header.blue   { background: #1a2a3a; border-bottom-color: #2a4a6a; }
+.face-group-header.blue   .face-group-label { color: #7aaed8; }
+.face-group-header.grey   { background: #1e1e1e; border-bottom-color: #383838; }
+.face-group-header.grey   .face-group-label { color: #888; }
+.face-group-header.amber  { background: #2a2218; border-bottom-color: #4a3a28; }
+.face-group-header.amber  .face-group-label { color: #d8b88a; }
+
+/* ── Quick-action popup ──
+ * Floating menu anchored to a face cell (desktop) built by openQuickActions(). */
+.face-expand {
+  z-index: 1000;
+  background: #2a2a2a;
+  border: 1px solid #4a90d9;
+  border-radius: 5px;
+  padding: 8px;
+  min-width: 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.8);
+}
+.expand-row { display: flex; gap: 4px; align-items: center; }
+.expand-btn { font-size: 11px; padding: 3px 8px; white-space: nowrap; }
+.expand-select {
+  flex: 1;
+  font-size: 11px;
+  padding: 3px 4px;
+  background: #333;
+  color: #ddd;
+  border: 1px solid #555;
+  border-radius: 3px;
+  min-width: 0;
+}
+
+/* Bottom-sheet variant for narrow/touch viewports (e.g. Quick Tag on a phone).
+ * Same buttons, larger tap targets, anchored to the bottom edge. */
+.face-qa-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  background: rgba(0,0,0,.5);
+}
+.face-expand.as-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  min-width: 0;
+  border-radius: 16px 16px 0 0;
+  padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+  gap: 10px;
+}
+.face-expand.as-sheet .expand-btn,
+.face-expand.as-sheet .expand-select { font-size: 16px; padding: 14px; }
+.face-expand.as-sheet .expand-row { gap: 8px; }

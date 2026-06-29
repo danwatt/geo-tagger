@@ -159,15 +159,11 @@ function renderBboxes() {
 
   photoFaces.forEach(f => {
     if (!f.bbox) return;
-    const [x1, y1, x2, y2] = f.bbox;
 
     const box = document.createElement("div");
     box.className = "face-bbox";
     box.dataset.faceId = String(f.id);
-    box.style.left   = (x1 * 100) + "%";
-    box.style.top    = (y1 * 100) + "%";
-    box.style.width  = ((x2 - x1) * 100) + "%";
-    box.style.height = ((y2 - y1) * 100) + "%";
+    applyBbox(box, f.bbox);
 
     if (f.person_id) {
       box.style.borderColor = "#4caf50";
@@ -212,13 +208,8 @@ function highlightCard(faceId) {
 }
 
 /* ── Face rendering ── */
-function closeExpandPanel() {
-  const p = document.getElementById("cr-expand-panel");
-  if (p) p.remove();
-}
-
 function renderFaces() {
-  closeExpandPanel();
+  closeQuickActions();
 
   const labeled  = photoFaces.filter(f => f.person_id !== null);
   const ignored  = photoFaces.filter(f => f.ignored);
@@ -265,7 +256,8 @@ function renderTaggedSection(labeled) {
   const sec = document.getElementById("section-tagged");
   sec.innerHTML = "";
   if (!labeled.length) return;
-  sec.appendChild(makeSectionHeader("Tagged people", labeled.length, "faces tagged"));
+  sec.appendChild(makeSectionHeader("Tagged people", labeled.length, "faces tagged",
+    { variant: "green" }));
   const strip = document.createElement("div");
   strip.className = "face-strip";
   labeled.forEach(f => strip.appendChild(makeLabeledCard(f)));
@@ -280,7 +272,7 @@ function renderSuggestedSection(byPerson) {
   const total = entries.reduce((n, [, g]) => n + g.faces.length, 0);
   sec.appendChild(makeSectionHeader(
     "Suggested matches", total,
-    `face(s) across ${entries.length} person(s)`));
+    `face(s) across ${entries.length} person(s)`, { variant: "blue" }));
   entries.sort((a, b) => b[1].faces.length - a[1].faces.length);
   entries.forEach(([pid, group]) =>
     sec.appendChild(makeSuggestedGroup(parseInt(pid), group)));
@@ -290,15 +282,12 @@ function renderUnknownSection(unknown) {
   const sec = document.getElementById("section-unknown");
   sec.innerHTML = "";
   if (!unknown.length) return;
-  const hdr = makeSectionHeader("Unrecognized", unknown.length, "face(s) — no match found");
-  if (unknown.length > 1) {
-    const btn = document.createElement("button");
-    btn.className = "danger hdr-btn";
-    btn.textContent = `Ignore all ${unknown.length}`;
-    btn.addEventListener("click", () => ignoreFaces(unknown.map(f => f.id)));
-    hdr.appendChild(btn);
-  }
-  sec.appendChild(hdr);
+  sec.appendChild(makeSectionHeader("Unrecognized", unknown.length, "face(s) — no match found", {
+    buttons: unknown.length > 1 ? [{
+      label: `Ignore all ${unknown.length}`, kind: "danger",
+      onClick: () => ignoreFaces(unknown.map(f => f.id)),
+    }] : [],
+  }));
   const strip = document.createElement("div");
   strip.className = "face-strip";
   unknown.forEach(f => strip.appendChild(makeAssignableCard(f)));
@@ -309,42 +298,31 @@ function renderIgnoredSection(ignored) {
   const sec = document.getElementById("section-ignored");
   sec.innerHTML = "";
   if (!ignored.length) return;
-  sec.appendChild(makeSectionHeader("Ignored", ignored.length, "face(s) — click to restore"));
+  sec.appendChild(makeSectionHeader("Ignored", ignored.length, "face(s) — click to restore",
+    { variant: "grey" }));
   const strip = document.createElement("div");
   strip.className = "face-strip";
   ignored.forEach(f => strip.appendChild(makeIgnoredCard(f)));
   sec.appendChild(strip);
 }
 
-/* ── Section header helper ── */
-function makeSectionHeader(title, count, suffix) {
-  const hdr = document.createElement("div");
-  hdr.className = "cr-section-hdr";
-  const txt = document.createElement("span");
-  txt.className = "hdr-title";
-  txt.textContent = title;
-  const meta = document.createElement("span");
-  meta.className = "hdr-meta";
-  meta.textContent = ` — ${count} ${suffix}`;
-  hdr.appendChild(txt);
-  hdr.appendChild(meta);
-  return hdr;
+/* ── Section header helper ──
+ * Thin wrapper over the shared faceGroupHeader(); opts = { variant, buttons }. */
+function makeSectionHeader(title, count, suffix, opts = {}) {
+  return faceGroupHeader({
+    title,
+    meta: `— ${count} ${suffix}`,
+    extraClass: opts.variant || "",
+    buttons: opts.buttons || [],
+  });
 }
 
 /* ── Face card builders ── */
-function makeFaceImg(f) {
-  const img = document.createElement("img");
-  img.src     = `/api/faces/${f.id}/crop`;
-  img.loading = "lazy";
-  img.alt     = "face";
-  return img;
-}
-
 function makeLabeledCard(f) {
   const card = document.createElement("div");
   card.className = "face-card labeled-card";
   card.dataset.faceId = String(f.id);
-  card.appendChild(makeFaceImg(f));
+  card.appendChild(faceCropImg(f));
   const lbl = document.createElement("div");
   lbl.className = "face-name-chip";
   lbl.textContent = f.person_name;
@@ -355,8 +333,10 @@ function makeLabeledCard(f) {
   unBtn.addEventListener("click", e => { e.stopPropagation(); doAssign(f.id, null); });
   lbl.appendChild(unBtn);
   card.appendChild(lbl);
-  // Clicking the card highlights the bbox on the photo
+  // Left-click highlights the bbox on the photo; right-click opens the menu
+  // (which offers Unassign / reassign for an already-tagged face).
   card.addEventListener("click", () => highlightBbox(f.id));
+  card.addEventListener("contextmenu", (e) => { e.preventDefault(); openFaceActions(card, f); });
   return card;
 }
 
@@ -364,14 +344,15 @@ function makeSuggestedFaceCard(f) {
   const card = document.createElement("div");
   card.className = "face-card";
   card.dataset.faceId = String(f.id);
-  card.appendChild(makeFaceImg(f));
+  card.appendChild(faceCropImg(f));
   if (f.suggestion) {
     const score = document.createElement("div");
     score.className = "face-score-chip";
     score.textContent = `${Math.round(f.suggestion.score * 100)}%`;
     card.appendChild(score);
   }
-  card.addEventListener("click", () => { highlightBbox(f.id); toggleExpand(card, f); });
+  card.addEventListener("click", () => highlightBbox(f.id));   // left: highlight on photo
+  card.addEventListener("contextmenu", (e) => { e.preventDefault(); openFaceActions(card, f); });
   return card;
 }
 
@@ -379,8 +360,9 @@ function makeAssignableCard(f) {
   const card = document.createElement("div");
   card.className = "face-card";
   card.dataset.faceId = String(f.id);
-  card.appendChild(makeFaceImg(f));
-  card.addEventListener("click", () => { highlightBbox(f.id); toggleExpand(card, f); });
+  card.appendChild(faceCropImg(f));
+  card.addEventListener("click", () => highlightBbox(f.id));   // left: highlight on photo
+  card.addEventListener("contextmenu", (e) => { e.preventDefault(); openFaceActions(card, f); });
   return card;
 }
 
@@ -388,12 +370,15 @@ function makeIgnoredCard(f) {
   const card = document.createElement("div");
   card.className = "face-card ignored-card";
   card.dataset.faceId = String(f.id);
-  card.appendChild(makeFaceImg(f));
+  card.appendChild(faceCropImg(f));
   const lbl = document.createElement("div");
   lbl.className = "face-ignored-chip";
   lbl.textContent = "ignored";
   card.appendChild(lbl);
-  card.addEventListener("click", () => restoreFace(f.id));
+  // Left-click highlights the bbox; right-click opens the menu (which offers
+  // Restore for an ignored face).
+  card.addEventListener("click", () => highlightBbox(f.id));
+  card.addEventListener("contextmenu", (e) => { e.preventDefault(); openFaceActions(card, f); });
   return card;
 }
 
@@ -402,31 +387,17 @@ function makeSuggestedGroup(pid, group) {
   const card = document.createElement("div");
   card.className = "suggested-group";
 
-  const head = document.createElement("div");
-  head.className = "suggested-head";
-
-  const title = document.createElement("span");
-  title.className = "suggested-title";
-  title.textContent = group.name;
-  const cnt = document.createElement("span");
-  cnt.className = "suggested-count";
-  cnt.textContent = ` — ${group.faces.length} face(s)`;
-  title.appendChild(cnt);
-
-  const acceptBtn = document.createElement("button");
-  acceptBtn.className = "primary";
-  acceptBtn.textContent = "✓ Accept all";
-  acceptBtn.addEventListener("click", () => doAcceptAll(pid, group.faces));
-
-  const ignoreBtn = document.createElement("button");
-  ignoreBtn.className = "danger";
-  ignoreBtn.textContent = "Ignore group";
-  ignoreBtn.addEventListener("click", () => ignoreFaces(group.faces.map(f => f.id)));
-
-  head.appendChild(title);
-  head.appendChild(acceptBtn);
-  head.appendChild(ignoreBtn);
-  card.appendChild(head);
+  card.appendChild(faceGroupHeader({
+    title: group.name,
+    meta: `— ${group.faces.length} face(s)`,
+    extraClass: "blue",
+    buttons: [
+      { label: "✓ Accept all", kind: "primary",
+        onClick: () => doAcceptAll(pid, group.faces) },
+      { label: "Ignore group", kind: "danger",
+        onClick: () => ignoreFaces(group.faces.map(f => f.id)) },
+    ],
+  }));
 
   const strip = document.createElement("div");
   strip.className = "face-strip";
@@ -436,107 +407,19 @@ function makeSuggestedGroup(pid, group) {
   return card;
 }
 
-/* ── Expand panel (attached to body with fixed positioning) ── */
-function toggleExpand(card, f) {
-  const existing = document.getElementById("cr-expand-panel");
-  if (existing && existing.dataset.faceId === String(f.id)) {
-    existing.remove();
-    return;
-  }
-  if (existing) existing.remove();
-
-  const panel = document.createElement("div");
-  panel.id = "cr-expand-panel";
-  panel.dataset.faceId = String(f.id);
-  panel.className = "face-expand";
-
-  if (f.suggestion) {
-    const acceptBtn = document.createElement("button");
-    acceptBtn.className = "primary expand-btn";
-    acceptBtn.textContent = `✓ ${f.suggestion.person_name}`;
-    acceptBtn.addEventListener("click", e => {
-      e.stopPropagation();
-      doAssign(f.id, f.suggestion.person_id);
-    });
-    panel.appendChild(acceptBtn);
-  }
-
-  const row = document.createElement("div");
-  row.className = "expand-row";
-
-  const sel = document.createElement("select");
-  sel.className = "expand-select";
-  const blank = document.createElement("option");
-  blank.value = "";
-  blank.textContent = "Assign to…";
-  sel.appendChild(blank);
-  persons.forEach(p => {
-    const opt = document.createElement("option");
-    opt.value = p.id;
-    opt.textContent = p.name;
-    sel.appendChild(opt);
+/* ── Quick-action popup ──
+ * Shared popup (face-grid.js); we supply crowd-review's data + callbacks.
+ * Labeled/ignored cards don't open it (they highlight / restore directly), so
+ * the popup only ever shows for suggested + unrecognized faces. */
+function openFaceActions(anchor, f) {
+  openQuickActions(anchor, f, {
+    persons,
+    onAssign: (pid) => doAssign(f.id, pid),          // pid null ⇒ unassign
+    onAssignNew: (name) => doAssignByName(f.id, name),
+    onIgnore: (ignored) => ignored ? ignoreFaces([f.id]) : restoreFace(f.id),
+    onOpenPhoto: () => window.open(`/api/preview/${crowdPhotos[currentIdx].id}`, "_blank"),
   });
-  row.appendChild(sel);
-
-  const assignBtn = document.createElement("button");
-  assignBtn.className = "expand-btn";
-  assignBtn.textContent = "✓";
-  assignBtn.title = "Assign to selected person";
-  assignBtn.addEventListener("click", e => {
-    e.stopPropagation();
-    const pid = parseInt(sel.value);
-    if (pid) doAssign(f.id, pid);
-  });
-  row.appendChild(assignBtn);
-  panel.appendChild(row);
-
-  const newBtn = document.createElement("button");
-  newBtn.className = "expand-btn";
-  newBtn.textContent = "+ New person";
-  newBtn.addEventListener("click", e => {
-    e.stopPropagation();
-    const name = prompt("New person name:");
-    if (name && name.trim()) doAssignByName(f.id, name.trim());
-  });
-  panel.appendChild(newBtn);
-
-  const ignBtn = document.createElement("button");
-  ignBtn.className = "danger expand-btn";
-  ignBtn.textContent = "Ignore";
-  ignBtn.addEventListener("click", e => {
-    e.stopPropagation();
-    ignoreFaces([f.id]);
-  });
-  panel.appendChild(ignBtn);
-
-  // Attach to body so it escapes all overflow containers
-  panel.style.visibility = "hidden";
-  document.body.appendChild(panel);
-
-  const cr = card.getBoundingClientRect();
-  const pr = panel.getBoundingClientRect();
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-
-  let top  = cr.bottom + 6;
-  if (top + pr.height > vh - 10) top = cr.top - pr.height - 6;
-  top = Math.max(6, top);
-
-  let left = cr.left;
-  if (left + pr.width > vw - 10) left = vw - pr.width - 10;
-  left = Math.max(6, left);
-
-  panel.style.position   = "fixed";
-  panel.style.top        = top  + "px";
-  panel.style.left       = left + "px";
-  panel.style.visibility = "";
 }
-
-document.addEventListener("click", e => {
-  if (!e.target.closest(".face-card") && !e.target.closest("#cr-expand-panel")) {
-    closeExpandPanel();
-  }
-});
 
 /* ── Actions ── */
 async function doAssign(faceId, personId) {

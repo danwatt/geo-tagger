@@ -616,11 +616,7 @@ function makeFaceCell(face, idx) {
     (face.ignored ? " ignored" : "");
   cell.dataset.id = face.id;
 
-  const img = document.createElement("img");
-  img.src = `/api/faces/${face.id}/crop`;
-  img.alt = face.filename;
-  img.loading = "lazy";
-  cell.appendChild(img);
+  cell.appendChild(faceCropImg(face));
 
   const score = document.createElement("div");
   score.className = "face-score";
@@ -665,10 +661,12 @@ function makeFaceCell(face, idx) {
     }
   }
 
-  cell.addEventListener("click", (e) => {
-    // Open/close the popup on a plain click; modifier clicks are selection-only.
-    if (!e.ctrlKey && !e.metaKey && !e.shiftKey) toggleCellExpand(cell, face);
-    handleCellClick(e, face, idx);
+  // Left-click selects/deselects (plain, Ctrl/⌘ toggle, Shift range);
+  // right-click opens the quick-action menu for this face.
+  cell.addEventListener("click", (e) => handleCellClick(e, face, idx));
+  cell.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    openFaceActions(cell, face);
   });
   return cell;
 }
@@ -718,41 +716,19 @@ function computeIgnoreBatches(list) {
 }
 
 function makeIgnoreBatchHeader(group) {
-  const header = document.createElement("div");
-  header.className = "face-group-header";
-
-  const label = document.createElement("span");
-  label.className = "face-group-label";
   const when = group.ts ? formatRelativeTime(group.ts) : "before tracking";
-  label.innerHTML = `Ignored ${when} ` +
-    `<span class="face-group-meta">· ${group.faces.length} face(s)</span>`;
-
-  const btns = document.createElement("div");
-  btns.className = "face-group-btns";
-
-  const selAll = document.createElement("button");
-  selAll.textContent = "Select all";
-  selAll.title = "Add every face in this batch to the current selection";
-  selAll.addEventListener("click", (e) => {
-    e.stopPropagation();
-    group.faces.forEach(f => selectedIds.add(f.id));
-    renderGrid(); updateDetail();
+  return faceGroupHeader({
+    title: `Ignored ${when}`,
+    meta: `· ${group.faces.length} face(s)`,
+    buttons: [
+      { label: "Select all",
+        title: "Add every face in this batch to the current selection",
+        onClick: () => { group.faces.forEach(f => selectedIds.add(f.id)); renderGrid(); updateDetail(); } },
+      { label: `Restore all (${group.faces.length})`, kind: "primary",
+        title: "Un-ignore every face in this batch (returns them to the Unlabeled queue)",
+        onClick: () => ignoreSelected_ids(group.faces.map(f => f.id), false) },
+    ],
   });
-
-  const restoreAll = document.createElement("button");
-  restoreAll.className = "primary";
-  restoreAll.textContent = `Restore all (${group.faces.length})`;
-  restoreAll.title = "Un-ignore every face in this batch (returns them to the Unlabeled queue)";
-  restoreAll.addEventListener("click", (e) => {
-    e.stopPropagation();
-    ignoreSelected_ids(group.faces.map(f => f.id), false);
-  });
-
-  btns.appendChild(selAll);
-  btns.appendChild(restoreAll);
-  header.appendChild(label);
-  header.appendChild(btns);
-  return header;
 }
 
 /* ── Tag-batch grouping (recently tagged view) ── */
@@ -778,34 +754,19 @@ function formatRelativeTime(ts) {
 }
 
 function makeTagBatchHeader(group) {
-  const header = document.createElement("div");
-  header.className = "face-group-header";
-
   const names = [...new Set(group.faces.map(f => f.person_name).filter(Boolean))];
   const who = names.length === 1 ? names[0]
             : names.length === 2 ? names.join(" & ")
             : `${names.length} people`;
-  const label = document.createElement("span");
-  label.className = "face-group-label";
-  label.innerHTML = `${who} ` +
-    `<span class="face-group-meta">· ${formatRelativeTime(group.ts)} · ` +
-    `${group.faces.length} face(s)</span>`;
-
-  const btns = document.createElement("div");
-  btns.className = "face-group-btns";
-  const untagAll = document.createElement("button");
-  untagAll.className = "danger";
-  untagAll.textContent = `Untag all (${group.faces.length})`;
-  untagAll.title = "Un-tag every face tagged in this batch (returns them to Unlabeled)";
-  untagAll.addEventListener("click", (e) => {
-    e.stopPropagation();
-    untagFaces(group.faces.map(f => f.id), who);
+  return faceGroupHeader({
+    title: who,
+    meta: `· ${formatRelativeTime(group.ts)} · ${group.faces.length} face(s)`,
+    buttons: [
+      { label: `Untag all (${group.faces.length})`, kind: "danger",
+        title: "Un-tag every face tagged in this batch (returns them to Unlabeled)",
+        onClick: () => untagFaces(group.faces.map(f => f.id), who) },
+    ],
   });
-  btns.appendChild(untagAll);
-
-  header.appendChild(label);
-  header.appendChild(btns);
-  return header;
 }
 
 // Clear the person assignment on faces, returning them to the unlabeled queue.
@@ -852,87 +813,48 @@ function computeTimeGroups(list, gapSeconds) {
 }
 
 function formatGroupRange(group) {
-  if (group.undated) return "Undated";
-  const opts = { year: "numeric", month: "short", day: "numeric" };
-  const s = new Date(group.start * 1000);
-  const e = new Date(group.end * 1000);
-  const sStr = s.toLocaleDateString(undefined, opts);
-  const eStr = e.toLocaleDateString(undefined, opts);
-  if (sStr === eStr) return sStr;
-  return `${s.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${eStr}`;
+  return group.undated ? "Undated" : formatDateRange(group.start, group.end);
 }
 
 function makeGroupHeader(group) {
-  const header = document.createElement("div");
-  header.className = "face-group-header";
-
+  const range = formatGroupRange(group);
   const selectedInGroup = group.faces.filter(f => selectedIds.has(f.id)).length;
-  const label = document.createElement("span");
-  label.className = "face-group-label";
-  label.innerHTML = `${formatGroupRange(group)} ` +
-    `<span class="face-group-meta">· ${selectedInGroup}/${group.faces.length} selected</span>`;
-
-  const btnAll = document.createElement("button");
-  btnAll.textContent = "Select all";
-  btnAll.title = "Add every face in this group to the current selection";
-  btnAll.addEventListener("click", (e) => {
-    e.stopPropagation();
-    selectGroupFaces(group, true);
-  });
-
-  const btnOnly = document.createElement("button");
-  btnOnly.textContent = "Select only";
-  btnOnly.title = "Select every face in this group and deselect all others";
-  btnOnly.addEventListener("click", (e) => {
-    e.stopPropagation();
-    selectGroupFaces(group, false);
-  });
-
-  const btns = document.createElement("div");
-  btns.className = "face-group-btns";
-
-  // Approve this event's guesses outright (confirm the suggested name).
   const acceptable = group.faces.filter(f => f.suggestion && !f.person_name && !f.ignored);
-  if (acceptable.length > 0) {
-    const btnAccept = document.createElement("button");
-    btnAccept.className = "primary";
-    btnAccept.textContent = `Accept all (${acceptable.length})`;
-    btnAccept.title = "Confirm the suggested name for every face in this group";
-    btnAccept.addEventListener("click", (e) => {
-      e.stopPropagation();
-      acceptSuggestionsFor(group.faces, formatGroupRange(group));
-    });
-    btns.appendChild(btnAccept);
-  }
-
-  const btnDeselect = document.createElement("button");
-  btnDeselect.textContent = "Deselect all";
-  btnDeselect.title = "Remove every face in this group from the current selection";
-  btnDeselect.addEventListener("click", (e) => {
-    e.stopPropagation();
-    group.faces.forEach(f => selectedIds.delete(f.id));
-    renderGrid();
-    updateDetail();
-    setStatus(`Deselected ${group.faces.length} face(s) from ${formatGroupRange(group)}.`);
+  return faceGroupHeader({
+    title: range,
+    meta: `· ${selectedInGroup}/${group.faces.length} selected`,
+    buttons: [
+      acceptable.length > 0 && {
+        label: `Accept all (${acceptable.length})`, kind: "primary",
+        title: "Confirm the suggested name for every face in this group",
+        onClick: () => acceptSuggestionsFor(group.faces, range),
+      },
+      { label: "Select all",
+        title: "Add every face in this group to the current selection",
+        onClick: () => selectGroupFaces(group, true) },
+      { label: "Select only",
+        title: "Select every face in this group and deselect all others",
+        onClick: () => selectGroupFaces(group, false) },
+      { label: "Deselect all",
+        title: "Remove every face in this group from the current selection",
+        onClick: () => {
+          group.faces.forEach(f => selectedIds.delete(f.id));
+          renderGrid();
+          updateDetail();
+          setStatus(`Deselected ${group.faces.length} face(s) from ${range}.`);
+        } },
+      { label: "Ignore selected", kind: "danger",
+        title: "Ignore the selected faces in this group",
+        onClick: () => {
+          const ids = group.faces.filter(f => selectedIds.has(f.id)).map(f => f.id);
+          if (!ids.length) {
+            setStatus(`No selected faces in ${range} to ignore.`, true);
+            return;
+          }
+          ignoreSelected_ids(ids, true);
+        } },
+    ],
   });
-
-  const btnIgnore = document.createElement("button");
-  btnIgnore.className = "danger";
-  btnIgnore.textContent = "Ignore selected";
-  btnIgnore.title = "Ignore all currently selected faces";
-  btnIgnore.addEventListener("click", (e) => {
-    e.stopPropagation();
-    ignoreSelected(true);
-  });
-
-  btns.appendChild(btnAll);
-  btns.appendChild(btnOnly);
-  btns.appendChild(btnDeselect);
-  btns.appendChild(btnIgnore);
-
-  header.appendChild(label);
-  header.appendChild(btns);
-  return header;
 }
 
 function selectGroupFaces(group, additive) {
@@ -1054,18 +976,20 @@ function makeClusterCard(cl) {
   const facesWrap = document.createElement("div");
   facesWrap.className = "cluster-faces";
   cl.sample.forEach(f => {
-    const img = document.createElement("img");
-    img.src = `/api/faces/${f.id}/crop`;
-    img.loading = "lazy";
-    img.title = `${f.filename} — click to preview`;
+    const img = faceCropImg(f, { title: f.filename });
     if (f.id === focusedFaceId) img.classList.add("focused");
-    img.addEventListener("click", () => {
+    const focus = () => {
       document.querySelectorAll(".cluster-faces img.focused")
         .forEach(el => el.classList.remove("focused"));
       img.classList.add("focused");
       focusedFaceId = f.id;
       updateDetail();
-      toggleCellExpand(img, f);
+    };
+    img.addEventListener("click", focus);          // left-click: show in detail
+    img.addEventListener("contextmenu", (e) => {   // right-click: actions
+      e.preventDefault();
+      focus();
+      openFaceActions(img, f);
     });
     facesWrap.appendChild(img);
   });
@@ -1324,12 +1248,7 @@ function updateDetail() {
   document.getElementById("detail-img").src = `/api/preview/${face.photo_id}`;
 
   // Position the bbox overlay (normalized coords map directly to percentages).
-  const [x1, y1, x2, y2] = face.bbox;
-  const box = document.getElementById("face-box");
-  box.style.left = (x1 * 100) + "%";
-  box.style.top = (y1 * 100) + "%";
-  box.style.width = ((x2 - x1) * 100) + "%";
-  box.style.height = ((y2 - y1) * 100) + "%";
+  applyBbox(document.getElementById("face-box"), face.bbox);
 
   const when = face.photo_datetime
     ? new Date(face.photo_datetime * 1000).toLocaleString() : "Unknown";
@@ -1467,122 +1386,35 @@ async function assignSelectedToNewPerson() {
   }
 }
 
-/* ── Quick-action popup (right-click on a face cell) ── */
-function closeCellExpand() {
-  const p = document.getElementById("face-cell-expand");
-  if (p) p.remove();
-}
-
-document.addEventListener("click", e => {
-  if (!e.target.closest(".thumb-cell") &&
-      !e.target.closest(".cluster-faces img") &&
-      !e.target.closest("#face-cell-expand"))
-    closeCellExpand();
-});
-
-function toggleCellExpand(cell, face) {
-  const existing = document.getElementById("face-cell-expand");
-  if (existing && parseInt(existing.dataset.faceId) === face.id) { existing.remove(); return; }
-  if (existing) existing.remove();
-
-  const panel = document.createElement("div");
-  panel.id = "face-cell-expand";
-  panel.dataset.faceId = String(face.id);
-  panel.className = "face-expand";
-
-  if (face.suggestion && !face.person_name) {
-    const btn = document.createElement("button");
-    btn.className = "primary expand-btn";
-    btn.textContent = `✓ ${face.suggestion.person_name}`;
-    btn.addEventListener("click", e => { e.stopPropagation(); closeCellExpand(); confirmFace(face.id, face.suggestion.person_id); });
-    panel.appendChild(btn);
-  }
-
-  if (face.person_name) {
-    const btn = document.createElement("button");
-    btn.className = "danger expand-btn";
-    btn.textContent = `× Unassign`;
-    btn.addEventListener("click", e => { e.stopPropagation(); closeCellExpand(); confirmFace(face.id, null); });
-    panel.appendChild(btn);
-  }
-
-  const row = document.createElement("div");
-  row.className = "expand-row";
-  const sel = document.createElement("select");
-  sel.className = "expand-select";
-  const blank = document.createElement("option");
-  blank.value = ""; blank.textContent = "Assign to…";
-  sel.appendChild(blank);
-  persons.forEach(p => {
-    const opt = document.createElement("option");
-    opt.value = p.id; opt.textContent = p.name;
-    sel.appendChild(opt);
+/* ── Quick-action popup ──
+ * The popup itself (DOM, positioning, toggle, outside-click close) lives in
+ * face-grid.js; here we only supply this page's data and action callbacks. */
+function openFaceActions(anchor, face) {
+  openQuickActions(anchor, face, {
+    persons,
+    onAssign: (pid) => confirmFace(face.id, pid),   // pid null ⇒ unassign
+    onAssignNew: async (name) => {
+      try {
+        const res = await fetch(`/api/faces/${face.id}/assign`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await Promise.all([loadPersons(), loadFaces()]);
+      } catch (err) { setStatus("Assign failed: " + err.message, true); }
+    },
+    onIgnore: async (ignored) => {
+      try {
+        const res = await fetch("/api/faces/ignore", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ face_ids: [face.id], ignored }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await loadFaces();
+      } catch (err) { setStatus("Ignore failed: " + err.message, true); }
+    },
+    onOpenPhoto: () => window.open(`/api/preview/${face.photo_id}`, "_blank"),
   });
-  const assignBtn = document.createElement("button");
-  assignBtn.className = "expand-btn"; assignBtn.textContent = "✓";
-  assignBtn.title = "Assign to selected person";
-  assignBtn.addEventListener("click", async e => {
-    e.stopPropagation();
-    const pid = parseInt(sel.value);
-    if (!pid) return;
-    closeCellExpand();
-    await confirmFace(face.id, pid);
-  });
-  row.appendChild(sel); row.appendChild(assignBtn);
-  panel.appendChild(row);
-
-  const newBtn = document.createElement("button");
-  newBtn.className = "expand-btn"; newBtn.textContent = "+ New person";
-  newBtn.addEventListener("click", async e => {
-    e.stopPropagation();
-    closeCellExpand();
-    const name = prompt("New person name:");
-    if (!name || !name.trim()) return;
-    try {
-      const res = await fetch(`/api/faces/${face.id}/assign`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim() }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      await Promise.all([loadPersons(), loadFaces()]);
-    } catch (err) { setStatus("Assign failed: " + err.message, true); }
-  });
-  panel.appendChild(newBtn);
-
-  const ignBtn = document.createElement("button");
-  ignBtn.className = face.ignored ? "expand-btn" : "danger expand-btn";
-  ignBtn.textContent = face.ignored ? "↩ Restore" : "🚫 Ignore";
-  ignBtn.addEventListener("click", async e => {
-    e.stopPropagation();
-    closeCellExpand();
-    try {
-      const res = await fetch("/api/faces/ignore", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ face_ids: [face.id], ignored: !face.ignored }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      await loadFaces();
-    } catch (err) { setStatus("Ignore failed: " + err.message, true); }
-  });
-  panel.appendChild(ignBtn);
-
-  panel.style.visibility = "hidden";
-  document.body.appendChild(panel);
-
-  const cr = cell.getBoundingClientRect();
-  const pr = panel.getBoundingClientRect();
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  let top  = cr.bottom + 6;
-  if (top + pr.height > vh - 10) top = cr.top - pr.height - 6;
-  top = Math.max(6, top);
-  let left = cr.left;
-  if (left + pr.width > vw - 10) left = vw - pr.width - 10;
-  left = Math.max(6, left);
-  panel.style.position = "fixed";
-  panel.style.top  = top  + "px";
-  panel.style.left = left + "px";
-  panel.style.visibility = "";
 }
 
 async function confirmFace(faceId, personId) {

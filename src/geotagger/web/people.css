@@ -297,24 +297,9 @@
 .group-tint-4 { background: rgba(130,  60, 170, 0.09); }
 .group-tint-5 { background: rgba(40,  150, 160, 0.09); }
 
-/* ── Event group headers in the guesses grid ── */
-.face-group-header {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 7px 10px;
-  margin-top: 6px;
-  background: #1e2a3a;
-  border-bottom: 1px solid #3a5a7a;
-  border-radius: 4px 4px 0 0;
-  user-select: none;
-}
-.face-group-label { font-size: 12px; font-weight: 600; color: #9ab8d8; }
-.face-group-meta { color: #567; font-weight: 400; }
-.face-group-btns { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; }
-.face-group-header button { padding: 2px 9px; font-size: 11px; flex-shrink: 0; }
+/* Event/ignore/tag group headers (.face-group-header) are styled in
+   face-grid.css and built by faceGroupHeader(); the section wrapper above
+   only needs to flatten the header's top margin/radius. */
 
 /* Per-person action bar: "Find more photos of <name>" */
 .person-scope-header {
@@ -368,35 +353,7 @@
 }
 .face-person-subhdr .subhdr-accept-btn { padding: 1px 8px; font-size: 10px; flex-shrink: 0; }
 
-/* ── Quick-action popup (right-click on face cell) ── */
-.face-expand {
-  z-index: 1000;
-  background: #2a2a2a;
-  border: 1px solid #4a90d9;
-  border-radius: 5px;
-  padding: 8px;
-  min-width: 190px;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  box-shadow: 0 6px 20px rgba(0,0,0,.8);
-}
-.expand-row {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-}
-.expand-btn { font-size: 11px; padding: 3px 8px; white-space: nowrap; }
-.expand-select {
-  flex: 1;
-  font-size: 11px;
-  padding: 3px 4px;
-  background: #333;
-  color: #ddd;
-  border: 1px solid #555;
-  border-radius: 3px;
-  min-width: 0;
-}
+/* The quick-action popup (.face-expand / .expand-*) is styled in face-grid.css. */
 
 /* Ignored faces are dimmed and badged */
 .thumb-cell.ignored img { opacity: 0.4; filter: grayscale(0.6); }
