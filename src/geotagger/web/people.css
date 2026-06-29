@@ -174,38 +174,57 @@
 /* ── Discover view: cluster cards ── */
 .cluster-card {
   grid-column: 1 / -1;
-  background: #252525;
-  border: 1px solid #383838;
+  background: #1a2230;
+  border: 1px solid #2a3d54;
   border-radius: 6px;
-  padding: 10px;
+  padding: 0;
   margin-bottom: 10px;
+  overflow: hidden;
 }
 .cluster-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 8px;
+  padding: 8px 10px;
+  background: #1e2a3a;
+  border-bottom: 1px solid #2a3d54;
+  flex-wrap: wrap;
 }
-.cluster-title { font-size: 13px; font-weight: 600; color: #cfe6ff; }
-.cluster-meta { color: #888; font-weight: 400; font-size: 11px; }
+.cluster-title { font-size: 13px; font-weight: 600; color: #9ab8d8; }
+.cluster-meta { color: #567; font-weight: 400; font-size: 11px; }
 .cluster-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .cluster-actions button { padding: 3px 10px; font-size: 11px; }
-.cluster-faces { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.cluster-faces {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 4px;
+  padding: 8px 10px;
+}
 .cluster-faces img {
-  width: 64px; height: 64px;
+  width: 100%;
+  aspect-ratio: 1;
   object-fit: cover;
   border-radius: 3px;
   background: #1a1a1a;
   cursor: pointer;
   border: 2px solid transparent;
+  display: block;
 }
 .cluster-faces img:hover { border-color: #555; }
 .cluster-faces img.focused { border-color: #4a90d9; }
-.cluster-more { color: #888; font-size: 11px; padding: 0 6px; }
+.cluster-more { color: #888; font-size: 11px; padding: 6px 4px; }
 
 /* ── Crowds view ── */
-.crowd-group-card { border-color: #4a3a28; }
+.crowd-group-card {
+  background: #221e14;
+  border-color: #4a3a28;
+}
+.crowd-group-card .cluster-head {
+  background: #2a2218;
+  border-bottom-color: #4a3a28;
+}
+.crowd-group-card .cluster-title { color: #d8b88a; }
 .crowd-photos {
   display: flex;
   flex-wrap: wrap;
@@ -254,11 +273,14 @@
 .face-group-section {
   grid-column: 1 / -1;
   border-radius: 5px;
-  padding: 3px 0 5px;
-  margin: 2px 0;
+  border: 1px solid rgba(80, 110, 160, 0.18);
+  padding: 0;
+  margin: 4px 0;
+  overflow: hidden;
 }
 .face-group-section > .face-group-header {
   margin-top: 0;
+  border-radius: 0;
 }
 .face-group-cells {
   display: grid;
@@ -282,14 +304,16 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 4px 4px;
+  padding: 7px 10px;
   margin-top: 6px;
+  background: #1e2a3a;
   border-bottom: 1px solid #3a5a7a;
+  border-radius: 4px 4px 0 0;
   user-select: none;
 }
-.face-group-label { font-size: 12px; font-weight: 600; color: #7ab8f5; }
-.face-group-meta { color: #888; font-weight: 400; }
-.face-group-btns { display: flex; gap: 6px; flex-shrink: 0; }
+.face-group-label { font-size: 12px; font-weight: 600; color: #9ab8d8; }
+.face-group-meta { color: #567; font-weight: 400; }
+.face-group-btns { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; }
 .face-group-header button { padding: 2px 9px; font-size: 11px; flex-shrink: 0; }
 
 /* Per-person action bar: "Find more photos of <name>" */
@@ -315,11 +339,13 @@
   justify-content: space-between;
   gap: 8px;
   font-size: 11px;
-  font-weight: 500;
-  color: #888;
-  border-bottom: 1px solid #2e2e2e;
-  padding: 4px 4px 2px;
-  margin-top: 4px;
+  font-weight: 600;
+  color: #9ab8d8;
+  background: #1e2a3a;
+  border: 1px solid #2a3d54;
+  border-radius: 4px;
+  padding: 5px 10px;
+  margin-top: 6px;
   user-select: none;
 }
 .face-month-header .month-accept-btn { padding: 1px 8px; font-size: 10px; flex-shrink: 0; }
@@ -332,13 +358,45 @@
   justify-content: space-between;
   gap: 8px;
   font-size: 11px;
-  color: #9ab;
-  padding: 2px 4px 2px 16px;
-  margin-top: 2px;
+  color: #9ab8d8;
+  background: #192231;
   border-left: 2px solid #3a5a7a;
+  padding: 4px 10px 4px 14px;
+  margin-top: 2px;
+  border-radius: 0 3px 3px 0;
   user-select: none;
 }
 .face-person-subhdr .subhdr-accept-btn { padding: 1px 8px; font-size: 10px; flex-shrink: 0; }
+
+/* ── Quick-action popup (right-click on face cell) ── */
+.face-expand {
+  z-index: 1000;
+  background: #2a2a2a;
+  border: 1px solid #4a90d9;
+  border-radius: 5px;
+  padding: 8px;
+  min-width: 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.8);
+}
+.expand-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.expand-btn { font-size: 11px; padding: 3px 8px; white-space: nowrap; }
+.expand-select {
+  flex: 1;
+  font-size: 11px;
+  padding: 3px 4px;
+  background: #333;
+  color: #ddd;
+  border: 1px solid #555;
+  border-radius: 3px;
+  min-width: 0;
+}
 
 /* Ignored faces are dimmed and badged */
 .thumb-cell.ignored img { opacity: 0.4; filter: grayscale(0.6); }

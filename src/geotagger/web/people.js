@@ -386,6 +386,22 @@ function renderGrid() {
     return;
   }
 
+  // Ignored: group by ignore-batch (shared ignored_at), newest first,
+  // each batch header offering a one-click "Restore all".
+  if (scope === "ignored") {
+    let idx = 0, groupIdx = 0;
+    computeIgnoreBatches(faces).forEach(group => {
+      const sec = makeGroupSection(groupIdx++);
+      sec.appendChild(makeIgnoreBatchHeader(group));
+      const cells = document.createElement("div");
+      cells.className = "face-group-cells";
+      group.faces.forEach(face => { cells.appendChild(makeFaceCell(face, idx)); idx++; });
+      sec.appendChild(cells);
+      grid.appendChild(sec);
+    });
+    return;
+  }
+
   // Recently tagged: group by tag-batch (shared assigned_at), newest first,
   // each batch header offering a one-click "Untag all".
   if (scope === "recent") {
@@ -649,7 +665,11 @@ function makeFaceCell(face, idx) {
     }
   }
 
-  cell.addEventListener("click", (e) => handleCellClick(e, face, idx));
+  cell.addEventListener("click", (e) => {
+    // Open/close the popup on a plain click; modifier clicks are selection-only.
+    if (!e.ctrlKey && !e.metaKey && !e.shiftKey) toggleCellExpand(cell, face);
+    handleCellClick(e, face, idx);
+  });
   return cell;
 }
 
@@ -681,6 +701,58 @@ function makeAltChip(face, alt) {
     confirmFace(face.id, alt.person_id);
   });
   return chip;
+}
+
+/* ── Ignore-batch grouping (ignored view) ── */
+function computeIgnoreBatches(list) {
+  // `list` is newest-first by ignored_at; faces ignored together share a value.
+  // Faces with no ignored_at (ignored before this column existed) go in one trailing group.
+  const groups = [];
+  let cur = null;
+  list.forEach(f => {
+    const key = f.ignored_at ?? null;
+    if (!cur || cur.ts !== key) { cur = { ts: key, faces: [] }; groups.push(cur); }
+    cur.faces.push(f);
+  });
+  return groups;
+}
+
+function makeIgnoreBatchHeader(group) {
+  const header = document.createElement("div");
+  header.className = "face-group-header";
+
+  const label = document.createElement("span");
+  label.className = "face-group-label";
+  const when = group.ts ? formatRelativeTime(group.ts) : "before tracking";
+  label.innerHTML = `Ignored ${when} ` +
+    `<span class="face-group-meta">· ${group.faces.length} face(s)</span>`;
+
+  const btns = document.createElement("div");
+  btns.className = "face-group-btns";
+
+  const selAll = document.createElement("button");
+  selAll.textContent = "Select all";
+  selAll.title = "Add every face in this batch to the current selection";
+  selAll.addEventListener("click", (e) => {
+    e.stopPropagation();
+    group.faces.forEach(f => selectedIds.add(f.id));
+    renderGrid(); updateDetail();
+  });
+
+  const restoreAll = document.createElement("button");
+  restoreAll.className = "primary";
+  restoreAll.textContent = `Restore all (${group.faces.length})`;
+  restoreAll.title = "Un-ignore every face in this batch (returns them to the Unlabeled queue)";
+  restoreAll.addEventListener("click", (e) => {
+    e.stopPropagation();
+    ignoreSelected_ids(group.faces.map(f => f.id), false);
+  });
+
+  btns.appendChild(selAll);
+  btns.appendChild(restoreAll);
+  header.appendChild(label);
+  header.appendChild(btns);
+  return header;
 }
 
 /* ── Tag-batch grouping (recently tagged view) ── */
@@ -833,8 +905,30 @@ function makeGroupHeader(group) {
     btns.appendChild(btnAccept);
   }
 
+  const btnDeselect = document.createElement("button");
+  btnDeselect.textContent = "Deselect all";
+  btnDeselect.title = "Remove every face in this group from the current selection";
+  btnDeselect.addEventListener("click", (e) => {
+    e.stopPropagation();
+    group.faces.forEach(f => selectedIds.delete(f.id));
+    renderGrid();
+    updateDetail();
+    setStatus(`Deselected ${group.faces.length} face(s) from ${formatGroupRange(group)}.`);
+  });
+
+  const btnIgnore = document.createElement("button");
+  btnIgnore.className = "danger";
+  btnIgnore.textContent = "Ignore selected";
+  btnIgnore.title = "Ignore all currently selected faces";
+  btnIgnore.addEventListener("click", (e) => {
+    e.stopPropagation();
+    ignoreSelected(true);
+  });
+
   btns.appendChild(btnAll);
   btns.appendChild(btnOnly);
+  btns.appendChild(btnDeselect);
+  btns.appendChild(btnIgnore);
 
   header.appendChild(label);
   header.appendChild(btns);
@@ -965,13 +1059,13 @@ function makeClusterCard(cl) {
     img.loading = "lazy";
     img.title = `${f.filename} — click to preview`;
     if (f.id === focusedFaceId) img.classList.add("focused");
-    // Preview-only: focus the face (show detail + bbox) without changing selection.
     img.addEventListener("click", () => {
       document.querySelectorAll(".cluster-faces img.focused")
         .forEach(el => el.classList.remove("focused"));
       img.classList.add("focused");
       focusedFaceId = f.id;
       updateDetail();
+      toggleCellExpand(img, f);
     });
     facesWrap.appendChild(img);
   });
@@ -1319,6 +1413,10 @@ async function assignSelected(personId, clear = false) {
 async function ignoreSelected(ignored) {
   const ids = selectionOrFocused();
   if (ids.length === 0) { setStatus("Select one or more faces first.", true); return; }
+  await ignoreSelected_ids(ids, ignored);
+}
+
+async function ignoreSelected_ids(ids, ignored) {
   try {
     const res = await fetch("/api/faces/ignore", {
       method: "POST",
@@ -1367,6 +1465,124 @@ async function assignSelectedToNewPerson() {
   } catch (err) {
     setStatus("Assign failed: " + err.message, true);
   }
+}
+
+/* ── Quick-action popup (right-click on a face cell) ── */
+function closeCellExpand() {
+  const p = document.getElementById("face-cell-expand");
+  if (p) p.remove();
+}
+
+document.addEventListener("click", e => {
+  if (!e.target.closest(".thumb-cell") &&
+      !e.target.closest(".cluster-faces img") &&
+      !e.target.closest("#face-cell-expand"))
+    closeCellExpand();
+});
+
+function toggleCellExpand(cell, face) {
+  const existing = document.getElementById("face-cell-expand");
+  if (existing && parseInt(existing.dataset.faceId) === face.id) { existing.remove(); return; }
+  if (existing) existing.remove();
+
+  const panel = document.createElement("div");
+  panel.id = "face-cell-expand";
+  panel.dataset.faceId = String(face.id);
+  panel.className = "face-expand";
+
+  if (face.suggestion && !face.person_name) {
+    const btn = document.createElement("button");
+    btn.className = "primary expand-btn";
+    btn.textContent = `✓ ${face.suggestion.person_name}`;
+    btn.addEventListener("click", e => { e.stopPropagation(); closeCellExpand(); confirmFace(face.id, face.suggestion.person_id); });
+    panel.appendChild(btn);
+  }
+
+  if (face.person_name) {
+    const btn = document.createElement("button");
+    btn.className = "danger expand-btn";
+    btn.textContent = `× Unassign`;
+    btn.addEventListener("click", e => { e.stopPropagation(); closeCellExpand(); confirmFace(face.id, null); });
+    panel.appendChild(btn);
+  }
+
+  const row = document.createElement("div");
+  row.className = "expand-row";
+  const sel = document.createElement("select");
+  sel.className = "expand-select";
+  const blank = document.createElement("option");
+  blank.value = ""; blank.textContent = "Assign to…";
+  sel.appendChild(blank);
+  persons.forEach(p => {
+    const opt = document.createElement("option");
+    opt.value = p.id; opt.textContent = p.name;
+    sel.appendChild(opt);
+  });
+  const assignBtn = document.createElement("button");
+  assignBtn.className = "expand-btn"; assignBtn.textContent = "✓";
+  assignBtn.title = "Assign to selected person";
+  assignBtn.addEventListener("click", async e => {
+    e.stopPropagation();
+    const pid = parseInt(sel.value);
+    if (!pid) return;
+    closeCellExpand();
+    await confirmFace(face.id, pid);
+  });
+  row.appendChild(sel); row.appendChild(assignBtn);
+  panel.appendChild(row);
+
+  const newBtn = document.createElement("button");
+  newBtn.className = "expand-btn"; newBtn.textContent = "+ New person";
+  newBtn.addEventListener("click", async e => {
+    e.stopPropagation();
+    closeCellExpand();
+    const name = prompt("New person name:");
+    if (!name || !name.trim()) return;
+    try {
+      const res = await fetch(`/api/faces/${face.id}/assign`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim() }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await Promise.all([loadPersons(), loadFaces()]);
+    } catch (err) { setStatus("Assign failed: " + err.message, true); }
+  });
+  panel.appendChild(newBtn);
+
+  const ignBtn = document.createElement("button");
+  ignBtn.className = face.ignored ? "expand-btn" : "danger expand-btn";
+  ignBtn.textContent = face.ignored ? "↩ Restore" : "🚫 Ignore";
+  ignBtn.addEventListener("click", async e => {
+    e.stopPropagation();
+    closeCellExpand();
+    try {
+      const res = await fetch("/api/faces/ignore", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ face_ids: [face.id], ignored: !face.ignored }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await loadFaces();
+    } catch (err) { setStatus("Ignore failed: " + err.message, true); }
+  });
+  panel.appendChild(ignBtn);
+
+  panel.style.visibility = "hidden";
+  document.body.appendChild(panel);
+
+  const cr = cell.getBoundingClientRect();
+  const pr = panel.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  let top  = cr.bottom + 6;
+  if (top + pr.height > vh - 10) top = cr.top - pr.height - 6;
+  top = Math.max(6, top);
+  let left = cr.left;
+  if (left + pr.width > vw - 10) left = vw - pr.width - 10;
+  left = Math.max(6, left);
+  panel.style.position = "fixed";
+  panel.style.top  = top  + "px";
+  panel.style.left = left + "px";
+  panel.style.visibility = "";
 }
 
 async function confirmFace(faceId, personId) {

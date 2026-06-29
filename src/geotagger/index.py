@@ -164,6 +164,8 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     # created_at (when the face was detected); powers tag-order views and undo.
     if "assigned_at" not in face_cols:
         _db.execute("ALTER TABLE faces ADD COLUMN assigned_at REAL")
+    if "ignored_at" not in face_cols:
+        _db.execute("ALTER TABLE faces ADD COLUMN ignored_at REAL")
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id)")
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id)")
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_ignored ON faces(ignored)")
@@ -173,6 +175,7 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_queue ON faces(ignored, person_id, det_score)")
     # Serves tag-order / "recently tagged" / undo queries (ORDER BY assigned_at DESC).
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_assigned_at ON faces(assigned_at)")
+    _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_ignored_at ON faces(ignored_at)")
 
     # Create R*Tree spatial index for photo locations
     # R*Tree uses min/max bounds, so for a point we use same value for min and max
@@ -642,12 +645,13 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
     """
     clause = ""
     params: list = []
-    # 'recent' is ordered by tag time, newest first; the rest by detection score.
+    # 'recent' and 'ignored' are ordered by action time, newest first; the rest by detection score.
     order_by = "f.det_score DESC"
     if scope == "unlabeled":
         clause = "WHERE f.person_id IS NULL AND f.ignored = 0"
     elif scope == "ignored":
         clause = "WHERE f.ignored = 1"
+        order_by = "f.ignored_at DESC NULLS LAST, f.det_score DESC"
     elif scope == "person" and person_id is not None:
         clause = "WHERE f.person_id = ?"
         params.append(person_id)
@@ -659,7 +663,7 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
         params.append(min_det_score)
     return get_db().execute(
         f"""SELECT f.id, f.photo_id, f.person_id, f.bbox, f.det_score, f.embedding,
-                   f.ignored, f.assigned_at, p.name AS person_name, ph.filename,
+                   f.ignored, f.assigned_at, f.ignored_at, p.name AS person_name, ph.filename,
                    ph.photo_datetime, ph.orientation
             FROM faces f
             LEFT JOIN persons p ON p.id = f.person_id
@@ -730,14 +734,15 @@ def set_faces_ignored(face_ids: list[int], ignored: bool):
     if not face_ids:
         return
     db = get_db()
+    now = time.time()
     if ignored:
         db.executemany(
-            "UPDATE faces SET ignored=1, person_id=NULL, assigned_at=NULL WHERE id=?",
-            [(fid,) for fid in face_ids],
+            "UPDATE faces SET ignored=1, person_id=NULL, assigned_at=NULL, ignored_at=? WHERE id=?",
+            [(now, fid) for fid in face_ids],
         )
     else:
         db.executemany(
-            "UPDATE faces SET ignored=0 WHERE id=?",
+            "UPDATE faces SET ignored=0, ignored_at=NULL WHERE id=?",
             [(fid,) for fid in face_ids],
         )
     db.commit()
@@ -782,9 +787,10 @@ def ignore_unlabeled_in_photos(photo_ids: list[int]) -> int:
     ]
     if not face_ids:
         return 0
+    now = time.time()
     db.executemany(
-        "UPDATE faces SET ignored=1, person_id=NULL, assigned_at=NULL WHERE id=?",
-        [(fid,) for fid in face_ids],
+        "UPDATE faces SET ignored=1, person_id=NULL, assigned_at=NULL, ignored_at=? WHERE id=?",
+        [(now, fid) for fid in face_ids],
     )
     db.commit()
     bump_faces_generation()

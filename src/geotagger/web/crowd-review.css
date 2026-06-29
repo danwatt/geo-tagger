@@ -32,9 +32,28 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   background: #0d0d0d;
   overflow: auto;
   display: flex;
-  align-items: flex-start;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
   padding: 8px;
+  gap: 10px;
+}
+
+#photo-meta {
+  width: 100%;
+  max-width: 600px;
+  border-collapse: collapse;
+  font-size: 11px;
+  color: #999;
+}
+#photo-meta td { padding: 2px 8px; }
+#photo-meta td:first-child {
+  color: #666;
+  white-space: nowrap;
+  width: 80px;
+}
+#photo-meta td:last-child {
+  color: #bbb;
+  word-break: break-all;
 }
 
 /* photo-container shrink-wraps the image so the bbox overlay aligns exactly */

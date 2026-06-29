@@ -120,8 +120,25 @@ async function navigateTo(idx) {
   history.replaceState(null, "",
     `?photo_id=${photo.id}&min_faces=${minFaces}&group_gap=${groupGap}`);
 
+  document.getElementById("photo-meta").innerHTML = "";
   setStatus("Loading faces…");
-  await loadPhotoFaces(photo.id);
+  await Promise.all([loadPhotoFaces(photo.id), loadPhotoMeta(photo.id)]);
+}
+
+async function loadPhotoMeta(photoId) {
+  try {
+    const res = await fetch(`/api/photo/${photoId}`);
+    if (!res.ok) return;
+    const d = await res.json();
+    const rows = [
+      ["File",       d.filename],
+      ["Date",       d.datetime  || "—"],
+      ["Camera",     d.camera    || "—"],
+      ["Dimensions", d.dimensions || "—"],
+    ];
+    document.getElementById("photo-meta").innerHTML =
+      rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
+  } catch (_) { /* non-fatal */ }
 }
 
 async function loadPhotoFaces(photoId) {

@@ -1212,6 +1212,7 @@ def _face_item(r) -> dict:
         "ignored": bool(r["ignored"]),
         "photo_datetime": r["photo_datetime"],
         "assigned_at": r["assigned_at"],
+        "ignored_at": r["ignored_at"],
         "suggestion": None,
         "alternatives": [],
     }
