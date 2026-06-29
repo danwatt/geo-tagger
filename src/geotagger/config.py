@@ -56,6 +56,12 @@ FACE_MATCH_THRESHOLD = float(os.environ.get("GEOTAGGER_FACE_MATCH_THRESHOLD", "0
 # / "Only suggested"). 0 = exhaustive (scan every unlabeled face). Set a positive
 # value to bound the scan if a very large library makes the first scan too slow.
 FACE_SUGGEST_SCAN_CAP = int(os.environ.get("GEOTAGGER_FACE_SUGGEST_SCAN_CAP", "0"))
+# Max labeled examples per person used in the single-person gate pass inside
+# suggest_for_person. A person with thousands of labeled faces causes the gate
+# matmul to be as expensive as the full-gallery rank pass; capping at ~200
+# evenly-spread examples preserves recall (any genuine match will hit at least
+# one of them) while keeping the gate cheap regardless of label count.
+FACE_GATE_MAX_EXAMPLES = int(os.environ.get("GEOTAGGER_FACE_GATE_MAX_EXAMPLES", "200"))
 # When reviewing one person's guesses, another person whose own best example
 # scores within this cosine margin of the top match is flagged as an ambiguous
 # alternative ("could be this family member instead") — a near-tie, not a clear win.

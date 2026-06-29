@@ -35,10 +35,16 @@ html, body {
 #hint.new { color: #e0b878; }
 #hint::after { content: " ✎"; font-size: 13px; color: #777; font-weight: 400; }
 #meta { color: #9aa; font-size: 13px; margin-top: 5px; }
+#card-actions {
+  display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; margin-top: 10px;
+}
 .link-btn {
-  margin-top: 10px;
   background: #2a2a2a; border: 1px solid #444; color: #cfe6ff;
   padding: 8px 16px; border-radius: 20px; font-size: 14px; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center;
+}
+#prev-name {
+  display: block; font-size: 11px; color: #9aa; margin-top: 3px; line-height: 1;
 }
 
 /* Person picker — bottom sheet */

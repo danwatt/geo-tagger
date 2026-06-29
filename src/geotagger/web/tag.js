@@ -7,6 +7,26 @@ let pos = 0;      // index of the group currently shown
 let persons = []; // existing people, for the picker
 let pickerGroup = null;
 
+// Persisted across sessions so "Use previous" survives a page reload.
+let prevPerson = (() => {
+  try { return JSON.parse(localStorage.getItem("quicktag_prev_person")); } catch { return null; }
+})();
+
+function savePrevPerson(id, name) {
+  prevPerson = { id, name };
+  try { localStorage.setItem("quicktag_prev_person", JSON.stringify(prevPerson)); } catch {}
+}
+
+function renderPrevBtn() {
+  const btn = el("prev-btn");
+  if (prevPerson) {
+    el("prev-name").textContent = prevPerson.name;
+    btn.hidden = false;
+  } else {
+    btn.hidden = true;
+  }
+}
+
 const WEEK_SECONDS = 7 * 86400;
 
 const el = (id) => document.getElementById(id);
@@ -17,6 +37,7 @@ document.addEventListener("DOMContentLoaded", () => {
   el("skip-btn").addEventListener("click", onSkip);
   el("hint").addEventListener("click", openPicker);
   el("choose-btn").addEventListener("click", openPicker);
+  el("prev-btn").addEventListener("click", onUsePrevious);
   el("overlay").addEventListener("click", closePreview);
   el("picker-close").addEventListener("click", closePicker);
   el("picker").addEventListener("click", (e) => { if (e.target === el("picker")) closePicker(); });
@@ -96,6 +117,7 @@ function render() {
 
   el("meta").textContent = `${dateRange(cl)} · ${size} face${size > 1 ? "s" : ""}`;
   el("progress").textContent = `${pos + 1} / ${queue.length}`;
+  renderPrevBtn();
 
   const grid = el("faces");
   grid.innerHTML = "";
@@ -145,12 +167,21 @@ function onAccept() {
   const cl = queue[pos];
   if (!cl) return;
   if (cl.suggestion) {
+    savePrevPerson(cl.suggestion.person_id, cl.suggestion.person_name);
     act("/api/faces/assign",
         { face_ids: cl.face_ids, person_id: cl.suggestion.person_id },
         `Tagged ${cl.face_ids.length} as ${cl.suggestion.person_name}`);
   } else {
     openPicker();   // no guess → choose an existing person or create a new one
   }
+}
+
+function onUsePrevious() {
+  const cl = queue[pos];
+  if (!cl || !prevPerson) return;
+  act("/api/faces/assign",
+      { face_ids: cl.face_ids, person_id: prevPerson.id },
+      `Tagged ${cl.face_ids.length} as ${prevPerson.name}`);
 }
 
 /* ── Person picker ── */
@@ -201,6 +232,7 @@ function pickAssign(who, label) {
   const cl = pickerGroup;
   if (!cl) return;
   closePicker();
+  if (who.person_id) savePrevPerson(who.person_id, label);
   act("/api/faces/assign", { face_ids: cl.face_ids, ...who },
       `Tagged ${cl.face_ids.length} as ${label}`);
 }

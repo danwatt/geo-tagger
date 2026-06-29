@@ -6,3 +6,5 @@ tools/
 *.egg-info/
 dist/
 .geotagger_last_root
+/.idea/geo-tagger@1.iml
+/nul
