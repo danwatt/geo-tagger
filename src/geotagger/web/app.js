@@ -138,21 +138,70 @@ function initMap() {
   addBasemapControl();
 
   const mapPane = document.getElementById("map-pane");
+  let dragAccuracyCircle = null;
 
   mapPane.addEventListener("dragover", (e) => {
     e.preventDefault();
     mapPane.classList.add("drop-target");
+
+    const toggle = document.getElementById("imprecise-toggle");
+    if (toggle && toggle.checked) {
+      const radiusSelect = document.getElementById("imprecise-radius-select");
+      const radius = parseFloat(radiusSelect.value);
+      const rect = document.getElementById("map").getBoundingClientRect();
+      const point = L.point(e.clientX - rect.left, e.clientY - rect.top);
+      const latlng = map.containerPointToLatLng(point);
+
+      if (!dragAccuracyCircle) {
+        dragAccuracyCircle = L.circle(latlng, {
+          radius: radius,
+          color: "#e0a040",
+          fillColor: "#e0a040",
+          fillOpacity: 0.15,
+          weight: 1.5,
+          opacity: 0.6,
+          dashArray: "5, 5",
+          interactive: false
+        }).addTo(map);
+      } else {
+        dragAccuracyCircle.setLatLng(latlng);
+        dragAccuracyCircle.setRadius(radius);
+      }
+    } else if (dragAccuracyCircle) {
+      dragAccuracyCircle.remove();
+      dragAccuracyCircle = null;
+    }
   });
-  mapPane.addEventListener("dragleave", () => mapPane.classList.remove("drop-target"));
+
+  const cleanupDragCircle = () => {
+    if (dragAccuracyCircle) {
+      dragAccuracyCircle.remove();
+      dragAccuracyCircle = null;
+    }
+  };
+
+  mapPane.addEventListener("dragleave", () => {
+    mapPane.classList.remove("drop-target");
+    cleanupDragCircle();
+  });
+
   mapPane.addEventListener("drop", async (e) => {
     e.preventDefault();
     mapPane.classList.remove("drop-target");
+    cleanupDragCircle();
     const ids = JSON.parse(e.dataTransfer.getData("application/json") || "[]");
     if (!ids.length) return;
     const rect = document.getElementById("map").getBoundingClientRect();
     const point = L.point(e.clientX - rect.left, e.clientY - rect.top);
     const latlng = map.containerPointToLatLng(point);
-    await geotag(ids, latlng.lat, latlng.lng);
+
+    let accuracy = null;
+    const toggle = document.getElementById("imprecise-toggle");
+    if (toggle && toggle.checked) {
+      const radiusSelect = document.getElementById("imprecise-radius-select");
+      accuracy = parseFloat(radiusSelect.value);
+    }
+    await geotag(ids, latlng.lat, latlng.lng, accuracy);
   });
 }
 
@@ -258,6 +307,15 @@ function bindToolbar() {
   document.getElementById("places-select").addEventListener("change", onPlaceSelected);
   document.getElementById("draw-rectangle-btn").addEventListener("click", () => startDrawing("rectangle"));
   document.getElementById("draw-circle-btn").addEventListener("click", () => startDrawing("circle"));
+
+  // Imprecise drop toggle
+  const impreciseToggle = document.getElementById("imprecise-toggle");
+  const impreciseRadiusSelect = document.getElementById("imprecise-radius-select");
+  if (impreciseToggle && impreciseRadiusSelect) {
+    impreciseToggle.addEventListener("change", () => {
+      impreciseRadiusSelect.style.display = impreciseToggle.checked ? "inline-block" : "none";
+    });
+  }
 
   // Modal close handlers
   document.querySelector(".modal-close").addEventListener("click", hideMonthPicker);
@@ -1229,12 +1287,17 @@ function handleDragStart(e, id) {
 }
 
 /* ── Markers ── */
-function makePinIcon(color) {
+function makePinIcon(color, isImprecise = false) {
   // SVG teardrop pin. Outline is a slightly darker shade for contrast.
+  const strokeDash = isImprecise ? 'stroke-dasharray="3,2"' : '';
+  const innerCircle = isImprecise
+    ? `<circle cx="12" cy="12" r="5" fill="none" stroke="rgba(255,255,255,0.7)" stroke-width="1.2" stroke-dasharray="1.5,1"/>`
+    : `<circle cx="12" cy="12" r="5" fill="rgba(255,255,255,0.35)"/>`;
+
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="34" viewBox="0 0 24 34">
     <path d="M12 0C5.373 0 0 5.373 0 12c0 8 12 22 12 22s12-14 12-22C24 5.373 18.627 0 12 0z"
-          fill="${color}" stroke="rgba(0,0,0,0.45)" stroke-width="1.5"/>
-    <circle cx="12" cy="12" r="5" fill="rgba(255,255,255,0.35)"/>
+          fill="${color}" stroke="rgba(0,0,0,0.55)" stroke-width="1.5" ${strokeDash}/>
+    ${innerCircle}
   </svg>`;
   return L.divIcon({
     html: svg,
@@ -1265,14 +1328,15 @@ function renderMarkers() {
 
 function addOrUpdateMarker(photo) {
   const color = camColor(photo.camera);
+  const isImprecise = photo.gps_accuracy && photo.gps_accuracy > 30;
   if (markersById[photo.id]) {
     markersById[photo.id].setLatLng([photo.lat, photo.lng]);
-    markersById[photo.id].setIcon(makePinIcon(color));
+    markersById[photo.id].setIcon(makePinIcon(color, isImprecise));
     return;
   }
   const marker = L.marker([photo.lat, photo.lng], {
     draggable: true,
-    icon: makePinIcon(color),
+    icon: makePinIcon(color, isImprecise),
   }).addTo(map);
 
   marker.on("click", () => {
@@ -1285,30 +1349,42 @@ function addOrUpdateMarker(photo) {
 
   marker.on("dragend", async () => {
     const ll = marker.getLatLng();
-    await geotag([photo.id], ll.lat, ll.lng);
+    let accuracy = null;
+    const toggle = document.getElementById("imprecise-toggle");
+    if (toggle && toggle.checked) {
+      const radiusSelect = document.getElementById("imprecise-radius-select");
+      accuracy = parseFloat(radiusSelect.value);
+    }
+    await geotag([photo.id], ll.lat, ll.lng, accuracy);
   });
 
   markersById[photo.id] = marker;
 }
 
-/* ── Geotag / remove ── */
-async function geotag(ids, lat, lng) {
+async function geotag(ids, lat, lng, accuracy = null) {
   setStatus(`Geotagging ${ids.length} photo(s)…`);
   try {
     const res = await fetch("/api/geotag", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids, lat, lng }),
+      body: JSON.stringify({ ids, lat, lng, gps_accuracy: accuracy }),
     });
     const updated = await res.json();
     updated.forEach((u) => {
       const photo = photos.find((p) => p.id === u.id);
-      if (photo) { photo.lat = u.lat; photo.lng = u.lng; photo.geotag_source = u.geotag_source; }
+      if (photo) {
+        photo.lat = u.lat;
+        photo.lng = u.lng;
+        photo.geotag_source = u.geotag_source;
+        photo.gps_accuracy = u.gps_accuracy;
+      }
       addOrUpdateMarker({ id: u.id, lat: u.lat, lng: u.lng,
-        filename: photo?.filename || "", camera: photo?.camera });
+        filename: photo?.filename || "", camera: photo?.camera,
+        gps_accuracy: u.gps_accuracy });
     });
     renderGrid();
-    setStatus(`Tagged ${updated.length} photo(s) at ${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+    const accLog = accuracy ? ` (accuracy: ±${accuracy}m)` : "";
+    setStatus(`Tagged ${updated.length} photo(s) at ${lat.toFixed(5)}, ${lng.toFixed(5)}${accLog}`);
     if (focusedPhotoId && ids.includes(focusedPhotoId)) showDetail(focusedPhotoId);
   } catch (err) {
     setStatus("Geotag error: " + err.message, true);
@@ -1381,6 +1457,23 @@ async function doPlaceSearch() {
   }
 }
 
+function formatAccuracy(meters) {
+  if (meters == null || meters <= 0) return "—";
+  if (meters >= 160.934) {
+    const miles = meters / 1609.344;
+    let milesStr = miles.toFixed(2);
+    if (milesStr.endsWith(".00")) milesStr = miles.toFixed(0);
+    else if (milesStr.endsWith("0")) milesStr = miles.toFixed(1);
+    
+    let kmStr = (meters / 1000).toFixed(2);
+    if (kmStr.endsWith(".00")) kmStr = (meters / 1000).toFixed(0);
+    else if (kmStr.endsWith("0")) kmStr = (meters / 1000).toFixed(1);
+
+    return `±${milesStr} miles (~${kmStr} km)`;
+  }
+  return `±${meters.toFixed(1)} m`;
+}
+
 /* ── Detail pane ── */
 async function showDetail(id) {
   focusedPhotoId = id;
@@ -1408,7 +1501,7 @@ async function showDetail(id) {
       ["Latitude", data.lat != null ? data.lat.toFixed(6) : "—"],
       ["Longitude", data.lng != null ? data.lng.toFixed(6) : "—"],
       ["Location", placeStr || "—"],
-      ["GPS accuracy", data.gps_accuracy != null ? `±${data.gps_accuracy.toFixed(1)} m` : "—"],
+      ["GPS accuracy", formatAccuracy(data.gps_accuracy)],
       ["Geotag source", data.geotag_source],
       ["Sidecar", data.sidecar_path ? data.sidecar_path.split(/[\\/]/).pop() : "none"],
     ];

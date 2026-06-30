@@ -286,6 +286,7 @@ class GeotagRequest(BaseModel):
     ids: list[int]
     lat: float
     lng: float
+    gps_accuracy: float | None = None
 
 class RemoveGeotagRequest(BaseModel):
     ids: list[int]
@@ -770,15 +771,16 @@ async def api_geotag(req: GeotagRequest):
         if not row:
             continue
         p = Path(row["path"])
-        sc = sidecar.write_gps(p, req.lat, req.lng, location=loc)
+        sc = sidecar.write_gps(p, req.lat, req.lng, location=loc, gps_accuracy=req.gps_accuracy)
         sc_mtime = sc.stat().st_mtime if sc.exists() else None
-        index.update_geotag(photo_id, req.lat, req.lng, "sidecar", str(sc), sc_mtime)
+        index.update_geotag(photo_id, req.lat, req.lng, "sidecar", str(sc), sc_mtime, gps_accuracy=req.gps_accuracy)
         if loc is not None:
             index.update_photo_location(photo_id, loc)
         results.append({
             "id": photo_id, "lat": req.lat, "lng": req.lng,
             "geotag_source": "sidecar", "sidecar_path": str(sc),
             "location": loc,
+            "gps_accuracy": req.gps_accuracy,
         })
     return results
 

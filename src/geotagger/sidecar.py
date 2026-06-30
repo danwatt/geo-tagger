@@ -27,22 +27,29 @@ def sidecar_path(image_path: Path) -> Path:
 
 
 def read_metadata(image_path: Path) -> dict:
-    """Return dict with keys: lat, lng, geotag_source, camera."""
+    """Return dict with keys: lat, lng, geotag_source, camera, photo_datetime, gps_accuracy, orientation."""
     et = get_et()
     sc = sidecar_path(image_path)
 
     lat = lng = None
     source = "none"
+    gps_accuracy = -1.0
 
     # Try sidecar first for GPS
     if sc.exists():
-        result = et.get_tags([str(sc)], tags=["XMP:GPSLatitude", "XMP:GPSLongitude"])
+        result = et.get_tags([str(sc)], tags=["XMP:GPSLatitude", "XMP:GPSLongitude", "XMP:GPSHPositioningError"])
         if result:
             row = result[0]
             _lat = row.get("XMP:GPSLatitude")
             _lng = row.get("XMP:GPSLongitude")
+            _acc = row.get("XMP:GPSHPositioningError")
             if _lat is not None and _lng is not None:
                 lat, lng, source = float(_lat), float(_lng), "sidecar"
+                if _acc is not None:
+                    try:
+                        gps_accuracy = float(_acc)
+                    except (TypeError, ValueError):
+                        pass
 
     # Read embedded GPS + camera in one call
     result = et.get_tags([str(image_path)], tags=[
@@ -53,6 +60,7 @@ def read_metadata(image_path: Path) -> dict:
         "EXIF:DateTimeOriginal", "QuickTime:CreateDate",
         "XMP:DateTimeOriginal",
         "EXIF:GPSHPositioningError",
+        "XMP:GPSHPositioningError",
         "EXIF:Orientation#",  # '#' → numeric 1..8 rather than "Rotate 90 CW"
     ])
     row = result[0] if result else {}
@@ -72,8 +80,13 @@ def read_metadata(image_path: Path) -> dict:
               or row.get("QuickTime:CreateDate"))
     photo_datetime = _parse_exif_datetime(str(raw_dt)) if raw_dt else 0
 
-    raw_acc = row.get("EXIF:GPSHPositioningError")
-    gps_accuracy = float(raw_acc) if raw_acc is not None else -1.0
+    if gps_accuracy <= 0:
+        raw_acc = row.get("EXIF:GPSHPositioningError") or row.get("XMP:GPSHPositioningError")
+        if raw_acc is not None:
+            try:
+                gps_accuracy = float(raw_acc)
+            except (TypeError, ValueError):
+                gps_accuracy = -1.0
 
     # EXIF orientation 1..8 (how to rotate/flip for display); 1 = as-stored.
     raw_orient = row.get("EXIF:Orientation")
@@ -109,7 +122,7 @@ def _location_args(location: dict | None) -> list[str]:
     ]
 
 
-def write_gps(image_path: Path, lat: float, lng: float, location: dict | None = None) -> Path:
+def write_gps(image_path: Path, lat: float, lng: float, location: dict | None = None, gps_accuracy: float | None = None) -> Path:
     """Write GPS to sidecar (creating it if needed). When ``location`` is given,
     its place names are written in the same pass. Returns sidecar path."""
     # Read existing coordinates before updating
@@ -122,15 +135,23 @@ def write_gps(image_path: Path, lat: float, lng: float, location: dict | None = 
         f"-XMP:GPSLatitude={lat}",
         f"-XMP:GPSLongitude={lng}",
     ]
+    if gps_accuracy is not None and gps_accuracy > 0:
+        args.append(f"-XMP:GPSHPositioningError={gps_accuracy}")
+        args.append(f"-GPSHPositioningError={gps_accuracy}")
+    else:
+        args.append("-XMP:GPSHPositioningError=")
+        args.append("-GPSHPositioningError=")
+
     if location is not None:
         args += _location_args(location)
     et.execute(*args, str(sc))
 
     # Log the change
+    acc_log = f" (accuracy: {gps_accuracy}m)" if gps_accuracy and gps_accuracy > 0 else ""
     if old_lat is not None and old_lng is not None:
-        logger.info(f"Updated GPS for {image_path.name}: ({old_lat:.6f}, {old_lng:.6f}) → ({lat:.6f}, {lng:.6f})")
+        logger.info(f"Updated GPS for {image_path.name}: ({old_lat:.6f}, {old_lng:.6f}) → ({lat:.6f}, {lng:.6f}){acc_log}")
     else:
-        logger.info(f"Added GPS to {image_path.name}: ({lat:.6f}, {lng:.6f})")
+        logger.info(f"Added GPS to {image_path.name}: ({lat:.6f}, {lng:.6f}){acc_log}")
 
     return sc
 
@@ -157,11 +178,13 @@ def remove_gps(image_path: Path) -> Path:
     et = get_et()
     sc = sidecar_path(image_path)
     if sc.exists():
-        # Clear coordinates and the derived place names together.
+        # Clear coordinates, accuracy and the derived place names together.
         et.execute(
             "-overwrite_original",
             "-XMP:GPSLatitude=",
             "-XMP:GPSLongitude=",
+            "-XMP:GPSHPositioningError=",
+            "-GPSHPositioningError=",
             *_location_args(None),
             str(sc),
         )

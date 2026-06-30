@@ -70,6 +70,22 @@
         <button id="draw-rectangle-btn" title="Draw Rectangle">📐</button>
         <button id="draw-circle-btn" title="Draw Circle">⭕</button>
       </div>
+      <div class="toolbar-group imprecise-control-group">
+        <label title="Drop photos with a specified uncertainty radius">
+          <input type="checkbox" id="imprecise-toggle" />
+          Imprecise Drop
+        </label>
+        <select id="imprecise-radius-select" style="display: none;">
+          <option value="160.934">0.1 miles</option>
+          <option value="402.336">0.25 miles</option>
+          <option value="804.672">0.5 miles</option>
+          <option value="1609.34">1 mile</option>
+          <option value="8046.72">5 miles</option>
+          <option value="16093.44">10 miles</option>
+          <option value="40233.6" selected>25 miles</option>
+          <option value="80467.2">50 miles</option>
+        </select>
+      </div>
       <div class="toolbar-group">
         <input id="place-search" type="text" placeholder="Search place…" />
         <button id="place-search-btn">Go</button>

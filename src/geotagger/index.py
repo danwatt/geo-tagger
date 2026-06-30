@@ -297,17 +297,18 @@ def upsert_photo(
 
 
 def update_geotag(photo_id: int, lat: float | None, lng: float | None,
-                  geotag_source: str, sidecar_path: str, sidecar_mtime: float | None):
+                  geotag_source: str, sidecar_path: str, sidecar_mtime: float | None,
+                  gps_accuracy: float | None = None):
     db = get_db()
     # Coordinates changed, so any previously-derived location names are stale.
     # Clear them and reset geocoded_at so the point is re-geocoded; the caller
     # repopulates them (api_geotag does this immediately after).
     db.execute("""
-        UPDATE photos SET lat=?, lng=?, geotag_source=?, sidecar_path=?, sidecar_mtime=?,
+        UPDATE photos SET lat=?, lng=?, gps_accuracy=?, geotag_source=?, sidecar_path=?, sidecar_mtime=?,
             loc_city=NULL, loc_state=NULL, loc_county=NULL, loc_country=NULL,
             loc_country_code=NULL, geocoded_at=NULL
         WHERE id=?
-    """, (lat, lng, geotag_source, sidecar_path, sidecar_mtime, photo_id))
+    """, (lat, lng, gps_accuracy, geotag_source, sidecar_path, sidecar_mtime, photo_id))
     db.commit()
 
 
