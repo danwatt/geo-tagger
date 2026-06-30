@@ -73,6 +73,7 @@ select {
 #main {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
+  grid-auto-rows: minmax(0, 1fr);
   flex: 1;
   overflow: hidden;
 }
@@ -106,28 +107,27 @@ select {
 
 /* ── Grid ── */
 #grid-pane {
-  display: flex;
-  flex-direction: column;
   background: #1e1e1e;
   border-left: 1px solid #333;
   border-right: 1px solid #333;
-  overflow: hidden;
+  overflow-y: auto;
+  min-height: 0;
 }
 #grid-nav {
+  position: sticky;
+  top: 0;
+  z-index: 10;
   display: flex;
   align-items: center;
   padding: 5px 8px;
   background: #252525;
   border-bottom: 1px solid #333;
-  flex-shrink: 0;
 }
 #grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   gap: 4px;
   padding: 6px;
-  overflow-y: auto;
-  flex: 1;
 }
 
 .thumb-cell {
