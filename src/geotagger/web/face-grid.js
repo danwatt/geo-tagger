@@ -46,6 +46,30 @@ function formatDateRange(startTs, endTs) {
   return `${s.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${eStr}`;
 }
 
+/* ── Location label for a group of faces ──
+ * Each face may carry a `location: {city, state, country}` resolved by the
+ * reverse geocoder, or null when its photo isn't geocoded. `locationKey` is the
+ * "City, State, Country" string for one face (missing parts dropped), or null.
+ * `locationLabel` summarizes a group: the distinct places among its faces, most
+ * common first, with a "+N" suffix when the group spans more than one place;
+ * empty string when no face has a resolved location. */
+function locationKey(face) {
+  const loc = face.location;
+  if (!loc) return null;
+  return [loc.city, loc.state, loc.country].filter(Boolean).join(", ") || null;
+}
+
+function locationLabel(faces) {
+  const counts = new Map();
+  for (const f of faces) {
+    const k = locationKey(f);
+    if (k) counts.set(k, (counts.get(k) || 0) + 1);
+  }
+  if (!counts.size) return "";
+  const sorted = [...counts.keys()].sort((a, b) => counts.get(b) - counts.get(a));
+  return sorted.length === 1 ? sorted[0] : `${sorted[0]} +${sorted.length - 1}`;
+}
+
 /* ── Group header ──
  * Canonical "title + meta + action buttons" header for a section of faces.
  *   title      — main label text

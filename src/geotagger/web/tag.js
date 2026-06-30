@@ -108,8 +108,8 @@ async function loadGroups() {
     const res = await fetch(`/api/faces/clusters?full=true&threshold=${settings.threshold}`);
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
-    // Split each person-group into chunks spanning at most one week.
-    queue = (data.clusters || []).flatMap(splitByWeek);
+    // Split each person-group into chunks that are tight in both time and place.
+    queue = (data.clusters || []).flatMap(splitGroups);
     pos = 0;
     render();
   } catch (e) {
@@ -117,21 +117,30 @@ async function loadGroups() {
   }
 }
 
-// Break a cluster's faces into groups that each span <= 1 week. Faces are sorted
-// by time; a new chunk starts whenever a face falls more than a week after the
-// chunk's first face. Undated faces (ts 0) collect into a leading chunk.
-function splitByWeek(cluster) {
+// Break a cluster's faces into groups that are tight in BOTH time and place.
+// Faces are sorted by time; a new chunk starts whenever a face falls more than
+// the date window after the chunk's first face, or comes from a different
+// resolved location. Undated faces (ts 0) and faces with no location don't force
+// a split — they join the current chunk. So each presented group is one person,
+// around one time, in one place.
+function splitGroups(cluster) {
   const faces = (cluster.sample || []).slice()
     .sort((a, b) => (a.photo_datetime || 0) - (b.photo_datetime || 0));
   const groups = [];
   let cur = null;
   for (const f of faces) {
     const ts = f.photo_datetime || 0;
-    if (!cur || ts - cur.start > windowSeconds()) {
-      cur = { suggestion: cluster.suggestion, faces: [], start: ts };
+    const place = locationKey(f);
+    const newWindow = !cur || ts - cur.start > windowSeconds();
+    // Split on place only when both the chunk and this face have a known,
+    // differing location — missing locations join the current chunk.
+    const newPlace = cur && cur.place && place && place !== cur.place;
+    if (newWindow || newPlace) {
+      cur = { suggestion: cluster.suggestion, faces: [], start: ts, place };
       groups.push(cur);
     }
     cur.faces.push(f);
+    if (!cur.place && place) cur.place = place;  // first located face sets the chunk's place
   }
   groups.forEach((g) => (g.face_ids = g.faces.map((x) => x.id)));
   return groups;
@@ -159,6 +168,8 @@ function render() {
   }
 
   el("meta").textContent = `${dateRange(cl)} · ${size} face${size > 1 ? "s" : ""}`;
+  const place = locationLabel(cl.faces);
+  el("place").textContent = place ? `📍 ${place}` : "";
   el("progress").textContent = `${pos + 1} / ${queue.length}`;
   renderPrevBtn();
 

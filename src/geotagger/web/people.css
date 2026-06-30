@@ -312,43 +312,6 @@
 .person-scope-label { font-size: 12px; color: #aaa; }
 .person-scope-header button { flex-shrink: 0; }
 
-/* Month header (unlabeled queue) — like the geocode month divider, but interactive */
-.face-month-header {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 11px;
-  font-weight: 600;
-  color: #9ab8d8;
-  background: #1e2a3a;
-  border: 1px solid #2a3d54;
-  border-radius: 4px;
-  padding: 5px 10px;
-  margin-top: 6px;
-  user-select: none;
-}
-.face-month-header .month-accept-btn { padding: 1px 8px; font-size: 10px; flex-shrink: 0; }
-
-/* Per-person sub-header within a month (suggested-only view) — indented + lighter */
-.face-person-subhdr {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 11px;
-  color: #9ab8d8;
-  background: #192231;
-  border-left: 2px solid #3a5a7a;
-  padding: 4px 10px 4px 14px;
-  margin-top: 2px;
-  border-radius: 0 3px 3px 0;
-  user-select: none;
-}
-.face-person-subhdr .subhdr-accept-btn { padding: 1px 8px; font-size: 10px; flex-shrink: 0; }
-
 /* The quick-action popup (.face-expand / .expand-*) is styled in face-grid.css. */
 
 /* Ignored faces are dimmed and badged */

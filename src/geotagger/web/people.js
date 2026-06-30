@@ -16,6 +16,10 @@ let hideCompletedCrowds = true; // hide crowd photos with no unlabeled faces
 let groupGapSeconds = 86400;    // event grouping gap in the guesses view (1 day)
 
 const FACE_LIMIT = 1000;
+// Auto-select bar for the Unlabeled queue: a suggestion only exists at all above
+// FACE_MATCH_THRESHOLD (0.35), so this higher cutoff pre-selects just the
+// confident guesses and leaves weaker ones for manual triage.
+const CONFIDENT_SCORE = 0.5;
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
                      "July", "August", "September", "October", "November", "December"];
 
@@ -293,12 +297,19 @@ async function loadFaces() {
       // Newest tag first (the server already orders this way; keep it explicit).
       faces.sort((a, b) => (b.assigned_at || 0) - (a.assigned_at || 0));
     } else if (scope === "unlabeled") {
-      // Oldest first so the year/month dividers read top-to-bottom. In "Only
-      // suggested" mode, cluster each month by suggested person (date secondary)
-      // — month stays the primary key so the month grouping/range-select hold.
-      faces.sort(suggestedOnly
-        ? byMonthThenPersonThenDate
-        : (a, b) => (a.photo_datetime || 0) - (b.photo_datetime || 0));
+      // Oldest first so each month's location buckets land in first-seen
+      // (chronological) order, then flatten into that month → location order so
+      // the flat `faces` array matches the on-screen order — shift-range
+      // selection relies on index ↔ faces[index] correspondence.
+      faces.sort((a, b) => (a.photo_datetime || 0) - (b.photo_datetime || 0));
+      faces = computeMonthLocationGroups(faces).flatMap(g => g.faces);
+      // Pre-select only the confident guesses — accept those in bulk, then
+      // triage the weaker/unguessed faces by hand.
+      selectedIds = new Set(
+        faces.filter(f => f.suggestion && f.suggestion.score >= CONFIDENT_SCORE
+                          && !f.person_name && !f.ignored)
+             .map(f => f.id));
+      focusedFaceId = faces.length ? faces[0].id : null;
     } else if (scope === "person") {
       faces.sort((a, b) => (a.photo_datetime || 0) - (b.photo_datetime || 0));
     }
@@ -337,11 +348,15 @@ async function loadFaces() {
       setStatus("No unlabeled faces have a recognition guess yet — uncheck " +
                 "“Only suggested” to see the rest, or label a few faces so " +
                 "recognition has examples to match against.");
+    } else if (scope === "unlabeled") {
+      const noun = suggestedOnly ? "suggested face(s)" : "unlabeled face(s)";
+      let msg = `${data.returned} of ${data.total} ${noun}, grouped by month then place`;
+      if (data.total > data.returned) msg += ` (showing first ${data.returned})`;
+      if (selectedIds.size) msg += `. ${selectedIds.size} confident guess(es) pre-selected.`;
+      setStatus(msg);
     } else {
       const label = scope === "person" ? personName : scope;
-      const what = (scope === "unlabeled" && suggestedOnly)
-        ? "suggested face(s) — Unlabeled" : `faces — ${label}`;
-      let msg = `${data.returned} of ${data.total} ${what}`;
+      let msg = `${data.returned} of ${data.total} faces — ${label}`;
       if (data.total > data.returned) msg += ` (showing first ${data.returned})`;
       setStatus(msg);
     }
@@ -360,12 +375,17 @@ function renderGrid() {
   const grid = document.getElementById("grid");
   grid.innerHTML = "";
 
-  // In the guesses view, lay faces out under event-group headers.
+  // In the guesses view, lay faces out under event-group headers (date-range
+  // title, location in the meta; the Ignore button acts on the selection).
   if (scope === "suggested") {
     let idx = 0, groupIdx = 0;
     computeTimeGroups(faces, groupGapSeconds).forEach(group => {
       const sec = makeGroupSection(groupIdx++);
-      sec.appendChild(makeGroupHeader(group));
+      const place = locationLabel(group.faces);
+      sec.appendChild(makeGroupHeader(group, {
+        title: formatGroupRange(group),
+        meta: place ? `· 📍 ${place}` : "",
+      }));
       const cells = document.createElement("div");
       cells.className = "face-group-cells";
       group.faces.forEach(face => { cells.appendChild(makeFaceCell(face, idx)); idx++; });
@@ -407,36 +427,41 @@ function renderGrid() {
     return;
   }
 
-  // Unlabeled queue: year dividers + a per-month header carrying an "Accept all"
-  // button that confirms the suggestions for just that month's faces.
+  // Unlabeled queue: same common group grid as the guesses view, grouped by
+  // month then by location. Year/month dividers read top-to-bottom; each
+  // location within a month is one group (location title, date range in the
+  // meta) and its Ignore button acts on the whole group, not just the selection.
   if (scope === "unlabeled") {
-    let idx = 0, curYear = null, groupIdx = 0;
-    computeMonthGroups(faces).forEach(group => {
-      if (group.year !== null && group.year !== curYear) {
-        curYear = group.year;
+    let idx = 0, groupIdx = 0, curYear, curMonth;
+    computeMonthLocationGroups(faces).forEach(group => {
+      if (group.year !== curYear) {
+        curYear = group.year; curMonth = undefined;
         const yd = document.createElement("div");
         yd.className = "grid-year-divider";
-        yd.textContent = group.year;
+        yd.textContent = group.year === null ? "Undated" : group.year;
         grid.appendChild(yd);
       }
-      grid.appendChild(makeMonthHeader(group));
-      // In "Only suggested" mode the month is clustered by person; when more than
-      // one person appears, give each a sub-header with its own "Accept all".
-      const runs = suggestedOnly ? computePersonRuns(group.faces) : null;
-      if (runs && runs.length > 1) {
-        runs.forEach(run => {
-          const sec = makeGroupSection(groupIdx++);
-          sec.appendChild(makePersonRunHeader(run));
-          const cells = document.createElement("div");
-          cells.className = "face-group-cells";
-          run.faces.forEach(face => { cells.appendChild(makeFaceCell(face, idx)); idx++; });
-          sec.appendChild(cells);
-          grid.appendChild(sec);
-        });
-      } else {
-        group.faces.forEach(face => { grid.appendChild(makeFaceCell(face, idx)); idx++; });
-        groupIdx++;
+      if (group.month !== curMonth) {
+        curMonth = group.month;
+        if (group.month !== null) {
+          const md = document.createElement("div");
+          md.className = "grid-month-divider";
+          md.textContent = MONTH_NAMES[group.month];
+          grid.appendChild(md);
+        }
       }
+      const sec = makeGroupSection(groupIdx++);
+      sec.appendChild(makeGroupHeader(group, {
+        title: group.place ? `📍 ${group.place}` : "No location",
+        label: group.place || "No location",
+        meta: `· ${facesDateRange(group.faces)}`,
+        ignoreAll: true,
+      }));
+      const cells = document.createElement("div");
+      cells.className = "face-group-cells";
+      group.faces.forEach(face => { cells.appendChild(makeFaceCell(face, idx)); idx++; });
+      sec.appendChild(cells);
+      grid.appendChild(sec);
     });
     return;
   }
@@ -495,25 +520,6 @@ function makePersonHeader() {
   return bar;
 }
 
-// Sort key for a face's calendar month ("YYYY-MM"; undated sorts first), so the
-// month grouping stays contiguous regardless of any secondary ordering.
-function monthKey(f) {
-  if (!f.photo_datetime) return "0000-00";
-  const d = new Date(f.photo_datetime * 1000);
-  return `${d.getFullYear()}-${String(d.getMonth()).padStart(2, "0")}`;
-}
-
-// Month → suggested person (alphabetical) → date. Clusters each month's faces by
-// who they're guessed to be while keeping months in chronological order.
-function byMonthThenPersonThenDate(a, b) {
-  const ma = monthKey(a), mb = monthKey(b);
-  if (ma !== mb) return ma < mb ? -1 : 1;
-  const an = ((a.suggestion && a.suggestion.person_name) || "￿").toLowerCase();
-  const bn = ((b.suggestion && b.suggestion.person_name) || "￿").toLowerCase();
-  if (an !== bn) return an < bn ? -1 : 1;
-  return (a.photo_datetime || 0) - (b.photo_datetime || 0);
-}
-
 /* ── Month grouping (unlabeled queue) ── */
 function computeMonthGroups(list) {
   // `list` is chronological with undated faces first (see loadFaces).
@@ -535,67 +541,33 @@ function computeMonthGroups(list) {
   return groups;
 }
 
-function makeMonthHeader(group) {
-  const header = document.createElement("div");
-  header.className = "face-month-header";
-
-  const labelText = group.year === null ? "Undated" : MONTH_NAMES[group.month];
-  const label = document.createElement("span");
-  label.textContent = labelText;
-  header.appendChild(label);
-
-  const acceptable = group.faces.filter(f => f.suggestion && !f.person_name && !f.ignored);
-  if (acceptable.length > 0) {
-    const btn = document.createElement("button");
-    btn.className = "month-accept-btn";
-    btn.textContent = `Accept all (${acceptable.length})`;
-    btn.title = "Confirm the suggested name for every guessed face in this month";
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      acceptSuggestionsFor(group.faces, labelText);
+// Month → location grouping. Within each chronological month, faces are bucketed
+// by resolved location; buckets keep first-seen order, which (because `list` is
+// chronological) is the order each location first appears that month. Faces with
+// no location collect into one "No location" bucket per month.
+function computeMonthLocationGroups(list) {
+  const out = [];
+  computeMonthGroups(list).forEach(mg => {
+    const buckets = new Map();   // locationKey ("" = none) → group
+    mg.faces.forEach(f => {
+      const key = locationKey(f) || "";
+      let b = buckets.get(key);
+      if (!b) {
+        b = { year: mg.year, month: mg.month, place: key || null, faces: [] };
+        buckets.set(key, b);
+      }
+      b.faces.push(f);
     });
-    header.appendChild(btn);
-  }
-  return header;
-}
-
-// Runs of consecutive same-suggested-person faces within an already-clustered month.
-function computePersonRuns(list) {
-  const runs = [];
-  let cur = null;
-  list.forEach(f => {
-    const pid = f.suggestion ? f.suggestion.person_id : null;
-    if (!cur || cur.person_id !== pid) {
-      cur = { person_id: pid, person_name: f.suggestion ? f.suggestion.person_name : null, faces: [] };
-      runs.push(cur);
-    }
-    cur.faces.push(f);
+    out.push(...buckets.values());
   });
-  return runs;
+  return out;
 }
 
-// Per-person sub-header inside a month, with an "Accept all" scoped to that person.
-function makePersonRunHeader(run) {
-  const header = document.createElement("div");
-  header.className = "face-person-subhdr";
-
-  const label = document.createElement("span");
-  label.textContent = run.person_name || "No suggestion";
-  header.appendChild(label);
-
-  const acceptable = run.faces.filter(f => f.suggestion && !f.person_name && !f.ignored);
-  if (acceptable.length > 0) {
-    const btn = document.createElement("button");
-    btn.className = "subhdr-accept-btn";
-    btn.textContent = `Accept all (${acceptable.length})`;
-    btn.title = `Confirm ${run.person_name} for these ${acceptable.length} face(s)`;
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      acceptSuggestionsFor(run.faces, run.person_name);
-    });
-    header.appendChild(btn);
-  }
-  return header;
+// "Mar 3 – Mar 8" date span across a group's faces (undated faces ignored).
+function facesDateRange(faceList) {
+  const ts = faceList.map(f => f.photo_datetime).filter(Boolean);
+  if (!ts.length) return "Undated";
+  return formatDateRange(Math.min(...ts), Math.max(...ts));
 }
 
 function makeFaceCell(face, idx) {
@@ -805,55 +777,67 @@ function formatGroupRange(group) {
   return group.undated ? "Undated" : formatDateRange(group.start, group.end);
 }
 
-function makeGroupHeader(group) {
-  const range = formatGroupRange(group);
-  const selectedInGroup = group.faces.filter(f => selectedIds.has(f.id)).length;
+// Shared header for a section of faces (guesses view and Unlabeled queue).
+// `title`/`meta` are display text; `label` (default `title`) is the plain name
+// used in status messages. `ignoreAll` switches the Ignore button between
+// "ignore the selected faces" (guesses view) and "ignore the whole group
+// regardless of selection" (Unlabeled queue).
+function makeGroupHeader(group, { title, meta = "", label = title, ignoreAll = false } = {}) {
   const acceptable = group.faces.filter(f => f.suggestion && !f.person_name && !f.ignored);
+  const ignoreBtn = ignoreAll
+    ? { icon: "🚫", label: "Ignore all", kind: "danger",
+        title: "Ignore every face in this group, regardless of selection",
+        onClick: () => {
+          if (!confirm(`Ignore all ${group.faces.length} face(s) in ${label}?`)) return;
+          ignoreSelected_ids(group.faces.map(f => f.id), true);
+        } }
+    : { icon: "🚫", label: "Ignore selected", kind: "danger",
+        title: "Ignore the selected faces in this group",
+        onClick: () => {
+          const ids = group.faces.filter(f => selectedIds.has(f.id)).map(f => f.id);
+          if (!ids.length) {
+            setStatus(`No selected faces in ${label} to ignore.`, true);
+            return;
+          }
+          ignoreSelected_ids(ids, true);
+        } };
   return faceGroupHeader({
-    title: range,
-    meta: `· ${selectedInGroup}/${group.faces.length} selected`,
+    title,
+    meta,
     buttons: [
       acceptable.length > 0 && {
         icon: "✓", label: `Accept all (${acceptable.length})`, kind: "primary",
         title: `Accept all ${acceptable.length} suggestion(s) in this group`,
-        onClick: () => acceptSuggestionsFor(group.faces, range),
+        onClick: () => acceptSuggestionsFor(group.faces, label),
       },
       { icon: "☑", label: "Select all",
         title: "Add every face in this group to the current selection",
-        onClick: () => selectGroupFaces(group, true) },
+        onClick: () => selectGroupFaces(group, true, label) },
       { icon: "◉", label: "Select only",
         title: "Select every face in this group and deselect all others",
-        onClick: () => selectGroupFaces(group, false) },
+        onClick: () => selectGroupFaces(group, false, label) },
       { icon: "☐", label: "Deselect all",
         title: "Remove every face in this group from the current selection",
         onClick: () => {
           group.faces.forEach(f => selectedIds.delete(f.id));
           renderGrid();
           updateDetail();
-          setStatus(`Deselected ${group.faces.length} face(s) from ${range}.`);
+          setStatus(`Deselected ${group.faces.length} face(s) from ${label}.`);
         } },
-      { icon: "🚫", label: "Ignore selected", kind: "danger",
-        title: "Ignore the selected faces in this group",
-        onClick: () => {
-          const ids = group.faces.filter(f => selectedIds.has(f.id)).map(f => f.id);
-          if (!ids.length) {
-            setStatus(`No selected faces in ${range} to ignore.`, true);
-            return;
-          }
-          ignoreSelected_ids(ids, true);
-        } },
+      ignoreBtn,
     ],
   });
 }
 
-function selectGroupFaces(group, additive) {
+function selectGroupFaces(group, additive, label) {
   if (!additive) selectedIds.clear();
   group.faces.forEach(f => selectedIds.add(f.id));
   focusedFaceId = group.faces[0] ? group.faces[0].id : focusedFaceId;
   renderGrid();
   updateDetail();
   const verb = additive ? "Added" : "Selected only";
-  setStatus(`${verb} ${group.faces.length} face(s) from ${formatGroupRange(group)}. ` +
+  const where = label || facesDateRange(group.faces);
+  setStatus(`${verb} ${group.faces.length} face(s) from ${where}. ` +
     `Assign to approve, or refine with click/Ctrl-click.`);
 }
 
@@ -942,10 +926,12 @@ function makeClusterCard(cl) {
     onClick: () => clusterIgnore(cl),
   });
 
+  const place = locationLabel(cl.sample);
   card.appendChild(faceGroupHeader({
     title: cl.suggestion ? `Looks like ${cl.suggestion.person_name}` : "New group",
     meta: `· ${cl.size} face(s)` +
-      (cl.suggestion ? ` · ${Math.round(cl.suggestion.score * 100)}% of group` : ""),
+      (cl.suggestion ? ` · ${Math.round(cl.suggestion.score * 100)}% of group` : "") +
+      (place ? ` · 📍 ${place}` : ""),
     buttons,
   }));
 

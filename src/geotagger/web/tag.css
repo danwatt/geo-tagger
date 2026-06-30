@@ -52,6 +52,8 @@ html, body {
 #hint.new { color: #e0b878; }
 #hint::after { content: " ✎"; font-size: 13px; color: #777; font-weight: 400; }
 #meta { color: #9aa; font-size: 13px; margin-top: 5px; }
+#place { color: #8ec6a0; font-size: 13px; margin-top: 4px; }
+#place:empty { display: none; }
 #card-actions {
   display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; margin-top: 10px;
 }
