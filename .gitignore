@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 tools/
+data/geonames/
 .geotagger/
 *.egg-info/
 dist/

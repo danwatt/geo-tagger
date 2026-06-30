@@ -1245,6 +1245,12 @@ async function showDetail(id) {
     document.getElementById("detail-content").style.display = "";
     document.getElementById("detail-img").src = `/api/preview/${id}`;
 
+    // Reverse-geocoded place name (city / state / country), when available.
+    const loc = data.location;
+    const placeStr = loc
+      ? [loc.city, loc.state, loc.country].filter(Boolean).join(", ")
+      : null;
+
     const rows = [
       ["File", data.filename],
       ["Type", data.media_type],
@@ -1253,6 +1259,7 @@ async function showDetail(id) {
       ["Dimensions", data.dimensions || "—"],
       ["Latitude", data.lat != null ? data.lat.toFixed(6) : "—"],
       ["Longitude", data.lng != null ? data.lng.toFixed(6) : "—"],
+      ["Location", placeStr || "—"],
       ["GPS accuracy", data.gps_accuracy != null ? `±${data.gps_accuracy.toFixed(1)} m` : "—"],
       ["Geotag source", data.geotag_source],
       ["Sidecar", data.sidecar_path ? data.sidecar_path.split(/[\\/]/).pop() : "none"],

@@ -75,6 +75,20 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     # Timestamp of last face-detection pass for this photo (NULL = never scanned)
     if "faces_scanned_at" not in cols:
         _db.execute("ALTER TABLE photos ADD COLUMN faces_scanned_at REAL")
+    # Reverse-geocoded place names (from coordinates). geocoded_at NULL = not yet
+    # looked up; a non-NULL geocoded_at with NULL names means "looked up, no match".
+    if "loc_city" not in cols:
+        _db.execute("ALTER TABLE photos ADD COLUMN loc_city TEXT")
+    if "loc_state" not in cols:
+        _db.execute("ALTER TABLE photos ADD COLUMN loc_state TEXT")
+    if "loc_county" not in cols:
+        _db.execute("ALTER TABLE photos ADD COLUMN loc_county TEXT")
+    if "loc_country" not in cols:
+        _db.execute("ALTER TABLE photos ADD COLUMN loc_country TEXT")
+    if "loc_country_code" not in cols:
+        _db.execute("ALTER TABLE photos ADD COLUMN loc_country_code TEXT")
+    if "geocoded_at" not in cols:
+        _db.execute("ALTER TABLE photos ADD COLUMN geocoded_at REAL")
     _db.execute("""
         CREATE TABLE IF NOT EXISTS scans (
             id INTEGER PRIMARY KEY,
@@ -89,6 +103,24 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
             type TEXT NOT NULL,
             bounds TEXT NOT NULL,
             created_at REAL NOT NULL
+        )
+    """)
+
+    # Reverse-geocode cache keyed on integer-quantized coordinates (see
+    # config.GEOCODE_PRECISION). qlat/qlng are round(coord * 10**precision), so
+    # nearby photos collapse to one row and share a single lookup result.
+    _db.execute("""
+        CREATE TABLE IF NOT EXISTS geocode_cache (
+            qlat INTEGER NOT NULL,
+            qlng INTEGER NOT NULL,
+            city TEXT,
+            state TEXT,
+            county TEXT,
+            country TEXT,
+            country_code TEXT,
+            source TEXT NOT NULL DEFAULT 'local',
+            created_at REAL NOT NULL,
+            PRIMARY KEY (qlat, qlng)
         )
     """)
 
@@ -267,8 +299,13 @@ def upsert_photo(
 def update_geotag(photo_id: int, lat: float | None, lng: float | None,
                   geotag_source: str, sidecar_path: str, sidecar_mtime: float | None):
     db = get_db()
+    # Coordinates changed, so any previously-derived location names are stale.
+    # Clear them and reset geocoded_at so the point is re-geocoded; the caller
+    # repopulates them (api_geotag does this immediately after).
     db.execute("""
-        UPDATE photos SET lat=?, lng=?, geotag_source=?, sidecar_path=?, sidecar_mtime=?
+        UPDATE photos SET lat=?, lng=?, geotag_source=?, sidecar_path=?, sidecar_mtime=?,
+            loc_city=NULL, loc_state=NULL, loc_county=NULL, loc_country=NULL,
+            loc_country_code=NULL, geocoded_at=NULL
         WHERE id=?
     """, (lat, lng, geotag_source, sidecar_path, sidecar_mtime, photo_id))
     db.commit()
@@ -555,6 +592,86 @@ def contexts_for_point_time(lat: float, lng: float, ts: int) -> list[sqlite3.Row
     return out
 
 
+# ── Reverse geocoding ──
+
+def get_cached_geocode(qlat: int, qlng: int) -> dict | None:
+    """Return a cached location for quantized coords, or None on a miss."""
+    row = get_db().execute(
+        "SELECT city, state, county, country, country_code FROM geocode_cache "
+        "WHERE qlat=? AND qlng=?",
+        (qlat, qlng),
+    ).fetchone()
+    if row is None:
+        return None
+    return {"city": row["city"], "state": row["state"], "county": row["county"],
+            "country": row["country"], "country_code": row["country_code"]}
+
+
+def put_cached_geocode(qlat: int, qlng: int, loc: dict, source: str = "local"):
+    """Cache a location result for quantized coords."""
+    db = get_db()
+    db.execute(
+        """INSERT OR REPLACE INTO geocode_cache
+               (qlat, qlng, city, state, county, country, country_code, source, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (qlat, qlng, loc.get("city"), loc.get("state"), loc.get("county"),
+         loc.get("country"), loc.get("country_code"), source, time.time()),
+    )
+    db.commit()
+
+
+def update_photo_location(photo_id: int, loc: dict | None):
+    """Store reverse-geocoded place names on a photo. geocoded_at is always set
+    (so a no-match isn't retried endlessly); loc=None records 'looked up, no match'."""
+    db = get_db()
+    if loc is None:
+        db.execute(
+            "UPDATE photos SET loc_city=NULL, loc_state=NULL, loc_county=NULL, "
+            "loc_country=NULL, loc_country_code=NULL, geocoded_at=? WHERE id=?",
+            (time.time(), photo_id),
+        )
+    else:
+        db.execute(
+            "UPDATE photos SET loc_city=?, loc_state=?, loc_county=?, loc_country=?, "
+            "loc_country_code=?, geocoded_at=? WHERE id=?",
+            (loc.get("city"), loc.get("state"), loc.get("county"), loc.get("country"),
+             loc.get("country_code"), time.time(), photo_id),
+        )
+    db.commit()
+
+
+def get_photos_needing_geocode(limit: int | None = None) -> list[sqlite3.Row]:
+    """Photos that have coordinates but have not been reverse-geocoded yet."""
+    sql = ("SELECT id, lat, lng FROM photos "
+           "WHERE lat IS NOT NULL AND lng IS NOT NULL AND geocoded_at IS NULL "
+           "ORDER BY id")
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    return get_db().execute(sql).fetchall()
+
+
+def count_photos_needing_geocode() -> int:
+    return get_db().execute(
+        "SELECT COUNT(*) FROM photos "
+        "WHERE lat IS NOT NULL AND lng IS NOT NULL AND geocoded_at IS NULL"
+    ).fetchone()[0]
+
+
+def count_geocoded_photos() -> int:
+    """Photos that resolved to a location (geocoded with a country)."""
+    return get_db().execute(
+        "SELECT COUNT(*) FROM photos WHERE loc_country_code IS NOT NULL"
+    ).fetchone()[0]
+
+
+def get_photos_with_location() -> list[sqlite3.Row]:
+    """All photos that have resolved location names — used to export to sidecars."""
+    return get_db().execute(
+        "SELECT id, path, loc_city, loc_state, loc_country, loc_country_code "
+        "FROM photos WHERE loc_country_code IS NOT NULL"
+    ).fetchall()
+
+
 # ── Faces & persons ──
 
 def get_unscanned_photo_ids() -> list[int]:
@@ -664,7 +781,8 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
     return get_db().execute(
         f"""SELECT f.id, f.photo_id, f.person_id, f.bbox, f.det_score, f.embedding,
                    f.ignored, f.assigned_at, f.ignored_at, p.name AS person_name, ph.filename,
-                   ph.photo_datetime, ph.orientation
+                   ph.photo_datetime, ph.orientation,
+                   ph.loc_city, ph.loc_state, ph.loc_country
             FROM faces f
             LEFT JOIN persons p ON p.id = f.person_id
             JOIN photos ph ON ph.id = f.photo_id

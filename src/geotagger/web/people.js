@@ -1255,9 +1255,14 @@ function updateDetail() {
   const personCell = face.ignored
     ? "<i style='color:#999'>Ignored</i>"
     : (face.person_name || "<i style='color:#777'>Unassigned</i>");
+  const loc = face.location;
+  const placeStr = loc
+    ? [loc.city, loc.state, loc.country].filter(Boolean).join(", ")
+    : null;
   document.getElementById("detail-meta").innerHTML = `
     <tr><td>Photo</td><td>${face.filename}</td></tr>
     <tr><td>Taken</td><td>${when}</td></tr>
+    ${placeStr ? `<tr><td>Location</td><td>${placeStr}</td></tr>` : ""}
     <tr><td>Person</td><td>${personCell}</td></tr>
     <tr><td>Detection</td><td>${face.det_score.toFixed(3)}</td></tr>
   `;

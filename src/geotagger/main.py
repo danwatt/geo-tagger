@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from geotagger.exiftool_session import lifespan as _et_lifespan, exiftool_status
-from geotagger import index, scanner, sidecar, thumbnails, faces
+from geotagger import index, scanner, sidecar, thumbnails, faces, geocode
 from geotagger.exiftool_session import get_et, get_et_lock
 from geotagger.config import (
     FACE_SUGGEST_SCAN_CAP,
@@ -207,6 +207,20 @@ def _scan_directory(root: Path, show_progress: bool = True, generate_thumbnails:
         for i in range(max_workers):
             print(" ".ljust(100))
 
+    # Reverse-geocode any newly-indexed photos that have coordinates (DB only;
+    # sidecars are written on demand via /api/geocode/export-sidecars).
+    if geocode.is_available():
+        try:
+            pending = index.count_photos_needing_geocode()
+            if pending:
+                if show_progress:
+                    print(f"  Reverse geocoding {pending} photo(s)…")
+                res = _geocode_pending()
+                if show_progress:
+                    print(f"  Geocoded {res['matched']}/{res['processed']} photo(s).")
+        except Exception as e:
+            warnings.append(f"Geocoding failed: {e}")
+
     return count, skipped, warnings
 
 
@@ -276,6 +290,9 @@ class GeotagRequest(BaseModel):
 class RemoveGeotagRequest(BaseModel):
     ids: list[int]
 
+class GeocodeBackfillRequest(BaseModel):
+    limit: int = 1000  # photos geocoded per call; repeat until remaining == 0
+
 class CreatePlaceRequest(BaseModel):
     name: str
     type: str  # "rectangle" or "circle"
@@ -304,7 +321,7 @@ async def api_status():
         total = db.execute("SELECT COUNT(*) FROM photos").fetchone()[0]
     except Exception as e:
         total = f"error: {e}"
-    return {**exiftool_status(), "db_total": total}
+    return {**exiftool_status(), "db_total": total, "geocoder": geocode.status()}
 
 
 @app.get("/api/debug")
@@ -729,23 +746,39 @@ async def api_photo(photo_id: int):
         "datetime": extra.get("EXIF:DateTimeOriginal"),
         "dimensions": extra.get("Composite:ImageSize"),
         "gps_accuracy": row["gps_accuracy"] if row["gps_accuracy"] and row["gps_accuracy"] > 0 else None,
+        "location": {
+            "city": row["loc_city"],
+            "state": row["loc_state"],
+            "county": row["loc_county"],
+            "country": row["loc_country"],
+            "country_code": row["loc_country_code"],
+        } if row["loc_country_code"] else None,
     }
 
 
 @app.post("/api/geotag")
 async def api_geotag(req: GeotagRequest):
+    # Reverse-geocode once for the shared drop point (executor avoids blocking the
+    # event loop on the geocoder's one-time KD-tree load). loc is None when the
+    # GeoNames data isn't installed, in which case we just skip the place names.
+    loop = asyncio.get_running_loop()
+    loc = await loop.run_in_executor(_executor, geocode.lookup, req.lat, req.lng)
+
     results = []
     for photo_id in req.ids:
         row = index.get_photo(photo_id)
         if not row:
             continue
         p = Path(row["path"])
-        sc = sidecar.write_gps(p, req.lat, req.lng)
+        sc = sidecar.write_gps(p, req.lat, req.lng, location=loc)
         sc_mtime = sc.stat().st_mtime if sc.exists() else None
         index.update_geotag(photo_id, req.lat, req.lng, "sidecar", str(sc), sc_mtime)
+        if loc is not None:
+            index.update_photo_location(photo_id, loc)
         results.append({
             "id": photo_id, "lat": req.lat, "lng": req.lng,
             "geotag_source": "sidecar", "sidecar_path": str(sc),
+            "location": loc,
         })
     return results
 
@@ -845,6 +878,83 @@ async def api_geotag_remove(req: RemoveGeotagRequest):
         index.update_geotag(photo_id, None, None, "none", str(sc), sc_mtime)
         results.append({"id": photo_id, "geotag_source": "none"})
     return results
+
+
+# ── Reverse geocoding ──────────────────────────────────────────────────────────
+
+def _geocode_pending(limit: int | None = None) -> dict:
+    """Reverse-geocode photos that have coordinates but no location yet, storing
+    the result in the DB (not sidecars). Blocking; runs in the executor."""
+    if not geocode.is_available():
+        return {"processed": 0, "matched": 0, "available": False,
+                "remaining": index.count_photos_needing_geocode()}
+    rows = index.get_photos_needing_geocode(limit)
+    processed = matched = 0
+    for r in rows:
+        loc = geocode.lookup(r["lat"], r["lng"])
+        index.update_photo_location(r["id"], loc)
+        processed += 1
+        if loc:
+            matched += 1
+    return {"processed": processed, "matched": matched, "available": True,
+            "remaining": index.count_photos_needing_geocode()}
+
+
+def _export_locations_to_sidecars() -> dict:
+    """Write resolved place names into the XMP sidecar of every geocoded photo.
+    Blocking; runs in the executor. Acquires the ExifTool lock per file so it
+    doesn't starve thumbnail/preview requests for the whole run."""
+    rows = index.get_photos_with_location()
+    lock = get_et_lock()
+    db = index.get_db()
+    written = errors = 0
+    err_samples: list[str] = []
+    for r in rows:
+        loc = {"city": r["loc_city"], "state": r["loc_state"],
+               "country": r["loc_country"], "country_code": r["loc_country_code"]}
+        try:
+            p = Path(r["path"])
+            with lock:
+                sc = sidecar.write_location(p, loc)
+            sc_mtime = sc.stat().st_mtime if sc.exists() else None
+            # Keep sidecar tracking current so the next scan doesn't re-index this row.
+            db.execute("UPDATE photos SET sidecar_path=?, sidecar_mtime=? WHERE id=?",
+                       (str(sc), sc_mtime, r["id"]))
+            db.commit()
+            written += 1
+        except Exception as e:
+            errors += 1
+            if len(err_samples) < 5:
+                err_samples.append(f"{Path(r['path']).name}: {e}")
+    return {"written": written, "errors": errors, "error_samples": err_samples}
+
+
+@app.get("/api/geocode/status")
+async def api_geocode_status():
+    """Geocoder availability plus how many photos are geocoded vs. pending."""
+    return {
+        **geocode.status(),
+        "geocoded": index.count_geocoded_photos(),
+        "pending": index.count_photos_needing_geocode(),
+    }
+
+
+@app.post("/api/geocode/backfill")
+async def api_geocode_backfill(req: GeocodeBackfillRequest):
+    """Reverse-geocode up to `limit` photos that have coordinates but no location.
+    Repeat until `remaining` is 0. Returns 503 if the GeoNames data isn't installed."""
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(_executor, _geocode_pending, max(1, req.limit))
+    if not result.get("available"):
+        raise HTTPException(503, "GeoNames data not installed — run scripts/get_geonames.py")
+    return result
+
+
+@app.post("/api/geocode/export-sidecars")
+async def api_geocode_export_sidecars():
+    """Write resolved place names into the XMP sidecars of all geocoded photos."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_executor, _export_locations_to_sidecars)
 
 
 @app.get("/api/places")
@@ -1199,6 +1309,15 @@ async def api_delete_person(person_id: int):
     return {"success": True}
 
 
+def _row_location(r) -> dict | None:
+    """Place names from a photo-joined row, or None. Defensive against rows that
+    don't carry the loc_* columns (only list_faces rows do)."""
+    keys = r.keys()
+    if "loc_country" not in keys or not r["loc_country"]:
+        return None
+    return {"city": r["loc_city"], "state": r["loc_state"], "country": r["loc_country"]}
+
+
 def _face_item(r) -> dict:
     """Build the JSON-safe face dict (without a suggestion) from a DB row."""
     return {
@@ -1213,6 +1332,7 @@ def _face_item(r) -> dict:
         "photo_datetime": r["photo_datetime"],
         "assigned_at": r["assigned_at"],
         "ignored_at": r["ignored_at"],
+        "location": _row_location(r),
         "suggestion": None,
         "alternatives": [],
     }

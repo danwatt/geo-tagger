@@ -40,7 +40,17 @@ def start_et() -> bool:
     if _et is not None:
         return True
     try:
-        _et = exiftool.ExifToolHelper(executable=EXIFTOOL_PATH)
+        # encoding="utf-8" + "-charset filename=utf8" so tag values AND file paths
+        # are exchanged as UTF-8 in both directions. Without this, the default
+        # Windows code page (cp1252) mojibakes or outright fails on the many
+        # non-Latin-1 place names from GeoNames (e.g. "Ōtemachi", "Zürich"), and
+        # on non-cp1252 file paths. "-G -n" are pyexiftool's defaults, which the
+        # rest of the app relies on (group-prefixed keys, numeric GPS/orientation).
+        _et = exiftool.ExifToolHelper(
+            executable=EXIFTOOL_PATH,
+            encoding="utf-8",
+            common_args=["-charset", "filename=utf8", "-G", "-n"],
+        )
         version = _et.execute("-ver").strip()
         _et_error = None
         print(f"ExifTool {version} ready ({EXIFTOOL_PATH})")

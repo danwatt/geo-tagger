@@ -33,6 +33,22 @@ PREVIEW_SIZE = 1600
 #                 "fullname" -> IMG.NEF uses IMG.NEF.xmp
 SIDECAR_MODE = os.environ.get("GEOTAGGER_SIDECAR_MODE", "basename")  # or "fullname"
 
+# ── Reverse geocoding (offline, GeoNames) ──
+# Directory holding the GeoNames data files (cities500.txt, admin1CodesASCII.txt,
+# admin2Codes.txt, countryInfo.txt). Download them with:
+#     uv run python scripts/get_geonames.py
+def get_geonames_dir() -> Path:
+    if env := os.environ.get("GEOTAGGER_GEONAMES_DIR"):
+        return Path(env)
+    return _PROJECT_ROOT / "data" / "geonames"
+
+GEONAMES_DIR: Path = get_geonames_dir()
+
+# Coordinates are quantized to this many decimal degrees before a reverse-geocode
+# lookup, so nearby photos share one cached result. 4 decimals ≈ 11 m at the
+# equator (and less at higher latitudes) — fine for city/state/country tagging.
+GEOCODE_PRECISION = int(os.environ.get("GEOTAGGER_GEOCODE_PRECISION", "4"))
+
 # Supported file extensions
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".heic", ".heif", ".nef", ".dng", ".tif", ".tiff", ".png"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".avi"}

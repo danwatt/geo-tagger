@@ -94,19 +94,37 @@ def read_gps(image_path: Path) -> tuple[float, float, str] | tuple[None, None, s
     return m["lat"], m["lng"], m["geotag_source"]
 
 
-def write_gps(image_path: Path, lat: float, lng: float) -> Path:
-    """Write GPS to sidecar (creating it if needed). Returns sidecar path."""
+# XMP location fields. We use the legacy IPTC/Photoshop tags because they're the
+# most widely-read place-name fields (Lightroom, Bridge, digiKam, Photos, etc.).
+# CountryCode is ISO 3166-1 alpha-2, matching GeoNames.
+def _location_args(location: dict | None) -> list[str]:
+    """ExifTool args to write (or clear, with location=None) the place-name tags.
+    Empty values clear the tag so stale names never linger."""
+    loc = location or {}
+    return [
+        f"-XMP-photoshop:City={loc.get('city') or ''}",
+        f"-XMP-photoshop:State={loc.get('state') or ''}",
+        f"-XMP-photoshop:Country={loc.get('country') or ''}",
+        f"-XMP-iptcCore:CountryCode={loc.get('country_code') or ''}",
+    ]
+
+
+def write_gps(image_path: Path, lat: float, lng: float, location: dict | None = None) -> Path:
+    """Write GPS to sidecar (creating it if needed). When ``location`` is given,
+    its place names are written in the same pass. Returns sidecar path."""
     # Read existing coordinates before updating
     old_lat, old_lng, _ = read_gps(image_path)
 
     et = get_et()
     sc = sidecar_path(image_path)
-    et.execute(
+    args = [
         "-overwrite_original",
         f"-XMP:GPSLatitude={lat}",
         f"-XMP:GPSLongitude={lng}",
-        str(sc),
-    )
+    ]
+    if location is not None:
+        args += _location_args(location)
+    et.execute(*args, str(sc))
 
     # Log the change
     if old_lat is not None and old_lng is not None:
@@ -114,6 +132,20 @@ def write_gps(image_path: Path, lat: float, lng: float) -> Path:
     else:
         logger.info(f"Added GPS to {image_path.name}: ({lat:.6f}, {lng:.6f})")
 
+    return sc
+
+
+def write_location(image_path: Path, location: dict) -> Path:
+    """Write only the reverse-geocoded place names to the sidecar (creating it if
+    needed) — used by the bulk 'export locations to sidecars' action. Returns the
+    sidecar path."""
+    et = get_et()
+    sc = sidecar_path(image_path)
+    et.execute("-overwrite_original", *_location_args(location), str(sc))
+    logger.info(
+        f"Wrote location to {sc.name}: "
+        f"{location.get('city')}, {location.get('state')}, {location.get('country')}"
+    )
     return sc
 
 
@@ -125,10 +157,12 @@ def remove_gps(image_path: Path) -> Path:
     et = get_et()
     sc = sidecar_path(image_path)
     if sc.exists():
+        # Clear coordinates and the derived place names together.
         et.execute(
             "-overwrite_original",
             "-XMP:GPSLatitude=",
             "-XMP:GPSLongitude=",
+            *_location_args(None),
             str(sc),
         )
 
