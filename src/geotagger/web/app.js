@@ -4,6 +4,7 @@ let filteredPhotos = [];  // after camera hide + date range filter
 let selectedIds = new Set();
 let lastClickedIndex = -1;
 let markersById = {};
+let dayIsolation = null; // "YYYY-MM-DD" key, or null when all days are shown
 let focusedPhotoId = null;
 let map;
 let guessMarker = null;        // temporary guess pin (amber ?)
@@ -93,6 +94,18 @@ function camColor(camera) {
     camPaletteCursor++;
   }
   return camColorMap[key];
+}
+
+function dayKey(photo) {
+  if (!photo.photo_datetime) return null;
+  const d = new Date(photo.photo_datetime * 1000);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function isolateDay(key) {
+  dayIsolation = (dayIsolation === key) ? null : key;
+  renderMarkers();
+  renderGrid();
 }
 
 /* ── Init ── */
@@ -334,6 +347,7 @@ function hideMonthPicker() {
 async function selectMonth(year, month) {
   selectedYear = year;
   selectedMonth = month;
+  dayIsolation = null;
   hideMonthPicker();
 
   // Clear area and context selections
@@ -359,6 +373,7 @@ async function selectMonth(year, month) {
 async function selectYear(year) {
   selectedYear = year;
   selectedMonth = null;
+  dayIsolation = null;
   hideMonthPicker();
 
   areaSelectParams = null;
@@ -701,6 +716,7 @@ async function loadContextsDropdown() {
 
 async function loadPhotosByContext(ctx) {
   contextFilterData = ctx;
+  dayIsolation = null;
 
   // Draw / update the polygon layer
   if (contextPolygonLayer) { map.removeLayer(contextPolygonLayer); contextPolygonLayer = null; }
@@ -715,7 +731,8 @@ async function loadPhotosByContext(ctx) {
   document.getElementById("selected-context-label").textContent = ctx.name;
 
   const filter = document.getElementById("filter-select").value;
-  const url = `/api/photos?geotagged=${filter}&context_id=${ctx.id}`;
+  const apiFilter = filter === "mixed" ? "all" : filter;
+  const url = `/api/photos?geotagged=${apiFilter}&context_id=${ctx.id}`;
 
   try {
     setStatus(`Loading photos in context "${ctx.name}"…`);
@@ -846,12 +863,14 @@ function stopAreaSelection() {
 }
 
 async function loadPhotosByArea(lat, lng, radius) {
+  dayIsolation = null;
   const filter = document.getElementById("filter-select").value;
+  const apiFilter = filter === "mixed" ? "all" : filter;
   const window = document.getElementById("window-select").value;
 
   try {
     setStatus("Loading photos in area...");
-    const res = await fetch(`/api/photos/by-area?lat=${lat}&lng=${lng}&radius=${radius}&geotagged=${filter}&window=${window}`);
+    const res = await fetch(`/api/photos/by-area?lat=${lat}&lng=${lng}&radius=${radius}&geotagged=${apiFilter}&window=${window}`);
 
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
@@ -939,6 +958,7 @@ async function loadPhotos(fitMap = false) {
   }
 
   const filter = document.getElementById("filter-select").value;
+  const apiFilter = filter === "mixed" ? "all" : filter;
 
   let dateFrom, dateTo;
   if (selectedMonth) {
@@ -951,7 +971,7 @@ async function loadPhotos(fitMap = false) {
   }
 
   try {
-    const url = `/api/photos?geotagged=${filter}&date_from=${dateFrom}&date_to=${dateTo}`;
+    const url = `/api/photos?geotagged=${apiFilter}&date_from=${dateFrom}&date_to=${dateTo}`;
 
     const res = await fetch(url);
     photos = await res.json();
@@ -965,6 +985,20 @@ async function loadPhotos(fitMap = false) {
   }
 }
 
+function filterMixedDays(photoList) {
+  const dayCounts = new Map(); // dayKey -> { tagged, untagged }
+  photoList.forEach(p => {
+    const k = dayKey(p) || "__undated__";
+    if (!dayCounts.has(k)) dayCounts.set(k, { tagged: 0, untagged: 0 });
+    const e = dayCounts.get(k);
+    if (p.lat != null) e.tagged++; else e.untagged++;
+  });
+  const mixedKeys = new Set(
+    [...dayCounts.entries()].filter(([, v]) => v.tagged > 0 && v.untagged > 0).map(([k]) => k)
+  );
+  return photoList.filter(p => mixedKeys.has(dayKey(p) || "__undated__"));
+}
+
 /* ── Apply all active filters → filteredPhotos ── */
 function applyFilters(fitMap = false) {
   filteredPhotos = photos.filter(p => {
@@ -975,6 +1009,9 @@ function applyFilters(fitMap = false) {
     }
     return true;
   });
+  if (document.getElementById("filter-select").value === "mixed") {
+    filteredPhotos = filterMixedDays(filteredPhotos);
+  }
   renderGrid();
   renderMarkers();
   drawHistogram();
@@ -1017,77 +1054,140 @@ function renderLegend() {
 const DAY_ABBRS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 /* ── Grid ── */
+function makeThumbCell(photo, idx) {
+  const cell = document.createElement("div");
+  cell.className = "thumb-cell" +
+    (selectedIds.has(photo.id) ? " selected" : "") +
+    (photo.lat != null ? " tagged" : "");
+  cell.dataset.id = photo.id;
+  cell.dataset.idx = idx;
+  cell.draggable = true;
+
+  const strip = document.createElement("div");
+  strip.className = "cam-strip";
+  strip.style.background = camColor(photo.camera);
+
+  const img = document.createElement("img");
+  img.src = `/api/thumbnail/${photo.id}`;
+  img.loading = "lazy";
+  img.alt = photo.filename;
+
+  const name = document.createElement("div");
+  name.className = "thumb-name";
+  name.textContent = photo.filename;
+
+  cell.appendChild(strip);
+  cell.appendChild(img);
+  cell.appendChild(name);
+
+  cell.addEventListener("click", (e) => handleThumbClick(e, photo.id, idx));
+  cell.addEventListener("dragstart", (e) => handleDragStart(e, photo.id));
+  return cell;
+}
+
 function renderGrid() {
   const grid = document.getElementById("grid");
   grid.innerHTML = "";
 
-  let curYear = null;
-  let curMonth = null;
-  let curDay = null;
-
+  // Group filteredPhotos into calendar-day buckets
+  const dayGroups = [];
+  let curGroup = null;
   filteredPhotos.forEach((photo, idx) => {
+    const key = dayKey(photo);
+    let year = null, month = null, day = null, date = null;
     if (photo.photo_datetime) {
-      const d = new Date(photo.photo_datetime * 1000);
-      const year = d.getFullYear();
-      const month = d.getMonth();  // 0-based
-      const day = d.getDate();
+      date = new Date(photo.photo_datetime * 1000);
+      year = date.getFullYear();
+      month = date.getMonth();
+      day = date.getDate();
+    }
+    if (!curGroup || curGroup.key !== key ||
+        curGroup.year !== year || curGroup.month !== month || curGroup.day !== day) {
+      curGroup = { key, year, month, day, date, photos: [] };
+      dayGroups.push(curGroup);
+    }
+    curGroup.photos.push({ photo, idx });
+  });
 
-      if (year !== curYear) {
-        curYear = year;
-        curMonth = null;  // force month header below
-        curDay = null;
+  let curYear = null, curMonth = null, groupIdx = 0;
+  dayGroups.forEach(group => {
+    if (group.year !== curYear) {
+      curYear = group.year;
+      curMonth = null;
+      if (group.year !== null) {
         const div = document.createElement("div");
         div.className = "grid-year-divider";
-        div.textContent = year;
+        div.textContent = group.year;
         grid.appendChild(div);
       }
-
-      if (month !== curMonth) {
-        curMonth = month;
-        curDay = null;  // force day header below
+    }
+    if (group.month !== curMonth) {
+      curMonth = group.month;
+      if (group.month !== null) {
         const div = document.createElement("div");
         div.className = "grid-month-divider";
-        div.textContent = MONTH_NAMES[month];
-        grid.appendChild(div);
-      }
-
-      if (day !== curDay) {
-        curDay = day;
-        const div = document.createElement("div");
-        div.className = "grid-day-divider";
-        div.textContent = `${DAY_ABBRS[d.getDay()]} ${day}`;
+        div.textContent = MONTH_NAMES[group.month];
         grid.appendChild(div);
       }
     }
 
-    const cell = document.createElement("div");
-    cell.className = "thumb-cell" +
-      (selectedIds.has(photo.id) ? " selected" : "") +
-      (photo.lat != null ? " tagged" : "");
-    cell.dataset.id = photo.id;
-    cell.dataset.idx = idx;
-    cell.draggable = true;
+    const sec = document.createElement("div");
+    sec.className = `face-group-section group-tint-${groupIdx % 6}`;
 
-    const strip = document.createElement("div");
-    strip.className = "cam-strip";
-    strip.style.background = camColor(photo.camera);
+    const title = group.date
+      ? `${DAY_ABBRS[group.date.getDay()]} ${group.day}`
+      : "Undated";
+    const count = group.photos.length;
+    const isIsolated = group.key !== null && dayIsolation === group.key;
+    const taggedInDay   = group.photos.filter(({ photo }) => photo.lat != null && photo.lng != null);
+    const untaggedInDay = group.photos.filter(({ photo }) => photo.lat == null);
 
-    const img = document.createElement("img");
-    img.src = `/api/thumbnail/${photo.id}`;
-    img.loading = "lazy";
-    img.alt = photo.filename;
+    sec.appendChild(faceGroupHeader({
+      title,
+      meta: `· ${count} photo${count !== 1 ? "s" : ""}`,
+      buttons: group.key ? [
+        {
+          icon: "📍",
+          label: isIsolated ? "Show all days on map" : "Show only this day on map",
+          title: isIsolated ? "Show all days on map" : "Show only this day on map",
+          kind: isIsolated ? "active" : "",
+          onClick: () => isolateDay(group.key),
+        },
+        {
+          icon: "⛶",
+          label: "Zoom to this day",
+          title: taggedInDay.length
+            ? `Zoom map to fit ${taggedInDay.length} geotagged photo${taggedInDay.length !== 1 ? "s" : ""} on this day`
+            : "No geotagged photos on this day",
+          disabled: taggedInDay.length === 0,
+          onClick: () => {
+            const bounds = L.latLngBounds(taggedInDay.map(({ photo }) => [photo.lat, photo.lng]));
+            map.flyToBounds(bounds, { padding: [40, 40], maxZoom: 16, duration: 0.8 });
+          },
+        },
+        {
+          icon: "☐",
+          label: "Select untagged",
+          title: untaggedInDay.length
+            ? `Select ${untaggedInDay.length} untagged photo${untaggedInDay.length !== 1 ? "s" : ""} on this day`
+            : "No untagged photos on this day",
+          disabled: untaggedInDay.length === 0,
+          onClick: () => {
+            selectedIds.clear();
+            untaggedInDay.forEach(({ photo }) => selectedIds.add(photo.id));
+            refreshSelectionUI();
+            setStatus(`Selected ${untaggedInDay.length} untagged photo(s) on ${title}.`);
+          },
+        },
+      ] : [],
+    }));
 
-    const name = document.createElement("div");
-    name.className = "thumb-name";
-    name.textContent = photo.filename;
-
-    cell.appendChild(strip);
-    cell.appendChild(img);
-    cell.appendChild(name);
-    grid.appendChild(cell);
-
-    cell.addEventListener("click", (e) => handleThumbClick(e, photo.id, idx));
-    cell.addEventListener("dragstart", (e) => handleDragStart(e, photo.id));
+    const cells = document.createElement("div");
+    cells.className = "face-group-cells";
+    group.photos.forEach(({ photo, idx }) => cells.appendChild(makeThumbCell(photo, idx)));
+    sec.appendChild(cells);
+    grid.appendChild(sec);
+    groupIdx++;
   });
 }
 
@@ -1146,11 +1246,19 @@ function makePinIcon(color) {
 }
 
 function renderMarkers() {
-  const visibleIds = new Set(filteredPhotos.map(p => p.id));
+  const isolatedSet = dayIsolation
+    ? new Set(filteredPhotos.filter(p => dayKey(p) === dayIsolation).map(p => p.id))
+    : null;
+  const inScope = new Set(filteredPhotos.map(p => p.id));
   Object.entries(markersById).forEach(([id, m]) => {
-    if (!visibleIds.has(Number(id))) { m.remove(); delete markersById[id]; }
+    const nid = Number(id);
+    if (!inScope.has(nid) || (isolatedSet && !isolatedSet.has(nid))) {
+      m.remove();
+      delete markersById[id];
+    }
   });
   filteredPhotos.forEach((photo) => {
+    if (isolatedSet && !isolatedSet.has(photo.id)) return;
     if (photo.lat != null && photo.lng != null) addOrUpdateMarker(photo);
   });
 }

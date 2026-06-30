@@ -6,6 +6,7 @@
 <title>Geo-Tagger</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="style.css"/>
+<link rel="stylesheet" href="face-grid.css"/>
 </head>
 <body>
 <div id="toolbar">
@@ -15,6 +16,7 @@
     <button id="people-view-btn">🙂 People</button>
     <button id="contexts-view-btn">🗺️ Contexts</button>
   </div>
+  <div class="toolbar-spacer"></div>
   <div class="toolbar-group">
     <button id="select-month-btn">Select Month</button>
     <span id="selected-month-label">No month selected</span>
@@ -32,42 +34,17 @@
     </select>
     <span id="selected-area-label"></span>
   </div>
-  <div class="toolbar-group">
-    <label>Context:</label>
-    <select id="context-filter-select">
-      <option value="">-- none --</option>
-    </select>
-    <span id="selected-context-label"></span>
-  </div>
-  <div class="toolbar-group">
-    <label>Places:</label>
-    <select id="places-select">
-      <option value="">Select a place...</option>
-    </select>
-    <button id="draw-rectangle-btn" title="Draw Rectangle">📐</button>
-    <button id="draw-circle-btn" title="Draw Circle">⭕</button>
-  </div>
-  <div class="toolbar-group">
-    <label>Show:</label>
-    <select id="filter-select">
-      <option value="all">All</option>
-      <option value="yes">Geotagged</option>
-      <option value="no">Not geotagged</option>
-    </select>
-  </div>
-  <div class="toolbar-group">
-    <input id="place-search" type="text" placeholder="Search place…" />
-    <button id="place-search-btn">Go</button>
-  </div>
-  <div class="toolbar-group">
-    <input id="lat-input" type="text" placeholder="Lat" style="width:90px"/>
-    <input id="lng-input" type="text" placeholder="Lng" style="width:90px"/>
-    <button id="apply-latlng-btn">Apply to selection</button>
-  </div>
-  <div class="toolbar-group">
-    <button id="copy-location-btn">Copy location to selection</button>
-    <button id="remove-geotag-btn" class="danger">Remove geotag</button>
-  </div>
+</div>
+
+<!-- Hidden controls kept for JS compatibility -->
+<div style="display:none">
+  <select id="context-filter-select"><option value="">-- none --</option></select>
+  <span id="selected-context-label"></span>
+  <input id="lat-input" type="text"/>
+  <input id="lng-input" type="text"/>
+  <button id="apply-latlng-btn"></button>
+  <button id="copy-location-btn"></button>
+  <button id="remove-geotag-btn"></button>
 </div>
 
 <div id="cam-legend"></div>
@@ -84,9 +61,34 @@
 
 <div id="main">
   <div id="map-pane">
+    <div id="map-nav">
+      <div class="toolbar-group">
+        <label>Places:</label>
+        <select id="places-select">
+          <option value="">Select a place...</option>
+        </select>
+        <button id="draw-rectangle-btn" title="Draw Rectangle">📐</button>
+        <button id="draw-circle-btn" title="Draw Circle">⭕</button>
+      </div>
+      <div class="toolbar-group">
+        <input id="place-search" type="text" placeholder="Search place…" />
+        <button id="place-search-btn">Go</button>
+      </div>
+    </div>
     <div id="map"></div>
   </div>
   <div id="grid-pane">
+    <div id="grid-nav">
+      <div class="toolbar-group">
+        <label>Show:</label>
+        <select id="filter-select">
+          <option value="all">All</option>
+          <option value="yes">Geotagged</option>
+          <option value="no">Not geotagged</option>
+          <option value="mixed">Mixed geotagged days</option>
+        </select>
+      </div>
+    </div>
     <div id="grid"></div>
   </div>
   <div id="detail-pane">
@@ -120,6 +122,7 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="face-grid.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

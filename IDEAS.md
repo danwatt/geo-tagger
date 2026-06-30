@@ -148,11 +148,6 @@ sidebar list of contexts (name, date range, vertex/photo count, edit/delete).
 
 ## Faces
 
-- **Large Crowd management**. I want the ability to find photos that appear to be of large crowds. The main thing I want to do with these
-is to ignore any background members of the crowd in bulk. Once the primary people have been identified, I have no further need to identify
-the background members of the crowd. Also, since these tend to be at events where multiple photos are taken, it would be helpful to group them together -
-likely by a date range window (same day, same week, etc). The crowd size should be adjustable, but we could start with a default of 50 total faces.
-
 - **Discover / cluster unlabeled faces** — *Done 2026-06-28.* "Discover groups"
   view clusters the unlabeled queue (cosine-graph + union-find connected
   components over the stored embeddings; det-score floor; top `FACE_CLUSTER_CAP`
