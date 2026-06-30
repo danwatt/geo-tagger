@@ -19,10 +19,6 @@
     <button id="manage-view-btn" title="Edit names, birth dates, and family groups">⚙ Manage</button>
   </div>
   <div class="toolbar-group">
-    <button id="scan-btn">Scan faces</button>
-    <span id="scan-status"></span>
-  </div>
-  <div class="toolbar-group">
     <button id="deselect-all-btn">Deselect all</button>
     <label id="suggested-only-label" title="In the Unlabeled queue, show only faces that have a recognition guess">
       <input type="checkbox" id="suggested-only-chk"/> Only suggested
@@ -40,21 +36,6 @@
   <div class="toolbar-group">
     <button id="confirm-suggested-btn" title="Confirm the suggested name for every selected face">✓ Accept suggestions</button>
     <button id="ignore-btn" title="Hide selected faces from the queue (background strangers, false detections)">🚫 Ignore</button>
-  </div>
-  <div class="toolbar-group">
-    <label>Review guesses for:</label>
-    <select id="guess-person-select">
-      <option value="">Choose person…</option>
-    </select>
-    <button id="review-guesses-btn" title="Show every face guessed to be this person, all pre-selected, so you can approve the good ones at once">🔮 Review</button>
-    <label>Group by:</label>
-    <select id="group-gap-select" title="Start a new event group when photos are more than this far apart in time">
-      <option value="21600">6 hours</option>
-      <option value="86400" selected>1 day</option>
-      <option value="259200">3 days</option>
-      <option value="604800">1 week</option>
-      <option value="2592000">1 month</option>
-    </select>
   </div>
   <div class="toolbar-group" id="crowd-controls" style="display:none">
     <label title="Photos with at least this many detected faces are shown as crowd photos">Min faces:</label>
@@ -82,6 +63,21 @@
 
   <!-- Center: faces grid -->
   <div id="grid-pane">
+    <div id="grid-nav">
+      <label>Review guesses for:</label>
+      <select id="guess-person-select">
+        <option value="">Choose person…</option>
+      </select>
+      <button id="review-guesses-btn" title="Show every face guessed to be this person, all pre-selected, so you can approve the good ones at once">🔮 Review</button>
+      <label>Group by:</label>
+      <select id="group-gap-select" title="Start a new event group when photos are more than this far apart in time">
+        <option value="21600">6 hours</option>
+        <option value="86400" selected>1 day</option>
+        <option value="259200">3 days</option>
+        <option value="604800">1 week</option>
+        <option value="2592000">1 month</option>
+      </select>
+    </div>
     <div id="grid"></div>
   </div>
 
@@ -102,10 +98,10 @@
           <button id="detail-assign-btn" class="primary">Assign</button>
         </div>
         <div class="face-assign-row">
-          <button id="detail-new-btn">New person…</button>
-          <button id="detail-unassign-btn" class="danger">Unassign</button>
-          <button id="detail-ignore-btn">🚫 Ignore</button>
-          <button id="detail-open-photo-btn">Open photo ↗</button>
+          <button id="detail-new-btn" class="icon-btn" title="New person…" aria-label="New person…">👤</button>
+          <button id="detail-unassign-btn" class="danger icon-btn" title="Unassign" aria-label="Unassign">×</button>
+          <button id="detail-ignore-btn" class="icon-btn" title="Ignore" aria-label="Ignore">🚫</button>
+          <button id="detail-open-photo-btn" class="icon-btn" title="Open photo" aria-label="Open photo">🖼</button>
         </div>
       </div>
       <table id="detail-meta"></table>

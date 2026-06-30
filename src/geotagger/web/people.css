@@ -6,8 +6,6 @@
   overflow: hidden;
 }
 
-#scan-status { color: #888; font-size: 11px; }
-
 #suggested-only-label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
 #suggested-only-chk { cursor: pointer; margin: 0; }
 
@@ -83,6 +81,21 @@
 }
 
 /* ── Center: faces grid (reuses #grid / .thumb-cell from style.css) ── */
+/* Sticky control bar pinned to the top of the (scrolling) middle pane. */
+#grid-nav {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  background: #252525;
+  border-bottom: 1px solid #333;
+}
+#grid-nav label { color: #bbb; font-size: 12px; }
+
 .thumb-cell .face-label {
   position: absolute;
   bottom: 0; left: 0; right: 0;
@@ -181,20 +194,8 @@
   margin-bottom: 10px;
   overflow: hidden;
 }
-.cluster-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 10px;
-  background: #1e2a3a;
-  border-bottom: 1px solid #2a3d54;
-  flex-wrap: wrap;
-}
-.cluster-title { font-size: 13px; font-weight: 600; color: #9ab8d8; }
-.cluster-meta { color: #567; font-weight: 400; font-size: 11px; }
-.cluster-actions { display: flex; gap: 6px; flex-shrink: 0; }
-.cluster-actions button { padding: 3px 10px; font-size: 11px; }
+/* Cluster/crowd headers use the shared .face-group-header (face-grid.js);
+   the crowd card's amber tint comes from faceGroupHeader({ extraClass: "amber" }). */
 .cluster-faces {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
@@ -220,11 +221,6 @@
   background: #221e14;
   border-color: #4a3a28;
 }
-.crowd-group-card .cluster-head {
-  background: #2a2218;
-  border-bottom-color: #4a3a28;
-}
-.crowd-group-card .cluster-title { color: #d8b88a; }
 .crowd-photos {
   display: flex;
   flex-wrap: wrap;
@@ -388,6 +384,7 @@
 }
 .face-assign-row { display: flex; gap: 6px; align-items: center; }
 .face-assign-row select { flex: 1; }
+.face-assign-row button.icon-btn { padding: 2px 8px; font-size: 14px; line-height: 1.2; }
 
 #face-suggestion {
   font-size: 12px;

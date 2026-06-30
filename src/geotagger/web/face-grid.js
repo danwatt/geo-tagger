@@ -50,7 +50,13 @@ function formatDateRange(startTs, endTs) {
  * Canonical "title + meta + action buttons" header for a section of faces.
  *   title      — main label text
  *   meta       — optional secondary text (caller includes its own "· " etc.)
- *   buttons    — [{ label, kind: "primary"|"danger"|"", title, onClick }]
+ *   buttons    — [{ label, icon, kind: "primary"|"danger"|"", title,
+ *                   disabled, ref, onClick }]
+ *                When `icon` is set the button shows that glyph instead of the
+ *                text label; `label` then serves as the tooltip / aria-label.
+ *                `disabled` sets the initial disabled state; `ref(btnEl)` hands
+ *                the created <button> back to the caller (e.g. to toggle it
+ *                later as related state changes).
  *   extraClass — optional tint variant ("green"|"blue"|"grey"|"amber") or any
  *                page-specific class.
  * Returns a .face-group-header element (styled in face-grid.css). */
@@ -75,10 +81,19 @@ function faceGroupHeader({ title, meta, buttons = [], extraClass = "" }) {
     btns.className = "face-group-btns";
     visible.forEach((b) => {
       const btn = document.createElement("button");
-      if (b.kind) btn.className = b.kind;
-      btn.textContent = b.label;
-      if (b.title) btn.title = b.title;
+      if (b.kind) btn.classList.add(b.kind);
+      if (b.icon) {
+        btn.classList.add("icon-btn");
+        btn.textContent = b.icon;
+        btn.title = b.title || b.label || "";
+        if (b.label) btn.setAttribute("aria-label", b.label);
+      } else {
+        btn.textContent = b.label;
+        if (b.title) btn.title = b.title;
+      }
+      if (b.disabled) btn.disabled = true;
       btn.addEventListener("click", (e) => { e.stopPropagation(); b.onClick(e); });
+      if (b.ref) b.ref(btn);
       btns.appendChild(btn);
     });
     header.appendChild(btns);

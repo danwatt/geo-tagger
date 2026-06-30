@@ -8,9 +8,6 @@ let focusedFaceId = null;
 let scope = "unlabeled";        // "unlabeled" | "all" | "person"
 let scopePersonId = null;       // when scope === "person"
 
-let scanning = false;
-let stopScanRequested = false;
-
 let suggestedOnly = false;      // Unlabeled queue: hide faces with no guess
 let clusters = [];              // discovered groups (Discover view)
 let crowdGroups = [];           // crowd photo groups (Crowds view)
@@ -54,7 +51,6 @@ function bindToolbar() {
     window.location.href = "/people-manage.html";
   });
 
-  document.getElementById("scan-btn").addEventListener("click", toggleScan);
   document.getElementById("deselect-all-btn").addEventListener("click", deselectAll);
   document.getElementById("suggested-only-chk").addEventListener("change", (e) => {
     suggestedOnly = e.target.checked;
@@ -102,7 +98,9 @@ function bindToolbar() {
   document.getElementById("detail-unassign-btn").addEventListener("click", () => assignSelected(null, true));
   document.getElementById("detail-ignore-btn").addEventListener("click", () => {
     const f = findFace(focusedFaceId);
-    ignoreSelected(!(f && f.ignored));  // toggle the focused face's ignored state
+    if (!f) { setStatus("Select a face first.", true); return; }
+    // Act on the previewed face only — not the grid selection.
+    ignoreSelected_ids([f.id], !f.ignored);
   });
   document.getElementById("detail-open-photo-btn").addEventListener("click", () => {
     const f = findFace(focusedFaceId);
@@ -124,7 +122,6 @@ async function loadPersons() {
     renderPeopleList(status.unlabeled_faces || 0, totalFaces,
                      status.ignored_faces || 0, status.tagged_faces || 0);
     populatePersonSelects();
-    updateScanStatus(status.remaining_photos, totalFaces);
   } catch (err) {
     setStatus("Failed to load people: " + err.message, true);
   }
@@ -256,14 +253,6 @@ function populatePersonSelects() {
   });
 }
 
-function updateScanStatus(remainingPhotos, totalFaces) {
-  const el = document.getElementById("scan-status");
-  if (scanning) return;  // leave the live message during a scan
-  const parts = [];
-  if (remainingPhotos > 0) parts.push(`${remainingPhotos} photos pending`);
-  parts.push(`${totalFaces} faces`);
-  el.textContent = parts.join(" · ");
-}
 
 /* ── Scope selection ── */
 async function selectScope(newScope, personId) {
@@ -825,17 +814,17 @@ function makeGroupHeader(group) {
     meta: `· ${selectedInGroup}/${group.faces.length} selected`,
     buttons: [
       acceptable.length > 0 && {
-        label: `Accept all (${acceptable.length})`, kind: "primary",
-        title: "Confirm the suggested name for every face in this group",
+        icon: "✓", label: `Accept all (${acceptable.length})`, kind: "primary",
+        title: `Accept all ${acceptable.length} suggestion(s) in this group`,
         onClick: () => acceptSuggestionsFor(group.faces, range),
       },
-      { label: "Select all",
+      { icon: "☑", label: "Select all",
         title: "Add every face in this group to the current selection",
         onClick: () => selectGroupFaces(group, true) },
-      { label: "Select only",
+      { icon: "◉", label: "Select only",
         title: "Select every face in this group and deselect all others",
         onClick: () => selectGroupFaces(group, false) },
-      { label: "Deselect all",
+      { icon: "☐", label: "Deselect all",
         title: "Remove every face in this group from the current selection",
         onClick: () => {
           group.faces.forEach(f => selectedIds.delete(f.id));
@@ -843,7 +832,7 @@ function makeGroupHeader(group) {
           updateDetail();
           setStatus(`Deselected ${group.faces.length} face(s) from ${range}.`);
         } },
-      { label: "Ignore selected", kind: "danger",
+      { icon: "🚫", label: "Ignore selected", kind: "danger",
         title: "Ignore the selected faces in this group",
         onClick: () => {
           const ids = group.faces.filter(f => selectedIds.has(f.id)).map(f => f.id);
@@ -931,47 +920,34 @@ function makeClusterCard(cl) {
   const card = document.createElement("div");
   card.className = "cluster-card";
 
-  const head = document.createElement("div");
-  head.className = "cluster-head";
-
-  const title = document.createElement("span");
-  title.className = "cluster-title";
-  title.textContent = cl.suggestion ? `Looks like ${cl.suggestion.person_name}` : "New group";
-  const meta = document.createElement("span");
-  meta.className = "cluster-meta";
-  meta.textContent = ` · ${cl.size} face(s)` +
-    (cl.suggestion ? ` · ${Math.round(cl.suggestion.score * 100)}% of group` : "");
-  title.appendChild(meta);
-
-  const actions = document.createElement("div");
-  actions.className = "cluster-actions";
+  const buttons = [];
   if (cl.suggestion) {
-    const assignBtn = document.createElement("button");
-    assignBtn.className = "primary";
-    assignBtn.textContent = `✓ Assign to ${cl.suggestion.person_name}`;
-    assignBtn.addEventListener("click", () =>
-      clusterAssign(cl, { person_id: cl.suggestion.person_id }, cl.suggestion.person_name));
-    actions.appendChild(assignBtn);
+    buttons.push({
+      icon: "✓", label: `Assign to ${cl.suggestion.person_name}`, kind: "primary",
+      onClick: () =>
+        clusterAssign(cl, { person_id: cl.suggestion.person_id }, cl.suggestion.person_name),
+    });
   }
-  const nameBtn = document.createElement("button");
-  nameBtn.className = cl.suggestion ? "" : "primary";
-  nameBtn.textContent = cl.suggestion ? "Name instead…" : "Name…";
-  nameBtn.addEventListener("click", () => {
-    const name = prompt(`Name this group of ${cl.size} face(s):`,
-                        cl.suggestion ? cl.suggestion.person_name : "");
-    if (name && name.trim()) clusterAssign(cl, { name: name.trim() }, name.trim());
+  buttons.push({
+    icon: "✏️", label: cl.suggestion ? "Name instead…" : "Name…",
+    kind: cl.suggestion ? "" : "primary",
+    onClick: () => {
+      const name = prompt(`Name this group of ${cl.size} face(s):`,
+                          cl.suggestion ? cl.suggestion.person_name : "");
+      if (name && name.trim()) clusterAssign(cl, { name: name.trim() }, name.trim());
+    },
   });
-  actions.appendChild(nameBtn);
+  buttons.push({
+    icon: "🚫", label: "Ignore all", kind: "danger",
+    onClick: () => clusterIgnore(cl),
+  });
 
-  const ignoreBtn = document.createElement("button");
-  ignoreBtn.className = "danger";
-  ignoreBtn.textContent = "Ignore all";
-  ignoreBtn.addEventListener("click", () => clusterIgnore(cl));
-  actions.appendChild(ignoreBtn);
-
-  head.appendChild(title);
-  head.appendChild(actions);
-  card.appendChild(head);
+  card.appendChild(faceGroupHeader({
+    title: cl.suggestion ? `Looks like ${cl.suggestion.person_name}` : "New group",
+    meta: `· ${cl.size} face(s)` +
+      (cl.suggestion ? ` · ${Math.round(cl.suggestion.score * 100)}% of group` : ""),
+    buttons,
+  }));
 
   const facesWrap = document.createElement("div");
   facesWrap.className = "cluster-faces";
@@ -1093,31 +1069,21 @@ function makeCrowdGroupCard(g) {
   const card = document.createElement("div");
   card.className = "cluster-card crowd-group-card";
 
-  const head = document.createElement("div");
-  head.className = "cluster-head";
+  let ignoreBtn;   // captured from the header so per-photo actions can update it
+  let meta = `· ${g.photos.length} photo(s) · ${g.total_faces} face(s)`;
+  if (g.unlabeled_faces > 0) meta += ` · ${g.unlabeled_faces} unlabeled`;
 
-  const title = document.createElement("span");
-  title.className = "cluster-title";
-  title.textContent = g.label;
-  const meta = document.createElement("span");
-  meta.className = "cluster-meta";
-  meta.textContent = ` · ${g.photos.length} photo(s) · ${g.total_faces} face(s)`;
-  if (g.unlabeled_faces > 0) meta.textContent += ` · ${g.unlabeled_faces} unlabeled`;
-  title.appendChild(meta);
-
-  const actions = document.createElement("div");
-  actions.className = "cluster-actions";
-
-  const ignoreBtn = document.createElement("button");
-  ignoreBtn.className = "danger";
-  ignoreBtn.textContent = `Ignore ${g.unlabeled_faces} unlabeled`;
-  ignoreBtn.disabled = g.unlabeled_faces === 0;
-  ignoreBtn.addEventListener("click", () => crowdIgnoreGroup(g, ignoreBtn));
-  actions.appendChild(ignoreBtn);
-
-  head.appendChild(title);
-  head.appendChild(actions);
-  card.appendChild(head);
+  card.appendChild(faceGroupHeader({
+    title: g.label,
+    meta,
+    extraClass: "amber",
+    buttons: [{
+      icon: "🚫", label: `Ignore ${g.unlabeled_faces} unlabeled`, kind: "danger",
+      disabled: g.unlabeled_faces === 0,
+      ref: (el) => { ignoreBtn = el; },
+      onClick: () => crowdIgnoreGroup(g, ignoreBtn),
+    }],
+  }));
 
   const photosWrap = document.createElement("div");
   photosWrap.className = "crowd-photos";
@@ -1160,7 +1126,10 @@ function makeCrowdPhotoThumb(ph, group, groupIgnoreBtn) {
       ph.unlabeled_faces = 0;
       ignoreBtn.disabled = true;
       badge.textContent = parts.filter(p => !p.includes("unlabeled")).join(" · ");
-      groupIgnoreBtn.textContent = `Ignore ${group.unlabeled_faces} unlabeled`;
+      // The group button is now an icon (🚫); update its tooltip, not its glyph.
+      const groupLbl = `Ignore ${group.unlabeled_faces} unlabeled`;
+      groupIgnoreBtn.title = groupLbl;
+      groupIgnoreBtn.setAttribute("aria-label", groupLbl);
       groupIgnoreBtn.disabled = group.unlabeled_faces === 0;
     } catch (_) { /* error already shown in status bar */ }
   });
@@ -1266,8 +1235,10 @@ function updateDetail() {
     <tr><td>Person</td><td>${personCell}</td></tr>
     <tr><td>Detection</td><td>${face.det_score.toFixed(3)}</td></tr>
   `;
-  document.getElementById("detail-ignore-btn").textContent =
-    face.ignored ? "↩ Restore" : "🚫 Ignore";
+  const detailIgnoreBtn = document.getElementById("detail-ignore-btn");
+  detailIgnoreBtn.textContent = face.ignored ? "↩" : "🚫";
+  detailIgnoreBtn.title = face.ignored ? "Restore" : "Ignore";
+  detailIgnoreBtn.setAttribute("aria-label", detailIgnoreBtn.title);
 
   const sug = document.getElementById("face-suggestion");
   const alts = face.alternatives || [];
@@ -1527,42 +1498,3 @@ async function deletePerson(personId, name) {
   }
 }
 
-/* ── Scan ── */
-async function toggleScan() {
-  if (scanning) { stopScanRequested = true; return; }
-  scanning = true;
-  stopScanRequested = false;
-  const btn = document.getElementById("scan-btn");
-  btn.textContent = "Stop scanning";
-  btn.classList.add("danger");
-
-  let totalProcessed = 0;
-  let totalFound = 0;
-  try {
-    while (!stopScanRequested) {
-      const res = await fetch("/api/faces/scan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ limit: 25 }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      totalProcessed += data.processed;
-      totalFound += data.faces_found;
-      document.getElementById("scan-status").textContent =
-        `Scanning… ${data.remaining} left · ${totalFound} new faces`;
-      if (data.errors && data.errors.length) console.warn("scan errors:", data.errors);
-      if (data.processed === 0 || data.remaining <= 0) break;
-    }
-    setStatus(`Scan ${stopScanRequested ? "stopped" : "complete"}: ` +
-      `${totalProcessed} photos processed, ${totalFound} faces found.`);
-  } catch (err) {
-    setStatus("Scan failed: " + err.message, true);
-  } finally {
-    scanning = false;
-    btn.textContent = "Scan faces";
-    btn.classList.remove("danger");
-    await loadPersons();
-    await loadFaces();
-  }
-}

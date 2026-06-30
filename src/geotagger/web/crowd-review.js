@@ -284,7 +284,8 @@ function renderUnknownSection(unknown) {
   if (!unknown.length) return;
   sec.appendChild(makeSectionHeader("Unrecognized", unknown.length, "face(s) — no match found", {
     buttons: unknown.length > 1 ? [{
-      label: `Ignore all ${unknown.length}`, kind: "danger",
+      icon: "🚫", label: `Ignore all ${unknown.length}`, kind: "danger",
+      title: `Ignore all ${unknown.length} unrecognized face(s)`,
       onClick: () => ignoreFaces(unknown.map(f => f.id)),
     }] : [],
   }));
@@ -392,9 +393,11 @@ function makeSuggestedGroup(pid, group) {
     meta: `— ${group.faces.length} face(s)`,
     extraClass: "blue",
     buttons: [
-      { label: "✓ Accept all", kind: "primary",
+      { icon: "✓", label: "Accept all", kind: "primary",
+        title: `Accept all ${group.faces.length} suggestion(s)`,
         onClick: () => doAcceptAll(pid, group.faces) },
-      { label: "Ignore group", kind: "danger",
+      { icon: "🚫", label: "Ignore group", kind: "danger",
+        title: "Ignore every face in this group",
         onClick: () => ignoreFaces(group.faces.map(f => f.id)) },
     ],
   }));
