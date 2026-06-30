@@ -152,6 +152,18 @@ select {
   margin-top: 4px;
 }
 
+.grid-day-divider {
+  grid-column: 1 / -1;
+  padding: 2px 4px 1px;
+  font-size: 10px;
+  font-weight: 500;
+  color: #555;
+  border-bottom: 1px solid #252525;
+  margin-top: 2px;
+  user-select: none;
+  pointer-events: none;
+}
+
 /* Camera legend */
 #cam-legend {
   padding: 6px 10px;
@@ -465,7 +477,20 @@ button.primary:hover { background: #1e3a5e; }
   margin-bottom: 8px;
   padding: 4px 0;
   border-bottom: 1px solid #383838;
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
 }
+.month-year-header:hover { color: #a0d0ff; }
+.year-browse-all {
+  font-size: 11px;
+  font-weight: 400;
+  color: #5a8ab8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.month-year-header:hover .year-browse-all { color: #7ab8f5; }
 
 .month-item {
   display: flex;

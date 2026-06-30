@@ -37,21 +37,6 @@
     <button id="confirm-suggested-btn" title="Confirm the suggested name for every selected face">✓ Accept suggestions</button>
     <button id="ignore-btn" title="Hide selected faces from the queue (background strangers, false detections)">🚫 Ignore</button>
   </div>
-  <div class="toolbar-group" id="crowd-controls" style="display:none">
-    <label title="Photos with at least this many detected faces are shown as crowd photos">Min faces:</label>
-    <input type="number" id="crowd-min-faces" value="50" min="2" max="9999" style="width:60px"/>
-    <label>Group gap:</label>
-    <select id="crowd-gap-select">
-      <option value="21600">6 hours</option>
-      <option value="86400" selected>1 day</option>
-      <option value="259200">3 days</option>
-      <option value="604800">1 week</option>
-    </select>
-    <button id="crowd-reload-btn">Reload</button>
-    <label title="Only show crowd photos that still have unlabeled faces">
-      <input type="checkbox" id="crowd-hide-done" checked/> Hide completed
-    </label>
-  </div>
 </div>
 
 <div id="people-main">
@@ -63,20 +48,37 @@
 
   <!-- Center: faces grid -->
   <div id="grid-pane">
-    <div id="grid-nav">
-      <label>Review guesses for:</label>
-      <select id="guess-person-select">
-        <option value="">Choose person…</option>
-      </select>
-      <button id="review-guesses-btn" title="Show every face guessed to be this person, all pre-selected, so you can approve the good ones at once">🔮 Review</button>
-      <label>Group by:</label>
-      <select id="group-gap-select" title="Start a new event group when photos are more than this far apart in time">
-        <option value="21600">6 hours</option>
-        <option value="86400" selected>1 day</option>
-        <option value="259200">3 days</option>
-        <option value="604800">1 week</option>
-        <option value="2592000">1 month</option>
-      </select>
+    <div id="grid-nav" style="display:none">
+      <div id="grid-nav-person" style="display:none">
+        <label>Review guesses for:</label>
+        <select id="guess-person-select">
+          <option value="">Choose person…</option>
+        </select>
+        <button id="review-guesses-btn" title="Show every face guessed to be this person, all pre-selected, so you can approve the good ones at once">🔮 Review</button>
+        <label>Group by:</label>
+        <select id="group-gap-select" title="Start a new event group when photos are more than this far apart in time">
+          <option value="21600">6 hours</option>
+          <option value="86400" selected>1 day</option>
+          <option value="259200">3 days</option>
+          <option value="604800">1 week</option>
+          <option value="2592000">1 month</option>
+        </select>
+      </div>
+      <div id="grid-nav-crowds" style="display:none">
+        <label title="Photos with at least this many detected faces are shown as crowd photos">Min faces:</label>
+        <input type="number" id="crowd-min-faces" value="50" min="2" max="9999" style="width:60px"/>
+        <label>Group gap:</label>
+        <select id="crowd-gap-select">
+          <option value="21600">6 hours</option>
+          <option value="86400" selected>1 day</option>
+          <option value="259200">3 days</option>
+          <option value="604800">1 week</option>
+        </select>
+        <button id="crowd-reload-btn">Reload</button>
+        <label title="Only show crowd photos that still have unlabeled faces">
+          <input type="checkbox" id="crowd-hide-done" checked/> Hide completed
+        </label>
+      </div>
     </div>
     <div id="grid"></div>
   </div>

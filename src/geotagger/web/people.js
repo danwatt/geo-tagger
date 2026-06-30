@@ -265,8 +265,11 @@ async function selectScope(newScope, personId) {
   selectedIds.clear();
   lastClickedIndex = -1;
   focusedFaceId = null;
-  document.getElementById("crowd-controls").style.display =
-    scope === "crowds" ? "" : "none";
+  const showPerson = scope === "person" || scope === "suggested";
+  const showCrowds = scope === "crowds";
+  document.getElementById("grid-nav-person").style.display = showPerson ? "" : "none";
+  document.getElementById("grid-nav-crowds").style.display = showCrowds ? "" : "none";
+  document.getElementById("grid-nav").style.display = (showPerson || showCrowds) ? "" : "none";
   await loadFaces();
   await loadPersons();  // re-renders the list with the correct active highlight
 }

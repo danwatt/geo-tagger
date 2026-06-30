@@ -225,7 +225,7 @@ function bindToolbar() {
   function reloadCurrentView() {
     if (contextFilterData) {
       loadPhotosByContext(contextFilterData);
-    } else if (selectedYear && selectedMonth) {
+    } else if (selectedYear) {
       loadPhotos();
     } else if (areaSelectParams) {
       loadPhotosByArea(areaSelectParams.lat, areaSelectParams.lng, areaSelectParams.radius);
@@ -286,7 +286,9 @@ async function showMonthPicker() {
 
       const yearHeader = document.createElement("div");
       yearHeader.className = "month-year-header";
-      yearHeader.textContent = year;
+      yearHeader.innerHTML = `${year} <span class="year-browse-all">Browse all</span>`;
+      yearHeader.title = `Load all photos from ${year}`;
+      yearHeader.addEventListener("click", () => selectYear(year));
       yearSection.appendChild(yearHeader);
 
       // Render months (most recent first)
@@ -351,6 +353,24 @@ async function selectMonth(year, month) {
   await loadMonthHistogram(year, month);
 
   // Load photos for this month
+  await loadPhotos(true);
+}
+
+async function selectYear(year) {
+  selectedYear = year;
+  selectedMonth = null;
+  hideMonthPicker();
+
+  areaSelectParams = null;
+  if (areaSelectCircle) {
+    map.removeLayer(areaSelectCircle);
+    areaSelectCircle = null;
+  }
+  document.getElementById("selected-area-label").textContent = "";
+  clearContextFilter();
+
+  document.getElementById("selected-month-label").textContent = `${year} (all months)`;
+
   await loadPhotos(true);
 }
 
@@ -913,21 +933,25 @@ function buildHistogramFromDateStats(dateStats) {
 
 /* ── Load photos ── */
 async function loadPhotos(fitMap = false) {
-  if (!selectedYear || !selectedMonth) {
+  if (!selectedYear) {
     setStatus("Please select a month first", true);
     return;
   }
 
   const filter = document.getElementById("filter-select").value;
 
-  // Calculate date range for selected month
-  const dateFrom = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-01`;
-  // Calculate last day of month
-  const lastDay = new Date(selectedYear, selectedMonth, 0).getDate();
-  const dateTo = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${lastDay}`;
+  let dateFrom, dateTo;
+  if (selectedMonth) {
+    dateFrom = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-01`;
+    const lastDay = new Date(selectedYear, selectedMonth, 0).getDate();
+    dateTo = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${lastDay}`;
+  } else {
+    dateFrom = `${selectedYear}-01-01`;
+    dateTo = `${selectedYear}-12-31`;
+  }
 
   try {
-    let url = `/api/photos?geotagged=${filter}&date_from=${dateFrom}&date_to=${dateTo}`;
+    const url = `/api/photos?geotagged=${filter}&date_from=${dateFrom}&date_to=${dateTo}`;
 
     const res = await fetch(url);
     photos = await res.json();
@@ -990,6 +1014,8 @@ function renderLegend() {
   });
 }
 
+const DAY_ABBRS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
 /* ── Grid ── */
 function renderGrid() {
   const grid = document.getElementById("grid");
@@ -997,25 +1023,39 @@ function renderGrid() {
 
   let curYear = null;
   let curMonth = null;
+  let curDay = null;
 
   filteredPhotos.forEach((photo, idx) => {
     if (photo.photo_datetime) {
       const d = new Date(photo.photo_datetime * 1000);
       const year = d.getFullYear();
       const month = d.getMonth();  // 0-based
+      const day = d.getDate();
 
       if (year !== curYear) {
         curYear = year;
-        curMonth = month;
+        curMonth = null;  // force month header below
+        curDay = null;
         const div = document.createElement("div");
         div.className = "grid-year-divider";
         div.textContent = year;
         grid.appendChild(div);
-      } else if (month !== curMonth) {
+      }
+
+      if (month !== curMonth) {
         curMonth = month;
+        curDay = null;  // force day header below
         const div = document.createElement("div");
         div.className = "grid-month-divider";
         div.textContent = MONTH_NAMES[month];
+        grid.appendChild(div);
+      }
+
+      if (day !== curDay) {
+        curDay = day;
+        const div = document.createElement("div");
+        div.className = "grid-day-divider";
+        div.textContent = `${DAY_ABBRS[d.getDay()]} ${day}`;
         grid.appendChild(div);
       }
     }

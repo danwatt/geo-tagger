@@ -96,6 +96,14 @@
 }
 #grid-nav label { color: #bbb; font-size: 12px; }
 
+#grid-nav-person,
+#grid-nav-crowds {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .thumb-cell .face-label {
   position: absolute;
   bottom: 0; left: 0; right: 0;
