@@ -291,6 +291,10 @@ class GeotagRequest(BaseModel):
 class RemoveGeotagRequest(BaseModel):
     ids: list[int]
 
+class SetGeocodeIgnoredRequest(BaseModel):
+    ids: list[int]
+    ignored: bool = True
+
 class GeocodeBackfillRequest(BaseModel):
     limit: int = 1000  # photos geocoded per call; repeat until remaining == 0
 
@@ -347,8 +351,8 @@ async def api_stats_months():
                 strftime('%Y', photo_datetime, 'unixepoch') as year,
                 strftime('%m', photo_datetime, 'unixepoch') as month,
                 COUNT(*) as total,
-                SUM(CASE WHEN lat IS NOT NULL THEN 1 ELSE 0 END) as geotagged,
-                SUM(CASE WHEN lat IS NULL THEN 1 ELSE 0 END) as not_geotagged
+                SUM(CASE WHEN lat IS NOT NULL OR geocode_ignored = 1 THEN 1 ELSE 0 END) as geotagged,
+                SUM(CASE WHEN lat IS NULL AND geocode_ignored = 0 THEN 1 ELSE 0 END) as not_geotagged
             FROM photos
             WHERE photo_datetime IS NOT NULL AND photo_datetime > 0
             GROUP BY year, month
@@ -498,7 +502,7 @@ async def api_photos(
         # Only included when the context has a date range — without one there is
         # no constraint and we would return the entire untagged library.
         if geotagged != "yes" and has_dates:
-            u_sql    = "SELECT * FROM photos WHERE lat IS NULL"
+            u_sql    = "SELECT * FROM photos WHERE lat IS NULL AND geocode_ignored = 0"
             u_params: list = []
             if start_ts is not None:
                 u_sql += " AND photo_datetime >= ?"
@@ -524,6 +528,7 @@ async def api_photos(
             "lat": r["lat"], "lng": r["lng"], "geotag_source": r["geotag_source"],
             "camera": r["camera"], "photo_datetime": r["photo_datetime"],
             "gps_accuracy": r["gps_accuracy"] if r["gps_accuracy"] and r["gps_accuracy"] > 0 else None,
+            "geocode_ignored": bool(r["geocode_ignored"]),
         }
         for r in rows
     ]
@@ -646,6 +651,7 @@ async def api_photos_by_area(
             "lat": r["lat"], "lng": r["lng"], "geotag_source": r["geotag_source"],
             "camera": r["camera"], "photo_datetime": r["photo_datetime"],
             "gps_accuracy": r["gps_accuracy"] if r["gps_accuracy"] and r["gps_accuracy"] > 0 else None,
+            "geocode_ignored": bool(r["geocode_ignored"]),
         }
         for r in photos_in_area
     ]
@@ -747,6 +753,7 @@ async def api_photo(photo_id: int):
         "datetime": extra.get("EXIF:DateTimeOriginal"),
         "dimensions": extra.get("Composite:ImageSize"),
         "gps_accuracy": row["gps_accuracy"] if row["gps_accuracy"] and row["gps_accuracy"] > 0 else None,
+        "geocode_ignored": bool(row["geocode_ignored"]),
         "location": {
             "city": row["loc_city"],
             "state": row["loc_state"],
@@ -783,6 +790,15 @@ async def api_geotag(req: GeotagRequest):
             "gps_accuracy": req.gps_accuracy,
         })
     return results
+
+
+@app.post("/api/geotag/ignore")
+async def api_geotag_ignore(req: SetGeocodeIgnoredRequest):
+    """Mark (or unmark) photos as not needing geocoding, e.g. screenshots.
+    DB-only — no EXIF/sidecar write. Ignored photos still appear in the grid
+    but count as geotagged for the Show filter and geotagged/not-geotagged stats."""
+    index.set_geocode_ignored(req.ids, req.ignored)
+    return {"ids": req.ids, "geocode_ignored": req.ignored}
 
 
 @app.get("/api/guess/{photo_id}")
@@ -957,6 +973,49 @@ async def api_geocode_export_sidecars():
     """Write resolved place names into the XMP sidecars of all geocoded photos."""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_executor, _export_locations_to_sidecars)
+
+
+@app.get("/api/geocode/next-group")
+async def api_geocode_next_group(
+    start_year: int = Query(2000),
+    after_ts: int = Query(None),
+    group_window_days: int = Query(1),
+    context_window_days: int = Query(1)
+):
+    from geotagger import geotag_groups
+    
+    def photo_to_dict(r):
+        return {
+            "id": r["id"], "filename": r["filename"], "media_type": r["media_type"],
+            "lat": r["lat"], "lng": r["lng"], "geotag_source": r["geotag_source"],
+            "camera": r["camera"], "photo_datetime": r["photo_datetime"],
+            "gps_accuracy": r["gps_accuracy"] if r["gps_accuracy"] and r["gps_accuracy"] > 0 else None,
+            "location": {
+                "city": r["loc_city"],
+                "state": r["loc_state"],
+                "country": r["loc_country"],
+            } if r["loc_country"] else None
+        }
+
+    loop = asyncio.get_running_loop()
+    groups = await loop.run_in_executor(
+        _executor,
+        geotag_groups.get_next_geotag_group,
+        start_year,
+        after_ts,
+        group_window_days,
+        context_window_days
+    )
+
+    if not groups:
+        return None
+
+    return {
+        "before": [photo_to_dict(p) for p in groups["before"]],
+        "to_tag": [photo_to_dict(p) for p in groups["to_tag"]],
+        "after": [photo_to_dict(p) for p in groups["after"]],
+    }
+
 
 
 @app.get("/api/places")

@@ -304,6 +304,8 @@ function bindToolbar() {
   document.getElementById("apply-latlng-btn").addEventListener("click", doApplyLatLng);
   document.getElementById("copy-location-btn").addEventListener("click", doCopyLocation);
   document.getElementById("remove-geotag-btn").addEventListener("click", doRemoveGeotag);
+  document.getElementById("mark-ignored-btn").addEventListener("click", () => doSetGeocodeIgnored(true));
+  document.getElementById("unmark-ignored-btn").addEventListener("click", () => doSetGeocodeIgnored(false));
 
   // Places
   document.getElementById("places-select").addEventListener("change", onPlaceSelected);
@@ -1052,7 +1054,7 @@ function filterMixedDays(photoList) {
     const k = dayKey(p) || "__undated__";
     if (!dayCounts.has(k)) dayCounts.set(k, { tagged: 0, untagged: 0 });
     const e = dayCounts.get(k);
-    if (p.lat != null) e.tagged++; else e.untagged++;
+    if (p.lat != null || p.geocode_ignored) e.tagged++; else e.untagged++;
   });
   const mixedKeys = new Set(
     [...dayCounts.entries()].filter(([, v]) => v.tagged > 0 && v.untagged > 0).map(([k]) => k)
@@ -1121,7 +1123,8 @@ function makeThumbCell(photo, idx) {
   const cell = document.createElement("div");
   cell.className = "thumb-cell" +
     (selectedIds.has(photo.id) ? " selected" : "") +
-    (photo.lat != null ? " tagged" : "");
+    (photo.lat != null ? " tagged" : "") +
+    (photo.geocode_ignored ? " geo-ignored" : "");
   cell.dataset.id = photo.id;
   cell.dataset.idx = idx;
   cell.draggable = true;
@@ -1203,7 +1206,7 @@ function renderGrid() {
     const count = group.photos.length;
     const isIsolated = group.key !== null && dayIsolation === group.key;
     const taggedInDay   = group.photos.filter(({ photo }) => photo.lat != null && photo.lng != null);
-    const untaggedInDay = group.photos.filter(({ photo }) => photo.lat == null);
+    const untaggedInDay = group.photos.filter(({ photo }) => photo.lat == null && !photo.geocode_ignored);
 
     sec.appendChild(faceGroupHeader({
       title,
@@ -1419,6 +1422,36 @@ async function doRemoveGeotag() {
   }
 }
 
+/* ── Ignore for geocoding (e.g. screenshots) ── */
+async function setGeocodeIgnored(ids, ignored) {
+  if (!ids.length) return false;
+  try {
+    await fetch("/api/geotag/ignore", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids, ignored }),
+    });
+    ids.forEach((id) => {
+      const photo = photos.find((p) => p.id === id);
+      if (photo) photo.geocode_ignored = ignored;
+    });
+    applyFilters();
+    if (focusedPhotoId && ids.includes(focusedPhotoId)) showDetail(focusedPhotoId);
+    return true;
+  } catch (err) {
+    setStatus("Error: " + err.message, true);
+    return false;
+  }
+}
+
+async function doSetGeocodeIgnored(ignored) {
+  if (!selectedIds.size) { setStatus("No photos selected", true); return; }
+  const ids = [...selectedIds];
+  setStatus(`${ignored ? "Marking" : "Un-marking"} ${ids.length} photo(s)…`);
+  const ok = await setGeocodeIgnored(ids, ignored);
+  if (ok) setStatus(`${ignored ? "Marked" : "Un-marked"} ${ids.length} photo(s) as ignored for geocoding`);
+}
+
 /* ── Manual lat/lng ── */
 async function doApplyLatLng() {
   const lat = parseFloat(document.getElementById("lat-input").value);
@@ -1509,11 +1542,15 @@ async function showDetail(id) {
       ["GPS accuracy", formatAccuracy(data.gps_accuracy)],
       ["Geotag source", data.geotag_source],
       ["Sidecar", data.sidecar_path ? data.sidecar_path.split(/[\\/]/).pop() : "none"],
+      ["Ignore for geocoding", `<label class="inline-toggle"><input type="checkbox" id="detail-ignore-chk" ${data.geocode_ignored ? "checked" : ""}/> not applicable (e.g. screenshot)</label>`],
     ];
     const table = document.getElementById("detail-meta");
     table.innerHTML = rows.map(([k, v]) =>
       `<tr><td>${k}</td><td>${v ?? "—"}</td></tr>`
     ).join("");
+    document.getElementById("detail-ignore-chk").addEventListener("change", (e) => {
+      setGeocodeIgnored([id], e.target.checked);
+    });
 
     // Show guess bar only for untagged photos that have a timestamp
     const guessBar = document.getElementById("guess-bar");

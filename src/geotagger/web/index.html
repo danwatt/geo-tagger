@@ -12,6 +12,7 @@
 <div id="toolbar">
   <div class="toolbar-group">
     <button id="geocode-view-btn" class="active">📍 Geocode View</button>
+    <a href="quick-geocode.html" class="button">⚡ Quick Geocode</a>
     <button id="timesync-view-btn">🕐 Time Sync View</button>
     <button id="people-view-btn">🙂 People</button>
     <button id="contexts-view-btn">🗺️ Contexts</button>
@@ -109,6 +110,10 @@
           <input type="checkbox" id="include-screenshots-chk" checked/>
           Screenshots
         </label>
+      </div>
+      <div class="toolbar-group">
+        <button id="mark-ignored-btn" title="Mark selected photos as not needing a location (e.g. screenshots)">🚫 Ignore location</button>
+        <button id="unmark-ignored-btn" title="Restore selected photos to normal geocoding filtering">↩ Un-ignore</button>
       </div>
     </div>
     <div id="grid"></div>

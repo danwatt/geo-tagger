@@ -89,6 +89,11 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
         _db.execute("ALTER TABLE photos ADD COLUMN loc_country_code TEXT")
     if "geocoded_at" not in cols:
         _db.execute("ALTER TABLE photos ADD COLUMN geocoded_at REAL")
+    # Files that don't matter for geocoding (e.g. screenshots). They still show
+    # in the grid, but the Show filter and geotagged/not-geotagged counts treat
+    # them as if they were already geotagged.
+    if "geocode_ignored" not in cols:
+        _db.execute("ALTER TABLE photos ADD COLUMN geocode_ignored INTEGER NOT NULL DEFAULT 0")
     _db.execute("""
         CREATE TABLE IF NOT EXISTS scans (
             id INTEGER PRIMARY KEY,
@@ -312,14 +317,28 @@ def update_geotag(photo_id: int, lat: float | None, lng: float | None,
     db.commit()
 
 
+def set_geocode_ignored(photo_ids: list[int], ignored: bool):
+    """Mark (or unmark) photos as not needing geocoding, e.g. screenshots.
+    Ignored photos keep showing in the grid but count as geotagged for the
+    Show filter and geotagged/not-geotagged stats."""
+    if not photo_ids:
+        return
+    db = get_db()
+    db.executemany(
+        "UPDATE photos SET geocode_ignored=? WHERE id=?",
+        [(1 if ignored else 0, pid) for pid in photo_ids],
+    )
+    db.commit()
+
+
 def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str | None = None, date_to: str | None = None) -> list[sqlite3.Row]:
     db = get_db()
     clauses = []
     params: list = []
     if geotagged == "yes":
-        clauses.append("lat IS NOT NULL")
+        clauses.append("(lat IS NOT NULL OR geocode_ignored = 1)")
     elif geotagged == "no":
-        clauses.append("lat IS NULL")
+        clauses.append("lat IS NULL AND geocode_ignored = 0")
     if bbox:
         # bbox=minLng,minLat,maxLng,maxLat
         try:
@@ -381,9 +400,9 @@ def get_photos_by_time_range(min_time: int, max_time: int, has_geotag: bool | No
     params = [min_time, max_time]
 
     if has_geotag is True:
-        clauses.append("lat IS NOT NULL")
+        clauses.append("(lat IS NOT NULL OR geocode_ignored = 1)")
     elif has_geotag is False:
-        clauses.append("lat IS NULL")
+        clauses.append("lat IS NULL AND geocode_ignored = 0")
 
     where = " AND ".join(clauses)
     return db.execute(f"""
