@@ -36,6 +36,7 @@ let dateRangeMax = 0;   // Unix ts — absolute max across all photos
 let dateFilterLo = 0;   // current low handle value
 let dateFilterHi = 0;   // current high handle value
 let histBuckets = [];   // [{ts, count}] for drawing
+let histBucketSecs = 86400; // granularity of current histogram
 
 /* ── Basemap definitions ── */
 const BASEMAPS = {
@@ -294,6 +295,7 @@ function bindToolbar() {
     }
   }
   document.getElementById("filter-select").addEventListener("change", reloadCurrentView);
+  document.getElementById("include-screenshots-chk").addEventListener("change", () => applyFilters());
   document.getElementById("window-select").addEventListener("change", reloadCurrentView);
   document.getElementById("place-search-btn").addEventListener("click", doPlaceSearch);
   document.getElementById("place-search").addEventListener("keydown", (e) => {
@@ -988,6 +990,7 @@ function buildHistogramFromDateStats(dateStats) {
 
   // For a single month, always use daily buckets
   const bucketSecs = 86400;  // daily
+  histBucketSecs = bucketSecs;
   const bucketCount = Math.ceil((dateRangeMax - dateRangeMin) / bucketSecs) + 1;
   const counts = new Array(bucketCount).fill(0);
 
@@ -1059,8 +1062,10 @@ function filterMixedDays(photoList) {
 
 /* ── Apply all active filters → filteredPhotos ── */
 function applyFilters(fitMap = false) {
+  const includeScreenshots = document.getElementById("include-screenshots-chk").checked;
   filteredPhotos = photos.filter(p => {
     if (hiddenCameras.has(p.camera || "Unknown")) return false;
+    if (!includeScreenshots && /\.png$/i.test(p.filename)) return false;
     if (dateRangeMin !== dateRangeMax) {
       const ts = p.photo_datetime || 0;
       if (ts > 0 && (ts < dateFilterLo || ts > dateFilterHi)) return false;
@@ -1253,7 +1258,7 @@ function handleThumbClick(e, id, idx) {
   if (e.shiftKey && lastClickedIndex >= 0) {
     const lo = Math.min(lastClickedIndex, idx);
     const hi = Math.max(lastClickedIndex, idx);
-    for (let i = lo; i <= hi; i++) selectedIds.add(photos[i].id);
+    for (let i = lo; i <= hi; i++) selectedIds.add(filteredPhotos[i].id);
   } else if (e.ctrlKey || e.metaKey) {
     selectedIds.has(id) ? selectedIds.delete(id) : selectedIds.add(id);
   } else {
@@ -1714,6 +1719,48 @@ function bindTimeline() {
 
   lo.addEventListener("input", onInput);
   hi.addEventListener("input", onInput);
+
+  const canvas = document.getElementById("hist-canvas");
+  const tooltip = document.createElement("div");
+  tooltip.id = "hist-tooltip";
+  document.body.appendChild(tooltip);
+
+  canvas.addEventListener("mousemove", (e) => {
+    if (!histBuckets.length) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const bucketIdx = Math.min(
+      Math.floor((x / rect.width) * histBuckets.length),
+      histBuckets.length - 1
+    );
+    const bucket = histBuckets[bucketIdx];
+    if (!bucket) return;
+
+    const d = new Date(bucket.ts * 1000);
+    let label;
+    if (histBucketSecs <= 86400) {
+      label = d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+    } else if (histBucketSecs <= 86400 * 7) {
+      const end = new Date((bucket.ts + histBucketSecs - 86400) * 1000);
+      label = d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) +
+              " – " + end.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    } else {
+      label = d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+    }
+    if (bucket.count) label += ` · ${bucket.count}`;
+
+    tooltip.textContent = label;
+    tooltip.style.display = "block";
+    // Keep tooltip inside viewport
+    const tipW = tooltip.offsetWidth;
+    const left = Math.min(e.clientX + 12, window.innerWidth - tipW - 8);
+    tooltip.style.left = left + "px";
+    tooltip.style.top = (e.clientY - 32) + "px";
+  });
+
+  canvas.addEventListener("mouseleave", () => {
+    tooltip.style.display = "none";
+  });
 }
 
 function buildHistogram() {
@@ -1743,6 +1790,7 @@ function buildHistogram() {
   if (spanDays <= 90)       bucketSecs = 86400;        // daily
   else if (spanDays <= 365) bucketSecs = 86400 * 7;    // weekly
   else                      bucketSecs = 86400 * 30;   // monthly
+  histBucketSecs = bucketSecs;
 
   const bucketCount = Math.ceil((dateRangeMax - dateRangeMin) / bucketSecs) + 1;
   const counts = new Array(bucketCount).fill(0);
