@@ -327,22 +327,29 @@ def get_suggested_scores(scan_cap: int | None = None,
 
 
 def window_rows(rows, unknowns: np.ndarray, times: np.ndarray,
-                start_ts: int | None, end_ts: int | None
+                start_ts: int | None, end_ts: int | None,
+                photo_ids: set[int] | list[int] | None = None
                 ) -> tuple[list, np.ndarray, np.ndarray]:
-    """Filter a decoded unlabeled matrix (rows/embeddings/times) to a time window.
+    """Filter a decoded unlabeled matrix (rows/embeddings/times) to a Focus window.
 
-    The People page's time Focus windows the *candidate* faces (not the gallery),
+    The People page's Focus windows the *candidate* faces (not the gallery),
     reusing the cached full-library matrix from ``get_unlabeled_matrix`` so the
-    cache stays warm. Undated faces (NaN time) fall out of any window. Returns the
-    filtered ``(rows, unknowns, times)``; an all-None window returns them unchanged.
+    cache stays warm. ``start_ts``/``end_ts`` window by time (undated faces, NaN
+    time, fall out of any time window); ``photo_ids`` (its "also limit to this
+    area" spatial Focus) keeps only faces whose photo is inside a context's
+    polygon. Returns the filtered ``(rows, unknowns, times)``; an all-None Focus
+    returns them unchanged.
     """
-    if start_ts is None and end_ts is None:
+    if start_ts is None and end_ts is None and photo_ids is None:
         return rows, unknowns, times
-    mask = ~np.isnan(times)
+    mask = np.ones(len(rows), dtype=bool)
     if start_ts is not None:
-        mask &= times >= start_ts
+        mask &= ~np.isnan(times) & (times >= start_ts)
     if end_ts is not None:
-        mask &= times <= end_ts
+        mask &= ~np.isnan(times) & (times <= end_ts)
+    if photo_ids is not None:
+        idset = photo_ids if isinstance(photo_ids, set) else set(photo_ids)
+        mask &= np.array([r["photo_id"] in idset for r in rows], dtype=bool)
     idx = np.flatnonzero(mask)
     return [rows[i] for i in idx], unknowns[idx], times[idx]
 

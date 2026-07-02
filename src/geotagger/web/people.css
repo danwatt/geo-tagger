@@ -15,6 +15,14 @@
 /* Highlight the picker while a window is active so it's obvious the page is scoped. */
 #focus-group select.focus-active { border-color: #4a90d9; background: #24374d; }
 #focus-note { color: #7fae7f; font-size: 11px; font-style: italic; }
+/* "＋ in its area" checkbox: enabled only when a Context (with a polygon) is picked. */
+#focus-spatial-label {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: #bbb; font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+#focus-spatial-label input { margin: 0; cursor: pointer; }
+#focus-spatial-label.disabled { opacity: 0.45; cursor: default; }
+#focus-spatial-label.disabled input { cursor: default; }
 
 /* ── Left: people list ── */
 #people-pane {

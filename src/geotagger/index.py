@@ -550,6 +550,31 @@ def get_context(context_id: int) -> sqlite3.Row | None:
     return get_db().execute("SELECT * FROM contexts WHERE id=?", (context_id,)).fetchone()
 
 
+def get_context_photo_ids(context_id: int) -> list[int] | None:
+    """Photo IDs whose GPS falls inside a context's polygon — the spatial half of
+    the People page's Focus ("also limit to this area").
+
+    Uses the context's cached polygon bbox as an R*Tree prefilter (photos_spatial),
+    then the exact ray-casting point_in_polygon test, matching the app's spatial
+    pattern elsewhere. Returns None when the context is missing or has no polygon
+    (→ caller applies no spatial constraint); an empty list means the area holds no
+    geotagged photos (→ the windowed views come back empty, which is correct)."""
+    import json as _json
+    from geotagger.contexts import point_in_polygon
+    c = get_context(context_id)
+    if not c or c["polygon"] is None or c["min_lat"] is None:
+        return None
+    polygon = _json.loads(c["polygon"])
+    rows = get_db().execute(
+        """SELECT ph.id, ph.lat, ph.lng
+           FROM photos_spatial s JOIN photos ph ON ph.id = s.id
+           WHERE s.max_lat >= ? AND s.min_lat <= ?
+             AND s.max_lng >= ? AND s.min_lng <= ?""",
+        (c["min_lat"], c["max_lat"], c["min_lng"], c["max_lng"]),
+    ).fetchall()
+    return [r["id"] for r in rows if point_in_polygon(r["lat"], r["lng"], polygon)]
+
+
 def create_context(name: str, polygon_json: str, start_ts: int | None, end_ts: int | None,
                    min_lat: float, max_lat: float, min_lng: float, max_lng: float) -> int:
     db = get_db()
@@ -783,7 +808,8 @@ def get_labeled_faces() -> list[sqlite3.Row]:
 
 def list_faces(scope: str = "unlabeled", person_id: int | None = None,
                limit: int = 500, min_det_score: float | None = None,
-               start_ts: int | None = None, end_ts: int | None = None) -> list[sqlite3.Row]:
+               start_ts: int | None = None, end_ts: int | None = None,
+               photo_ids: list[int] | None = None) -> list[sqlite3.Row]:
     """List faces across the whole library for the people UI.
 
     scope: 'unlabeled' (person_id IS NULL), 'person' (a specific person),
@@ -819,6 +845,14 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
     if end_ts is not None:
         clause += (" AND " if clause else "WHERE ") + "ph.photo_datetime <= ?"
         params.append(end_ts)
+    if photo_ids is not None:
+        # Spatial Focus: restrict to photos inside a context's polygon. json_each
+        # keeps this to one bound param regardless of how many ids (SQLite has a
+        # ~999-variable cap on a literal IN list).
+        import json as _json
+        clause += (" AND " if clause else "WHERE ") + \
+                  "f.photo_id IN (SELECT value FROM json_each(?))"
+        params.append(_json.dumps(photo_ids))
     return get_db().execute(
         f"""SELECT f.id, f.photo_id, f.person_id, f.bbox, f.det_score, f.embedding,
                    f.ignored, f.assigned_at, f.ignored_at, p.name AS person_name, ph.filename,
@@ -835,11 +869,13 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
 
 
 def count_faces(scope: str = "unlabeled", person_id: int | None = None,
-                start_ts: int | None = None, end_ts: int | None = None) -> int:
+                start_ts: int | None = None, end_ts: int | None = None,
+                photo_ids: list[int] | None = None) -> int:
     if scope == "unlabeled":
-        # The People page's time Focus windows only the unlabeled count; a window
-        # needs the photos join, so keep the plain (unwindowed) path join-free.
-        if start_ts is None and end_ts is None:
+        # The People page's Focus windows only the unlabeled count; a window (time
+        # and/or a context's polygon) needs the photos join, so keep the plain
+        # (unwindowed) path join-free.
+        if start_ts is None and end_ts is None and photo_ids is None:
             return get_db().execute(
                 "SELECT COUNT(*) FROM faces WHERE person_id IS NULL AND ignored = 0"
             ).fetchone()[0]
@@ -851,6 +887,10 @@ def count_faces(scope: str = "unlabeled", person_id: int | None = None,
         if end_ts is not None:
             clause += " AND ph.photo_datetime <= ?"
             params.append(end_ts)
+        if photo_ids is not None:
+            import json as _json
+            clause += " AND f.photo_id IN (SELECT value FROM json_each(?))"
+            params.append(_json.dumps(photo_ids))
         return get_db().execute(
             f"SELECT COUNT(*) FROM faces f JOIN photos ph ON ph.id = f.photo_id {clause}",
             params,
@@ -928,10 +968,12 @@ def set_faces_ignored(face_ids: list[int], ignored: bool):
 
 
 def get_crowd_photos(min_faces: int = 50, start_ts: int | None = None,
-                     end_ts: int | None = None) -> list[sqlite3.Row]:
+                     end_ts: int | None = None,
+                     photo_ids: list[int] | None = None) -> list[sqlite3.Row]:
     """Return photos with at least `min_faces` detected faces, ordered by
     photo_datetime. Each row includes per-state face counts. ``start_ts``/
-    ``end_ts`` (epoch secs) window by photo_datetime for the People page's Focus."""
+    ``end_ts`` (epoch secs) window by photo_datetime and ``photo_ids`` restricts to
+    a context's polygon — both for the People page's Focus."""
     clause = "WHERE ph.media_type = 'image' AND ph.faces_scanned_at IS NOT NULL"
     params: list = []
     if start_ts is not None:
@@ -940,6 +982,10 @@ def get_crowd_photos(min_faces: int = 50, start_ts: int | None = None,
     if end_ts is not None:
         clause += " AND ph.photo_datetime <= ?"
         params.append(end_ts)
+    if photo_ids is not None:
+        import json as _json
+        clause += " AND ph.id IN (SELECT value FROM json_each(?))"
+        params.append(_json.dumps(photo_ids))
     params.append(min_faces)
     return get_db().execute(
         f"""SELECT ph.id, ph.filename, ph.path, ph.photo_datetime, ph.orientation,
@@ -1025,14 +1071,17 @@ def get_or_create_person(name: str) -> int:
     return create_person(name)
 
 
-def get_persons(start_ts: int | None = None, end_ts: int | None = None) -> list[sqlite3.Row]:
+def get_persons(start_ts: int | None = None, end_ts: int | None = None,
+                photo_ids: list[int] | None = None) -> list[sqlite3.Row]:
     """All persons with a count of confirmed faces and family info.
 
     With a ``start_ts``/``end_ts`` window (epoch secs, the People page's time
-    Focus), face_count reflects only faces whose photo falls in the window and
-    persons with none drop out — so the left nav lists just who appears in range.
+    Focus) and/or ``photo_ids`` (its "also limit to this area" spatial Focus —
+    photos inside a context's polygon), face_count reflects only faces whose photo
+    falls in the window and persons with none drop out — so the left nav lists just
+    who appears in range.
     """
-    if start_ts is None and end_ts is None:
+    if start_ts is None and end_ts is None and photo_ids is None:
         return get_db().execute(
             """SELECT p.id, p.name, p.birth_date, p.created_at, p.family_id,
                       fam.name AS family_name, COUNT(f.id) AS face_count
@@ -1050,6 +1099,10 @@ def get_persons(start_ts: int | None = None, end_ts: int | None = None) -> list[
     if end_ts is not None:
         conds.append("ph.photo_datetime <= ?")
         params.append(end_ts)
+    if photo_ids is not None:
+        import json as _json
+        conds.append("ph.id IN (SELECT value FROM json_each(?))")
+        params.append(_json.dumps(photo_ids))
     when = " AND ".join(conds)
     return get_db().execute(
         f"""SELECT p.id, p.name, p.birth_date, p.created_at, p.family_id,

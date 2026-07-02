@@ -22,15 +22,20 @@ let hideCompletedCrowds = true; // hide crowd photos with no unlabeled faces
 
 let groupGapSeconds = 86400;    // event grouping gap in the guesses view (1 day)
 
-// Time Focus: narrows the tagging/discovery surfaces (people list, Unlabeled,
+// Focus: narrows the tagging/discovery surfaces (people list, Unlabeled,
 // suggestions, Discover, Crowds) to one Context's time window. null = all time.
 // The per-person / All / Recently-tagged views and the recognition gallery are
-// unaffected — only the *candidates* shown are windowed.
+// unaffected — only the *candidates* shown are windowed. The "＋ in its area"
+// checkbox additionally limits to photos inside the Context's polygon (spatial),
+// off by default; the backend resolves the polygon from focusContextId.
 let focusStartTs = null;        // epoch secs, or null
 let focusEndTs = null;          // epoch secs, or null
 let focusLabel = null;          // active Context's name (for status messages)
+let focusContextId = null;      // active Context's id (drives the spatial Focus)
+let focusSpatial = false;       // also limit to the active Context's polygon
 let focusContexts = [];         // contexts that have a time component
 const FOCUS_LS_KEY = "geotagger.people.focusContextId";
+const FOCUS_SPATIAL_LS_KEY = "geotagger.people.focusSpatial";
 
 const FACE_LIMIT = 1000;
 // Auto-select bar for the Unlabeled queue: a suggestion only exists at all above
@@ -68,6 +73,11 @@ function bindToolbar() {
   });
 
   document.getElementById("focus-context-select").addEventListener("change", onFocusChange);
+  document.getElementById("focus-spatial-chk").addEventListener("change", () => {
+    localStorage.setItem(FOCUS_SPATIAL_LS_KEY,
+      document.getElementById("focus-spatial-chk").checked ? "1" : "0");
+    onFocusChange();   // applyFocusFromSelect re-reads the checkbox, then reloads
+  });
 
   document.getElementById("deselect-all-btn").addEventListener("click", deselectAll);
   document.getElementById("suggested-only-chk").addEventListener("change", (e) => {
@@ -159,6 +169,8 @@ async function loadFocusContexts() {
   if (saved && focusContexts.some(c => String(c.id) === saved)) {
     sel.value = saved;
   }
+  document.getElementById("focus-spatial-chk").checked =
+    localStorage.getItem(FOCUS_SPATIAL_LS_KEY) === "1";
   applyFocusFromSelect();   // sets state + note; the initial load picks it up
 }
 
@@ -166,10 +178,17 @@ async function loadFocusContexts() {
 // not reload — callers decide whether to refresh the views.
 function applyFocusFromSelect() {
   const sel = document.getElementById("focus-context-select");
+  const chk = document.getElementById("focus-spatial-chk");
   const c = focusContexts.find(x => String(x.id) === sel.value);
   focusStartTs = c ? c.start_ts : null;
   focusEndTs = c ? c.end_ts : null;
   focusLabel = c ? c.name : null;
+  focusContextId = c ? c.id : null;
+  // "＋ in its area" only means something with a Context picked; disable it under
+  // "All time" so it's clear it needs one. focusSpatial follows the live checkbox.
+  chk.disabled = !c;
+  document.getElementById("focus-spatial-label").classList.toggle("disabled", !c);
+  focusSpatial = chk.checked && !!c;
   if (c) localStorage.setItem(FOCUS_LS_KEY, String(c.id));
   else localStorage.removeItem(FOCUS_LS_KEY);
   updateFocusNote(c);
@@ -183,14 +202,20 @@ async function onFocusChange() {
 }
 
 function focusActive() {
-  return focusStartTs != null || focusEndTs != null;
+  return focusStartTs != null || focusEndTs != null
+      || (focusSpatial && focusContextId != null);
 }
 
-// Query fragment (no leading separator) for the active window, else "".
+// Query fragment (no leading separator) for the active Focus, else "". Carries the
+// time window and, when "＋ in its area" is on, the Context id so the backend can
+// resolve its polygon and drop out-of-area photos.
 function focusQuery() {
   const parts = [];
   if (focusStartTs != null) parts.push(`start_ts=${focusStartTs}`);
   if (focusEndTs != null) parts.push(`end_ts=${focusEndTs}`);
+  if (focusSpatial && focusContextId != null) {
+    parts.push(`spatial_context_id=${focusContextId}`);
+  }
   return parts.join("&");
 }
 
@@ -206,15 +231,21 @@ function focusRangeLabel(c) {
 
 // " · Focus: <name>" for windowed status lines, or "" when no Focus is active.
 function focusStatusSuffix() {
-  return focusActive() ? ` · Focus: ${focusLabel || "time window"}` : "";
+  if (!focusActive()) return "";
+  return ` · Focus: ${focusLabel || "time window"}` + (focusSpatial ? " (in its area)" : "");
 }
 
 function updateFocusNote(c) {
   const note = document.getElementById("focus-note");
   document.getElementById("focus-context-select").classList.toggle("focus-active", focusActive());
   if (!focusActive()) { note.textContent = ""; note.title = ""; return; }
-  note.textContent = "◦ windowing people, Unlabeled, suggestions, Discover & Crowds";
-  note.title = c ? `Focused on “${c.name}” (${focusRangeLabel(c)})` : "";
+  note.textContent = focusSpatial
+    ? "◦ windowing by time + area (people, Unlabeled, suggestions, Discover & Crowds)"
+    : "◦ windowing people, Unlabeled, suggestions, Discover & Crowds";
+  note.title = c
+    ? `Focused on “${c.name}” (${focusRangeLabel(c)})` +
+      (focusSpatial ? " — limited to its map area" : "")
+    : "";
 }
 
 /* ── People list ── */
