@@ -4,152 +4,76 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Geo-Tagger</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="style.css"/>
-<link rel="stylesheet" href="face-grid.css"/>
+<link rel="stylesheet" href="home.css"/>
 </head>
 <body>
 <div id="toolbar">
-  <div class="toolbar-group">
-    <button id="geocode-view-btn" class="active">📍 Geocode View</button>
-    <a href="quick-geocode.html" class="button">⚡ Quick Geocode</a>
-    <button id="timesync-view-btn">🕐 Time Sync View</button>
-    <button id="people-view-btn">🙂 People</button>
-    <button id="contexts-view-btn">🗺️ Contexts</button>
-  </div>
-  <div class="toolbar-spacer"></div>
-  <div class="toolbar-group">
-    <button id="select-month-btn">Select Month</button>
-    <span id="selected-month-label">No month selected</span>
-  </div>
-  <div class="toolbar-group">
-    <button id="select-area-btn">Select Area</button>
-    <select id="window-select">
-      <option value="900">Window: 15 min</option>
-      <option value="1800">Window: 30 min</option>
-      <option value="3600">Window: 1 hr</option>
-      <option value="7200">Window: 2 hr</option>
-      <option value="43200">Window: 12 hr</option>
-      <option value="86400">Window: 24 hr</option>
-      <option value="604800">Window: 1 week</option>
-    </select>
-    <span id="selected-area-label"></span>
-  </div>
+  <div class="toolbar-group" id="app-nav" data-active="home"></div>
 </div>
 
-<!-- Hidden controls kept for JS compatibility -->
-<div style="display:none">
-  <select id="context-filter-select"><option value="">-- none --</option></select>
-  <span id="selected-context-label"></span>
-  <input id="lat-input" type="text"/>
-  <input id="lng-input" type="text"/>
-  <button id="apply-latlng-btn"></button>
-  <button id="copy-location-btn"></button>
-  <button id="remove-geotag-btn"></button>
-</div>
-
-<div id="cam-legend"></div>
-
-<div id="timeline">
-  <canvas id="hist-canvas"></canvas>
-  <input id="range-lo" class="hist-range" type="range" min="0" max="1000" value="0"/>
-  <input id="range-hi" class="hist-range" type="range" min="0" max="1000" value="1000"/>
-  <div id="hist-labels">
-    <span id="hist-label-lo"></span>
-    <span id="hist-label-hi"></span>
+<div id="dashboard">
+  <div class="card" id="card-library">
+    <h2>Library</h2>
+    <div class="big-number" id="library-total">—</div>
+    <div class="sub-line" id="library-breakdown"></div>
   </div>
-</div>
 
-<div id="main">
-  <div id="map-pane">
-    <div id="map-nav">
-      <div class="toolbar-group">
-        <label>Places:</label>
-        <select id="places-select">
-          <option value="">Select a place...</option>
-        </select>
-        <button id="draw-rectangle-btn" title="Draw Rectangle">📐</button>
-        <button id="draw-circle-btn" title="Draw Circle">⭕</button>
-      </div>
-      <div class="toolbar-group imprecise-control-group">
-        <label title="Drop photos with a specified uncertainty radius">
-          <input type="checkbox" id="imprecise-toggle" />
-          Imprecise Drop
-        </label>
-        <select id="imprecise-radius-select" style="display: none;">
-          <option value="160.934">0.1 miles</option>
-          <option value="402.336">0.25 miles</option>
-          <option value="804.672">0.5 miles</option>
-          <option value="1609.34">1 mile</option>
-          <option value="8046.72">5 miles</option>
-          <option value="16093.44">10 miles</option>
-          <option value="40233.6" selected>25 miles</option>
-          <option value="80467.2">50 miles</option>
-        </select>
-      </div>
-      <div class="toolbar-group">
-        <input id="place-search" type="text" placeholder="Search place…" />
-        <button id="place-search-btn">Go</button>
-      </div>
-    </div>
-    <div id="map"></div>
-  </div>
-  <div id="grid-pane">
-    <div id="grid-nav">
-      <div class="toolbar-group">
-        <label>Show:</label>
-        <select id="filter-select">
-          <option value="all">All</option>
-          <option value="yes">Geotagged</option>
-          <option value="no">Not geotagged</option>
-          <option value="mixed">Mixed geotagged days</option>
-        </select>
-      </div>
-      <div class="toolbar-group imprecise-control-group">
-        <label>
-          <input type="checkbox" id="include-screenshots-chk" checked/>
-          Screenshots
-        </label>
-      </div>
-      <div class="toolbar-group">
-        <button id="mark-ignored-btn" title="Mark selected photos as not needing a location (e.g. screenshots)">🚫 Ignore location</button>
-        <button id="unmark-ignored-btn" title="Restore selected photos to normal geocoding filtering">↩ Un-ignore</button>
-      </div>
-    </div>
-    <div id="grid"></div>
-  </div>
-  <div id="detail-pane">
-    <div id="detail-placeholder">Select a photo to view details</div>
-    <div id="detail-content" style="display:none">
-      <img id="detail-img" src="" alt="Preview"/>
-      <table id="detail-meta"></table>
-      <div id="guess-bar" style="display:none">
-        <button id="guess-btn">Guess location</button>
-        <div id="guess-result" style="display:none">
-          <span id="guess-summary"></span>
-          <div class="guess-actions">
-            <button id="guess-apply-btn" class="primary">Apply</button>
-            <button id="guess-dismiss-btn">Dismiss</button>
-          </div>
-        </div>
-      </div>
+  <div class="card" id="card-geotag">
+    <h2>Geotagging</h2>
+    <div class="progress-bar"><div class="progress-fill" id="geotag-progress-fill"></div></div>
+    <div class="progress-label" id="geotag-progress-label"></div>
+    <div class="stat-line" id="geotag-stats"></div>
+    <div class="stat-line highlight" id="geotag-guessable"></div>
+    <div class="card-actions">
+      <a class="button" href="/quick-geocode.html">⚡ Quick Geocode</a>
+      <a class="button" href="/geocode.html">📍 Open Geocode view</a>
     </div>
   </div>
-</div>
 
-<div id="status-bar"></div>
+  <div class="card" id="card-reverse-geocode">
+    <h2>Reverse geocoding (place names)</h2>
+    <div class="stat-line" id="reverse-geocode-stats"></div>
+    <div class="hint" id="reverse-geocode-hint" style="display:none"></div>
+    <div class="card-actions">
+      <button id="backfill-btn">Run backfill</button>
+    </div>
+  </div>
 
-<!-- Month Picker Modal -->
-<div id="month-picker-modal" class="modal" style="display:none">
-  <div class="modal-content">
-    <span class="modal-close">&times;</span>
-    <h2>Select Month</h2>
-    <div id="month-picker-list"></div>
+  <div class="card" id="card-faces">
+    <h2>Faces</h2>
+    <div class="progress-bar"><div class="progress-fill" id="faces-progress-fill"></div></div>
+    <div class="progress-label" id="faces-progress-label"></div>
+    <div class="stat-line" id="faces-unscanned"></div>
+    <div class="card-actions">
+      <button id="detect-faces-btn">Detect faces</button>
+      <button id="detect-faces-stop-btn" class="danger" style="display:none">Stop</button>
+    </div>
+    <div class="card-actions">
+      <a class="button" href="/people.html">🙂 People</a>
+      <a class="button" href="/tag.html">📱 Quick Tag</a>
+    </div>
+  </div>
+
+  <div class="card" id="card-people">
+    <h2>People &amp; Contexts</h2>
+    <div class="stat-line" id="people-stats"></div>
+    <div class="card-actions">
+      <a class="button" href="/people-manage.html">⚙ Manage</a>
+    </div>
+    <div class="stat-line" id="contexts-stats"></div>
+    <div class="card-actions">
+      <a class="button" href="/contexts.html">🗺️ Contexts</a>
+    </div>
+  </div>
+
+  <div class="card card-full" id="card-months">
+    <h2>Coverage by month</h2>
+    <div id="months-bar-container"></div>
   </div>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="face-grid.js"></script>
-<script src="app.js"></script>
+<script src="nav.js"></script>
+<script src="home.js"></script>
 </body>
 </html>

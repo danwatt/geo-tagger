@@ -56,7 +56,7 @@ button, a.button {
 button:hover, a.button:hover {
   background: #4a4a4a;
 }
-button.active {
+button.active, a.button.active {
   background: #2a4a6e;
   border-color: #4a90d9;
   color: #7ab8f5;

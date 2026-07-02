@@ -259,17 +259,6 @@ function addBasemapControl() {
 }
 
 function bindToolbar() {
-  // View navigation
-  document.getElementById("timesync-view-btn").addEventListener("click", () => {
-    window.location.href = "/timesync.html";
-  });
-  document.getElementById("people-view-btn").addEventListener("click", () => {
-    window.location.href = "/people.html";
-  });
-  document.getElementById("contexts-view-btn").addEventListener("click", () => {
-    window.location.href = "/contexts.html";
-  });
-
   document.getElementById("context-filter-select").addEventListener("change", async (e) => {
     const id = parseInt(e.target.value);
     if (!id) {

@@ -39,15 +39,6 @@ function setStatus(msg, isError = false) {
 
 /* ── Toolbar ── */
 function bindToolbar() {
-  document.getElementById("geocode-view-btn").addEventListener("click", () => {
-    window.location.href = "/";
-  });
-  document.getElementById("timesync-view-btn").addEventListener("click", () => {
-    window.location.href = "/timesync.html";
-  });
-  document.getElementById("contexts-view-btn").addEventListener("click", () => {
-    window.location.href = "/contexts.html";
-  });
   document.getElementById("quicktag-view-btn").addEventListener("click", () => {
     window.location.href = "/tag.html";
   });

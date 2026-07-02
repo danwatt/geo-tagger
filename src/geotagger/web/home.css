@@ -1,0 +1,118 @@
+#dashboard {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  padding: 16px;
+  align-content: start;
+}
+
+.card {
+  background: #232323;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card h2 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #7ab8f5;
+}
+
+.card-full {
+  grid-column: 1 / -1;
+}
+
+.big-number {
+  font-size: 36px;
+  font-weight: 700;
+  color: #eee;
+  line-height: 1;
+}
+
+.sub-line {
+  font-size: 12px;
+  color: #999;
+}
+
+.stat-line {
+  font-size: 12px;
+  color: #ccc;
+}
+
+.stat-line strong {
+  color: #eee;
+}
+
+.stat-line.highlight {
+  color: #7ab8f5;
+}
+
+.hint {
+  font-size: 11px;
+  color: #d9534f;
+}
+
+.error-line {
+  font-size: 11px;
+  color: #f88;
+}
+
+.card-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+/* ── Progress bars ── */
+.progress-bar {
+  height: 10px;
+  background: #333;
+  border-radius: 5px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  width: 0;
+  background: #4a90d9;
+  transition: width 0.3s;
+}
+.progress-label {
+  font-size: 11px;
+  color: #aaa;
+}
+
+/* ── Coverage-by-month bars ── */
+#months-bar-container {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 80px;
+  overflow-x: auto;
+  padding: 18px 4px 0;
+  position: relative;
+}
+.month-bar {
+  flex: 0 0 4px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+.month-bar .bar-untagged { width: 100%; background: #4a4a4a; }
+.month-bar .bar-tagged { width: 100%; background: #5cb85c; }
+.month-year-label {
+  position: absolute;
+  top: -16px;
+  left: 0;
+  font-size: 9px;
+  color: #777;
+  white-space: nowrap;
+}

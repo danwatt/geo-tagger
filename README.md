@@ -51,11 +51,12 @@ uv run geotagger
 uv run python -m geotagger
 ```
 
-Opens at <http://127.0.0.1:8000>
+Opens at <http://127.0.0.1:8000>, showing the home dashboard with library health and
+links into each tool. The map/grid geocode view lives at `/geocode.html`.
 
 ## Usage
 
-1. Paste a directory path into the toolbar and click **Scan**
+1. Open the dashboard at `/` for an overview, or go straight to `/geocode.html`
 2. Geotagged photos show as pushpins on the map; thumbnails appear in the center grid
 3. **Drag thumbnails onto the map** to geotag them at the drop point
 4. **Ctrl/Cmd+click** or **Shift+click** to multi-select; drag the selection

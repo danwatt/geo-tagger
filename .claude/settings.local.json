@@ -10,7 +10,9 @@
       "Bash(uv add *)",
       "Bash(node --check people.js)",
       "Read(//c/temp/geotagger/prod/**)",
-      "Bash(uv run *)"
+      "Bash(uv run *)",
+      "Bash(git mv *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://127.0.0.1:8000/api/status)"
     ]
   }
 }

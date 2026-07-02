@@ -84,15 +84,6 @@ function addBasemapControl() {
 
 /* ── Toolbar ── */
 function bindToolbar() {
-  document.getElementById("geocode-view-btn").addEventListener("click", () => {
-    window.location.href = "/";
-  });
-  document.getElementById("timesync-view-btn").addEventListener("click", () => {
-    window.location.href = "/timesync.html";
-  });
-  document.getElementById("people-view-btn").addEventListener("click", () => {
-    window.location.href = "/people.html";
-  });
   document.getElementById("add-context-btn").addEventListener("click", () => openForm(null));
   document.getElementById("draw-btn").addEventListener("click", startDrawing);
   document.getElementById("form-save-btn").addEventListener("click", saveContext);

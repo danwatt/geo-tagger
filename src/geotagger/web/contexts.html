@@ -11,12 +11,7 @@
 </head>
 <body>
 <div id="toolbar">
-  <div class="toolbar-group">
-    <button id="geocode-view-btn">📍 Geocode View</button>
-    <button id="timesync-view-btn">🕐 Time Sync View</button>
-    <button id="people-view-btn">🙂 People</button>
-    <button id="contexts-view-btn" class="active">🗺️ Contexts</button>
-  </div>
+  <div class="toolbar-group" id="app-nav" data-active="contexts"></div>
 </div>
 
 <div id="main">
@@ -58,6 +53,7 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.16.0/dist/leaflet-geoman.min.js"></script>
+<script src="nav.js"></script>
 <script src="contexts.js"></script>
 </body>
 </html>

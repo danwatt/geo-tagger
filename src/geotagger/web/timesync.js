@@ -159,17 +159,6 @@ function initTimeline() {
 
 /* ── Toolbar ── */
 function bindToolbar() {
-  // View switcher
-  document.getElementById("geocode-view-btn").addEventListener("click", () => {
-    window.location.href = "/";
-  });
-  document.getElementById("people-view-btn").addEventListener("click", () => {
-    window.location.href = "/people.html";
-  });
-  document.getElementById("contexts-view-btn").addEventListener("click", () => {
-    window.location.href = "/contexts.html";
-  });
-
   // Month picker
   document.getElementById("select-month-btn").addEventListener("click", showMonthPicker);
   document.querySelector(".modal-close").addEventListener("click", () => {

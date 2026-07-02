@@ -192,7 +192,9 @@ sidebar list of contexts (name, date range, vertex/photo count, edit/delete).
   appear?") and, inversely, "who's here?" within an area/place. Fuses the two
   halves of the app using data already stored (face tags + geotags). A combined
   search (person + date range + place → grid *and* map) would be the command
-  center. *(Top brainstorm pick alongside clustering, 2026-06-28.)*
+  center. *(Top brainstorm pick alongside clustering, 2026-06-28. Re-endorsed as
+  the highest-value existing backlog item in the 2026-07-01 review — the hard
+  parts are all indexed already: face tags, geotags, place names, contexts.)*
 
 ## Geo / locating photos
 
@@ -200,6 +202,66 @@ sidebar list of contexts (name, date range, vertex/photo count, edit/delete).
   surface every untagged photo that has a confident time-based location guess
   (`/api/guess` already computes these one at a time) and accept per trip/day.
 
-- **Reverse-geocode coordinates → city/country** — turn raw lat/lng into place
-  names so photos are searchable/labelable by text ("Paris") instead of only
-  drawn boxes; enables grouping by location name.
+- **Reverse-geocode coordinates → city/country** — *Done.* Offline GeoNames-based
+  reverse geocoding (city/state/county/country), auto on scan and on geotag, with
+  backfill and IPTC sidecar export endpoints. See README "Reverse geocoding".
+
+- **Location-history import (GPX / Google Takeout)** — import phone GPS tracks
+  (GPX files, or Google Location History JSON from Takeout) and auto-geotag every
+  timestamped photo by track correlation: find the track point(s) nearest in time
+  to each photo and interpolate. Typically resolves thousands of photos in one
+  pass with real per-point accuracy instead of a context-centroid guess.
+  Composes with what's already built: Time Sync fixes camera clock offsets first;
+  the `gps_accuracy` field stores per-match confidence (based on time gap between
+  photo and nearest track point); Quick Geocode becomes the review UI for
+  low-confidence matches. Sketch: a `tracks` table (source file, point count,
+  time span) + `track_points(ts, lat, lng)` with an index on `ts`; an import
+  script/endpoint; a "correlate" pass that writes sidecars like `/api/geotag`
+  does. *(Biggest single coverage win on the geo side — 2026-07-01 review.)*
+
+## App-wide / UX (2026-07-01 review)
+
+- **Home dashboard + shared nav** — a landing page at `/` showing library health
+  (total photos, % geotagged, % faces labeled, pending queues) with action links
+  into the right tool ("1,204 photos have a confident guess → Quick Geocode"),
+  plus one shared nav component to replace the per-page copies of the toolbar
+  buttons (crowd-review has no main nav; quick pages only have back links; the
+  geocode page hides legacy controls in a `display:none` div). All the stats
+  endpoints already exist (`/api/stats/*`, `/api/geocode/status`,
+  `/api/faces/scan/status`). **Planned — see `DASHBOARD_PLAN.md` for the
+  ready-to-execute handoff.**
+
+- **In-app rescan + background jobs with progress** — scanning only happens at
+  server startup (the old `POST /api/scan` is gone), so new photos need a
+  restart, and scan progress renders as ANSI text in the terminal — invisible
+  from the browser. Face scan and geocode backfill are "call repeatedly until
+  `remaining == 0`" endpoints with no UI driver. A small job runner (one
+  background task per job kind, progress via SSE or polling) would give a Rescan
+  button, a "Detect faces on N new photos" button, and progress bars in the web
+  UI. `watchfiles` is already in the venv (via uvicorn) if filesystem watching
+  is wanted later. *(The dashboard's loop-buttons are a stopgap for this.)*
+
+- **Undo via sidecar history** — bulk operations (drop 50 photos on the wrong
+  spot, accept a bad suggestion batch) commit immediately with no way back.
+  Since sidecars are the only mutable artifact, an operations log plus a copy of
+  the prior sidecar bytes per write buys full undo without touching the
+  immutability guarantee — and makes aggressive bulk-accept workflows feel safe.
+
+- **In-app settings page** — the ~25 tuning knobs are env-vars only. The face
+  matching/clustering thresholds especially are things to tweak while looking at
+  results, not by restarting. A settings API + page for the safe-to-change
+  subset (thresholds, crowd min size, suggest caps), persisted in the DB and
+  overriding the env defaults.
+
+## Robustness & safety (2026-07-01 review)
+
+- **LAN mode auth** — `--network` binds 0.0.0.0 with zero auth; anyone on the
+  network can write sidecars and edit people. A simple shared token/PIN
+  (query-param or cookie, set via env/CLI flag) would cover the phone-tagging
+  use case without real user management.
+
+- **Test suite** — there are no tests. Highest-value first targets: sidecar
+  round-trip (write GPS → read back → remove; place names; datetime), the
+  guess/context math (`point_in_polygon`, centroid fallback, time-neighbor
+  weighting), and scanner freshness/invalidation. Protects the immutability
+  guarantee as the codebase keeps growing.

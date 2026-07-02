@@ -10,12 +10,7 @@
 </head>
 <body>
 <div id="toolbar">
-  <div class="toolbar-group">
-    <button id="geocode-view-btn">📍 Geocode View</button>
-    <button id="timesync-view-btn" class="active">🕐 Time Sync View</button>
-    <button id="people-view-btn">🙂 People</button>
-    <button id="contexts-view-btn">🗺️ Contexts</button>
-  </div>
+  <div class="toolbar-group" id="app-nav" data-active="timesync"></div>
   <div class="toolbar-group">
     <button id="select-month-btn">Select Month</button>
     <span id="selected-month-label">No month selected</span>
@@ -79,6 +74,7 @@
 </div>
 
 <script src="https://unpkg.com/vis-timeline@7.7.3/standalone/umd/vis-timeline-graph2d.min.js"></script>
+<script src="nav.js"></script>
 <script src="timesync.js"></script>
 </body>
 </html>
