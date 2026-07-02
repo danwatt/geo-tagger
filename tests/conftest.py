@@ -12,6 +12,12 @@ def db(tmp_path, monkeypatch):
     conn.close()
     index._db = None
     index._db_path = None
+    # Recognition caches are module globals keyed on the faces generation; drop
+    # them so the next test's fresh DB isn't shadowed by a Gallery built here.
+    from geotagger import faces
+    faces._gallery_cache = None
+    faces._unlabeled_cache = None
+    faces._suggested_scores_cache = None
 
 
 @pytest.fixture
