@@ -122,14 +122,19 @@ function bindToolbar() {
 
   document.getElementById("add-person-btn").addEventListener("click", addPerson);
 
-  // Detail-pane assignment controls act on the current selection too.
+  // Detail-pane assignment controls act on the ONE previewed face only — never the
+  // grid selection (the toolbar's "Assign selection" is for that). Mirrors the
+  // detail Ignore button below, which already scopes to the focused face.
   document.getElementById("detail-assign-btn").addEventListener("click", () => {
     const pid = parseInt(document.getElementById("detail-person-select").value);
     if (!pid) { setStatus("Pick a person from the dropdown first.", true); return; }
-    assignSelected(pid);
+    assignFocusedFace({ personId: pid });
   });
-  document.getElementById("detail-new-btn").addEventListener("click", assignSelectedToNewPerson);
-  document.getElementById("detail-unassign-btn").addEventListener("click", () => assignSelected(null, true));
+  document.getElementById("detail-new-btn").addEventListener("click", () => {
+    const name = prompt("Name for this person:");
+    if (name && name.trim()) assignFocusedFace({ name: name.trim() });
+  });
+  document.getElementById("detail-unassign-btn").addEventListener("click", () => assignFocusedFace({ clear: true }));
   document.getElementById("detail-ignore-btn").addEventListener("click", () => {
     const f = findFace(focusedFaceId);
     if (!f) { setStatus("Select a face first.", true); return; }
@@ -1519,6 +1524,32 @@ async function assignSelected(personId, clear = false) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     setStatus(clear ? `Unassigned ${ids.length} face(s).` : `Assigned ${ids.length} face(s).`);
     selectedIds.clear();
+    await loadPersons();
+    await loadFaces();
+  } catch (err) {
+    setStatus("Assign failed: " + err.message, true);
+  }
+}
+
+// Detail-pane assignment: act on the single previewed face (focusedFaceId) via the
+// per-face endpoint, leaving the grid selection untouched. Handles all three detail
+// buttons — assign to a person, create a new person (name), or unassign (clear).
+async function assignFocusedFace({ personId = null, name = null, clear = false } = {}) {
+  const f = findFace(focusedFaceId);
+  if (!f) { setStatus("Select a face first.", true); return; }
+  const body = clear ? { person_id: null } : name ? { name } : { person_id: personId };
+  try {
+    const res = await fetch(`/api/faces/${f.id}/assign`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const who = clear ? null : (name || persons.find(p => p.id === personId)?.name);
+    setStatus(clear ? "Unassigned this face." : `Assigned this face${who ? ` to ${who}` : ""}.`);
+    // Only this face changes — drop just it from the selection, keep the rest.
+    selectedIds.delete(f.id);
+    if (focusedFaceId === f.id) focusedFaceId = null;
     await loadPersons();
     await loadFaces();
   } catch (err) {
