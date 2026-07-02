@@ -15,6 +15,13 @@
     <button id="quicktag-view-btn" title="Phone/tablet-friendly screen to tag groups of faces fast">📱 Quick Tag</button>
     <button id="manage-view-btn" title="Edit names, birth dates, and family groups">⚙ Manage</button>
   </div>
+  <div class="toolbar-group" id="focus-group">
+    <label for="focus-context-select" title="Narrow the people list, Unlabeled queue, suggestions, Discover and Crowds to one Context's time window. Per-person, All and Recently-tagged views stay full-library.">🕑 Focus:</label>
+    <select id="focus-context-select" title="Pick a Context to focus tagging on its time window">
+      <option value="">All time</option>
+    </select>
+    <span id="focus-note"></span>
+  </div>
   <div class="toolbar-group">
     <button id="deselect-all-btn">Deselect all</button>
     <label id="suggested-only-label" title="In the Unlabeled queue, show only faces that have a recognition guess">

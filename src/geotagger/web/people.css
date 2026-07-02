@@ -9,6 +9,13 @@
 #suggested-only-label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
 #suggested-only-chk { cursor: pointer; margin: 0; }
 
+/* ── Time Focus control ── */
+#focus-group label { color: #bbb; font-size: 12px; }
+#focus-group select { max-width: 240px; }
+/* Highlight the picker while a window is active so it's obvious the page is scoped. */
+#focus-group select.focus-active { border-color: #4a90d9; background: #24374d; }
+#focus-note { color: #7fae7f; font-size: 11px; font-style: italic; }
+
 /* ── Left: people list ── */
 #people-pane {
   display: flex;

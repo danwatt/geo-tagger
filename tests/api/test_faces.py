@@ -135,6 +135,98 @@ def test_photo_faces_lists_and_404(client):
     assert client.get("/api/photos/999/faces").status_code == 404
 
 
+# ── Time Focus window (start_ts/end_ts) on the tagging/discovery surfaces ──
+
+_2015 = (ff.epoch(2015, 1, 1), ff.epoch(2016, 1, 1))  # a [start, end] covering 2015
+
+
+def test_unlabeled_scope_windows_by_photo_time(client):
+    db = index.get_db()
+    rng = np.random.default_rng(10)
+    ff.seed_unlabeled(db, ff.unit_vectors(rng, 2), photo_datetimes=ff.epoch(2015, 6, 1))
+    ff.seed_unlabeled(db, ff.unit_vectors(rng, 3), photo_datetimes=ff.epoch(2020, 6, 1))
+    ff.seed_unlabeled(db, ff.unit_vectors(rng, 1), photo_datetimes=None)  # undated
+
+    assert client.get("/api/faces?scope=unlabeled").json()["total"] == 6
+    start, end = _2015
+    win = client.get(f"/api/faces?scope=unlabeled&start_ts={start}&end_ts={end}").json()
+    assert win["total"] == 2 and len(win["faces"]) == 2
+    # Undated faces fall outside every window (a wide 2000–2025 span still omits it).
+    wide = client.get(
+        f"/api/faces?scope=unlabeled&start_ts={ff.epoch(2000,1,1)}&end_ts={ff.epoch(2025,1,1)}"
+    ).json()
+    assert wide["total"] == 5
+
+
+def test_persons_window_hides_out_of_range_and_counts_in_range(client):
+    db = index.get_db()
+    rng = np.random.default_rng(11)
+    c1, c2 = ff.unit_vectors(rng, 2)
+    ff.seed_person(db, "Alice", ff.cluster_around(rng, c1, 3, intra_cos=0.9),
+                   photo_datetimes=[ff.epoch(2015, 6, 1), ff.epoch(2015, 7, 1),
+                                    ff.epoch(2020, 6, 1)])
+    ff.seed_person(db, "Bob", ff.cluster_around(rng, c2, 2, intra_cos=0.9),
+                   photo_datetimes=ff.epoch(2020, 6, 1))
+
+    full = {p["name"]: p["face_count"] for p in client.get("/api/persons").json()}
+    assert full == {"Alice": 3, "Bob": 2}
+
+    start, end = _2015
+    win = client.get(f"/api/persons?start_ts={start}&end_ts={end}").json()
+    # Bob (no 2015 faces) drops out; Alice's count reflects only her in-range faces.
+    assert {p["name"]: p["face_count"] for p in win} == {"Alice": 2}
+
+
+def test_scan_status_window_scopes_unlabeled_only(client):
+    db = index.get_db()
+    rng = np.random.default_rng(12)
+    ff.seed_unlabeled(db, ff.unit_vectors(rng, 2), photo_datetimes=ff.epoch(2015, 6, 1))
+    ff.seed_unlabeled(db, ff.unit_vectors(rng, 3), photo_datetimes=ff.epoch(2020, 6, 1))
+    start, end = _2015
+    s = client.get(f"/api/faces/scan/status?start_ts={start}&end_ts={end}").json()
+    assert s["unlabeled_faces"] == 2   # windowed
+    assert s["total_faces"] == 5       # global (unwindowed nav scope)
+
+
+def test_suggested_scopes_window_candidates(client):
+    db = index.get_db()
+    rng = np.random.default_rng(13)
+    c = ff.unit_vectors(rng, 1)[0]
+    # Alice's gallery is undated (still global); unknowns are split across years.
+    alice_id, _ = ff.seed_person(db, "Alice", ff.cluster_around(rng, c, 3, intra_cos=0.9))
+    ff.seed_unlabeled(db, ff.cluster_around(rng, c, 2, intra_cos=0.9),
+                      photo_datetimes=ff.epoch(2015, 6, 1))
+    ff.seed_unlabeled(db, ff.cluster_around(rng, c, 4, intra_cos=0.9),
+                      photo_datetimes=ff.epoch(2020, 6, 1))
+    start, end = _2015
+
+    # scope=suggested ("Find more") only offers the in-window candidates.
+    sug = client.get(
+        f"/api/faces?scope=suggested&person_id={alice_id}&start_ts={start}&end_ts={end}"
+    ).json()
+    assert sug["total"] == 2
+    # suggested_only on the unlabeled queue windows the same way.
+    only = client.get(
+        f"/api/faces?scope=unlabeled&suggested_only=true&start_ts={start}&end_ts={end}"
+    ).json()
+    assert only["total"] == 2
+
+
+def test_clusters_window_candidates(client):
+    db = index.get_db()
+    rng = np.random.default_rng(14)
+    c1, c2 = ff.unit_vectors(rng, 2)
+    ff.seed_unlabeled(db, ff.cluster_around(rng, c1, 5, intra_cos=0.9),
+                      photo_datetimes=ff.epoch(2015, 6, 1))
+    ff.seed_unlabeled(db, ff.cluster_around(rng, c2, 5, intra_cos=0.9),
+                      photo_datetimes=ff.epoch(2020, 6, 1))
+    start, end = _2015
+    data = client.get(f"/api/faces/clusters?start_ts={start}&end_ts={end}").json()
+    # Only the 2015 group's faces are scanned, so one cluster of 5 is found.
+    assert data["scanned"] == 5
+    assert [c["size"] for c in data["clusters"]] == [5]
+
+
 def test_crowds_groups_and_ignore(client):
     from geotagger import faces as faces_mod
     db = index.get_db()
@@ -170,3 +262,35 @@ def test_crowds_groups_and_ignore(client):
     after = client.get("/api/crowds?min_faces=2").json()
     assert after["photo_count"] == 1
     assert after["groups"][0]["unlabeled_faces"] == 0
+
+
+def test_crowds_window_filters_photos(client):
+    from geotagger import faces as faces_mod
+    db = index.get_db()
+    rng = np.random.default_rng(15)
+
+    def seed_crowd(path, dt):
+        index.upsert_photo(
+            path=path, filename=path, dir_=".", ext=".jpg", media_type="image",
+            mtime=0.0, size=0, lat=None, lng=None, geotag_source="none",
+            sidecar_path=None, sidecar_mtime=None, photo_datetime=dt,
+        )
+        pid = db.execute("SELECT id FROM photos WHERE path=?", (path,)).fetchone()[0]
+        db.execute("UPDATE photos SET faces_scanned_at=1 WHERE id=?", (pid,))
+        vec = faces_mod.encode_embedding(ff.unit_vectors(rng, 1)[0])
+        for _ in range(3):
+            db.execute(
+                "INSERT INTO faces (photo_id, person_id, bbox, det_score, embedding, "
+                "source, ignored, created_at) VALUES (?, NULL, '0,0,1,1', 0.9, ?, 'detected', 0, 0)",
+                (pid, vec))
+        db.commit()
+
+    seed_crowd("crowd2015.jpg", ff.epoch(2015, 6, 1))
+    seed_crowd("crowd2020.jpg", ff.epoch(2020, 6, 1))
+    ff.reset_faces_caches()
+
+    assert client.get("/api/crowds?min_faces=2").json()["photo_count"] == 2
+    start, end = _2015
+    win = client.get(f"/api/crowds?min_faces=2&start_ts={start}&end_ts={end}").json()
+    assert win["photo_count"] == 1
+    assert win["groups"][0]["label"] == "June 1, 2015"

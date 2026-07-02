@@ -17,6 +17,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _in_window(ts, start_ts: int | None, end_ts: int | None) -> bool:
+    """True if a photo timestamp falls in an optional [start_ts, end_ts] window.
+    Undated photos (ts None/0) fall outside any active window."""
+    if start_ts is None and end_ts is None:
+        return True
+    if not ts:
+        return False
+    return (start_ts is None or ts >= start_ts) and (end_ts is None or ts <= end_ts)
+
+
 class CreatePersonRequest(BaseModel):
     name: str
 
@@ -47,12 +57,17 @@ class ScanFacesRequest(BaseModel):
 
 
 @router.get("/api/persons")
-async def api_get_persons():
+async def api_get_persons(
+    start_ts: int | None = Query(None),
+    end_ts: int | None = Query(None),
+):
+    """List persons. With a start_ts/end_ts window (the People page's time Focus),
+    face_count reflects only in-range faces and people with none are omitted."""
     return [
         {"id": p["id"], "name": p["name"], "face_count": p["face_count"],
          "birth_date": p["birth_date"], "created_at": p["created_at"],
          "family_id": p["family_id"], "family_name": p["family_name"]}
-        for p in index.get_persons()
+        for p in index.get_persons(start_ts=start_ts, end_ts=end_ts)
     ]
 
 
@@ -133,12 +148,18 @@ async def api_list_faces(
     person_id: int | None = Query(None),
     limit: int = Query(500, ge=1, le=2000),
     suggested_only: bool = Query(False),
+    start_ts: int | None = Query(None),
+    end_ts: int | None = Query(None),
 ):
     """List faces. scope=unlabeled attaches a recognition suggestion to each face;
     scope=suggested returns only unlabeled faces whose *best* guess is `person_id`,
     ranked by confidence — for quickly approving one person's guesses in bulk.
     suggested_only (scope=unlabeled) drops faces with no guess, scanning up to the
-    suggest cap so it finds matches beyond the first detection-ranked page."""
+    suggest cap so it finds matches beyond the first detection-ranked page.
+
+    start_ts/end_ts (epoch secs) are the People page's time Focus: they window the
+    candidate faces for the unlabeled and suggested scopes only (person/all/recent/
+    ignored ignore them, and the recognition gallery stays global either way)."""
     if scope == "unlabeled" and suggested_only:
         loop = asyncio.get_running_loop()
         rows, matches = await loop.run_in_executor(
@@ -146,7 +167,8 @@ async def api_list_faces(
             faces.get_suggested_scores,
         )
         names = serializers.person_name_map()
-        scored = [(r, m) for r, m in zip(rows, matches) if m]
+        scored = [(r, m) for r, m in zip(rows, matches)
+                  if m and _in_window(r["photo_datetime"], start_ts, end_ts)]
         scored.sort(key=lambda rm: rm[1][1], reverse=True)  # most confident first
         total = len(scored)
         out = []
@@ -169,6 +191,9 @@ async def api_list_faces(
         _unlabeled_n = 0
         if len(gallery) > 0:
             rows, unknowns, _u_times = faces.get_unlabeled_matrix()
+            # Focus window narrows the candidates (gallery stays global).
+            rows, unknowns, _u_times = faces.window_rows(
+                rows, unknowns, _u_times, start_ts, end_ts)
             _t2 = time.perf_counter()
             _unlabeled_n = len(rows)
             loop = asyncio.get_running_loop()
@@ -199,7 +224,10 @@ async def api_list_faces(
             out.append(item)
         return {"faces": out, "total": len(scored), "returned": len(out)}
 
-    rows = index.list_faces(scope=scope, person_id=person_id, limit=limit)
+    # The Focus window applies to the unlabeled queue only; other scopes ignore it.
+    w_start, w_end = (start_ts, end_ts) if scope == "unlabeled" else (None, None)
+    rows = index.list_faces(scope=scope, person_id=person_id, limit=limit,
+                            start_ts=w_start, end_ts=w_end)
     gallery = faces.build_gallery() if scope == "unlabeled" else None
     matches = (faces.suggest_persons_batch(rows, gallery)
                if gallery is not None and len(gallery) > 0 else [None] * len(rows))
@@ -214,7 +242,8 @@ async def api_list_faces(
         out.append(item)
     return {
         "faces": out,
-        "total": index.count_faces(scope=scope, person_id=person_id),
+        "total": index.count_faces(scope=scope, person_id=person_id,
+                                   start_ts=w_start, end_ts=w_end),
         "returned": len(out),
     }
 
@@ -321,12 +350,18 @@ async def api_faces_scan(req: ScanFacesRequest):
 
 
 @router.get("/api/faces/scan/status")
-async def api_faces_scan_status():
+async def api_faces_scan_status(
+    start_ts: int | None = Query(None),
+    end_ts: int | None = Query(None),
+):
+    """Face-pipeline counts for the People nav. A start_ts/end_ts Focus window
+    scopes only unlabeled_faces (the one windowed nav scope); total/ignored/tagged
+    stay global to match the un-windowed All/Ignored/Recently-tagged scopes."""
     remaining = len(index.get_unscanned_photo_ids())
     return {
         "remaining_photos": remaining,
         "total_faces": index.count_faces("all"),
-        "unlabeled_faces": index.count_faces("unlabeled"),
+        "unlabeled_faces": index.count_faces("unlabeled", start_ts=start_ts, end_ts=end_ts),
         "ignored_faces": index.count_faces("ignored"),
         "tagged_faces": index.count_faces("recent"),
     }
@@ -338,6 +373,8 @@ async def api_face_clusters(
     min_size: int | None = Query(None, ge=2),
     cap: int | None = Query(None, ge=0),
     full: bool = Query(False),
+    start_ts: int | None = Query(None),
+    end_ts: int | None = Query(None),
 ):
     """Discover groups of likely same-person faces among the unlabeled queue, so a
     new person can be named in one go (no seed example needed). Clusters the top
@@ -350,6 +387,8 @@ async def api_face_clusters(
     cap = config.FACE_CLUSTER_CAP if cap is None else cap
     gallery = faces.build_gallery()
     rows, unknowns, times = faces.get_unlabeled_matrix()
+    # Focus window narrows the candidates before the det-score cap (gallery stays global).
+    rows, unknowns, times = faces.window_rows(rows, unknowns, times, start_ts, end_ts)
     if cap and 0 < cap < len(rows):
         rows, unknowns, times = rows[:cap], unknowns[:cap], times[:cap]
     names = serializers.person_name_map()
@@ -369,11 +408,14 @@ class CrowdIgnoreRequest(BaseModel):
 async def api_crowds(
     min_faces: int | None = Query(None, ge=1),
     group_gap: int = Query(86400, ge=60),
+    start_ts: int | None = Query(None),
+    end_ts: int | None = Query(None),
 ):
     """Return crowd photos (>= min_faces detected faces) grouped by time gaps.
-    min_faces defaults to the live config.FACE_CROWD_MIN_SIZE setting."""
+    min_faces defaults to the live config.FACE_CROWD_MIN_SIZE setting. start_ts/
+    end_ts (epoch secs) are the People page's time Focus window."""
     min_faces = config.FACE_CROWD_MIN_SIZE if min_faces is None else min_faces
-    rows = index.get_crowd_photos(min_faces)
+    rows = index.get_crowd_photos(min_faces, start_ts=start_ts, end_ts=end_ts)
     groups: list[dict] = []
     for row in rows:
         ts = row["photo_datetime"] or 0

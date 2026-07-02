@@ -1,6 +1,7 @@
 /* ── State ── */
 let faces = [];                 // faces for the current scope
-let persons = [];               // [{id, name, face_count}]
+let persons = [];               // full [{id, name, face_count}] — dropdowns, lookups
+let navPersons = [];            // people shown in the left nav (windowed under Focus)
 let selectedIds = new Set();    // selected face ids
 let lastClickedIndex = -1;
 let focusedFaceId = null;
@@ -15,6 +16,16 @@ let hideCompletedCrowds = true; // hide crowd photos with no unlabeled faces
 
 let groupGapSeconds = 86400;    // event grouping gap in the guesses view (1 day)
 
+// Time Focus: narrows the tagging/discovery surfaces (people list, Unlabeled,
+// suggestions, Discover, Crowds) to one Context's time window. null = all time.
+// The per-person / All / Recently-tagged views and the recognition gallery are
+// unaffected — only the *candidates* shown are windowed.
+let focusStartTs = null;        // epoch secs, or null
+let focusEndTs = null;          // epoch secs, or null
+let focusLabel = null;          // active Context's name (for status messages)
+let focusContexts = [];         // contexts that have a time component
+const FOCUS_LS_KEY = "geotagger.people.focusContextId";
+
 const FACE_LIMIT = 1000;
 // Auto-select bar for the Unlabeled queue: a suggestion only exists at all above
 // FACE_MATCH_THRESHOLD (0.35), so this higher cutoff pre-selects just the
@@ -26,6 +37,7 @@ const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
 /* ── Init ── */
 document.addEventListener("DOMContentLoaded", async () => {
   bindToolbar();
+  await loadFocusContexts();   // restores any saved Focus before the first load
   await loadPersons();
   await loadFaces();
   setStatus("Select a person on the left, or scan for faces to begin.");
@@ -45,6 +57,8 @@ function bindToolbar() {
   document.getElementById("manage-view-btn").addEventListener("click", () => {
     window.location.href = "/people-manage.html";
   });
+
+  document.getElementById("focus-context-select").addEventListener("change", onFocusChange);
 
   document.getElementById("deselect-all-btn").addEventListener("click", deselectAll);
   document.getElementById("suggested-only-chk").addEventListener("change", (e) => {
@@ -103,15 +117,111 @@ function bindToolbar() {
   });
 }
 
+/* ── Time Focus ──
+ * The Focus dropdown is driven by Contexts: each Context with a time component
+ * (start_ts/end_ts) can window the tagging/discovery surfaces. Only the time part
+ * is used here — a Context's place polygon is ignored. */
+async function loadFocusContexts() {
+  const sel = document.getElementById("focus-context-select");
+  try {
+    const res = await fetch("/api/contexts");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const all = await res.json();
+    // Only Contexts with a time component can drive a time Focus.
+    focusContexts = all.filter(c => c.start_ts != null || c.end_ts != null);
+  } catch (err) {
+    focusContexts = [];   // non-fatal: Focus just stays at "All time"
+  }
+  sel.innerHTML = '<option value="">All time</option>';
+  focusContexts.forEach(c => {
+    const opt = document.createElement("option");
+    opt.value = c.id;
+    opt.textContent = `${c.name} (${focusRangeLabel(c)})`;
+    sel.appendChild(opt);
+  });
+  // Restore a previously chosen Focus so the window survives reloads.
+  const saved = localStorage.getItem(FOCUS_LS_KEY);
+  if (saved && focusContexts.some(c => String(c.id) === saved)) {
+    sel.value = saved;
+  }
+  applyFocusFromSelect();   // sets state + note; the initial load picks it up
+}
+
+// Read the dropdown, set the active window (state + localStorage + note). Does
+// not reload — callers decide whether to refresh the views.
+function applyFocusFromSelect() {
+  const sel = document.getElementById("focus-context-select");
+  const c = focusContexts.find(x => String(x.id) === sel.value);
+  focusStartTs = c ? c.start_ts : null;
+  focusEndTs = c ? c.end_ts : null;
+  focusLabel = c ? c.name : null;
+  if (c) localStorage.setItem(FOCUS_LS_KEY, String(c.id));
+  else localStorage.removeItem(FOCUS_LS_KEY);
+  updateFocusNote(c);
+}
+
+async function onFocusChange() {
+  applyFocusFromSelect();
+  // Re-render the left nav (windowed people list + Unlabeled count) and the grid.
+  await loadPersons();
+  await loadFaces();
+}
+
+function focusActive() {
+  return focusStartTs != null || focusEndTs != null;
+}
+
+// Query fragment (no leading separator) for the active window, else "".
+function focusQuery() {
+  const parts = [];
+  if (focusStartTs != null) parts.push(`start_ts=${focusStartTs}`);
+  if (focusEndTs != null) parts.push(`end_ts=${focusEndTs}`);
+  return parts.join("&");
+}
+
+// Human label for a Context's window, matching the Contexts page convention
+// (raw start_date/end_date; end_date is the app's exclusive end-of-day value).
+function focusRangeLabel(c) {
+  const s = c.start_date, e = c.end_date;
+  if (s && e) return s === e ? s : `${s} → ${e}`;
+  if (s) return `from ${s}`;
+  if (e) return `until ${e}`;
+  return "any time";
+}
+
+// " · Focus: <name>" for windowed status lines, or "" when no Focus is active.
+function focusStatusSuffix() {
+  return focusActive() ? ` · Focus: ${focusLabel || "time window"}` : "";
+}
+
+function updateFocusNote(c) {
+  const note = document.getElementById("focus-note");
+  document.getElementById("focus-context-select").classList.toggle("focus-active", focusActive());
+  if (!focusActive()) { note.textContent = ""; note.title = ""; return; }
+  note.textContent = "◦ windowing people, Unlabeled, suggestions, Discover & Crowds";
+  note.title = c ? `Focused on “${c.name}” (${focusRangeLabel(c)})` : "";
+}
+
 /* ── People list ── */
 async function loadPersons() {
   try {
+    const q = focusActive() ? "?" + focusQuery() : "";
+    // `persons` stays the FULL list — it feeds the Assign dropdowns, quick-action
+    // menu and name lookups, so you can still tag someone who has no faces in the
+    // window yet. The left nav renders `navPersons`, which is windowed when a Focus
+    // is active (only in-range people, with in-range counts).
     const [pRes, sRes] = await Promise.all([
       fetch("/api/persons"),
-      fetch("/api/faces/scan/status"),
+      fetch("/api/faces/scan/status" + q),
     ]);
     persons = await pRes.json();
     const status = await sRes.json();
+
+    navPersons = persons;
+    if (focusActive()) {
+      const navRes = await fetch("/api/persons" + q);
+      if (navRes.ok) navPersons = await navRes.json();
+    }
 
     const totalFaces = status.total_faces || 0;
     renderPeopleList(status.unlabeled_faces || 0, totalFaces,
@@ -137,10 +247,12 @@ function renderPeopleList(unlabeledCount, allCount, ignoredCount, taggedCount) {
   sep.className = "people-sep";
   list.appendChild(sep);
 
-  if (persons.length === 0) {
+  if (navPersons.length === 0) {
     const empty = document.createElement("div");
     empty.style.cssText = "color:#666;padding:8px;font-size:11px;";
-    empty.textContent = "No people yet. Assign a face to create one.";
+    empty.textContent = focusActive()
+      ? "No tagged people in this time window. Widen the Focus, or tag faces in the Unlabeled queue."
+      : "No people yet. Assign a face to create one.";
     list.appendChild(empty);
     return;
   }
@@ -148,7 +260,7 @@ function renderPeopleList(unlabeledCount, allCount, ignoredCount, taggedCount) {
   // Group by family; persons without a family go last.
   const familyMap = new Map(); // family_id -> { name, persons[] }
   const noFamily = [];
-  persons.forEach((p) => {
+  navPersons.forEach((p) => {
     if (p.family_id) {
       if (!familyMap.has(p.family_id)) {
         familyMap.set(p.family_id, { name: p.family_name, persons: [] });
@@ -275,6 +387,11 @@ async function loadFaces() {
       url += `&person_id=${scopePersonId}`;
     }
     if (scope === "unlabeled" && suggestedOnly) url += "&suggested_only=true";
+    // Focus windows the candidate scopes only (unlabeled/suggested); the backend
+    // ignores it for person/all/recent/ignored so nothing else needs gating here.
+    if ((scope === "unlabeled" || scope === "suggested") && focusActive()) {
+      url += "&" + focusQuery();
+    }
     const res = await fetch(url);
     const data = await res.json();
     faces = data.faces;
@@ -320,14 +437,16 @@ async function loadFaces() {
     const personName = persons.find(p => p.id === scopePersonId)?.name || "this person";
     if (scope === "suggested") {
       if (data.returned === 0) {
-        setStatus(`No guesses for ${personName} yet — label a few of their faces ` +
-                  `first so recognition has examples to match against.`);
+        setStatus(`No guesses for ${personName}${focusActive() ? " in this window" : ""} yet — ` +
+                  `label a few of their faces first so recognition has examples to match against.` +
+                  (focusActive() ? " (Focus is active — set “All time” to widen.)" : ""));
       } else {
         const ambiguous = faces.filter(f => f.alternatives && f.alternatives.length).length;
         const ambigNote = ambiguous
           ? `${ambiguous} (amber) may be someone else — check those. ` : "";
         setStatus(`${data.returned} guesses for ${personName}, all selected. ${ambigNote}` +
-                  `Click any wrong ones to deselect, then Assign to approve the rest.`);
+                  `Click any wrong ones to deselect, then Assign to approve the rest.` +
+                  focusStatusSuffix());
       }
     } else if (scope === "recent") {
       if (data.returned === 0) {
@@ -341,13 +460,14 @@ async function loadFaces() {
     } else if (scope === "unlabeled" && suggestedOnly && data.total === 0) {
       setStatus("No unlabeled faces have a recognition guess yet — uncheck " +
                 "“Only suggested” to see the rest, or label a few faces so " +
-                "recognition has examples to match against.");
+                "recognition has examples to match against." +
+                (focusActive() ? " (Focus is active — set “All time” to widen.)" : ""));
     } else if (scope === "unlabeled") {
       const noun = suggestedOnly ? "suggested face(s)" : "unlabeled face(s)";
       let msg = `${data.returned} of ${data.total} ${noun}, grouped by month then place`;
       if (data.total > data.returned) msg += ` (showing first ${data.returned})`;
       if (selectedIds.size) msg += `. ${selectedIds.size} confident guess(es) pre-selected.`;
-      setStatus(msg);
+      setStatus(msg + focusStatusSuffix());
     } else {
       const label = scope === "person" ? personName : scope;
       let msg = `${data.returned} of ${data.total} faces — ${label}`;
@@ -871,14 +991,15 @@ async function loadClusters() {
   updateDetail();
   setStatus("Finding groups… this can take a few seconds on a large library.");
   try {
-    const res = await fetch("/api/faces/clusters");
+    const res = await fetch("/api/faces/clusters" + (focusActive() ? "?" + focusQuery() : ""));
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     clusters = data.clusters || [];
     renderClusters();
     if (!clusters.length) {
       setStatus(`No groups found among ${data.scanned} clear unlabeled faces. ` +
-        `Tag a few faces and use “Find more”, or rescan if many are still pending.`);
+        `Tag a few faces and use “Find more”, or rescan if many are still pending.` +
+        (focusActive() ? " (Focus is active — set “All time” to widen.)" : ""));
     } else {
       setStatus(`${clusters.length} group(s) across ${data.grouped} of ${data.scanned} ` +
         `faces. Name or assign each group, or Ignore it.`);
@@ -1006,14 +1127,17 @@ async function loadCrowds() {
   const minFaces = parseInt(document.getElementById("crowd-min-faces").value) || 50;
   const gap = parseInt(document.getElementById("crowd-gap-select").value) || 86400;
   try {
-    const res = await fetch(`/api/crowds?min_faces=${minFaces}&group_gap=${gap}`);
+    let url = `/api/crowds?min_faces=${minFaces}&group_gap=${gap}`;
+    if (focusActive()) url += "&" + focusQuery();
+    const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     crowdGroups = data.groups || [];
     renderCrowds();
     if (!crowdGroups.length) {
       setStatus(`No crowd photos found with ≥ ${minFaces} faces. ` +
-        `Try lowering the threshold or scan more photos.`);
+        `Try lowering the threshold or scan more photos.` +
+        (focusActive() ? " (Focus is active — set “All time” to widen.)" : ""));
     } else {
       setStatus(`${crowdGroups.length} event group(s) across ${data.photo_count} crowd photo(s). ` +
         `Open a photo, tag the key people, then ignore the rest.`);

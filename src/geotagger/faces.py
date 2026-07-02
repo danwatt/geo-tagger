@@ -326,6 +326,27 @@ def get_suggested_scores(scan_cap: int | None = None,
     return rows, scores
 
 
+def window_rows(rows, unknowns: np.ndarray, times: np.ndarray,
+                start_ts: int | None, end_ts: int | None
+                ) -> tuple[list, np.ndarray, np.ndarray]:
+    """Filter a decoded unlabeled matrix (rows/embeddings/times) to a time window.
+
+    The People page's time Focus windows the *candidate* faces (not the gallery),
+    reusing the cached full-library matrix from ``get_unlabeled_matrix`` so the
+    cache stays warm. Undated faces (NaN time) fall out of any window. Returns the
+    filtered ``(rows, unknowns, times)``; an all-None window returns them unchanged.
+    """
+    if start_ts is None and end_ts is None:
+        return rows, unknowns, times
+    mask = ~np.isnan(times)
+    if start_ts is not None:
+        mask &= times >= start_ts
+    if end_ts is not None:
+        mask &= times <= end_ts
+    idx = np.flatnonzero(mask)
+    return [rows[i] for i in idx], unknowns[idx], times[idx]
+
+
 def drop_from_unlabeled_cache(face_ids):
     """Prune just-labeled/ignored faces from the cached unlabeled matrix instead
     of forcing a full re-read on the next scan, and re-tag the cache to the

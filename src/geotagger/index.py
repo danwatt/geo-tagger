@@ -782,7 +782,8 @@ def get_labeled_faces() -> list[sqlite3.Row]:
 
 
 def list_faces(scope: str = "unlabeled", person_id: int | None = None,
-               limit: int = 500, min_det_score: float | None = None) -> list[sqlite3.Row]:
+               limit: int = 500, min_det_score: float | None = None,
+               start_ts: int | None = None, end_ts: int | None = None) -> list[sqlite3.Row]:
     """List faces across the whole library for the people UI.
 
     scope: 'unlabeled' (person_id IS NULL), 'person' (a specific person),
@@ -790,6 +791,9 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
     caller can compute recognition suggestions. ``min_det_score`` drops faces
     below a detector-confidence floor (used by the suggestion scan to skip
     unreliable tiny/blurry faces; the manual queues pass None to keep them).
+    ``start_ts``/``end_ts`` (epoch secs) window by photo_datetime — the People
+    page's time Focus passes these for the unlabeled queue; undated faces
+    (NULL photo_datetime) fall out of any window.
     """
     clause = ""
     params: list = []
@@ -809,6 +813,12 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
     if min_det_score is not None:
         clause += (" AND " if clause else "WHERE ") + "f.det_score >= ?"
         params.append(min_det_score)
+    if start_ts is not None:
+        clause += (" AND " if clause else "WHERE ") + "ph.photo_datetime >= ?"
+        params.append(start_ts)
+    if end_ts is not None:
+        clause += (" AND " if clause else "WHERE ") + "ph.photo_datetime <= ?"
+        params.append(end_ts)
     return get_db().execute(
         f"""SELECT f.id, f.photo_id, f.person_id, f.bbox, f.det_score, f.embedding,
                    f.ignored, f.assigned_at, f.ignored_at, p.name AS person_name, ph.filename,
@@ -824,10 +834,26 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
     ).fetchall()
 
 
-def count_faces(scope: str = "unlabeled", person_id: int | None = None) -> int:
+def count_faces(scope: str = "unlabeled", person_id: int | None = None,
+                start_ts: int | None = None, end_ts: int | None = None) -> int:
     if scope == "unlabeled":
+        # The People page's time Focus windows only the unlabeled count; a window
+        # needs the photos join, so keep the plain (unwindowed) path join-free.
+        if start_ts is None and end_ts is None:
+            return get_db().execute(
+                "SELECT COUNT(*) FROM faces WHERE person_id IS NULL AND ignored = 0"
+            ).fetchone()[0]
+        clause = "WHERE f.person_id IS NULL AND f.ignored = 0"
+        params: list = []
+        if start_ts is not None:
+            clause += " AND ph.photo_datetime >= ?"
+            params.append(start_ts)
+        if end_ts is not None:
+            clause += " AND ph.photo_datetime <= ?"
+            params.append(end_ts)
         return get_db().execute(
-            "SELECT COUNT(*) FROM faces WHERE person_id IS NULL AND ignored = 0"
+            f"SELECT COUNT(*) FROM faces f JOIN photos ph ON ph.id = f.photo_id {clause}",
+            params,
         ).fetchone()[0]
     if scope == "ignored":
         return get_db().execute("SELECT COUNT(*) FROM faces WHERE ignored = 1").fetchone()[0]
@@ -901,22 +927,33 @@ def set_faces_ignored(face_ids: list[int], ignored: bool):
         _faces.drop_from_unlabeled_cache(face_ids)
 
 
-def get_crowd_photos(min_faces: int = 50) -> list[sqlite3.Row]:
+def get_crowd_photos(min_faces: int = 50, start_ts: int | None = None,
+                     end_ts: int | None = None) -> list[sqlite3.Row]:
     """Return photos with at least `min_faces` detected faces, ordered by
-    photo_datetime. Each row includes per-state face counts."""
+    photo_datetime. Each row includes per-state face counts. ``start_ts``/
+    ``end_ts`` (epoch secs) window by photo_datetime for the People page's Focus."""
+    clause = "WHERE ph.media_type = 'image' AND ph.faces_scanned_at IS NOT NULL"
+    params: list = []
+    if start_ts is not None:
+        clause += " AND ph.photo_datetime >= ?"
+        params.append(start_ts)
+    if end_ts is not None:
+        clause += " AND ph.photo_datetime <= ?"
+        params.append(end_ts)
+    params.append(min_faces)
     return get_db().execute(
-        """SELECT ph.id, ph.filename, ph.path, ph.photo_datetime, ph.orientation,
+        f"""SELECT ph.id, ph.filename, ph.path, ph.photo_datetime, ph.orientation,
                   COUNT(f.id)                                          AS total_faces,
                   COUNT(CASE WHEN f.person_id IS NOT NULL THEN 1 END) AS labeled_faces,
                   COUNT(CASE WHEN f.person_id IS NULL AND f.ignored=0 THEN 1 END) AS unlabeled_faces,
                   COUNT(CASE WHEN f.ignored=1 THEN 1 END)             AS ignored_faces
            FROM photos ph
            JOIN faces f ON f.photo_id = ph.id
-           WHERE ph.media_type = 'image' AND ph.faces_scanned_at IS NOT NULL
+           {clause}
            GROUP BY ph.id
            HAVING total_faces >= ?
            ORDER BY ph.photo_datetime""",
-        (min_faces,),
+        params,
     ).fetchall()
 
 
@@ -988,15 +1025,44 @@ def get_or_create_person(name: str) -> int:
     return create_person(name)
 
 
-def get_persons() -> list[sqlite3.Row]:
-    """All persons with a count of confirmed faces and family info."""
+def get_persons(start_ts: int | None = None, end_ts: int | None = None) -> list[sqlite3.Row]:
+    """All persons with a count of confirmed faces and family info.
+
+    With a ``start_ts``/``end_ts`` window (epoch secs, the People page's time
+    Focus), face_count reflects only faces whose photo falls in the window and
+    persons with none drop out — so the left nav lists just who appears in range.
+    """
+    if start_ts is None and end_ts is None:
+        return get_db().execute(
+            """SELECT p.id, p.name, p.birth_date, p.created_at, p.family_id,
+                      fam.name AS family_name, COUNT(f.id) AS face_count
+               FROM persons p
+               LEFT JOIN families fam ON fam.id = p.family_id
+               LEFT JOIN faces f ON f.person_id = p.id
+               GROUP BY p.id ORDER BY p.name"""
+        ).fetchall()
+    # Count only in-window faces (via a conditional COUNT over the photos join),
+    # then HAVING drops people with no faces in range.
+    conds, params = [], []
+    if start_ts is not None:
+        conds.append("ph.photo_datetime >= ?")
+        params.append(start_ts)
+    if end_ts is not None:
+        conds.append("ph.photo_datetime <= ?")
+        params.append(end_ts)
+    when = " AND ".join(conds)
     return get_db().execute(
-        """SELECT p.id, p.name, p.birth_date, p.created_at, p.family_id,
-                  fam.name AS family_name, COUNT(f.id) AS face_count
-           FROM persons p
-           LEFT JOIN families fam ON fam.id = p.family_id
-           LEFT JOIN faces f ON f.person_id = p.id
-           GROUP BY p.id ORDER BY p.name"""
+        f"""SELECT p.id, p.name, p.birth_date, p.created_at, p.family_id,
+                   fam.name AS family_name,
+                   COUNT(CASE WHEN {when} THEN 1 END) AS face_count
+            FROM persons p
+            LEFT JOIN families fam ON fam.id = p.family_id
+            LEFT JOIN faces f ON f.person_id = p.id
+            LEFT JOIN photos ph ON ph.id = f.photo_id
+            GROUP BY p.id
+            HAVING face_count > 0
+            ORDER BY p.name""",
+        params,
     ).fetchall()
 
 
