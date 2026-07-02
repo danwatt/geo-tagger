@@ -19,18 +19,22 @@ import numpy as np
 
 _log = logging.getLogger(__name__)
 
-from geotagger import index, thumbnails
+from geotagger import index, thumbnails, config
 from geotagger.config import (
     CACHE_DIR_NAME, get_cache_dir,
-    FACE_MODEL_NAME, FACE_DET_SIZE, FACE_DET_THRESHOLD,
-    FACE_MATCH_THRESHOLD, FACE_AMBIGUITY_MARGIN, FACE_SUGGEST_SCAN_CAP,
-    FACE_SUGGEST_MIN_DET_SCORE, FACE_PROVIDERS,
-    FACE_CLUSTER_THRESHOLD, FACE_CLUSTER_MIN_SIZE,
-    FACE_BIRTH_TOLERANCE_YEARS, FACE_AGE_PENALTY_PER_YEAR, FACE_AGE_PENALTY_CAP_YEARS,
-    FACE_GATE_MAX_EXAMPLES,
+    FACE_MODEL_NAME, FACE_DET_SIZE, FACE_DET_THRESHOLD, FACE_PROVIDERS,
 )
 
 YEAR_SECONDS = 365.25 * 86400
+
+
+def _cfg(value, key: str):
+    """Resolve an optional override: fall back to the live (possibly
+    settings-page-overridden) config value when the caller didn't pass one.
+    Used for knobs in config.SETTINGS_SPEC — a plain `from geotagger.config
+    import KEY` default would freeze the env-startup value into this
+    function's signature forever, missing later overrides."""
+    return getattr(config, key) if value is None else value
 
 _model_dir: Path | None = None
 _app = None  # insightface.app.FaceAnalysis, loaded lazily
@@ -269,7 +273,7 @@ def build_gallery() -> Gallery:
     return gallery
 
 
-def get_unlabeled_matrix(scan_cap: int = FACE_SUGGEST_SCAN_CAP
+def get_unlabeled_matrix(scan_cap: int | None = None
                          ) -> tuple[list, np.ndarray, np.ndarray]:
     """Cached (rows, embeddings, times) for the unlabeled queue.
 
@@ -277,24 +281,26 @@ def get_unlabeled_matrix(scan_cap: int = FACE_SUGGEST_SCAN_CAP
     each call re-reads the embedding blobs from SQLite and re-decodes them into a
     (N, 512) matrix. ``scan_cap`` <= 0 means scan *all* unlabeled faces (SQLite
     ``LIMIT -1``); a positive cap keeps the top ``scan_cap`` by detection score.
-    Keyed on the faces-table generation (and the cap). Removals (assign/ignore)
-    prune this in place via ``drop_from_unlabeled_cache`` so the exhaustive read
-    happens once, not on every accept.
+    Defaults to the live ``config.FACE_SUGGEST_SCAN_CAP`` setting. Keyed on the
+    faces-table generation (and the cap). Removals (assign/ignore) prune this in
+    place via ``drop_from_unlabeled_cache`` so the exhaustive read happens once,
+    not on every accept.
     """
     global _unlabeled_cache
+    scan_cap = _cfg(scan_cap, "FACE_SUGGEST_SCAN_CAP")
     gen = index.faces_generation()
     if (_unlabeled_cache is not None
             and _unlabeled_cache[0] == gen and _unlabeled_cache[1] == scan_cap):
         return _unlabeled_cache[2], _unlabeled_cache[3], _unlabeled_cache[4]
     limit = scan_cap if scan_cap and scan_cap > 0 else -1   # -1 → unbounded
-    floor = FACE_SUGGEST_MIN_DET_SCORE if FACE_SUGGEST_MIN_DET_SCORE > 0 else None
+    floor = config.FACE_SUGGEST_MIN_DET_SCORE if config.FACE_SUGGEST_MIN_DET_SCORE > 0 else None
     rows = index.list_faces("unlabeled", None, limit, min_det_score=floor)
     unknowns, times = _stack_rows(rows)
     _unlabeled_cache = (gen, scan_cap, rows, unknowns, times)
     return rows, unknowns, times
 
 
-def get_suggested_scores(scan_cap: int = FACE_SUGGEST_SCAN_CAP,
+def get_suggested_scores(scan_cap: int | None = None,
                          ) -> tuple[list, list]:
     """Cached (rows, match_scores) for the suggested-only review endpoint.
 
@@ -302,9 +308,11 @@ def get_suggested_scores(scan_cap: int = FACE_SUGGEST_SCAN_CAP,
     score)`` or ``None``. On a warm cache the matmul is skipped entirely;
     ``drop_from_unlabeled_cache`` keeps both the row list and this scores list
     in sync after each label/ignore action, so the rebuild only happens when
-    faces are added or the gallery changes.
+    faces are added or the gallery changes. Defaults to the live
+    ``config.FACE_SUGGEST_SCAN_CAP`` setting.
     """
     global _suggested_scores_cache
+    scan_cap = _cfg(scan_cap, "FACE_SUGGEST_SCAN_CAP")
     gen = index.faces_generation()
     rows, unknowns, times = get_unlabeled_matrix(scan_cap)
     if (_suggested_scores_cache is not None
@@ -376,10 +384,10 @@ def match_embedding(vec: np.ndarray, photo_datetime, gallery: Gallery) -> list[t
         can_pen   = has_birth & has_ft
         age_u     = tu_yr - gallery._s_bt_yr          # (N,) f32: unknown's age per example
         age_f     = gallery._s_ft_yr - gallery._s_bt_yr   # (N,) f32: example's age
-        excl      = has_birth & (age_u < np.float32(-FACE_BIRTH_TOLERANCE_YEARS))
+        excl      = has_birth & (age_u < np.float32(-config.FACE_BIRTH_TOLERANCE_YEARS))
         gap       = np.abs(age_u - age_f)
-        penalty   = np.minimum(gap, np.float32(FACE_AGE_PENALTY_CAP_YEARS))
-        penalty  *= np.float32(FACE_AGE_PENALTY_PER_YEAR)
+        penalty   = np.minimum(gap, np.float32(config.FACE_AGE_PENALTY_CAP_YEARS))
+        penalty  *= np.float32(config.FACE_AGE_PENALTY_PER_YEAR)
         np.subtract(scores, penalty, where=can_pen, out=scores)
         scores[excl] = np.float32(-np.inf)
 
@@ -398,8 +406,10 @@ def match_embedding(vec: np.ndarray, photo_datetime, gallery: Gallery) -> list[t
 
 
 def suggest_person(vec: np.ndarray, photo_datetime, gallery: Gallery,
-                   threshold: float = FACE_MATCH_THRESHOLD) -> tuple[int, float] | None:
-    """Return (person_id, score) if the top match clears the threshold, else None."""
+                   threshold: float | None = None) -> tuple[int, float] | None:
+    """Return (person_id, score) if the top match clears the threshold, else None.
+    Defaults to the live ``config.FACE_MATCH_THRESHOLD`` setting."""
+    threshold = _cfg(threshold, "FACE_MATCH_THRESHOLD")
     ranked = match_embedding(vec, photo_datetime, gallery)
     if ranked and ranked[0][1] >= threshold:
         return ranked[0]
@@ -437,12 +447,12 @@ def _best_per_person_f32(gallery: Gallery,
             times_yr  = (times / YEAR_SECONDS).astype(np.float32)               # (u,)
             scores_b  = scores[:K_b]                                             # VIEW, no copy
             age_u     = times_yr[None, :] - gallery._bt_yr_birth[:, None]       # (K_b, u)
-            excl      = (age_u < np.float32(-FACE_BIRTH_TOLERANCE_YEARS)) & dated[None, :]
+            excl      = (age_u < np.float32(-config.FACE_BIRTH_TOLERANCE_YEARS)) & dated[None, :]
             # Reuse age_u as the penalty array (saves K_b × u × 4 bytes).
             age_u -= gallery._age_f_birth[:, None]
             np.abs(age_u, out=age_u)
-            np.minimum(age_u, np.float32(FACE_AGE_PENALTY_CAP_YEARS), out=age_u)
-            age_u *= np.float32(FACE_AGE_PENALTY_PER_YEAR)
+            np.minimum(age_u, np.float32(config.FACE_AGE_PENALTY_CAP_YEARS), out=age_u)
+            age_u *= np.float32(config.FACE_AGE_PENALTY_PER_YEAR)
             # Apply where face has BOTH birth date AND a known photo datetime.
             can_b = gallery._has_ft_birth[:, None] & dated[None, :]
             np.subtract(scores_b, age_u, where=can_b, out=scores_b)  # in-place on view
@@ -463,7 +473,7 @@ def _best_per_person_f32(gallery: Gallery,
 
 
 def suggest_persons_batch(rows, gallery: Gallery,
-                          threshold: float = FACE_MATCH_THRESHOLD,
+                          threshold: float | None = None,
                           unknowns: np.ndarray | None = None,
                           times: np.ndarray | None = None
                           ) -> list[tuple[int, float] | None]:
@@ -475,7 +485,9 @@ def suggest_persons_batch(rows, gallery: Gallery,
     collapse into a single matmul per chunk and the per-person reduction is
     vectorized, instead of an N×gallery Python loop. Pass ``unknowns``/``times``
     (e.g. from ``get_unlabeled_matrix``) to skip decoding the embeddings again.
+    ``threshold`` defaults to the live ``config.FACE_MATCH_THRESHOLD`` setting.
     """
+    threshold = _cfg(threshold, "FACE_MATCH_THRESHOLD")
     n = len(rows)
     if n == 0 or len(gallery) == 0:
         return [None] * n
@@ -499,15 +511,17 @@ def suggest_persons_batch(rows, gallery: Gallery,
 
 
 def _rank_from_matrix(unknowns: np.ndarray, times: np.ndarray, gallery: Gallery,
-                      threshold: float = FACE_MATCH_THRESHOLD
+                      threshold: float | None = None
                       ) -> list[list[tuple[int, float]]]:
     """Full per-face ranking from an already-decoded embedding matrix.
 
     Returns, for each unknown, every person whose best example clears
     ``threshold`` as a ``(person_id, score)`` list ordered best-first. Working
     from a matrix (not DB rows) lets callers reuse embeddings they already
-    decoded instead of decoding them twice.
+    decoded instead of decoding them twice. Defaults to the live
+    ``config.FACE_MATCH_THRESHOLD`` setting.
     """
+    threshold = _cfg(threshold, "FACE_MATCH_THRESHOLD")
     n = unknowns.shape[0]
     if n == 0 or len(gallery) == 0:
         return [[] for _ in range(n)]
@@ -535,8 +549,8 @@ def _rank_from_matrix(unknowns: np.ndarray, times: np.ndarray, gallery: Gallery,
 
 
 def suggest_for_person(rows, gallery: Gallery, person_id: int,
-                       threshold: float = FACE_MATCH_THRESHOLD,
-                       margin: float = FACE_AMBIGUITY_MARGIN,
+                       threshold: float | None = None,
+                       margin: float | None = None,
                        unknowns: np.ndarray | None = None,
                        times: np.ndarray | None = None) -> list[tuple]:
     """Faces from ``rows`` whose best match across all persons is ``person_id``,
@@ -550,12 +564,15 @@ def suggest_for_person(rows, gallery: Gallery, person_id: int,
     ``margin`` of ``person_id``'s: a near-tie that often means the face is really
     that look-alike family member. Returns ``(row, score, alternatives)`` tuples
     (unordered), where ``alternatives`` is a possibly-empty ``(person_id, score)``
-    list, best-first.
+    list, best-first. ``threshold``/``margin`` default to the live
+    ``config.FACE_MATCH_THRESHOLD``/``config.FACE_AMBIGUITY_MARGIN`` settings.
 
     Pass ``unknowns``/``times`` (the decoded embedding matrix and photo times for
     ``rows``, e.g. from ``get_unlabeled_matrix``) to skip decoding here and in the
     ranking step entirely.
     """
+    threshold = _cfg(threshold, "FACE_MATCH_THRESHOLD")
+    margin = _cfg(margin, "FACE_AMBIGUITY_MARGIN")
     # O(1) dict lookup — _uniq_pids is no longer globally sorted (birth-dated
     # persons come first) so searchsorted would give wrong results.
     pid_pos = gallery._pid_to_group.get(person_id, -1)
@@ -577,11 +594,12 @@ def suggest_for_person(rows, gallery: Gallery, person_id: int,
 
     # Cap examples used in the gate pass so a heavily-labeled person (e.g. 3000+
     # faces) doesn't make the gate as expensive as the full-gallery rank pass.
-    # Any genuine match hits at least one of FACE_GATE_MAX_EXAMPLES evenly-spread
-    # examples; false negatives here are recovered by the rank pass later.
+    # Any genuine match hits at least one of config.FACE_GATE_MAX_EXAMPLES
+    # evenly-spread examples; false negatives here are recovered by the rank
+    # pass later.
     K = p_embs.shape[0]
-    if K > FACE_GATE_MAX_EXAMPLES:
-        idx     = np.linspace(0, K - 1, FACE_GATE_MAX_EXAMPLES, dtype=np.intp)
+    if K > config.FACE_GATE_MAX_EXAMPLES:
+        idx     = np.linspace(0, K - 1, config.FACE_GATE_MAX_EXAMPLES, dtype=np.intp)
         p_embs  = np.ascontiguousarray(p_embs[idx])
         p_ft_yr = p_ft_yr[idx]
         p_bt_yr = p_bt_yr[idx]
@@ -601,11 +619,11 @@ def suggest_for_person(rows, gallery: Gallery, person_id: int,
         dated_c  = ~np.isnan(times[c0:c1])
         if dated_c.any():
             age_u = t_chunk[None, :] - p_bt_yr[:, None]   # (K, chunk) f32
-            excl  = (has_birth[:, None] & dated_c[None, :]) & (age_u < np.float32(-FACE_BIRTH_TOLERANCE_YEARS))
+            excl  = (has_birth[:, None] & dated_c[None, :]) & (age_u < np.float32(-config.FACE_BIRTH_TOLERANCE_YEARS))
             age_u -= age_f[:, None]
             np.abs(age_u, out=age_u)
-            np.minimum(age_u, np.float32(FACE_AGE_PENALTY_CAP_YEARS), out=age_u)
-            age_u *= np.float32(FACE_AGE_PENALTY_PER_YEAR)
+            np.minimum(age_u, np.float32(config.FACE_AGE_PENALTY_CAP_YEARS), out=age_u)
+            age_u *= np.float32(config.FACE_AGE_PENALTY_PER_YEAR)
             np.subtract(scores, age_u, where=can_pen[:, None] & dated_c[None, :], out=scores)
             scores[excl] = np.float32(-np.inf)
         best[c0:c1] = scores.max(axis=0)
@@ -639,8 +657,8 @@ def suggest_for_person(rows, gallery: Gallery, person_id: int,
 # ── Unsupervised clustering (discover new people without a seed) ──
 
 def cluster_unlabeled(unknowns: np.ndarray,
-                      threshold: float = FACE_CLUSTER_THRESHOLD,
-                      min_size: int = FACE_CLUSTER_MIN_SIZE) -> list[list[int]]:
+                      threshold: float | None = None,
+                      min_size: int | None = None) -> list[list[int]]:
     """Group row indices of ``unknowns`` ((N, 512), L2-normalized) into clusters of
     likely same-person faces.
 
@@ -648,11 +666,15 @@ def cluster_unlabeled(unknowns: np.ndarray,
     takes its connected components via union-find. Returns clusters (lists of row
     indices) with at least ``min_size`` members, largest first; sparser faces drop
     out as noise. Pure numpy/Python, so it's safe to run off the event loop.
+    Defaults to the live ``config.FACE_CLUSTER_THRESHOLD``/
+    ``config.FACE_CLUSTER_MIN_SIZE`` settings.
 
     Connected components can over-merge by chaining (A~B~C), so ``threshold`` is
     kept fairly tight; a graph-relabel method (e.g. Chinese Whispers) would resist
     that better if it becomes a problem.
     """
+    threshold = _cfg(threshold, "FACE_CLUSTER_THRESHOLD")
+    min_size = _cfg(min_size, "FACE_CLUSTER_MIN_SIZE")
     n = unknowns.shape[0]
     if n == 0:
         return []

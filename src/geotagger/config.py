@@ -115,3 +115,90 @@ FACE_PROVIDERS = [
     os.environ.get("GEOTAGGER_FACE_PROVIDERS", "CPUExecutionProvider").split(",")
     if p.strip()
 ]
+
+# ── Runtime-tunable settings (in-app Settings page) ──
+# The subset of knobs above that are safe to change without a restart: pure
+# post-hoc math over already-computed embeddings/scores, not baked into a
+# loaded model (unlike FACE_DET_THRESHOLD/FACE_DET_SIZE/FACE_MODEL_NAME/
+# FACE_PROVIDERS, which only take effect when the InsightFace pipeline is
+# (re)built, so they stay env-only). Persisted overrides live in the DB
+# `settings` table and are (re)applied on top of the env default at startup
+# via apply_all_overrides(); consumers must read these via `config.KEY`
+# (module-attribute access) rather than `from geotagger.config import KEY`,
+# since only the module's own attribute gets mutated when a setting changes.
+SETTINGS_SPEC = [
+    {"key": "FACE_MATCH_THRESHOLD", "type": "float", "min": 0.1, "max": 0.9, "step": 0.01,
+     "group": "Face recognition", "label": "Match threshold",
+     "help": "Cosine similarity required to accept a suggested identity. Lower finds more matches but more false positives."},
+    {"key": "FACE_AMBIGUITY_MARGIN", "type": "float", "min": 0.0, "max": 0.3, "step": 0.01,
+     "group": "Face recognition", "label": "Ambiguity margin",
+     "help": "A second candidate scoring within this margin of the top match is flagged as an alternative (e.g. look-alike siblings)."},
+    {"key": "FACE_SUGGEST_MIN_DET_SCORE", "type": "float", "min": 0.0, "max": 1.0, "step": 0.05,
+     "group": "Face recognition", "label": "Suggestion min detection score",
+     "help": "Faces detected below this confidence are never offered as a suggestion (still detected and taggable by hand). 0 disables the floor."},
+    {"key": "FACE_SUGGEST_SCAN_CAP", "type": "int", "min": 0, "max": 200000, "step": 100,
+     "group": "Face recognition", "label": "Suggestion scan cap",
+     "help": "Max unlabeled faces scanned when gathering guesses. 0 = exhaustive."},
+    {"key": "FACE_GATE_MAX_EXAMPLES", "type": "int", "min": 10, "max": 2000, "step": 10,
+     "group": "Face recognition", "label": "Gate max examples per person",
+     "help": "Caps how many of a person's labeled examples are used in the cheap first pass when reviewing their guesses."},
+    {"key": "FACE_CROWD_MIN_SIZE", "type": "int", "min": 2, "max": 500, "step": 1,
+     "group": "Face recognition", "label": "Crowd photo min faces",
+     "help": "Photos with at least this many detected faces are treated as crowd photos."},
+    {"key": "FACE_CLUSTER_THRESHOLD", "type": "float", "min": 0.3, "max": 0.95, "step": 0.01,
+     "group": "Face clustering (Discover)", "label": "Cluster threshold",
+     "help": "Cosine similarity at/above which two unlabeled faces are linked into one group. Tighter = purer groups, looser = more chaining."},
+    {"key": "FACE_CLUSTER_MIN_SIZE", "type": "int", "min": 2, "max": 50, "step": 1,
+     "group": "Face clustering (Discover)", "label": "Cluster min size",
+     "help": "Groups smaller than this are dropped as noise."},
+    {"key": "FACE_CLUSTER_CAP", "type": "int", "min": 0, "max": 200000, "step": 500,
+     "group": "Face clustering (Discover)", "label": "Cluster scan cap",
+     "help": "Cluster at most this many highest-confidence unlabeled faces, to stay fast. 0 = no cap."},
+    {"key": "FACE_BIRTH_TOLERANCE_YEARS", "type": "float", "min": 0.0, "max": 5.0, "step": 0.1,
+     "group": "Age-aware matching", "label": "Birth-date tolerance (years)",
+     "help": "A dated photo taken more than this many years before a person's birth excludes them from suggestions."},
+    {"key": "FACE_AGE_PENALTY_PER_YEAR", "type": "float", "min": 0.0, "max": 0.2, "step": 0.005,
+     "group": "Age-aware matching", "label": "Age penalty per year",
+     "help": "Cosine penalty per year of age gap between an unknown face and a labeled example."},
+    {"key": "FACE_AGE_PENALTY_CAP_YEARS", "type": "float", "min": 0.0, "max": 50.0, "step": 1.0,
+     "group": "Age-aware matching", "label": "Age penalty cap (years)",
+     "help": "Maximum age gap (in years) the penalty above scales with."},
+]
+
+# Snapshot of the env-resolved value for each tunable, captured before any DB
+# override is applied — lets the settings page show/restore "default".
+SETTINGS_DEFAULTS = {spec["key"]: globals()[spec["key"]] for spec in SETTINGS_SPEC}
+
+
+def _coerce_setting(key: str, raw) -> float | int:
+    spec = next(s for s in SETTINGS_SPEC if s["key"] == key)
+    value = float(raw) if spec["type"] == "float" else int(raw)
+    if not (spec["min"] <= value <= spec["max"]):
+        raise ValueError(f"{key} must be between {spec['min']} and {spec['max']}")
+    return value
+
+
+def apply_setting_override(key: str, raw) -> float | int:
+    """Validate, coerce, and apply one setting to this module's live attribute
+    (visible to every consumer that reads it as `config.KEY`). Returns the
+    coerced value so the caller can persist/report it."""
+    value = _coerce_setting(key, raw)
+    globals()[key] = value
+    return value
+
+
+def apply_all_overrides(overrides: dict[str, str]):
+    """Apply every stored override at startup. Silently keeps the env default
+    for a row that's missing, unknown, or fails validation (e.g. a spec's
+    min/max changed since the value was saved)."""
+    for key, raw in overrides.items():
+        if key in SETTINGS_DEFAULTS:
+            try:
+                apply_setting_override(key, raw)
+            except (ValueError, TypeError):
+                pass
+
+
+def reset_setting(key: str):
+    """Restore one setting to its env-resolved default."""
+    globals()[key] = SETTINGS_DEFAULTS[key]

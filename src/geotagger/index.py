@@ -111,6 +111,17 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
         )
     """)
 
+    # Runtime-tunable settings (see config.SETTINGS_SPEC) that override the
+    # env-var default without a restart. Values are stored as text and coerced
+    # back to their real type by config.apply_setting_override.
+    _db.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at REAL NOT NULL
+        )
+    """)
+
     # Reverse-geocode cache keyed on integer-quantized coordinates (see
     # config.GEOCODE_PRECISION). qlat/qlng are round(coord * 10**precision), so
     # nearby photos collapse to one row and share a single lookup result.
@@ -1050,3 +1061,26 @@ def delete_person(person_id: int):
     db.execute("DELETE FROM persons WHERE id=?", (person_id,))
     db.commit()
     bump_faces_generation()  # their faces revert to unlabeled
+
+
+# ── Settings (runtime overrides of config.py tuning knobs) ──
+
+def get_all_settings() -> dict[str, str]:
+    rows = get_db().execute("SELECT key, value FROM settings").fetchall()
+    return {r["key"]: r["value"] for r in rows}
+
+
+def set_setting(key: str, value: str):
+    db = get_db()
+    db.execute(
+        "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        (key, value, time.time()),
+    )
+    db.commit()
+
+
+def delete_setting(key: str):
+    db = get_db()
+    db.execute("DELETE FROM settings WHERE key=?", (key,))
+    db.commit()

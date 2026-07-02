@@ -13,13 +13,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from geotagger.exiftool_session import lifespan as _et_lifespan, exiftool_status
-from geotagger import index, scanner, sidecar, thumbnails, faces, geocode
+from geotagger import index, scanner, sidecar, thumbnails, faces, geocode, config
 from geotagger.exiftool_session import get_et, get_et_lock
-from geotagger.config import (
-    FACE_SUGGEST_SCAN_CAP,
-    FACE_CLUSTER_THRESHOLD, FACE_CLUSTER_MIN_SIZE, FACE_CLUSTER_CAP,
-    FACE_CROWD_MIN_SIZE,
-)
 
 # Most groups worth reviewing are the larger ones; cap the response/DOM.
 CLUSTER_DISPLAY_LIMIT = 100
@@ -240,6 +235,7 @@ async def lifespan(app):
             try:
                 # Initialize DB and thumbnails once (not tied to a specific root)
                 index.init_db()
+                config.apply_all_overrides(index.get_all_settings())
                 thumbnails.init_thumbs()
                 faces.init_faces()
 
@@ -268,6 +264,7 @@ async def lifespan(app):
                 root = Path(last_root)
                 try:
                     index.init_db(root)
+                    config.apply_all_overrides(index.get_all_settings())
                     thumbnails.init_thumbs(root)
                     faces.init_faces(root)
                     if no_scan:
@@ -317,6 +314,12 @@ class UpdateContextRequest(BaseModel):
     end_date: str | None = None
     person_ids: list[int] | None = None
 
+class UpdateSettingsRequest(BaseModel):
+    values: dict[str, float]  # {setting_key: new_value}; ints are coerced server-side
+
+class ResetSettingsRequest(BaseModel):
+    keys: list[str]
+
 # ── API routes ────────────────────────────────────────────────────────────────
 
 @app.get("/api/status")
@@ -327,6 +330,66 @@ async def api_status():
     except Exception as e:
         total = f"error: {e}"
     return {**exiftool_status(), "db_total": total, "geocoder": geocode.status()}
+
+
+@app.get("/api/settings")
+async def api_get_settings():
+    """The safe-to-tune-live subset of config.py knobs (face matching/clustering
+    thresholds, caps), with each one's current effective value and whether it's
+    currently overridden from its env-resolved default."""
+    try:
+        overrides = index.get_all_settings()
+        return {
+            "settings": [
+                {
+                    **spec,
+                    "value": getattr(config, spec["key"]),
+                    "default": config.SETTINGS_DEFAULTS[spec["key"]],
+                    "overridden": spec["key"] in overrides,
+                }
+                for spec in config.SETTINGS_SPEC
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.patch("/api/settings")
+async def api_update_settings(req: UpdateSettingsRequest):
+    """Validate + persist one or more settings, applying them live (no restart)."""
+    valid_keys = {spec["key"] for spec in config.SETTINGS_SPEC}
+    try:
+        updated = {}
+        for key, raw in req.values.items():
+            if key not in valid_keys:
+                raise HTTPException(400, f"Unknown setting: {key}")
+            value = config.apply_setting_override(key, raw)
+            index.set_setting(key, str(value))
+            updated[key] = value
+        return {"updated": updated}
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/settings/reset")
+async def api_reset_settings(req: ResetSettingsRequest):
+    """Clear the DB override for one or more settings, reverting to the env default."""
+    valid_keys = {spec["key"] for spec in config.SETTINGS_SPEC}
+    try:
+        for key in req.keys:
+            if key not in valid_keys:
+                raise HTTPException(400, f"Unknown setting: {key}")
+            config.reset_setting(key)
+            index.delete_setting(key)
+        return {"reset": req.keys}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 @app.get("/api/debug")
@@ -1026,6 +1089,21 @@ async def api_geocode_status():
     }
 
 
+@app.get("/api/geocode/places")
+async def api_geocode_places(bbox: str = Query(...), limit: int = Query(3000, le=10000)):
+    """GeoNames places within a viewport bbox — backs the Places DB map, which
+    plots the raw reverse-geocode reference data (not photos) so the user can
+    verify what place names a coordinate would resolve to."""
+    try:
+        min_lng, min_lat, max_lng, max_lat = map(float, bbox.split(","))
+    except ValueError:
+        raise HTTPException(400, "bbox must be minLng,minLat,maxLng,maxLat")
+    if not geocode.is_available():
+        raise HTTPException(503, "GeoNames data not installed — run scripts/get_geonames.py")
+    places, total = geocode.cities_in_bbox(min_lat, max_lat, min_lng, max_lng, limit=limit)
+    return {"places": places, "total": total, "truncated": total > len(places)}
+
+
 @app.post("/api/geocode/backfill")
 async def api_geocode_backfill(req: GeocodeBackfillRequest):
     """Reverse-geocode up to `limit` photos that have coordinates but no location.
@@ -1490,7 +1568,7 @@ async def api_list_faces(
         loop = asyncio.get_running_loop()
         rows, matches = await loop.run_in_executor(
             _executor,
-            lambda: faces.get_suggested_scores(FACE_SUGGEST_SCAN_CAP),
+            faces.get_suggested_scores,
         )
         names = _person_name_map()
         scored = [(r, m) for r, m in zip(rows, matches) if m]
@@ -1515,7 +1593,7 @@ async def api_list_faces(
         scored = []
         _unlabeled_n = 0
         if len(gallery) > 0:
-            rows, unknowns, _u_times = faces.get_unlabeled_matrix(FACE_SUGGEST_SCAN_CAP)
+            rows, unknowns, _u_times = faces.get_unlabeled_matrix()
             _t2 = time.perf_counter()
             _unlabeled_n = len(rows)
             loop = asyncio.get_running_loop()
@@ -1726,16 +1804,20 @@ def _compute_clusters(rows, unknowns, times, gallery, names, threshold, min_size
 
 @app.get("/api/faces/clusters")
 async def api_face_clusters(
-    threshold: float = Query(FACE_CLUSTER_THRESHOLD, ge=0.1, le=1.0),
-    min_size: int = Query(FACE_CLUSTER_MIN_SIZE, ge=2),
-    cap: int = Query(FACE_CLUSTER_CAP, ge=0),
+    threshold: float | None = Query(None, ge=0.1, le=1.0),
+    min_size: int | None = Query(None, ge=2),
+    cap: int | None = Query(None, ge=0),
     full: bool = Query(False),
 ):
     """Discover groups of likely same-person faces among the unlabeled queue, so a
     new person can be named in one go (no seed example needed). Clusters the top
     `cap` faces by detection score (they cluster cleanest); the rest are reachable
     afterward via per-person 'Find more'. ``full`` returns every face item per
-    group (not just a 24-face sample) — total stays bounded by the cluster cap."""
+    group (not just a 24-face sample) — total stays bounded by the cluster cap.
+    threshold/min_size/cap default to the live config.FACE_CLUSTER_* settings."""
+    threshold = config.FACE_CLUSTER_THRESHOLD if threshold is None else threshold
+    min_size = config.FACE_CLUSTER_MIN_SIZE if min_size is None else min_size
+    cap = config.FACE_CLUSTER_CAP if cap is None else cap
     gallery = faces.build_gallery()
     rows, unknowns, times = faces.get_unlabeled_matrix()
     if cap and 0 < cap < len(rows):
@@ -1755,10 +1837,12 @@ class CrowdIgnoreRequest(BaseModel):
 
 @app.get("/api/crowds")
 async def api_crowds(
-    min_faces: int = Query(FACE_CROWD_MIN_SIZE, ge=1),
+    min_faces: int | None = Query(None, ge=1),
     group_gap: int = Query(86400, ge=60),
 ):
-    """Return crowd photos (>= min_faces detected faces) grouped by time gaps."""
+    """Return crowd photos (>= min_faces detected faces) grouped by time gaps.
+    min_faces defaults to the live config.FACE_CROWD_MIN_SIZE setting."""
+    min_faces = config.FACE_CROWD_MIN_SIZE if min_faces is None else min_faces
     rows = index.get_crowd_photos(min_faces)
     groups: list[dict] = []
     for row in rows:

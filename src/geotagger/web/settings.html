@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Settings - Geo-Tagger</title>
+<link rel="stylesheet" href="style.css"/>
+<link rel="stylesheet" href="settings.css"/>
+</head>
+<body>
+<div id="toolbar">
+  <div class="toolbar-group" id="app-nav" data-active="settings"></div>
+</div>
+
+<div id="settings-page">
+  <p class="settings-intro">
+    Tuning knobs for face matching and clustering. Changes apply immediately —
+    no restart needed — and are saved to the database, overriding the env-var
+    default shown in each hint.
+  </p>
+  <div id="settings-groups"></div>
+</div>
+
+<script src="nav.js"></script>
+<script src="settings.js"></script>
+</body>
+</html>

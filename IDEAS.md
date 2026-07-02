@@ -247,11 +247,17 @@ sidebar list of contexts (name, date range, vertex/photo count, edit/delete).
   the prior sidecar bytes per write buys full undo without touching the
   immutability guarantee — and makes aggressive bulk-accept workflows feel safe.
 
-- **In-app settings page** — the ~25 tuning knobs are env-vars only. The face
-  matching/clustering thresholds especially are things to tweak while looking at
-  results, not by restarting. A settings API + page for the safe-to-change
-  subset (thresholds, crowd min size, suggest caps), persisted in the DB and
-  overriding the env defaults.
+- **In-app settings page** — *Done 2026-07-01.* `/settings.html` exposes the
+  12 face matching/clustering/age-penalty knobs that are pure post-hoc math
+  (safe to change live); model-load-time knobs (`FACE_DET_THRESHOLD`,
+  `FACE_DET_SIZE`, `FACE_MODEL_NAME`, `FACE_PROVIDERS`) stay env-only since
+  they'd need the InsightFace pipeline rebuilt. `GET/PATCH /api/settings` +
+  `POST /api/settings/reset`, backed by a `settings` DB table
+  (`index.get_all_settings`/`set_setting`/`delete_setting`) applied on top of
+  the env default at startup via `config.apply_all_overrides`. Consumers
+  (`faces.py`, `main.py`) read these via live `config.KEY` attribute access
+  rather than `from geotagger.config import KEY`, since a plain import bakes
+  in the value at import/def time and would miss later overrides.
 
 ## Robustness & safety (2026-07-01 review)
 

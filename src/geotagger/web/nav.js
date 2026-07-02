@@ -4,9 +4,11 @@
     { key: "home", label: "🏠 Home", href: "/" },
     { key: "geocode", label: "📍 Geocode", href: "/geocode.html" },
     { key: "quick-geocode", label: "⚡ Quick Geocode", href: "/quick-geocode.html" },
+    { key: "map", label: "🌍 Places DB", href: "/map.html" },
     { key: "timesync", label: "🕐 Time Sync", href: "/timesync.html" },
     { key: "people", label: "🙂 People", href: "/people.html" },
     { key: "contexts", label: "🗺️ Contexts", href: "/contexts.html" },
+    { key: "settings", label: "⚙ Settings", href: "/settings.html" },
   ];
 
   const el = document.getElementById("app-nav");

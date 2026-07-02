@@ -34,6 +34,9 @@ _names: list[str] = []             # parallel to the KD-tree points
 _ccs: list[str] = []
 _admin1: list[str] = []
 _admin2: list[str] = []
+_lats = None                        # numpy array, parallel to _names — for bbox queries
+_lngs = None
+_populations = None
 _admin1_names: dict[str, str] = {}  # "<cc>.<a1>"        -> state/province name
 _admin2_names: dict[str, str] = {}  # "<cc>.<a1>.<a2>"   -> county/district name
 _country_names: dict[str, str] = {}  # cc                -> country name
@@ -61,7 +64,7 @@ def status() -> dict:
 def _load():
     """Parse the GeoNames files and build the KD-tree. Idempotent; call via
     _ensure_loaded() so it runs once under the lock."""
-    global _state, _error, _tree
+    global _state, _error, _tree, _lats, _lngs, _populations
     if _state != "unloaded":
         return
     if not is_available():
@@ -80,6 +83,7 @@ def _load():
 
         lats: list[float] = []
         lngs: list[float] = []
+        pops: list[int] = []
         with _cities_file().open(encoding="utf-8") as f:
             for line in f:
                 p = line.rstrip("\n").split("\t")
@@ -96,11 +100,19 @@ def _load():
                 _ccs.append(p[8])
                 _admin1.append(p[10])
                 _admin2.append(p[11] if len(p) > 11 else "")
+                try:
+                    pops.append(int(p[14]) if len(p) > 14 and p[14] else 0)
+                except ValueError:
+                    pops.append(0)
+
+        _lats = np.asarray(lats)
+        _lngs = np.asarray(lngs)
+        _populations = np.asarray(pops, dtype=np.int64)
 
         # Unit-sphere XYZ so nearest-neighbour by Euclidean (chord) distance
         # matches nearest-by-great-circle and is correct near poles/antimeridian.
-        lat_r = np.radians(np.asarray(lats))
-        lng_r = np.radians(np.asarray(lngs))
+        lat_r = np.radians(_lats)
+        lng_r = np.radians(_lngs)
         cos_lat = np.cos(lat_r)
         xyz = np.column_stack((cos_lat * np.cos(lng_r),
                                cos_lat * np.sin(lng_r),
@@ -162,17 +174,9 @@ def quantize(lat: float, lng: float) -> tuple[int, int]:
     return round(lat * scale), round(lng * scale)
 
 
-def _raw_lookup(lat: float, lng: float) -> dict | None:
-    """Nearest-city lookup without the cache. None if data unavailable."""
-    _ensure_loaded()
-    if _state != "ready" or _tree is None:
-        return None
-    lat_r = math.radians(lat)
-    lng_r = math.radians(lng)
-    cos_lat = math.cos(lat_r)
-    point = [cos_lat * math.cos(lng_r), cos_lat * math.sin(lng_r), math.sin(lat_r)]
-    _, idx = _tree.query(point)
-    i = int(idx)
+def _place_dict(i: int) -> dict:
+    """Resolve GeoNames row i's admin codes into the {city, state, county,
+    country, country_code} shape shared by lookup() and cities_in_bbox()."""
     cc = _ccs[i]
     a1 = _admin1[i]
     a2 = _admin2[i]
@@ -185,6 +189,50 @@ def _raw_lookup(lat: float, lng: float) -> dict | None:
         "country": _country_names.get(cc),
         "country_code": cc or None,
     }
+
+
+def _raw_lookup(lat: float, lng: float) -> dict | None:
+    """Nearest-city lookup without the cache. None if data unavailable."""
+    _ensure_loaded()
+    if _state != "ready" or _tree is None:
+        return None
+    lat_r = math.radians(lat)
+    lng_r = math.radians(lng)
+    cos_lat = math.cos(lat_r)
+    point = [cos_lat * math.cos(lng_r), cos_lat * math.sin(lng_r), math.sin(lat_r)]
+    _, idx = _tree.query(point)
+    return _place_dict(int(idx))
+
+
+def cities_in_bbox(min_lat: float, max_lat: float, min_lng: float, max_lng: float,
+                    limit: int = 3000) -> tuple[list[dict], int]:
+    """GeoNames places within a lat/lng box — lets the UI show the raw
+    reverse-geocode reference data (city/state/county/country + population)
+    for inspection, rather than a lookup for a single point.
+
+    Returns (places, total_matched). When total_matched exceeds limit, the
+    returned places are the largest by population so the capped view still
+    shows the most recognizable places first.
+    """
+    _ensure_loaded()
+    if _state != "ready" or _lats is None:
+        return [], 0
+    import numpy as np
+
+    mask = (_lats >= min_lat) & (_lats <= max_lat) & (_lngs >= min_lng) & (_lngs <= max_lng)
+    idxs = np.nonzero(mask)[0]
+    total = int(len(idxs))
+    if total > limit:
+        idxs = idxs[np.argsort(-_populations[idxs])][:limit]
+    places = []
+    for i in idxs:
+        i = int(i)
+        d = _place_dict(i)
+        d["lat"] = float(_lats[i])
+        d["lng"] = float(_lngs[i])
+        d["population"] = int(_populations[i])
+        places.append(d)
+    return places, total
 
 
 def lookup(lat: float | None, lng: float | None, use_cache: bool = True) -> dict | None:
