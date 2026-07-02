@@ -1,6 +1,6 @@
 import pytest
 
-from geotagger import index, exiftool_session
+from geotagger import index, exiftool_session, thumbnails
 
 
 @pytest.fixture
@@ -12,6 +12,15 @@ def db(tmp_path, monkeypatch):
     conn.close()
     index._db = None
     index._db_path = None
+
+
+@pytest.fixture
+def thumbs_dir(tmp_path, monkeypatch):
+    """A fresh, isolated thumbnail cache directory for one test."""
+    monkeypatch.delenv("GEOTAGGER_CACHE_DIR", raising=False)
+    thumbnails.init_thumbs(tmp_path)
+    yield thumbnails._get_thumbs_dir()
+    thumbnails._thumbs_dir = None
 
 
 @pytest.fixture(scope="session")
