@@ -1,0 +1,415 @@
+"""Faces, persons, families, and crowd management endpoints."""
+
+import asyncio
+import logging
+import time
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import Response
+from pydantic import BaseModel
+
+from geotagger import index, faces, thumbnails, serializers, config
+from geotagger.executor import get_executor
+from geotagger.services import faces_service
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+
+class CreatePersonRequest(BaseModel):
+    name: str
+
+class UpdatePersonRequest(BaseModel):
+    name: str | None = None
+    birth_date: str | None = None  # ISO YYYY-MM-DD, or null to clear
+    family_id: int | None = None   # family id, or null to clear
+
+class FamilyRequest(BaseModel):
+    name: str
+
+class AssignFaceRequest(BaseModel):
+    person_id: int | None = None  # None clears the assignment
+    name: str | None = None       # convenience: create/lookup a person by name
+
+class BulkAssignRequest(BaseModel):
+    face_ids: list[int]
+    person_id: int | None = None
+    name: str | None = None
+    clear: bool = False           # set True to unassign the faces
+
+class IgnoreFacesRequest(BaseModel):
+    face_ids: list[int]
+    ignored: bool = True          # False restores faces to the unlabeled queue
+
+class ScanFacesRequest(BaseModel):
+    limit: int = 50  # photos processed per call; repeat to continue
+
+
+@router.get("/api/persons")
+async def api_get_persons():
+    return [
+        {"id": p["id"], "name": p["name"], "face_count": p["face_count"],
+         "birth_date": p["birth_date"], "created_at": p["created_at"],
+         "family_id": p["family_id"], "family_name": p["family_name"]}
+        for p in index.get_persons()
+    ]
+
+
+@router.patch("/api/persons/{person_id}")
+async def api_update_person(person_id: int, req: UpdatePersonRequest):
+    """Update a person's name, birth date, and/or family. Only fields present in
+    the request body are changed — send just the fields you want to update."""
+    from datetime import datetime as _dt
+    fields = req.model_fields_set
+    if "name" in fields:
+        name = (req.name or "").strip()
+        if not name:
+            raise HTTPException(400, "Name cannot be empty")
+        index.rename_person(person_id, name)
+    if "birth_date" in fields:
+        birth = req.birth_date.strip() if req.birth_date else None
+        if birth:
+            try:
+                _dt.strptime(birth, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(400, "birth_date must be in YYYY-MM-DD format")
+        index.set_person_birth_date(person_id, birth)
+    if "family_id" in fields:
+        index.set_person_family(person_id, req.family_id)
+    return {"id": person_id}
+
+
+# ── Family endpoints ──
+
+@router.get("/api/families")
+async def api_get_families():
+    return [{"id": f["id"], "name": f["name"], "person_count": f["person_count"]}
+            for f in index.get_families()]
+
+
+@router.post("/api/families")
+async def api_create_family(req: FamilyRequest):
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(400, "Name required")
+    family_id = index.create_family(name)
+    return {"id": family_id, "name": name, "person_count": 0}
+
+
+@router.patch("/api/families/{family_id}")
+async def api_rename_family(family_id: int, req: FamilyRequest):
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(400, "Name required")
+    index.rename_family(family_id, name)
+    return {"id": family_id, "name": name}
+
+
+@router.delete("/api/families/{family_id}")
+async def api_delete_family(family_id: int):
+    index.delete_family(family_id)
+    return {"success": True}
+
+
+@router.post("/api/persons")
+async def api_create_person(req: CreatePersonRequest):
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(400, "Name required")
+    person_id = index.get_or_create_person(name)
+    return {"id": person_id, "name": name}
+
+
+@router.delete("/api/persons/{person_id}")
+async def api_delete_person(person_id: int):
+    index.delete_person(person_id)
+    return {"success": True}
+
+
+@router.get("/api/faces")
+async def api_list_faces(
+    scope: str = Query("unlabeled", pattern="^(unlabeled|person|ignored|suggested|recent|all)$"),
+    person_id: int | None = Query(None),
+    limit: int = Query(500, ge=1, le=2000),
+    suggested_only: bool = Query(False),
+):
+    """List faces. scope=unlabeled attaches a recognition suggestion to each face;
+    scope=suggested returns only unlabeled faces whose *best* guess is `person_id`,
+    ranked by confidence — for quickly approving one person's guesses in bulk.
+    suggested_only (scope=unlabeled) drops faces with no guess, scanning up to the
+    suggest cap so it finds matches beyond the first detection-ranked page."""
+    if scope == "unlabeled" and suggested_only:
+        loop = asyncio.get_running_loop()
+        rows, matches = await loop.run_in_executor(
+            get_executor(),
+            faces.get_suggested_scores,
+        )
+        names = serializers.person_name_map()
+        scored = [(r, m) for r, m in zip(rows, matches) if m]
+        scored.sort(key=lambda rm: rm[1][1], reverse=True)  # most confident first
+        total = len(scored)
+        out = []
+        for r, (pid, score) in scored[:limit]:
+            item = serializers.face_item(r)
+            item["suggestion"] = {"person_id": pid, "person_name": names.get(pid),
+                                  "score": round(score, 4)}
+            out.append(item)
+        return {"faces": out, "total": total, "returned": len(out)}
+
+    if scope == "suggested":
+        if not person_id:
+            raise HTTPException(400, "person_id is required for scope=suggested")
+        _t0 = time.perf_counter()
+        gallery = faces.build_gallery()
+        _t1 = time.perf_counter()
+        names = serializers.person_name_map()
+        name = names.get(person_id)
+        scored = []
+        _unlabeled_n = 0
+        if len(gallery) > 0:
+            rows, unknowns, _u_times = faces.get_unlabeled_matrix()
+            _t2 = time.perf_counter()
+            _unlabeled_n = len(rows)
+            loop = asyncio.get_running_loop()
+            scored = await loop.run_in_executor(
+                get_executor(),
+                lambda: faces.suggest_for_person(rows, gallery, person_id,
+                                                 unknowns=unknowns, times=_u_times),
+            )
+            _t3 = time.perf_counter()
+        else:
+            _t2 = _t3 = time.perf_counter()
+        scored.sort(key=lambda t: t[1], reverse=True)
+        logger.info(
+            "scope=suggested person_id=%d gallery=%d unlabeled=%d candidates=%d "
+            "build_gallery=%.3fs get_matrix=%.3fs suggest=%.3fs total=%.3fs",
+            person_id, len(gallery), _unlabeled_n, len(scored),
+            _t1 - _t0, _t2 - _t1, _t3 - _t2, _t3 - _t0,
+        )
+        out = []
+        for r, score, alts in scored[:limit]:
+            item = serializers.face_item(r)
+            item["suggestion"] = {"person_id": person_id, "person_name": name,
+                                  "score": round(score, 4)}
+            item["alternatives"] = [
+                {"person_id": pid, "person_name": names.get(pid), "score": round(s, 4)}
+                for pid, s in alts
+            ]
+            out.append(item)
+        return {"faces": out, "total": len(scored), "returned": len(out)}
+
+    rows = index.list_faces(scope=scope, person_id=person_id, limit=limit)
+    gallery = faces.build_gallery() if scope == "unlabeled" else None
+    matches = (faces.suggest_persons_batch(rows, gallery)
+               if gallery is not None and len(gallery) > 0 else [None] * len(rows))
+    names = serializers.person_name_map() if any(matches) else {}
+    out = []
+    for r, match in zip(rows, matches):
+        item = serializers.face_item(r)
+        if match:
+            pid, score = match
+            item["suggestion"] = {"person_id": pid, "person_name": names.get(pid),
+                                  "score": round(score, 4)}
+        out.append(item)
+    return {
+        "faces": out,
+        "total": index.count_faces(scope=scope, person_id=person_id),
+        "returned": len(out),
+    }
+
+
+@router.get("/api/faces/{face_id}/crop")
+async def api_face_crop(face_id: int, request: Request):
+    row = index.get_face_with_photo(face_id)
+    if not row:
+        raise HTTPException(404)
+    bbox = tuple(float(v) for v in row["bbox"].split(","))
+    etag = f'"{face_id}-{row["mtime"]}-{row["bbox"]}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304)
+    try:
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(
+            get_executor(),
+            lambda: thumbnails.get_face_crop(
+                Path(row["path"]), row["mtime"], row["size"], bbox,
+                orientation=row["orientation"]),
+        )
+        return Response(content=data, media_type="image/jpeg",
+                        headers={"Cache-Control": "max-age=86400", "ETag": etag})
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@router.post("/api/faces/assign")
+async def api_bulk_assign(req: BulkAssignRequest):
+    person_id = None if req.clear else req.person_id
+    if person_id is None and not req.clear and req.name and req.name.strip():
+        person_id = index.get_or_create_person(req.name.strip())
+    index.assign_faces(req.face_ids, person_id)
+    return {"assigned": len(req.face_ids), "person_id": person_id}
+
+
+@router.post("/api/faces/ignore")
+async def api_ignore_faces(req: IgnoreFacesRequest):
+    """Hide faces from the unlabeled queue (background strangers, false detections),
+    or restore them with ignored=false."""
+    index.set_faces_ignored(req.face_ids, req.ignored)
+    return {"updated": len(req.face_ids), "ignored": req.ignored}
+
+
+@router.get("/api/photos/{photo_id}/faces")
+async def api_photo_faces(photo_id: int):
+    """List faces in a photo with assigned person and a recognition suggestion."""
+    photo = index.get_photo(photo_id)
+    if not photo:
+        raise HTTPException(404)
+    photo_dt = photo["photo_datetime"]
+    gallery = faces.build_gallery()
+    rows = index.get_faces_for_photo(photo_id)
+    out = []
+    for r in rows:
+        item = {
+            "id": r["id"],
+            "bbox": thumbnails.orient_bbox(r["bbox"].split(","), r["orientation"]),
+            "det_score": r["det_score"],
+            "person_id": r["person_id"],
+            "person_name": r["person_name"],
+            "assigned_at": r["assigned_at"],
+            "ignored": bool(r["ignored"]),
+            "suggestion": None,
+        }
+        # Only suggest for unassigned, non-ignored faces.
+        if r["person_id"] is None and not r["ignored"] and len(gallery) > 0:
+            vec = faces.decode_embedding(r["embedding"])
+            match = faces.suggest_person(vec, photo_dt, gallery)
+            if match:
+                pid, score = match
+                person = index.get_db().execute(
+                    "SELECT name FROM persons WHERE id=?", (pid,)
+                ).fetchone()
+                item["suggestion"] = {
+                    "person_id": pid,
+                    "person_name": person["name"] if person else None,
+                    "score": round(score, 4),
+                }
+        out.append(item)
+    return out
+
+
+@router.post("/api/faces/{face_id}/assign")
+async def api_assign_face(face_id: int, req: AssignFaceRequest):
+    if not index.get_face(face_id):
+        raise HTTPException(404)
+    person_id = req.person_id
+    if person_id is None and req.name and req.name.strip():
+        person_id = index.get_or_create_person(req.name.strip())
+    index.assign_face(face_id, person_id)
+    return {"face_id": face_id, "person_id": person_id}
+
+
+@router.post("/api/faces/scan")
+async def api_faces_scan(req: ScanFacesRequest):
+    """Detect faces for up to `limit` not-yet-scanned photos. Repeat to continue."""
+    pending = index.get_unscanned_photo_ids()
+    batch = pending[: max(1, req.limit)]
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(get_executor(), faces_service.scan_faces_batch, batch)
+    result["remaining"] = len(pending) - result["processed"]
+    return result
+
+
+@router.get("/api/faces/scan/status")
+async def api_faces_scan_status():
+    remaining = len(index.get_unscanned_photo_ids())
+    return {
+        "remaining_photos": remaining,
+        "total_faces": index.count_faces("all"),
+        "unlabeled_faces": index.count_faces("unlabeled"),
+        "ignored_faces": index.count_faces("ignored"),
+        "tagged_faces": index.count_faces("recent"),
+    }
+
+
+@router.get("/api/faces/clusters")
+async def api_face_clusters(
+    threshold: float | None = Query(None, ge=0.1, le=1.0),
+    min_size: int | None = Query(None, ge=2),
+    cap: int | None = Query(None, ge=0),
+    full: bool = Query(False),
+):
+    """Discover groups of likely same-person faces among the unlabeled queue, so a
+    new person can be named in one go (no seed example needed). Clusters the top
+    `cap` faces by detection score (they cluster cleanest); the rest are reachable
+    afterward via per-person 'Find more'. ``full`` returns every face item per
+    group (not just a 24-face sample) — total stays bounded by the cluster cap.
+    threshold/min_size/cap default to the live config.FACE_CLUSTER_* settings."""
+    threshold = config.FACE_CLUSTER_THRESHOLD if threshold is None else threshold
+    min_size = config.FACE_CLUSTER_MIN_SIZE if min_size is None else min_size
+    cap = config.FACE_CLUSTER_CAP if cap is None else cap
+    gallery = faces.build_gallery()
+    rows, unknowns, times = faces.get_unlabeled_matrix()
+    if cap and 0 < cap < len(rows):
+        rows, unknowns, times = rows[:cap], unknowns[:cap], times[:cap]
+    names = serializers.person_name_map()
+    loop = asyncio.get_running_loop()
+    clusters = await loop.run_in_executor(
+        get_executor(), faces_service.compute_clusters, rows, unknowns, times, gallery, names,
+        threshold, min_size, full)
+    return {"clusters": clusters, "scanned": len(rows),
+            "grouped": sum(c["size"] for c in clusters)}
+
+
+class CrowdIgnoreRequest(BaseModel):
+    photo_ids: list[int]
+
+
+@router.get("/api/crowds")
+async def api_crowds(
+    min_faces: int | None = Query(None, ge=1),
+    group_gap: int = Query(86400, ge=60),
+):
+    """Return crowd photos (>= min_faces detected faces) grouped by time gaps.
+    min_faces defaults to the live config.FACE_CROWD_MIN_SIZE setting."""
+    min_faces = config.FACE_CROWD_MIN_SIZE if min_faces is None else min_faces
+    rows = index.get_crowd_photos(min_faces)
+    groups: list[dict] = []
+    for row in rows:
+        ts = row["photo_datetime"] or 0
+        if groups and ts - groups[-1]["_last_ts"] <= group_gap:
+            g = groups[-1]
+        else:
+            g = {
+                "_last_ts": ts,
+                "label": serializers.format_crowd_group_label(ts),
+                "photos": [],
+                "total_faces": 0,
+                "unlabeled_faces": 0,
+            }
+            groups.append(g)
+        g["_last_ts"] = ts
+        g["photos"].append({
+            "id": row["id"],
+            "filename": row["filename"],
+            "photo_datetime": row["photo_datetime"],
+            "orientation": row["orientation"],
+            "total_faces": row["total_faces"],
+            "labeled_faces": row["labeled_faces"],
+            "unlabeled_faces": row["unlabeled_faces"],
+            "ignored_faces": row["ignored_faces"],
+        })
+        g["total_faces"] += row["total_faces"]
+        g["unlabeled_faces"] += row["unlabeled_faces"]
+
+    for g in groups:
+        del g["_last_ts"]
+    return {"groups": groups, "photo_count": len(rows)}
+
+
+@router.post("/api/crowds/ignore-unlabeled")
+async def api_crowds_ignore_unlabeled(req: CrowdIgnoreRequest):
+    """Ignore all unlabeled faces in the given crowd photos."""
+    count = index.ignore_unlabeled_in_photos(req.photo_ids)
+    return {"ignored": count}
+

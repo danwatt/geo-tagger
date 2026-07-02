@@ -4,7 +4,8 @@ import json
 import pytest
 from fastapi import HTTPException
 
-from geotagger import index, main
+from geotagger import index
+from geotagger.api import geotag
 
 
 def _upsert(path, lat=None, lng=None, photo_datetime=1000, geotag_source="none"):
@@ -18,7 +19,7 @@ def _upsert(path, lat=None, lng=None, photo_datetime=1000, geotag_source="none")
 
 
 def _guess(photo_id, window=900):
-    return asyncio.run(main.api_guess(photo_id, window))
+    return asyncio.run(geotag.api_guess(photo_id, window))
 
 
 class TestApiGuessErrors:

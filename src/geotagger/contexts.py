@@ -20,6 +20,37 @@ def polygon_bbox(verts) -> tuple[float, float, float, float]:
     return min(lats), max(lats), min(lngs), max(lngs)
 
 
+def date_to_ts_start(d: str) -> int:
+    # Use calendar.timegm (UTC struct_time) to avoid the Windows OSError for
+    # pre-1970 dates that hits datetime.timestamp() via the C mktime() call.
+    import calendar
+    from datetime import datetime
+    return calendar.timegm(datetime.strptime(d, "%Y-%m-%d").timetuple())
+
+
+def date_to_ts_end(d: str) -> int:
+    return date_to_ts_start(d) + 86400
+
+
+def ts_to_date(ts: int | None) -> str | None:
+    if ts is None:
+        return None
+    from datetime import datetime, timedelta, timezone
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    return (epoch + timedelta(seconds=ts)).strftime("%Y-%m-%d")
+
+
+def normalize_lng(lng: float) -> float:
+    """Wrap longitude into [-180, 180]. Leaflet can return values outside this range
+    when the user pans across the antimeridian."""
+    lng = lng % 360
+    if lng > 180:
+        lng -= 360
+    if lng < -180:
+        lng += 360
+    return lng
+
+
 def polygon_centroid(verts) -> tuple[float, float]:
     """Area-weighted centroid -> (lat, lng). Falls back to vertex mean for degenerate polygons."""
     n = len(verts)

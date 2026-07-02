@@ -73,3 +73,29 @@ def sample_image(tmp_path):
     path = tmp_path / "photo.jpg"
     Image.new("RGB", (4, 4), color="red").save(path, "JPEG")
     return path
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    """A TestClient wired to a fresh, isolated DB. Entering the TestClient context
+    runs the app lifespan (which initializes the request executor); GEOTAGGER_NO_SCAN
+    + an empty cache dir keep startup from scanning or auto-loading a prior root."""
+    from fastapi.testclient import TestClient
+    from geotagger import index, main
+
+    monkeypatch.setenv("GEOTAGGER_NO_SCAN", "1")
+    monkeypatch.setenv("GEOTAGGER_CACHE_DIR", str(tmp_path))
+    monkeypatch.delenv("GEOTAGGER_SCAN_DIRS", raising=False)
+
+    # Pre-create the DB; with no last-scan sentinel in the empty cache dir the
+    # lifespan's auto-load path is a no-op, so this connection is the one served.
+    index.init_db(tmp_path)
+    with TestClient(main.app) as c:
+        yield c
+
+    index._db = None
+    index._db_path = None
+    from geotagger import faces
+    faces._gallery_cache = None
+    faces._unlabeled_cache = None
+    faces._suggested_scores_cache = None

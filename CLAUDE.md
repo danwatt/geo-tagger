@@ -22,8 +22,9 @@ doesn't.
 - Backend: **FastAPI + uvicorn**. DB: stdlib **`sqlite3`** (no ORM). Metadata I/O: **ExifTool**
   via `pyexiftool`. Faces: **InsightFace + onnxruntime + numpy**. Thumbnails: **Pillow / pillow-heif / av**.
 - Frontend: **vanilla JS + Leaflet**, plain `<script>` tags. No framework, no bundler, no npm.
-- `pytest` is a dev dependency but there is **no real test suite yet** (`network_test.py` is a
-  manual probe script). Verify changes by running the app and exercising the endpoint/UI.
+- **Tests**: `uv run pytest` (suite under `tests/`, incl. `TestClient` endpoint smoke tests via
+  the `client` fixture in `conftest.py`). `network_test.py` is a separate manual probe script.
+  Still worth running the app to exercise UI changes the tests don't cover.
 
 ## Hard constraints (do not violate)
 
@@ -37,8 +38,15 @@ doesn't.
 
 ## Python conventions
 
+- **Backend layout**: `main.py` is a thin `create_app()` factory only. Routes live in per-domain
+  `APIRouter`s under `geotagger/api/` (each `router = APIRouter()`, request models defined inline
+  near their route); blocking "run in the executor" logic lives in `geotagger/services/`
+  (framework-free — never import FastAPI or `geotagger.api` there); pure DB-row→JSON shaping lives
+  in `geotagger/serializers.py`; startup wiring is `lifespan.py`, the scan pipeline is
+  `scanning.py`. Add a new page/route by creating/extending a router and listing it in
+  `api/__init__.py`'s `ROUTERS`.
 - **Module-level singletons** guarded by module globals + lazy getters: `index.get_db()`,
-  `exiftool_session.get_et()`, the face model in `faces.py`, the executor in `main.py`. Follow
+  `exiftool_session.get_et()`, the face model in `faces.py`, the executor in `executor.py`. Follow
   this shape — a `_thing` global, an `init_*`/`start_*` that populates it, a `get_*` that raises
   if unset. Mutating them uses an explicit `global` statement.
 - **Thread safety**: shared native resources (ExifTool session, InsightFace app) are guarded by a
@@ -96,13 +104,13 @@ doesn't.
 - **Long-running server work is driven as a client loop**: POST a batch with a `limit`, read
   `remaining` from the response, repeat until `0`, updating the button label as you go (see
   `runBackfill` / `runFacesScan` in `home.js`). Match this pattern for new batch operations.
-- The **`StaticFiles` mount must stay the last line of `main.py`** (`app.mount("/", …)`); API
-  routes are registered before it or they get shadowed.
+- The **`StaticFiles` mount must be applied last in `create_app()`** (`app.mount("/", …)`), after
+  every `app.include_router(...)`; the SPA catch-all shadows API routes registered after it.
 
 ## Workflow
 
 - Larger features are handed off via self-contained `*_PLAN.md` docs; `IDEAS.md` is the backlog.
   If asked to implement from a plan, follow that doc.
-- After a nontrivial change, **run the app and exercise the affected route/UI** rather than
-  relying on a (nonexistent) test suite. The server binds `127.0.0.1:8000` by default, so tests
-  will require booting on a random port other than 8000.
+- After a nontrivial change, **run `uv run pytest`** and, for UI-affecting work, **run the app and
+  exercise the affected route/UI**. The server binds `127.0.0.1:8000` by default; a live test boot
+  should use a random port other than 8000.
