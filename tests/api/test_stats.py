@@ -32,6 +32,35 @@ def test_summary_counts(client):
     assert s["geotag"] == {"tagged": 2, "ignored": 1, "untagged": 1}
 
 
+def test_face_coverage(client):
+    import time
+    db = index.get_db()
+    alice = index.create_person("Alice")
+
+    def photo(path, specs, scanned=True):
+        pid = _add(path)
+        if scanned:
+            db.execute("UPDATE photos SET faces_scanned_at=? WHERE id=?", (time.time(), pid))
+        for person_id, ignored in specs:
+            db.execute(
+                "INSERT INTO faces (photo_id, person_id, bbox, det_score, embedding, "
+                "source, ignored, created_at) VALUES (?, ?, '0,0,1,1', 0.9, X'00', "
+                "'detected', ?, 0)",
+                (pid, person_id, ignored),
+            )
+        db.commit()
+
+    photo("full.jpg", [(alice, 0)])          # full
+    photo("partial.jpg", [(alice, 0), (None, 0)])  # partial
+    photo("none.jpg", [(None, 0)])           # none labeled
+    photo("noface.jpg", [])                  # no faces detected
+    photo("unscanned.jpg", [(None, 0)], scanned=False)  # excluded
+
+    assert client.get("/api/stats/face-coverage").json() == {
+        "full": 1, "partial": 1, "none": 1, "no_faces": 1,
+    }
+
+
 def test_bounds(client):
     _add("a.jpg", lat=10, lng=20)
     _add("b.jpg", lat=1, lng=2)

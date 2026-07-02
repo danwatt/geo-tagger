@@ -89,6 +89,31 @@
   color: #aaa;
 }
 
+/* ── Face-coverage segmented bar ── */
+.coverage-bar {
+  display: flex;
+  height: 14px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: #333;
+}
+.coverage-bar > div { height: 100%; transition: width 0.3s; }
+/* Segment colors double as legend swatches (.sw + same class). */
+.cov-full    { background: #5cb85c; }  /* green  — fully labeled */
+.cov-partial { background: #d9a441; }  /* amber  — some labeled */
+.cov-none    { background: #d9534f; }  /* red    — none labeled */
+.cov-noface  { background: #4a4a4a; }  /* grey   — no faces detected */
+
+.coverage-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+  color: #ccc;
+}
+.coverage-legend .lg { display: inline-flex; align-items: center; gap: 5px; }
+.coverage-legend .sw { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+
 /* ── Coverage-by-month bars ── */
 #months-bar-container {
   display: flex;

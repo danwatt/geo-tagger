@@ -1,5 +1,18 @@
+import hashlib
 from pathlib import Path
 from geotagger.config import ALL_EXTENSIONS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, CACHE_DIR_NAME
+
+
+def file_checksum(path: Path, _chunk: int = 1 << 20) -> str:
+    """SHA-256 hex digest of a file's bytes, read in 1 MiB chunks so a large
+    video never lands in memory whole. Originals are immutable, so the digest is
+    stable until the file itself changes — hence it's only (re)computed when a
+    file is first indexed or its mtime/size moves (see is_fresh)."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(_chunk), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def iter_media(root: Path):

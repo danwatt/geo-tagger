@@ -78,6 +78,68 @@ def stop_et():
         _et = None
 
 
+def _kill_et():
+    """Force-kill the ExifTool subprocess and drop the session handle.
+
+    Used to recover from a *wedged* session: a file that makes ExifTool hang blocks
+    the -stay_open pipe with no way to time the read out (pyexiftool exposes no
+    per-command timeout). We SIGKILL the OS process instead of the clean
+    ``terminate()`` because terminate() calls ``communicate()``, which would race
+    with the worker thread still blocked reading the same pipe. Killing the process
+    makes that blocked read hit EOF and unwind on its own.
+    """
+    global _et
+    et = _et
+    _et = None  # drop the handle first so get_et() forces a restart
+    if et is not None:
+        try:
+            proc = getattr(et, "_process", None)
+            if proc is not None:
+                proc.kill()
+        except Exception:
+            pass  # best-effort; we're abandoning this session regardless
+
+
+def restart_et() -> bool:
+    """Kill a wedged ExifTool session and start a fresh one. Returns True if ready."""
+    _kill_et()
+    return start_et()
+
+
+def run_with_timeout(fn, timeout_s: float):
+    """Run an ExifTool call with a wall-clock timeout, returning its result.
+
+    pyexiftool talks to a persistent -stay_open process over a pipe and offers no
+    per-command timeout, so a file that makes ExifTool hang blocks forever. We run
+    `fn` in a daemon thread and wait up to `timeout_s`. If it doesn't finish we treat
+    the session as wedged: kill the subprocess (which unblocks the thread's now-dead
+    pipe read) and raise TimeoutError. The session is left stopped afterwards — call
+    restart_et() (or start_et()) before the next read.
+
+    Intended for single-threaded callers (scripts / backfills); it is not safe to
+    call while another thread is using the same session, since it kills the process.
+    """
+    import threading
+
+    box: dict = {}
+
+    def worker():
+        try:
+            box["result"] = fn()
+        except BaseException as e:  # propagate genuine ExifTool errors to the caller
+            box["error"] = e
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    t.join(timeout_s)
+    if t.is_alive():
+        _kill_et()  # wedged; abandon the session so the blocked read unwinds
+        raise TimeoutError(f"ExifTool call exceeded {timeout_s:.0f}s")
+    if "error" in box:
+        raise box["error"]
+    return box.get("result")
+
+
 @asynccontextmanager
 async def lifespan(app):
     start_et()

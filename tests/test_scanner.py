@@ -1,9 +1,30 @@
-from geotagger.scanner import iter_media, detect_sidecar_collisions
+import hashlib
+
+from geotagger.scanner import iter_media, detect_sidecar_collisions, file_checksum
 
 
 def _touch(path):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"data")
+
+
+class TestFileChecksum:
+    def test_matches_hashlib_sha256(self, tmp_path):
+        p = tmp_path / "a.jpg"
+        p.write_bytes(b"hello world")
+        assert file_checksum(p) == hashlib.sha256(b"hello world").hexdigest()
+
+    def test_empty_file(self, tmp_path):
+        p = tmp_path / "empty.jpg"
+        p.write_bytes(b"")
+        assert file_checksum(p) == hashlib.sha256(b"").hexdigest()
+
+    def test_chunk_boundary_is_transparent(self, tmp_path):
+        # Content spanning several reads must hash identically to one-shot.
+        data = b"x" * (5 * 1024 * 1024 + 7)
+        p = tmp_path / "big.bin"
+        p.write_bytes(data)
+        assert file_checksum(p, _chunk=1024) == hashlib.sha256(data).hexdigest()
 
 
 class TestIterMedia:

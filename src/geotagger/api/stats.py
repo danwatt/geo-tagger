@@ -111,6 +111,16 @@ async def api_stats_summary():
         raise HTTPException(500, str(e))
 
 
+@router.get("/api/stats/face-coverage")
+async def api_stats_face_coverage():
+    """Per-photo face-labeling coverage across scanned image photos, bucketed into
+    full / partial / none / no-detected-faces for the home dashboard."""
+    try:
+        return index.get_face_coverage()
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 @router.get("/api/stats/bounds")
 async def api_stats_bounds():
     """Get the bounding box of all geotagged photos."""

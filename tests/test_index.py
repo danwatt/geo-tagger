@@ -45,6 +45,143 @@ class TestIsFresh:
         assert index.is_fresh("p1.jpg", 1000.0, None, None) is False
 
 
+class TestChecksum:
+    def test_upsert_stores_and_reads_back_checksum(self, db):
+        index.upsert_photo(
+            path="c.jpg", filename="c.jpg", dir_=".", ext=".jpg", media_type="image",
+            mtime=1.0, size=1, lat=None, lng=None, geotag_source="none",
+            sidecar_path=None, sidecar_mtime=None, checksum="deadbeef",
+        )
+        row = db.execute("SELECT checksum FROM photos WHERE path='c.jpg'").fetchone()
+        assert row["checksum"] == "deadbeef"
+
+    def test_upsert_defaults_checksum_to_null(self, db):
+        # The scan inserts a fast row before hashing; count/query treat it as pending.
+        _upsert(db, path="a.jpg")
+        assert index.count_photos_missing_checksum() == 1
+        assert [r["path"] for r in index.get_photos_missing_checksum()] == ["a.jpg"]
+
+    def test_missing_checksum_query_excludes_hashed_rows(self, db):
+        _upsert(db, path="a.jpg")  # NULL checksum
+        index.upsert_photo(
+            path="b.jpg", filename="b.jpg", dir_=".", ext=".jpg", media_type="image",
+            mtime=1.0, size=1, lat=None, lng=None, geotag_source="none",
+            sidecar_path=None, sidecar_mtime=None, checksum="cafef00d",
+        )
+        assert index.count_photos_missing_checksum() == 1
+        assert [r["path"] for r in index.get_photos_missing_checksum()] == ["a.jpg"]
+
+    def test_set_checksums_batch_fills_in_rows(self, db):
+        _upsert(db, path="a.jpg")
+        pid = db.execute("SELECT id FROM photos WHERE path='a.jpg'").fetchone()["id"]
+        index.set_checksums([("abc123", pid)])
+        assert index.count_photos_missing_checksum() == 0
+        assert db.execute(
+            "SELECT checksum FROM photos WHERE id=?", (pid,)
+        ).fetchone()["checksum"] == "abc123"
+
+
+class TestOrientationBackfill:
+    def test_null_orientation_rows_are_pending(self, db):
+        # Simulate a pre-orientation row (indexed before the tag was read).
+        _upsert(db, path="old.jpg", orientation=None)
+        assert index.count_photos_missing_orientation() == 1
+        assert [r["path"] for r in index.get_photos_missing_orientation()] == ["old.jpg"]
+
+    def test_set_orientations_clears_pending(self, db):
+        _upsert(db, path="old.jpg", orientation=None)
+        pid = db.execute("SELECT id FROM photos WHERE path='old.jpg'").fetchone()["id"]
+        index.set_orientations([(8, pid)])
+        assert index.count_photos_missing_orientation() == 0
+        assert db.execute(
+            "SELECT orientation FROM photos WHERE id=?", (pid,)
+        ).fetchone()["orientation"] == 8
+
+    def test_populated_rows_are_not_pending(self, db):
+        _upsert(db, path="new.jpg", orientation=1)
+        assert index.count_photos_missing_orientation() == 0
+
+
+class TestExifBackfill:
+    def test_rows_without_exif_are_pending(self, db):
+        # upsert_photo never writes exif_json, so a freshly indexed row is pending
+        # for the EXIF snapshot even though it already has an orientation.
+        _upsert(db, path="a.jpg", orientation=1)
+        assert index.count_photos_missing_exif() == 1
+        assert [r["path"] for r in index.get_photos_missing_exif()] == ["a.jpg"]
+
+    def test_set_exif_stores_json_and_orientation_and_clears_pending(self, db):
+        _upsert(db, path="a.jpg", orientation=None)
+        pid = db.execute("SELECT id FROM photos WHERE path='a.jpg'").fetchone()["id"]
+        index.set_exif([(6, '{"EXIF:Make": "Canon"}', pid)])
+        assert index.count_photos_missing_exif() == 0
+        row = db.execute(
+            "SELECT orientation, exif_json FROM photos WHERE id=?", (pid,)
+        ).fetchone()
+        assert row["orientation"] == 6
+        assert row["exif_json"] == '{"EXIF:Make": "Canon"}'
+
+    def test_upsert_stores_exif_json_at_scan_time(self, db):
+        # The scanner passes exif_json into upsert_photo directly; a row indexed
+        # with it is not pending for backfill.
+        index.upsert_photo(
+            path="s.jpg", filename="s.jpg", dir_=".", ext=".jpg", media_type="image",
+            mtime=1.0, size=1, lat=None, lng=None, geotag_source="none",
+            sidecar_path=None, sidecar_mtime=None, orientation=3,
+            exif_json='{"EXIF:Model": "Pixel"}',
+        )
+        assert index.count_photos_missing_exif() == 0
+        assert db.execute(
+            "SELECT exif_json FROM photos WHERE path='s.jpg'"
+        ).fetchone()["exif_json"] == '{"EXIF:Model": "Pixel"}'
+
+
+def _photo_with_faces(db, path, specs, scanned=True, media_type="image"):
+    """Insert a photo plus its faces. ``specs`` is a list of (person_id|None,
+    ignored) — one per face; an empty list means a photo with no detected faces.
+    ``scanned`` marks it as having gone through face detection."""
+    import time
+    index.upsert_photo(
+        path=path, filename=path, dir_=".", ext=".jpg", media_type=media_type,
+        mtime=1.0, size=1, lat=None, lng=None, geotag_source="none",
+        sidecar_path=None, sidecar_mtime=None,
+    )
+    pid = db.execute("SELECT id FROM photos WHERE path=?", (path,)).fetchone()["id"]
+    if scanned:
+        db.execute("UPDATE photos SET faces_scanned_at=? WHERE id=?", (time.time(), pid))
+    for person_id, ignored in specs:
+        db.execute(
+            "INSERT INTO faces (photo_id, person_id, bbox, det_score, embedding, "
+            "source, ignored, created_at) VALUES (?, ?, '0,0,1,1', 0.9, X'00', "
+            "'detected', ?, 0)",
+            (pid, person_id, ignored),
+        )
+    db.commit()
+    return pid
+
+
+class TestFaceCoverage:
+    def test_buckets_partition_scanned_image_photos(self, db):
+        alice = index.create_person("Alice")
+        _photo_with_faces(db, "full_labeled.jpg", [(alice, 0), (alice, 0)])   # full
+        _photo_with_faces(db, "full_ignored.jpg", [(None, 1)])               # full (all ignored)
+        _photo_with_faces(db, "partial.jpg", [(alice, 0), (None, 0)])        # partial
+        _photo_with_faces(db, "uncovered.jpg", [(None, 0), (None, 0)])       # none labeled
+        _photo_with_faces(db, "noface.jpg", [])                              # no faces detected
+        # Excluded from the tally: unscanned image, and a scanned video.
+        _photo_with_faces(db, "unscanned.jpg", [(None, 0)], scanned=False)
+        _photo_with_faces(db, "video.mp4", [(None, 0)], media_type="video")
+
+        assert index.get_face_coverage() == {
+            "full": 2, "partial": 1, "none": 1, "no_faces": 1,
+        }
+
+    def test_empty_library(self, db):
+        assert index.get_face_coverage() == {
+            "full": 0, "partial": 0, "none": 0, "no_faces": 0,
+        }
+
+
 class TestContextsForTime:
     def _make(self, db, name, start_ts, end_ts):
         return index.create_context(

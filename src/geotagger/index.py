@@ -72,6 +72,19 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     # EXIF orientation 1..8 for display rotation (NULL = not yet read)
     if "orientation" not in cols:
         _db.execute("ALTER TABLE photos ADD COLUMN orientation INTEGER")
+    # Full ExifTool metadata as a JSON blob (NULL = not yet read), so tags beyond
+    # the handful promoted to their own columns stay searchable later. orientation
+    # above is kept as a dedicated column because the UI reads it on nearly every
+    # grid/face query. Populated by the scanner (read_metadata full=True) for
+    # new/changed files; scripts/backfill_orientation.py fills pre-existing rows.
+    if "exif_json" not in cols:
+        _db.execute("ALTER TABLE photos ADD COLUMN exif_json TEXT")
+    # SHA-256 hex of the file's bytes (NULL = not yet hashed). Populated for
+    # new/changed files during a scan; existing rows are filled in by the
+    # one-time scripts/backfill_checksums.py. Deliberately NOT part of is_fresh
+    # so a routine rescan never re-hashes the whole library.
+    if "checksum" not in cols:
+        _db.execute("ALTER TABLE photos ADD COLUMN checksum TEXT")
     # Timestamp of last face-detection pass for this photo (NULL = never scanned)
     if "faces_scanned_at" not in cols:
         _db.execute("ALTER TABLE photos ADD COLUMN faces_scanned_at REAL")
@@ -290,14 +303,15 @@ def upsert_photo(
     sidecar_path: str | None, sidecar_mtime: float | None,
     camera: str | None = None, photo_datetime: int | None = None,
     gps_accuracy: float | None = None, orientation: int | None = None,
+    checksum: str | None = None, exif_json: str | None = None,
 ):
     db = get_db()
     db.execute("""
         INSERT INTO photos
             (path, filename, dir, ext, media_type, mtime, size, lat, lng,
              geotag_source, sidecar_path, sidecar_mtime, camera, photo_datetime,
-             gps_accuracy, orientation, scanned_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             gps_accuracy, orientation, checksum, exif_json, scanned_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(path) DO UPDATE SET
             filename=excluded.filename, dir=excluded.dir, ext=excluded.ext,
             media_type=excluded.media_type, mtime=excluded.mtime, size=excluded.size,
@@ -305,10 +319,11 @@ def upsert_photo(
             sidecar_path=excluded.sidecar_path, sidecar_mtime=excluded.sidecar_mtime,
             camera=excluded.camera, photo_datetime=excluded.photo_datetime,
             gps_accuracy=excluded.gps_accuracy, orientation=excluded.orientation,
+            checksum=excluded.checksum, exif_json=excluded.exif_json,
             scanned_at=excluded.scanned_at
     """, (path, filename, dir_, ext, media_type, mtime, size, lat, lng,
           geotag_source, sidecar_path, sidecar_mtime, camera, photo_datetime,
-          gps_accuracy, orientation, time.time()))
+          gps_accuracy, orientation, checksum, exif_json, time.time()))
     db.commit()
 
 
@@ -385,6 +400,93 @@ def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str |
 
 def get_photo(photo_id: int) -> sqlite3.Row | None:
     return get_db().execute("SELECT * FROM photos WHERE id=?", (photo_id,)).fetchone()
+
+
+# ── Checksums ──
+
+def get_photos_missing_checksum(limit: int | None = None) -> list[sqlite3.Row]:
+    """Rows whose file has not been hashed yet (checksum IS NULL) — the work list
+    for scripts/backfill_checksums.py. Ordered by id for stable batching."""
+    sql = "SELECT id, path FROM photos WHERE checksum IS NULL ORDER BY id"
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    return get_db().execute(sql).fetchall()
+
+
+def count_photos_missing_checksum() -> int:
+    return get_db().execute(
+        "SELECT COUNT(*) FROM photos WHERE checksum IS NULL"
+    ).fetchone()[0]
+
+
+def set_checksums(rows: list[tuple[str, int]]):
+    """Batch-store checksums in one transaction. Each pair is (checksum, photo_id),
+    matching the UPDATE's ``?`` order so the caller can pass cursor tuples directly."""
+    if not rows:
+        return
+    db = get_db()
+    db.executemany("UPDATE photos SET checksum=? WHERE id=?", rows)
+    db.commit()
+
+
+# ── Orientation backfill ──
+# Rows indexed before EXIF orientation was read carry orientation=NULL. is_fresh
+# marks them stale so a full rescan would refill them, but that re-reads every
+# file; scripts/backfill_orientation.py uses these to refill just the tag cheaply.
+
+def get_photos_missing_orientation(limit: int | None = None) -> list[sqlite3.Row]:
+    """Rows whose EXIF orientation hasn't been read yet (orientation IS NULL)."""
+    sql = "SELECT id, path FROM photos WHERE orientation IS NULL ORDER BY id"
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    return get_db().execute(sql).fetchall()
+
+
+def count_photos_missing_orientation() -> int:
+    return get_db().execute(
+        "SELECT COUNT(*) FROM photos WHERE orientation IS NULL"
+    ).fetchone()[0]
+
+
+def set_orientations(rows: list[tuple[int, int]]):
+    """Batch-store orientations in one transaction. Each pair is (orientation,
+    photo_id), matching the UPDATE's ``?`` order."""
+    if not rows:
+        return
+    db = get_db()
+    db.executemany("UPDATE photos SET orientation=? WHERE id=?", rows)
+    db.commit()
+
+
+# ── EXIF snapshot backfill ──
+# Full ExifTool metadata for each file, stored as JSON in photos.exif_json for
+# later searching. exif_json IS NULL means "not yet read"; the same one-time pass
+# also (re)derives orientation from the read, so a single call fills both.
+
+def get_photos_missing_exif(limit: int | None = None) -> list[sqlite3.Row]:
+    """Rows whose full EXIF snapshot hasn't been read yet (exif_json IS NULL)."""
+    sql = "SELECT id, path FROM photos WHERE exif_json IS NULL ORDER BY id"
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    return get_db().execute(sql).fetchall()
+
+
+def count_photos_missing_exif() -> int:
+    return get_db().execute(
+        "SELECT COUNT(*) FROM photos WHERE exif_json IS NULL"
+    ).fetchone()[0]
+
+
+def set_exif(rows: list[tuple[int | None, str | None, int]]):
+    """Batch-store the full-EXIF backfill in one transaction. Each triple is
+    (orientation, exif_json, photo_id), matching the UPDATE's ``?`` order. Both
+    columns are written together because one metadata read produces both."""
+    if not rows:
+        return
+    db = get_db()
+    db.executemany(
+        "UPDATE photos SET orientation=?, exif_json=? WHERE id=?", rows)
+    db.commit()
 
 
 def get_photos_in_bbox(min_lat: float, max_lat: float, min_lng: float, max_lng: float) -> list[sqlite3.Row]:
@@ -965,6 +1067,45 @@ def set_faces_ignored(face_ids: list[int], ignored: bool):
     if ignored:  # ignored faces leave the unlabeled queue (restore re-adds → rebuild)
         from geotagger import faces as _faces
         _faces.drop_from_unlabeled_cache(face_ids)
+
+
+def get_face_coverage() -> dict[str, int]:
+    """Bucket every scanned image photo by how many of its detected faces are
+    labeled. The four buckets partition all scanned image photos (media_type
+    'image', faces_scanned_at set):
+
+      full     — no unlabeled faces remain (every face is assigned or ignored)
+      partial  — at least one labeled and at least one still-unlabeled face
+      none     — faces detected but none labeled yet
+      no_faces — scanned, but nothing detected
+
+    'unlabeled' counts only the work queue (person_id NULL, not ignored), so a
+    photo whose faces are all either assigned or ignored counts as full."""
+    # Aggregate per photo first (LEFT JOIN so no-face photos survive as total=0),
+    # then tally the buckets. Aliases avoid the SQLite keyword FULL.
+    row = get_db().execute("""
+        SELECT
+            SUM(CASE WHEN total = 0 THEN 1 ELSE 0 END)                     AS no_faces,
+            SUM(CASE WHEN total > 0 AND unlabeled = 0 THEN 1 ELSE 0 END)   AS cov_full,
+            SUM(CASE WHEN labeled > 0 AND unlabeled > 0 THEN 1 ELSE 0 END) AS cov_partial,
+            SUM(CASE WHEN labeled = 0 AND unlabeled > 0 THEN 1 ELSE 0 END) AS cov_none
+        FROM (
+            SELECT ph.id AS pid,
+                   COUNT(f.id) AS total,
+                   COUNT(CASE WHEN f.person_id IS NOT NULL THEN 1 END) AS labeled,
+                   COUNT(CASE WHEN f.person_id IS NULL AND f.ignored = 0 THEN 1 END) AS unlabeled
+            FROM photos ph
+            LEFT JOIN faces f ON f.photo_id = ph.id
+            WHERE ph.media_type = 'image' AND ph.faces_scanned_at IS NOT NULL
+            GROUP BY ph.id
+        )
+    """).fetchone()
+    return {
+        "full": row["cov_full"] or 0,
+        "partial": row["cov_partial"] or 0,
+        "none": row["cov_none"] or 0,
+        "no_faces": row["no_faces"] or 0,
+    }
 
 
 def get_crowd_photos(min_faces: int = 50, start_ts: int | None = None,

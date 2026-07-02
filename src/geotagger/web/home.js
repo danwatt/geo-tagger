@@ -90,6 +90,48 @@ function renderPeople(people, contexts) {
     `${contexts.count.toLocaleString()} life contexts`;
 }
 
+ /* ── Face-coverage card ── */
+async function loadFaceCoverage() {
+  try {
+    const res = await fetch("/api/stats/face-coverage");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    clearError("card-face-coverage");
+    renderFaceCoverage(data);
+  } catch (e) {
+    showError("card-face-coverage", e.message);
+  }
+}
+
+function renderFaceCoverage(cov) {
+  const segs = [
+    { label: "Full", cls: "cov-full", n: cov.full },
+    { label: "Partial", cls: "cov-partial", n: cov.partial },
+    { label: "No coverage", cls: "cov-none", n: cov.none },
+    { label: "No faces", cls: "cov-noface", n: cov.no_faces },
+  ];
+  const total = segs.reduce((sum, s) => sum + s.n, 0);
+
+  const bar = document.getElementById("face-coverage-bar");
+  bar.innerHTML = "";
+  segs.forEach((s) => {
+    if (s.n === 0) return;  // skip empty segments so tiny slivers don't show
+    const seg = document.createElement("div");
+    seg.className = s.cls;
+    seg.style.width = `${(s.n / total) * 100}%`;
+    seg.title = `${s.label}: ${s.n.toLocaleString()}`;
+    bar.appendChild(seg);
+  });
+
+  document.getElementById("face-coverage-label").textContent = total > 0
+    ? `${total.toLocaleString()} photos scanned for faces`
+    : "No photos scanned for faces yet";
+
+  document.getElementById("face-coverage-legend").innerHTML = segs.map((s) =>
+    `<span class="lg"><span class="sw ${s.cls}"></span>${s.label} ${s.n.toLocaleString()}</span>`
+  ).join("");
+}
+
 /* ── Coverage-by-month card ── */
 async function loadMonths() {
   try {
@@ -202,6 +244,7 @@ async function runFacesScan() {
     btn.disabled = false;
     btn.textContent = "Detect faces";
     await loadSummary();
+    await loadFaceCoverage();
   }
 }
 
@@ -212,4 +255,5 @@ document.getElementById("detect-faces-stop-btn").addEventListener("click", () =>
 });
 
 loadSummary();
+loadFaceCoverage();
 loadMonths();

@@ -87,7 +87,19 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
             if index.is_fresh(str(p), stat.st_mtime, sc_path_str, sc_mtime):
                 was_skipped = True
             else:
-                meta = sidecar.read_metadata(p)
+                # full=True so the complete ExifTool dump is captured into
+                # exif_json (searchable later), in the same read that yields the
+                # promoted columns below.
+                meta = sidecar.read_metadata(p, full=True)
+                # Hash the file bytes for integrity/dedup. Non-fatal: a hash
+                # failure (e.g. a transient read error) shouldn't cost us the
+                # metadata index — the row is left checksum=NULL and the one-time
+                # backfill can pick it up later.
+                try:
+                    checksum = scanner.file_checksum(p)
+                except Exception as e:
+                    checksum = None
+                    error_msg = f"Error checksumming {p.name}: {e}"
                 index.upsert_photo(
                     path=str(p), filename=p.name, dir_=str(p.parent),
                     ext=p.suffix.lower(), media_type=media_type,
@@ -96,6 +108,7 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
                     sidecar_path=sc_path_str, sidecar_mtime=sc_mtime,
                     camera=meta["camera"], photo_datetime=meta["photo_datetime"],
                     gps_accuracy=meta["gps_accuracy"], orientation=meta["orientation"],
+                    checksum=checksum, exif_json=meta["exif_json"],
                 )
                 was_indexed = True
 

@@ -20,14 +20,79 @@ def _parse_exif_datetime(s: str) -> int | None:
         return None
 
 
+def _coerce_orientation(raw) -> int:
+    """Normalize a raw EXIF orientation value to 1..8, defaulting to 1 (as-stored)
+    when it's absent or unparseable. 1 is the common landscape/no-rotation case."""
+    try:
+        orientation = int(raw) if raw is not None else 1
+    except (TypeError, ValueError):
+        return 1
+    return orientation if orientation in range(1, 9) else 1
+
+
+def read_orientations(paths: list) -> dict[Path, int]:
+    """Batch-read EXIF orientation (1..8) for many files in one ExifTool call,
+    keyed by Path. Used by the one-time orientation backfill; a file that returns
+    no result (missing tag or unreadable) defaults to 1, matching read_metadata.
+
+    Keys are Path objects, not strings, so callers match reliably despite ExifTool
+    echoing forward-slash SourceFile paths on Windows (Path normalizes separators
+    and case)."""
+    if not paths:
+        return {}
+    et = get_et()
+    result = et.get_tags([str(p) for p in paths], tags=["EXIF:Orientation#"])
+    by_path = {Path(r["SourceFile"]): _coerce_orientation(r.get("EXIF:Orientation"))
+               for r in result}
+    # Fill in anything ExifTool didn't return (e.g. it skipped an unreadable file).
+    return {Path(p): by_path.get(Path(p), 1) for p in paths}
+
+
+def read_all_metadata(paths: list) -> dict[Path, dict]:
+    """Batch-read the *full* ExifTool metadata for many files in one call, keyed by
+    Path. Used by the EXIF backfill to snapshot every tag into photos.exif_json for
+    later searching (orientation is derived from the same read).
+
+    Values come back already JSON-serializable — pyexiftool parses ExifTool's -j
+    output, and our common_args ("-G -n") give group-prefixed keys and numeric
+    values. Binary tags (thumbnails, previews) are returned as short
+    "(Binary data …)" placeholder strings rather than raw bytes, so the JSON stays
+    compact. Files ExifTool skips (unreadable) simply won't appear in the result.
+
+    Keys are Path objects (not strings) so callers match reliably despite ExifTool
+    echoing forward-slash SourceFile paths on Windows (Path normalizes separators
+    and case)."""
+    if not paths:
+        return {}
+    et = get_et()
+    result = et.get_metadata([str(p) for p in paths])
+    return {Path(r["SourceFile"]): r for r in result}
+
+
+def dumps_exif(meta: dict) -> str:
+    """Serialize an ExifTool metadata dict to the JSON stored in photos.exif_json.
+    ensure_ascii=False keeps non-Latin tag values (place/camera names) readable;
+    default=str is a safety net for any stray non-JSON-native value. Shared by the
+    scanner (read_metadata full=True) and scripts/backfill_orientation.py so both
+    produce identical JSON."""
+    import json as _json  # local import: keep module import light (see CLAUDE.md)
+    return _json.dumps(meta, ensure_ascii=False, default=str)
+
+
 def sidecar_path(image_path: Path) -> Path:
     if SIDECAR_MODE == "fullname":
         return image_path.parent / (image_path.name + ".xmp")
     return image_path.parent / (image_path.stem + ".xmp")
 
 
-def read_metadata(image_path: Path) -> dict:
-    """Return dict with keys: lat, lng, geotag_source, camera, photo_datetime, gps_accuracy, orientation."""
+def read_metadata(image_path: Path, full: bool = False) -> dict:
+    """Return dict with keys: lat, lng, geotag_source, camera, photo_datetime,
+    gps_accuracy, orientation, exif_json.
+
+    With ``full=True`` (the scan path) the embedded read pulls *every* tag so the
+    whole ExifTool dump can be snapshotted into ``exif_json`` for later searching;
+    otherwise (interactive GPS/date paths that only need a few fields) it stays on
+    the cheaper targeted read and ``exif_json`` is None."""
     et = get_et()
     sc = sidecar_path(image_path)
 
@@ -58,19 +123,27 @@ def read_metadata(image_path: Path) -> dict:
                         pass
             sidecar_dt = row.get("XMP:DateTimeOriginal")
 
-    # Read embedded GPS + camera in one call
-    result = et.get_tags([str(image_path)], tags=[
-        "Composite:GPSLatitude", "Composite:GPSLongitude",
-        "GPS:GPSLatitude", "GPS:GPSLongitude",
-        "EXIF:Make", "EXIF:Model",
-        "QuickTime:Make", "QuickTime:Model",
-        "EXIF:DateTimeOriginal", "QuickTime:CreateDate",
-        "XMP:DateTimeOriginal",
-        "EXIF:GPSHPositioningError",
-        "XMP:GPSHPositioningError",
-        "EXIF:Orientation#",  # '#' → numeric 1..8 rather than "Rotate 90 CW"
-    ])
+    # Read embedded GPS + camera in one call. full=True (scan) pulls every tag for
+    # the exif_json snapshot; the fields below are extracted from that same dict, so
+    # the '-n' global keeps EXIF:Orientation numeric without the per-tag '#'.
+    if full:
+        result = et.get_metadata([str(image_path)])
+    else:
+        result = et.get_tags([str(image_path)], tags=[
+            "Composite:GPSLatitude", "Composite:GPSLongitude",
+            "GPS:GPSLatitude", "GPS:GPSLongitude",
+            "EXIF:Make", "EXIF:Model",
+            "QuickTime:Make", "QuickTime:Model",
+            "EXIF:DateTimeOriginal", "QuickTime:CreateDate",
+            "XMP:DateTimeOriginal",
+            "EXIF:GPSHPositioningError",
+            "XMP:GPSHPositioningError",
+            "EXIF:Orientation#",  # '#' → numeric 1..8 rather than "Rotate 90 CW"
+        ])
     row = result[0] if result else {}
+    # Snapshot the full dump only on the scan path; None otherwise (and when the
+    # file was unreadable) so the row is left exif_json=NULL for the backfill.
+    exif_json = dumps_exif(row) if (full and result) else None
 
     if source == "none":
         _lat = row.get("Composite:GPSLatitude") or row.get("GPS:GPSLatitude")
@@ -97,17 +170,12 @@ def read_metadata(image_path: Path) -> dict:
                 gps_accuracy = -1.0
 
     # EXIF orientation 1..8 (how to rotate/flip for display); 1 = as-stored.
-    raw_orient = row.get("EXIF:Orientation")
-    try:
-        orientation = int(raw_orient) if raw_orient is not None else 1
-    except (TypeError, ValueError):
-        orientation = 1
-    if orientation not in range(1, 9):
-        orientation = 1
+    orientation = _coerce_orientation(row.get("EXIF:Orientation"))
 
     return {"lat": lat, "lng": lng, "geotag_source": source,
             "camera": camera, "photo_datetime": photo_datetime,
-            "gps_accuracy": gps_accuracy, "orientation": orientation}
+            "gps_accuracy": gps_accuracy, "orientation": orientation,
+            "exif_json": exif_json}
 
 
 def read_gps(image_path: Path) -> tuple[float, float, str] | tuple[None, None, str]:
