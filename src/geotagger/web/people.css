@@ -113,13 +113,21 @@
 
 #grid-nav-person,
 #grid-nav-crowds,
-#grid-nav-unlabeled {
+#grid-nav-unlabeled,
+#grid-nav-selection {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
 #grid-nav-unlabeled select { max-width: 240px; }
+/* Push the selection-action bar to the right edge of #grid-nav, after whichever
+ * scope sub-bar is showing (or on its own when none is). */
+#grid-nav-selection { margin-left: auto; }
+#grid-nav-selection select { max-width: 240px; }
+/* Icon-only selection actions, matching the detail-pane and group-header icon
+ * buttons (👤 new · × unassign · ✓ accept suggestions · 🚫 ignore). */
+#grid-nav-selection button.icon-btn { padding: 2px 8px; font-size: 14px; line-height: 1.2; }
 
 .thumb-cell .face-label {
   position: absolute;
@@ -309,6 +317,10 @@
   gap: 4px;
   padding-top: 4px;
 }
+/* Unlabeled queue: force the first face of each new suggested-person run onto a
+ * fresh grid row (auto-placement can't backfill, so the prior row's tail stays
+ * empty — the visual break between people). Tagged by renderGrid. */
+.face-group-cells .thumb-cell.row-break { grid-column-start: 1; }
 
 /* 6 subtle tints that cycle across groups — low opacity to blend with dark bg */
 .group-tint-0 { background: rgba(60,  100, 170, 0.09); }

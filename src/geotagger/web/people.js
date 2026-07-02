@@ -430,11 +430,15 @@ function updateGridNavVisibility() {
   const showPerson = scope === "person" || scope === "suggested";
   const showCrowds = scope === "crowds";
   const showUnlabeled = scope === "unlabeled";
+  // The selection-action bar applies to any grid of selectable faces — every scope
+  // except Discover/Crowds, which render cluster/photo cards with their own buttons.
+  const showSelection = scope !== "discover" && scope !== "crowds";
   document.getElementById("grid-nav-person").style.display = showPerson ? "" : "none";
   document.getElementById("grid-nav-crowds").style.display = showCrowds ? "" : "none";
   document.getElementById("grid-nav-unlabeled").style.display = showUnlabeled ? "" : "none";
+  document.getElementById("grid-nav-selection").style.display = showSelection ? "" : "none";
   document.getElementById("grid-nav").style.display =
-    (showPerson || showCrowds || showUnlabeled) ? "" : "none";
+    (showPerson || showCrowds || showUnlabeled || showSelection) ? "" : "none";
 }
 
 /* ── Faces grid ── */
@@ -695,7 +699,19 @@ function renderGrid() {
       }));
       const cells = document.createElement("div");
       cells.className = "face-group-cells";
-      group.faces.forEach(face => { cells.appendChild(makeFaceCell(face, idx)); idx++; });
+      // Faces are already clustered by suggested person (sortBucketBySuggestion);
+      // break to a fresh grid row whenever the suggested person changes so each
+      // person reads as its own run. `.row-break` forces grid-column-start:1, which
+      // wraps the cell to a new line and leaves the prior row's tail empty.
+      let prevSug;   // undefined before the first cell; null = the "unknown" block
+      group.faces.forEach(face => {
+        const sug = face.suggestion ? face.suggestion.person_id : null;
+        const cell = makeFaceCell(face, idx);
+        if (prevSug !== undefined && sug !== prevSug) cell.classList.add("row-break");
+        cells.appendChild(cell);
+        prevSug = sug;
+        idx++;
+      });
       sec.appendChild(cells);
       grid.appendChild(sec);
     });
@@ -780,7 +796,10 @@ function computeMonthGroups(list) {
 // Month → location grouping. Within each chronological month, faces are bucketed
 // by resolved location; buckets keep first-seen order, which (because `list` is
 // chronological) is the order each location first appears that month. Faces with
-// no location collect into one "No location" bucket per month.
+// no location collect into one "No location" bucket per month. Each bucket's faces
+// are then clustered by suggested person (see sortBucketBySuggestion) so the same
+// person is contiguous — this is what makes `unlabeledAll` (the flat selection list)
+// and the render agree, so the ordering must live here, in the shared choke point.
 function computeMonthLocationGroups(list) {
   const out = [];
   computeMonthGroups(list).forEach(mg => {
@@ -794,9 +813,39 @@ function computeMonthLocationGroups(list) {
       }
       b.faces.push(f);
     });
+    buckets.forEach(b => { b.faces = sortBucketBySuggestion(b.faces); });
     out.push(...buckets.values());
   });
   return out;
+}
+
+// Order the faces within one location bucket so the same suggested person is
+// adjacent (so you can rubber-band / confirm a person's faces as a run): guessed
+// faces first, grouped by suggested person and ordered by that person's earliest
+// photo in the bucket (chronological first-appearance), each person's faces in
+// time order; faces with no suggestion ("unknown") sink to the bottom. The sort is
+// a fixed point — re-running it on already-sorted faces is a no-op — because the
+// per-person earliest timestamp is order-independent, so the flat list and the
+// re-grouped render stay in sync.
+function sortBucketBySuggestion(faceList) {
+  const firstTs = new Map();   // person_id → earliest photo_datetime in this bucket
+  faceList.forEach(f => {
+    const pid = f.suggestion ? f.suggestion.person_id : null;
+    if (pid == null) return;
+    const ts = f.photo_datetime || 0;
+    if (!firstTs.has(pid) || ts < firstTs.get(pid)) firstTs.set(pid, ts);
+  });
+  return faceList.slice().sort((a, b) => {
+    const pa = a.suggestion ? a.suggestion.person_id : null;
+    const pb = b.suggestion ? b.suggestion.person_id : null;
+    if ((pa == null) !== (pb == null)) return pa == null ? 1 : -1;  // unknowns last
+    if (pa !== pb) {
+      const fa = firstTs.get(pa), fb = firstTs.get(pb);
+      if (fa !== fb) return fa - fb;   // person blocks in first-appearance order
+      return pa - pb;                  // same earliest ts: stable tiebreak by id
+    }
+    return (a.photo_datetime || 0) - (b.photo_datetime || 0);  // within a block: chronological
+  });
 }
 
 // "Mar 3 – Mar 8" date span across a group's faces (undated faces ignored).
@@ -1581,9 +1630,16 @@ async function ignoreSelected_ids(ids, ignored) {
 }
 
 function updateActionButtons() {
-  // The ignore button restores in the Ignored scope, ignores elsewhere.
-  document.getElementById("ignore-btn").textContent =
-    scope === "ignored" ? "↩ Restore" : "🚫 Ignore";
+  // The ignore button restores in the Ignored scope, ignores elsewhere. It's an
+  // icon button now, so swap the glyph and keep the tooltip/aria-label in sync
+  // (mirrors the detail-pane ignore/restore toggle).
+  const ignoreBtn = document.getElementById("ignore-btn");
+  const restoring = scope === "ignored";
+  ignoreBtn.textContent = restoring ? "↩" : "🚫";
+  ignoreBtn.title = restoring
+    ? "Restore selected faces"
+    : "Hide selected faces from the queue (background strangers, false detections)";
+  ignoreBtn.setAttribute("aria-label", restoring ? "Restore" : "Ignore");
 
   // "Only suggested" applies to the Unlabeled queue only.
   const chk = document.getElementById("suggested-only-chk");

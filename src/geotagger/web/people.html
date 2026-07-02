@@ -31,19 +31,6 @@
       <input type="checkbox" id="suggested-only-chk"/> Only suggested
     </label>
   </div>
-  <div class="toolbar-group">
-    <label>Assign selection:</label>
-    <select id="assign-person-select">
-      <option value="">Choose person…</option>
-    </select>
-    <button id="assign-btn" class="primary">Assign</button>
-    <button id="assign-new-btn">New person…</button>
-    <button id="unassign-btn" class="danger">Unassign</button>
-  </div>
-  <div class="toolbar-group">
-    <button id="confirm-suggested-btn" title="Confirm the suggested name for every selected face">✓ Accept suggestions</button>
-    <button id="ignore-btn" title="Hide selected faces from the queue (background strangers, false detections)">🚫 Ignore</button>
-  </div>
 </div>
 
 <div id="people-main">
@@ -91,6 +78,20 @@
         <label title="Only show crowd photos that still have unlabeled faces">
           <input type="checkbox" id="crowd-hide-done" checked/> Hide completed
         </label>
+      </div>
+      <!-- Selection actions (right-aligned): apply to the faces selected in the
+           current grid. Shown in every scope except Discover/Crowds, which use
+           cluster/photo cards with their own buttons. -->
+      <div id="grid-nav-selection" style="display:none">
+        <label>Assign selection:</label>
+        <select id="assign-person-select">
+          <option value="">Choose person…</option>
+        </select>
+        <button id="assign-btn" class="primary">Assign</button>
+        <button id="assign-new-btn" class="icon-btn" title="New person…" aria-label="New person…">👤</button>
+        <button id="unassign-btn" class="danger icon-btn" title="Unassign" aria-label="Unassign">×</button>
+        <button id="confirm-suggested-btn" class="icon-btn" title="Confirm the suggested name for every selected face" aria-label="Accept suggestions">✓</button>
+        <button id="ignore-btn" class="icon-btn" title="Hide selected faces from the queue (background strangers, false detections)" aria-label="Ignore">🚫</button>
       </div>
     </div>
     <div id="grid"></div>
