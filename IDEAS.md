@@ -144,8 +144,6 @@ sidebar list of contexts (name, date range, vertex/photo count, edit/delete).
 - Pairs naturally with **reverse-geocoding** (backlog below): name a context "Paris" by its
   centroid automatically.
 
-
-
 ## Faces
 
 - **Discover / cluster unlabeled faces** — *Done 2026-06-28.* "Discover groups"
@@ -202,10 +200,6 @@ sidebar list of contexts (name, date range, vertex/photo count, edit/delete).
   surface every untagged photo that has a confident time-based location guess
   (`/api/guess` already computes these one at a time) and accept per trip/day.
 
-- **Reverse-geocode coordinates → city/country** — *Done.* Offline GeoNames-based
-  reverse geocoding (city/state/county/country), auto on scan and on geotag, with
-  backfill and IPTC sidecar export endpoints. See README "Reverse geocoding".
-
 - **Location-history import (GPX / Google Takeout)** — import phone GPS tracks
   (GPX files, or Google Location History JSON from Takeout) and auto-geotag every
   timestamped photo by track correlation: find the track point(s) nearest in time
@@ -247,17 +241,6 @@ sidebar list of contexts (name, date range, vertex/photo count, edit/delete).
   the prior sidecar bytes per write buys full undo without touching the
   immutability guarantee — and makes aggressive bulk-accept workflows feel safe.
 
-- **In-app settings page** — *Done 2026-07-01.* `/settings.html` exposes the
-  12 face matching/clustering/age-penalty knobs that are pure post-hoc math
-  (safe to change live); model-load-time knobs (`FACE_DET_THRESHOLD`,
-  `FACE_DET_SIZE`, `FACE_MODEL_NAME`, `FACE_PROVIDERS`) stay env-only since
-  they'd need the InsightFace pipeline rebuilt. `GET/PATCH /api/settings` +
-  `POST /api/settings/reset`, backed by a `settings` DB table
-  (`index.get_all_settings`/`set_setting`/`delete_setting`) applied on top of
-  the env default at startup via `config.apply_all_overrides`. Consumers
-  (`faces.py`, `main.py`) read these via live `config.KEY` attribute access
-  rather than `from geotagger.config import KEY`, since a plain import bakes
-  in the value at import/def time and would miss later overrides.
 
 ## Robustness & safety (2026-07-01 review)
 
