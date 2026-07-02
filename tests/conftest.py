@@ -1,6 +1,6 @@
 import pytest
 
-from geotagger import index, exiftool_session, thumbnails
+from geotagger import index, exiftool_session, thumbnails, geocode
 
 
 @pytest.fixture
@@ -21,6 +21,32 @@ def thumbs_dir(tmp_path, monkeypatch):
     thumbnails.init_thumbs(tmp_path)
     yield thumbnails._get_thumbs_dir()
     thumbnails._thumbs_dir = None
+
+
+def _reset_geocode_state():
+    geocode._state = "unloaded"
+    geocode._error = None
+    geocode._tree = None
+    geocode._names = []
+    geocode._ccs = []
+    geocode._admin1 = []
+    geocode._admin2 = []
+    geocode._lats = None
+    geocode._lngs = None
+    geocode._populations = None
+    geocode._admin1_names = {}
+    geocode._admin2_names = {}
+    geocode._country_names = {}
+
+
+@pytest.fixture
+def geonames_dir(tmp_path, monkeypatch):
+    """Point the geocoder at an isolated (initially empty) GeoNames directory
+    and reset its load-state singleton before and after the test."""
+    monkeypatch.setattr(geocode, "GEONAMES_DIR", tmp_path)
+    _reset_geocode_state()
+    yield tmp_path
+    _reset_geocode_state()
 
 
 @pytest.fixture(scope="session")
