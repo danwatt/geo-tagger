@@ -2,6 +2,13 @@
 
 Parked ideas for geo-tagger, to revisit later.
 
+
+## Narrow the face detection to time/space
+
+Use contexts?
+Use a date range picker?
+
+
 ## Life Contexts
 
 Add the concept of a **Life Context** to the app. A context is the *where* and *when* of a

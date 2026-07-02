@@ -1,0 +1,50 @@
+"""Endpoint tests for geotagger.api.status (status, debug, live settings)."""
+
+
+def test_status_and_debug(client):
+    s = client.get("/api/status").json()
+    assert "ok" in s and s["db_total"] == 0 and "geocoder" in s
+
+    d = client.get("/api/debug").json()
+    assert d == {"total": 0, "sample": []}
+
+
+def test_settings_defaults_not_overridden(client):
+    settings = client.get("/api/settings").json()["settings"]
+    assert all(s["overridden"] is False for s in settings)
+    match = next(s for s in settings if s["key"] == "FACE_MATCH_THRESHOLD")
+    assert match["value"] == match["default"]
+
+
+def test_settings_patch_then_reset_round_trip(client):
+    r = client.patch("/api/settings", json={"values": {"FACE_MATCH_THRESHOLD": 0.5}})
+    assert r.status_code == 200
+    assert r.json() == {"updated": {"FACE_MATCH_THRESHOLD": 0.5}}
+
+    match = next(s for s in client.get("/api/settings").json()["settings"]
+                 if s["key"] == "FACE_MATCH_THRESHOLD")
+    assert match["value"] == 0.5 and match["overridden"] is True
+
+    r = client.post("/api/settings/reset", json={"keys": ["FACE_MATCH_THRESHOLD"]})
+    assert r.status_code == 200 and r.json() == {"reset": ["FACE_MATCH_THRESHOLD"]}
+
+    match = next(s for s in client.get("/api/settings").json()["settings"]
+                 if s["key"] == "FACE_MATCH_THRESHOLD")
+    assert match["overridden"] is False
+    assert match["value"] == match["default"]
+
+
+def test_settings_patch_unknown_key_400(client):
+    r = client.patch("/api/settings", json={"values": {"NOPE": 1}})
+    assert r.status_code == 400
+
+
+def test_settings_patch_out_of_range_400(client):
+    # FACE_MATCH_THRESHOLD is capped at 0.9.
+    r = client.patch("/api/settings", json={"values": {"FACE_MATCH_THRESHOLD": 5.0}})
+    assert r.status_code == 400
+
+
+def test_settings_reset_unknown_key_400(client):
+    r = client.post("/api/settings/reset", json={"keys": ["NOPE"]})
+    assert r.status_code == 400

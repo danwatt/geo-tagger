@@ -89,10 +89,17 @@ def client(tmp_path, monkeypatch):
 
     # Pre-create the DB; with no last-scan sentinel in the empty cache dir the
     # lifespan's auto-load path is a no-op, so this connection is the one served.
-    index.init_db(tmp_path)
+    conn = index.init_db(tmp_path)
+    # The app lifespan stops the shared ExifTool session on shutdown. If a
+    # session-scoped et_session fixture already had it running, restart it after
+    # teardown so later et_session-based tests still find a live process.
+    et_was_running = exiftool_session._et is not None
     with TestClient(main.app) as c:
         yield c
+    if et_was_running:
+        exiftool_session.start_et()
 
+    conn.close()
     index._db = None
     index._db_path = None
     from geotagger import faces
