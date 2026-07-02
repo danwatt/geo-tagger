@@ -1391,11 +1391,17 @@ def _update_photo_times(updates: dict[int, int]) -> int:
 
         # Write to sidecar
         photo_path = Path(photo["path"])
-        write_datetime(photo_path, new_dt)
+        sc = write_datetime(photo_path, new_dt)
+        sc_mtime = sc.stat().st_mtime if sc.exists() else None
 
-        # Update database
+        # Update database. Keep sidecar tracking current so the next scan
+        # doesn't consider this row stale and re-derive photo_datetime from
+        # the (uncorrected) embedded EXIF, clobbering this offset.
         db = index.get_db()
-        db.execute("UPDATE photos SET photo_datetime=? WHERE id=?", (new_dt, photo_id))
+        db.execute(
+            "UPDATE photos SET photo_datetime=?, sidecar_path=?, sidecar_mtime=? WHERE id=?",
+            (new_dt, str(sc), sc_mtime, photo_id),
+        )
         db.commit()
 
         updated += 1

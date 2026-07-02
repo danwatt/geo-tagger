@@ -34,10 +34,16 @@ def read_metadata(image_path: Path) -> dict:
     lat = lng = None
     source = "none"
     gps_accuracy = -1.0
+    sidecar_dt = None
 
-    # Try sidecar first for GPS
+    # Try sidecar first for GPS, and for DateTimeOriginal (a sidecar-only
+    # correction written by write_datetime/Time Sync — the original file is
+    # never touched, so this is the only place such a correction lives).
     if sc.exists():
-        result = et.get_tags([str(sc)], tags=["XMP:GPSLatitude", "XMP:GPSLongitude", "XMP:GPSHPositioningError"])
+        result = et.get_tags([str(sc)], tags=[
+            "XMP:GPSLatitude", "XMP:GPSLongitude", "XMP:GPSHPositioningError",
+            "XMP:DateTimeOriginal",
+        ])
         if result:
             row = result[0]
             _lat = row.get("XMP:GPSLatitude")
@@ -50,6 +56,7 @@ def read_metadata(image_path: Path) -> dict:
                         gps_accuracy = float(_acc)
                     except (TypeError, ValueError):
                         pass
+            sidecar_dt = row.get("XMP:DateTimeOriginal")
 
     # Read embedded GPS + camera in one call
     result = et.get_tags([str(image_path)], tags=[
@@ -75,7 +82,8 @@ def read_metadata(image_path: Path) -> dict:
     model = (row.get("EXIF:Model") or row.get("QuickTime:Model") or "").strip()
     camera = f"{make} {model}".strip() or None
 
-    raw_dt = (row.get("EXIF:DateTimeOriginal")
+    raw_dt = (sidecar_dt
+              or row.get("EXIF:DateTimeOriginal")
               or row.get("XMP:DateTimeOriginal")
               or row.get("QuickTime:CreateDate"))
     photo_datetime = _parse_exif_datetime(str(raw_dt)) if raw_dt else 0
