@@ -53,6 +53,12 @@
   <!-- Center: faces grid -->
   <div id="grid-pane">
     <div id="grid-nav" style="display:none">
+      <div id="grid-nav-unlabeled" style="display:none">
+        <label for="suggest-filter-select" title="Limit the queue below to faces whose top recognition guess is one person">Suggested person:</label>
+        <select id="suggest-filter-select" title="Show only unlabeled faces suggested to be this person">
+          <option value="">All suggestions</option>
+        </select>
+      </div>
       <div id="grid-nav-person" style="display:none">
         <label>Review guesses for:</label>
         <select id="guess-person-select">

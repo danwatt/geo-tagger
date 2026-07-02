@@ -104,12 +104,14 @@
 #grid-nav label { color: #bbb; font-size: 12px; }
 
 #grid-nav-person,
-#grid-nav-crowds {
+#grid-nav-crowds,
+#grid-nav-unlabeled {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
+#grid-nav-unlabeled select { max-width: 240px; }
 
 .thumb-cell .face-label {
   position: absolute;

@@ -10,6 +10,12 @@ let scope = "unlabeled";        // "unlabeled" | "all" | "person"
 let scopePersonId = null;       // when scope === "person"
 
 let suggestedOnly = false;      // Unlabeled queue: hide faces with no guess
+// Unlabeled queue: narrow the grid to faces whose *top* guess is one person.
+// The filter is applied client-side over the loaded queue, so `unlabeledAll`
+// keeps the full flattened list and `faces` is the filtered view actually shown.
+let suggestFilterPersonId = null;               // person_id, or null for "all suggestions"
+let unlabeledAll = [];                          // full loaded queue (master; drives the dropdown + filter)
+let unlabeledMeta = { total: 0, returned: 0 };  // server counts for the loaded queue (status text)
 let clusters = [];              // discovered groups (Discover view)
 let crowdGroups = [];           // crowd photo groups (Crowds view)
 let hideCompletedCrowds = true; // hide crowd photos with no unlabeled faces
@@ -31,6 +37,9 @@ const FACE_LIMIT = 1000;
 // FACE_MATCH_THRESHOLD (0.35), so this higher cutoff pre-selects just the
 // confident guesses and leaves weaker ones for manual triage.
 const CONFIDENT_SCORE = 0.5;
+// Bulk-accepting suggestions is one click and has to be undone per-face, so the
+// toolbar's "Accept suggestions" confirms once the selection exceeds this many.
+const ACCEPT_CONFIRM_THRESHOLD = 5;
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
                      "July", "August", "September", "October", "November", "December"];
 
@@ -64,6 +73,12 @@ function bindToolbar() {
   document.getElementById("suggested-only-chk").addEventListener("change", (e) => {
     suggestedOnly = e.target.checked;
     if (scope === "unlabeled") loadFaces();
+  });
+  // Suggested-person filter (Unlabeled queue): filters the loaded queue in place,
+  // no refetch needed since we hold the full list in `unlabeledAll`.
+  document.getElementById("suggest-filter-select").addEventListener("change", (e) => {
+    suggestFilterPersonId = e.target.value ? parseInt(e.target.value) : null;
+    if (scope === "unlabeled") applyUnlabeledView();
   });
 
   document.getElementById("assign-btn").addEventListener("click", () => {
@@ -368,17 +383,27 @@ async function selectScope(newScope, personId) {
   selectedIds.clear();
   lastClickedIndex = -1;
   focusedFaceId = null;
-  const showPerson = scope === "person" || scope === "suggested";
-  const showCrowds = scope === "crowds";
-  document.getElementById("grid-nav-person").style.display = showPerson ? "" : "none";
-  document.getElementById("grid-nav-crowds").style.display = showCrowds ? "" : "none";
-  document.getElementById("grid-nav").style.display = (showPerson || showCrowds) ? "" : "none";
+  suggestFilterPersonId = null;   // the queue filter is per-visit to the Unlabeled scope
   await loadFaces();
   await loadPersons();  // re-renders the list with the correct active highlight
 }
 
+// Show the right sub-bar in the sticky #grid-nav for the current scope (and hide
+// the whole bar for scopes that have no controls, e.g. Discover/All/Ignored).
+function updateGridNavVisibility() {
+  const showPerson = scope === "person" || scope === "suggested";
+  const showCrowds = scope === "crowds";
+  const showUnlabeled = scope === "unlabeled";
+  document.getElementById("grid-nav-person").style.display = showPerson ? "" : "none";
+  document.getElementById("grid-nav-crowds").style.display = showCrowds ? "" : "none";
+  document.getElementById("grid-nav-unlabeled").style.display = showUnlabeled ? "" : "none";
+  document.getElementById("grid-nav").style.display =
+    (showPerson || showCrowds || showUnlabeled) ? "" : "none";
+}
+
 /* ── Faces grid ── */
 async function loadFaces() {
+  updateGridNavVisibility();
   if (scope === "discover") { await loadClusters(); return; }
   if (scope === "crowds")   { await loadCrowds();   return; }
   try {
@@ -410,17 +435,15 @@ async function loadFaces() {
     } else if (scope === "unlabeled") {
       // Oldest first so each month's location buckets land in first-seen
       // (chronological) order, then flatten into that month → location order so
-      // the flat `faces` array matches the on-screen order — shift-range
-      // selection relies on index ↔ faces[index] correspondence.
+      // the flat array matches the on-screen order — shift-range selection
+      // relies on index ↔ faces[index] correspondence. This is the master list;
+      // the suggested-person filter narrows it into `faces` in applyUnlabeledView.
       faces.sort((a, b) => (a.photo_datetime || 0) - (b.photo_datetime || 0));
-      faces = computeMonthLocationGroups(faces).flatMap(g => g.faces);
-      // Pre-select only the confident guesses — accept those in bulk, then
-      // triage the weaker/unguessed faces by hand.
-      selectedIds = new Set(
-        faces.filter(f => f.suggestion && f.suggestion.score >= CONFIDENT_SCORE
-                          && !f.person_name && !f.ignored)
-             .map(f => f.id));
-      focusedFaceId = faces.length ? faces[0].id : null;
+      unlabeledAll = computeMonthLocationGroups(faces).flatMap(g => g.faces);
+      unlabeledMeta = { total: data.total, returned: data.returned };
+      populateSuggestFilter();
+      applyUnlabeledView();   // owns faces/selection/render/status for this scope
+      return;
     } else if (scope === "person") {
       faces.sort((a, b) => (a.photo_datetime || 0) - (b.photo_datetime || 0));
     }
@@ -457,17 +480,6 @@ async function loadFaces() {
         if (data.total > data.returned) msg += ` (showing first ${data.returned})`;
         setStatus(msg);
       }
-    } else if (scope === "unlabeled" && suggestedOnly && data.total === 0) {
-      setStatus("No unlabeled faces have a recognition guess yet — uncheck " +
-                "“Only suggested” to see the rest, or label a few faces so " +
-                "recognition has examples to match against." +
-                (focusActive() ? " (Focus is active — set “All time” to widen.)" : ""));
-    } else if (scope === "unlabeled") {
-      const noun = suggestedOnly ? "suggested face(s)" : "unlabeled face(s)";
-      let msg = `${data.returned} of ${data.total} ${noun}, grouped by month then place`;
-      if (data.total > data.returned) msg += ` (showing first ${data.returned})`;
-      if (selectedIds.size) msg += `. ${selectedIds.size} confident guess(es) pre-selected.`;
-      setStatus(msg + focusStatusSuffix());
     } else {
       const label = scope === "person" ? personName : scope;
       let msg = `${data.returned} of ${data.total} faces — ${label}`;
@@ -477,6 +489,80 @@ async function loadFaces() {
   } catch (err) {
     setStatus("Failed to load faces: " + err.message, true);
   }
+}
+
+/* ── Unlabeled queue: suggested-person filter ──
+ * Fill the sticky-nav dropdown with the people who appear as a *top* suggestion
+ * somewhere in the loaded queue, most-suggested first, each with its face count.
+ * A stale selection (that person now has no suggested faces) falls back to "all". */
+function populateSuggestFilter() {
+  const sel = document.getElementById("suggest-filter-select");
+  const counts = new Map();   // person_id → { name, count }
+  unlabeledAll.forEach(f => {
+    if (!f.suggestion) return;
+    const e = counts.get(f.suggestion.person_id)
+              || { name: f.suggestion.person_name, count: 0 };
+    e.count++;
+    counts.set(f.suggestion.person_id, e);
+  });
+  // Drop a filter whose person no longer has any suggested faces here.
+  if (suggestFilterPersonId != null && !counts.has(suggestFilterPersonId)) {
+    suggestFilterPersonId = null;
+  }
+  const sorted = [...counts.entries()].sort((a, b) => b[1].count - a[1].count);
+  sel.innerHTML = '<option value="">All suggestions</option>';
+  sorted.forEach(([pid, { name, count }]) => {
+    const o = document.createElement("option");
+    o.value = pid;
+    o.textContent = `${name || "Unknown"} (${count})`;
+    sel.appendChild(o);
+  });
+  sel.value = suggestFilterPersonId == null ? "" : String(suggestFilterPersonId);
+  sel.disabled = counts.size === 0;
+}
+
+// Render the Unlabeled queue from the master list, narrowed to one suggested
+// person when the nav filter is set. Owns the render/status tail for this scope
+// so the dropdown can re-run it without a refetch.
+function applyUnlabeledView() {
+  const pid = suggestFilterPersonId;
+  faces = pid == null
+    ? unlabeledAll.slice()
+    : unlabeledAll.filter(f => f.suggestion && f.suggestion.person_id === pid);
+
+  // Pre-select only the confident guesses among the visible faces — accept those
+  // in bulk, then triage the weaker/unguessed ones by hand.
+  selectedIds = new Set(
+    faces.filter(f => f.suggestion && f.suggestion.score >= CONFIDENT_SCORE
+                      && !f.person_name && !f.ignored)
+         .map(f => f.id));
+  focusedFaceId = faces.length ? faces[0].id : null;
+
+  updateActionButtons();
+  renderGrid();
+  updateDetail();
+
+  const { total, returned } = unlabeledMeta;
+  const preselNote = selectedIds.size
+    ? `. ${selectedIds.size} confident guess(es) pre-selected.` : "";
+  if (pid != null) {
+    const name = persons.find(p => p.id === pid)?.name || "this person";
+    let msg = `${faces.length} face(s) suggested to be ${name}`;
+    if (returned < total) msg += `, within the first ${returned} loaded`;
+    setStatus(msg + preselNote + focusStatusSuffix());
+    return;
+  }
+  if (suggestedOnly && total === 0) {
+    setStatus("No unlabeled faces have a recognition guess yet — uncheck " +
+              "“Only suggested” to see the rest, or label a few faces so " +
+              "recognition has examples to match against." +
+              (focusActive() ? " (Focus is active — set “All time” to widen.)" : ""));
+    return;
+  }
+  const noun = suggestedOnly ? "suggested face(s)" : "unlabeled face(s)";
+  let msg = `${returned} of ${total} ${noun}, grouped by month then place`;
+  if (total > returned) msg += ` (showing first ${returned})`;
+  setStatus(msg + preselNote + focusStatusSuffix());
 }
 
 function makeGroupSection(groupIdx) {
@@ -1516,7 +1602,16 @@ async function confirmFace(faceId, personId) {
 
 async function acceptSuggestionsForSelection() {
   const ids = new Set(selectionOrFocused());
-  await acceptSuggestionsFor(faces.filter(f => ids.has(f.id)));
+  const faceList = faces.filter(f => ids.has(f.id));
+  // Count only the faces that would actually be accepted (guessed, not yet named
+  // or ignored) — the same predicate acceptSuggestionsFor uses — and confirm past
+  // the threshold so a large accidental batch isn't approved in one click.
+  const targets = faceList.filter(f => f.suggestion && !f.person_name && !f.ignored);
+  if (targets.length > ACCEPT_CONFIRM_THRESHOLD &&
+      !confirm(`Accept the suggested name for ${targets.length} selected face(s)?`)) {
+    return;
+  }
+  await acceptSuggestionsFor(faceList);
 }
 
 async function acceptSuggestionsFor(faceList, label) {
