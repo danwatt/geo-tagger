@@ -244,6 +244,19 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_assigned_at ON faces(assigned_at)")
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_ignored_at ON faces(ignored_at)")
 
+    # Negative labels: "face F is definitely NOT person P". Orthogonal to the
+    # labeled/ignored/unlabeled state — the face stays in the queue and can still
+    # match every OTHER person; P is just removed from F's candidate ranking.
+    _db.execute("""
+        CREATE TABLE IF NOT EXISTS face_negatives (
+            face_id    INTEGER NOT NULL REFERENCES faces(id)   ON DELETE CASCADE,
+            person_id  INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+            created_at REAL NOT NULL,
+            PRIMARY KEY (face_id, person_id)
+        )
+    """)
+    _db.execute("CREATE INDEX IF NOT EXISTS idx_face_negatives_person ON face_negatives(person_id)")
+
     # Create R*Tree spatial index for photo locations
     # R*Tree uses min/max bounds, so for a point we use same value for min and max
     _db.execute("""
@@ -869,6 +882,15 @@ def replace_faces(photo_id: int, faces: list[dict], det_dimension: int | None = 
     old_ids = [r[0] for r in db.execute(
         "SELECT id FROM faces WHERE photo_id=? AND source='detected'", (photo_id,)
     ).fetchall()]
+    if old_ids:
+        # Rescan mints new face ids, so negatives keyed on the old ones would
+        # otherwise dangle (FKs aren't enforced — no cascade). Known, accepted
+        # limitation: a rescan drops negatives, same as it already drops
+        # assignments (see docstring above).
+        db.execute(
+            f"DELETE FROM face_negatives WHERE face_id IN ({','.join('?' * len(old_ids))})",
+            old_ids,
+        )
     db.execute("DELETE FROM faces WHERE photo_id=? AND source='detected'", (photo_id,))
     now = time.time()
     db.executemany(
@@ -1045,6 +1067,13 @@ def assign_faces(face_ids: list[int], person_id: int | None):
         "UPDATE faces SET person_id=?, ignored=0, assigned_at=? WHERE id=?",
         [(person_id, now, fid) for fid in face_ids],
     )
+    if person_id is not None:
+        # A face can't be both "assigned to P" and "not P" — drop that conflict.
+        # Other persons' negatives on these faces are left intact.
+        db.executemany(
+            "DELETE FROM face_negatives WHERE face_id=? AND person_id=?",
+            [(fid, person_id) for fid in face_ids],
+        )
     db.commit()
     bump_faces_generation()
     if person_id is not None:  # labeled faces leave the unlabeled queue
@@ -1198,11 +1227,71 @@ def assign_face(face_id: int, person_id: int | None):
     now = time.time() if person_id is not None else None
     db.execute("UPDATE faces SET person_id=?, ignored=0, assigned_at=? WHERE id=?",
                (person_id, now, face_id))
+    if person_id is not None:
+        # A face can't be both "assigned to P" and "not P" — drop that conflict.
+        db.execute("DELETE FROM face_negatives WHERE face_id=? AND person_id=?",
+                   (face_id, person_id))
     db.commit()
     bump_faces_generation()
     if person_id is not None:  # labeled face leaves the unlabeled queue
         from geotagger import faces as _faces
         _faces.drop_from_unlabeled_cache([face_id])
+
+
+# ── Face negatives ──
+# A per-(face, person) exclusion: "this face is definitely NOT this person".
+# Orthogonal to the labeled/ignored/unlabeled face state (see faces table
+# comment) — the face stays wherever it already was; the excluded person is
+# just removed from that one face's candidate ranking in faces.py.
+
+def add_face_negatives(face_ids: list[int], person_id: int):
+    """Record 'these faces are NOT person_id'. Idempotent."""
+    if not face_ids:
+        return
+    db = get_db()
+    now = time.time()
+    db.executemany(
+        "INSERT OR IGNORE INTO face_negatives (face_id, person_id, created_at) "
+        "VALUES (?, ?, ?)",
+        [(fid, person_id, now) for fid in face_ids],
+    )
+    db.commit()
+    bump_faces_generation()   # invalidate gallery/score caches so the mask applies
+
+
+def remove_face_negatives(face_ids: list[int], person_id: int):
+    """Undo: allow person_id to be suggested for these faces again."""
+    if not face_ids:
+        return
+    db = get_db()
+    db.executemany(
+        "DELETE FROM face_negatives WHERE face_id=? AND person_id=?",
+        [(fid, person_id) for fid in face_ids],
+    )
+    db.commit()
+    bump_faces_generation()
+
+
+def get_all_face_negatives() -> dict[int, set[int]]:
+    """face_id -> {excluded person_id, ...} for the WHOLE table.
+
+    The table is tiny (only faces the user explicitly rejected), so one read is
+    cheap and lets the matcher mask by column with a dict lookup. Cached in
+    faces.py keyed on faces_generation()."""
+    out: dict[int, set[int]] = {}
+    for r in get_db().execute("SELECT face_id, person_id FROM face_negatives"):
+        out.setdefault(r["face_id"], set()).add(r["person_id"])
+    return out
+
+
+def get_negatives_for_face(face_id: int) -> list[int]:
+    """Excluded person_ids for one face (for the per-photo endpoint / detail pane)."""
+    return [r["person_id"] for r in get_db().execute(
+        "SELECT person_id FROM face_negatives WHERE face_id=?", (face_id,))]
+
+
+def get_person(person_id: int) -> sqlite3.Row | None:
+    return get_db().execute("SELECT * FROM persons WHERE id=?", (person_id,)).fetchone()
 
 
 def create_person(name: str) -> int:
@@ -1328,6 +1417,9 @@ def delete_family(family_id: int):
 
 def delete_person(person_id: int):
     db = get_db()
+    # FKs aren't enforced (no PRAGMA foreign_keys=ON), so cascade won't fire —
+    # clean up their negative exclusions explicitly before the parent row goes.
+    db.execute("DELETE FROM face_negatives WHERE person_id=?", (person_id,))
     db.execute("DELETE FROM persons WHERE id=?", (person_id,))
     db.commit()
     bump_faces_generation()  # their faces revert to unlabeled

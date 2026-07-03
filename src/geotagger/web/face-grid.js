@@ -136,6 +136,7 @@ function faceGroupHeader({ title, meta, buttons = [], extraClass = "" }) {
  *   onAssign,    // (personId|null) => any   (null = unassign)   REQUIRED
  *   onAssignNew, // (name) => any            optional
  *   onIgnore,    // (ignored:boolean) => any optional
+ *   onNotPerson, // (personId, personName) => any  optional — rejects face.suggestion
  *   onOpenPhoto, // () => void               optional
  *   showConfirm, // override; default = face.suggestion && !face.person_name
  *   sheet,       // force bottom-sheet; default = auto by viewport width
@@ -185,6 +186,15 @@ function openQuickActions(anchor, face, opts) {
     b.className = "danger expand-btn";
     b.textContent = "× Unassign";
     b.addEventListener("click", run(() => opts.onAssign(null)));
+    panel.appendChild(b);
+  }
+
+  if (opts.onNotPerson && face.suggestion) {
+    const b = document.createElement("button");
+    b.className = "danger expand-btn";
+    b.textContent = `⛔ Not ${face.suggestion.person_name}`;
+    b.addEventListener("click", run(() =>
+      opts.onNotPerson(face.suggestion.person_id, face.suggestion.person_name)));
     panel.appendChild(b);
   }
 

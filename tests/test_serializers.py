@@ -90,7 +90,7 @@ class TestFaceItem:
         assert set(item) == {
             "id", "photo_id", "filename", "bbox", "det_score", "person_id",
             "person_name", "ignored", "photo_datetime", "assigned_at",
-            "ignored_at", "location", "suggestion", "alternatives",
+            "ignored_at", "location", "suggestion", "alternatives", "negatives",
         }
         assert item["suggestion"] is None
         assert item["alternatives"] == []

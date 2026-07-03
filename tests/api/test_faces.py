@@ -135,6 +135,95 @@ def test_photo_faces_lists_and_404(client):
     assert client.get("/api/photos/999/faces").status_code == 404
 
 
+# ── Face negatives ("definitely not person A") ──
+
+def test_face_negatives_removes_and_restores_suggestion(client):
+    db = index.get_db()
+    rng = np.random.default_rng(20)
+    c = ff.unit_vectors(rng, 1)[0]
+    alice_id, _ = ff.seed_person(db, "Alice", ff.cluster_around(rng, c, 3, intra_cos=0.9))
+    fid = ff.seed_unlabeled(db, ff.cluster_around(rng, c, 1, intra_cos=0.9))[0]
+    photo_id = db.execute("SELECT photo_id FROM faces WHERE id=?", (fid,)).fetchone()[0]
+
+    before = client.get(f"/api/photos/{photo_id}/faces").json()
+    assert before[0]["suggestion"]["person_id"] == alice_id
+    assert before[0]["negatives"] == []
+
+    r = client.post("/api/faces/negatives",
+                    json={"face_ids": [fid], "person_id": alice_id, "negative": True})
+    assert r.status_code == 200
+    assert r.json() == {"updated": 1, "person_id": alice_id, "negative": True}
+
+    # The face stays in the unlabeled queue (negatives are orthogonal to ignore).
+    assert client.get("/api/faces?scope=unlabeled").json()["total"] == 1
+
+    after = client.get(f"/api/photos/{photo_id}/faces").json()
+    assert after[0]["suggestion"] is None
+    assert after[0]["negatives"] == [alice_id]
+
+    # Undo: negative=false restores the suggestion.
+    r2 = client.post("/api/faces/negatives",
+                     json={"face_ids": [fid], "person_id": alice_id, "negative": False})
+    assert r2.json()["negative"] is False
+    restored = client.get(f"/api/photos/{photo_id}/faces").json()
+    assert restored[0]["suggestion"]["person_id"] == alice_id
+    assert restored[0]["negatives"] == []
+
+
+def test_face_negatives_unknown_person_404(client):
+    r = client.post("/api/faces/negatives", json={"face_ids": [1], "person_id": 999})
+    assert r.status_code == 404
+
+
+def test_scope_suggested_excludes_rejected_face(client):
+    db = index.get_db()
+    rng = np.random.default_rng(21)
+    c = ff.unit_vectors(rng, 1)[0]
+    alice_id, _ = ff.seed_person(db, "Alice", ff.cluster_around(rng, c, 3, intra_cos=0.9))
+    fids = ff.seed_unlabeled(db, ff.cluster_around(rng, c, 2, intra_cos=0.9))
+
+    before = client.get(f"/api/faces?scope=suggested&person_id={alice_id}").json()
+    assert before["total"] == 2
+
+    client.post("/api/faces/negatives",
+               json={"face_ids": [fids[0]], "person_id": alice_id})
+    after = client.get(f"/api/faces?scope=suggested&person_id={alice_id}").json()
+    assert after["total"] == 1
+    assert all(f["id"] != fids[0] for f in after["faces"])
+
+
+def test_assign_clears_conflicting_negative(client):
+    """A face can't be simultaneously 'assigned to Alice' and 'not Alice'."""
+    db = index.get_db()
+    rng = np.random.default_rng(22)
+    alice_id = client.post("/api/persons", json={"name": "Alice"}).json()["id"]
+    fid = ff.seed_unlabeled(db, ff.unit_vectors(rng, 1))[0]
+
+    client.post("/api/faces/negatives", json={"face_ids": [fid], "person_id": alice_id})
+    assert db.execute(
+        "SELECT COUNT(*) FROM face_negatives WHERE face_id=? AND person_id=?", (fid, alice_id)
+    ).fetchone()[0] == 1
+
+    client.post(f"/api/faces/{fid}/assign", json={"person_id": alice_id})
+    assert db.execute(
+        "SELECT COUNT(*) FROM face_negatives WHERE face_id=? AND person_id=?", (fid, alice_id)
+    ).fetchone()[0] == 0
+
+
+def test_delete_person_removes_face_negatives(client):
+    db = index.get_db()
+    rng = np.random.default_rng(23)
+    c = ff.unit_vectors(rng, 1)[0]
+    alice_id, _ = ff.seed_person(db, "Alice", ff.cluster_around(rng, c, 2, intra_cos=0.9))
+    fid = ff.seed_unlabeled(db, ff.cluster_around(rng, c, 1, intra_cos=0.9))[0]
+
+    client.post("/api/faces/negatives", json={"face_ids": [fid], "person_id": alice_id})
+    assert db.execute("SELECT COUNT(*) FROM face_negatives").fetchone()[0] == 1
+
+    assert client.delete(f"/api/persons/{alice_id}").json() == {"success": True}
+    assert db.execute("SELECT COUNT(*) FROM face_negatives").fetchone()[0] == 0
+
+
 # ── Time Focus window (start_ts/end_ts) on the tagging/discovery surfaces ──
 
 _2015 = (ff.epoch(2015, 1, 1), ff.epoch(2016, 1, 1))  # a [start, end] covering 2015

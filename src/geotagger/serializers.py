@@ -58,6 +58,7 @@ def face_item(r) -> dict:
         "location": row_location(r),
         "suggestion": None,
         "alternatives": [],
+        "negatives": [],
     }
 
 

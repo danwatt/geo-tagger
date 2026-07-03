@@ -62,6 +62,11 @@ class IgnoreFacesRequest(BaseModel):
     face_ids: list[int]
     ignored: bool = True          # False restores faces to the unlabeled queue
 
+class NegativeFacesRequest(BaseModel):
+    face_ids: list[int]
+    person_id: int          # the person these faces are NOT
+    negative: bool = True   # False removes the exclusion (undo)
+
 class ScanFacesRequest(BaseModel):
     limit: int = 50  # photos processed per call; repeat to continue
 
@@ -177,6 +182,8 @@ async def api_list_faces(
     Both window the candidate faces for the unlabeled and suggested scopes only
     (person/all/recent/ignored ignore them, and the recognition gallery stays global
     either way)."""
+    neg_map = faces.get_negatives_map()
+
     if scope == "unlabeled" and suggested_only:
         loop = asyncio.get_running_loop()
         rows, matches = await loop.run_in_executor(
@@ -196,6 +203,7 @@ async def api_list_faces(
             item = serializers.face_item(r)
             item["suggestion"] = {"person_id": pid, "person_name": names.get(pid),
                                   "score": round(score, 4)}
+            item["negatives"] = sorted(neg_map.get(r["id"], ()))
             out.append(item)
         return {"faces": out, "total": total, "returned": len(out)}
 
@@ -243,6 +251,7 @@ async def api_list_faces(
                 {"person_id": pid, "person_name": names.get(pid), "score": round(s, 4)}
                 for pid, s in alts
             ]
+            item["negatives"] = sorted(neg_map.get(r["id"], ()))
             out.append(item)
         return {"faces": out, "total": len(scored), "returned": len(out)}
 
@@ -262,6 +271,7 @@ async def api_list_faces(
             pid, score = match
             item["suggestion"] = {"person_id": pid, "person_name": names.get(pid),
                                   "score": round(score, 4)}
+        item["negatives"] = sorted(neg_map.get(r["id"], ()))
         out.append(item)
     return {
         "faces": out,
@@ -311,6 +321,22 @@ async def api_ignore_faces(req: IgnoreFacesRequest):
     return {"updated": len(req.face_ids), "ignored": req.ignored}
 
 
+@router.post("/api/faces/negatives")
+async def api_face_negatives(req: NegativeFacesRequest):
+    """Mark faces as 'definitely not person_id' (negative=true), or lift that
+    (negative=false). Removes person_id from these faces' recognition ranking so
+    they stop being suggested as this person and fall through to their next-best
+    match. Distinct from /ignore, which hides a face from every queue."""
+    if not index.get_person(req.person_id):
+        raise HTTPException(404, "person not found")
+    if req.negative:
+        index.add_face_negatives(req.face_ids, req.person_id)
+    else:
+        index.remove_face_negatives(req.face_ids, req.person_id)
+    return {"updated": len(req.face_ids), "person_id": req.person_id,
+            "negative": req.negative}
+
+
 @router.get("/api/photos/{photo_id}/faces")
 async def api_photo_faces(photo_id: int):
     """List faces in a photo with assigned person and a recognition suggestion."""
@@ -322,6 +348,7 @@ async def api_photo_faces(photo_id: int):
     rows = index.get_faces_for_photo(photo_id)
     out = []
     for r in rows:
+        negatives = index.get_negatives_for_face(r["id"])
         item = {
             "id": r["id"],
             "bbox": thumbnails.orient_bbox(r["bbox"].split(","), r["orientation"]),
@@ -331,11 +358,12 @@ async def api_photo_faces(photo_id: int):
             "assigned_at": r["assigned_at"],
             "ignored": bool(r["ignored"]),
             "suggestion": None,
+            "negatives": negatives,
         }
         # Only suggest for unassigned, non-ignored faces.
         if r["person_id"] is None and not r["ignored"] and len(gallery) > 0:
             vec = faces.decode_embedding(r["embedding"])
-            match = faces.suggest_person(vec, photo_dt, gallery)
+            match = faces.suggest_person(vec, photo_dt, gallery, exclude=set(negatives))
             if match:
                 pid, score = match
                 person = index.get_db().execute(

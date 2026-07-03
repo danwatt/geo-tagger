@@ -109,3 +109,104 @@ class TestAgeMath:
         assert faces.suggest_person(g, None, gallery) is not None
         # Same embedding, but dated 5 years before birth (> tolerance) → excluded.
         assert faces.suggest_person(g, ff.epoch(2005), gallery) is None
+
+
+def _fixed_vec(theta_deg: float) -> np.ndarray:
+    """A unit vector at exactly ``theta_deg`` in the plane of the first two
+    dims (rest zero), so cosine to another ``_fixed_vec`` is exactly
+    ``cos(theta_a - theta_b)`` — precise, deterministic angles for the
+    negatives tests below (no InsightFace model, no DB)."""
+    theta = np.radians(theta_deg)
+    v = np.zeros(faces.EMBED_DIM, dtype=np.float32)
+    v[0] = np.cos(theta)
+    v[1] = np.sin(theta)
+    return v
+
+
+class TestNegatives:
+    """Pure-math tests for face_negatives masking. No DB writes — neg_map is
+    built and passed directly (the pattern the masking seams are designed
+    for), so these run without the ``db`` fixture at all."""
+
+    @staticmethod
+    def _two_person_gallery() -> "faces.Gallery":
+        alice_vec = _fixed_vec(0)    # person 1
+        bob_vec = _fixed_vec(60)     # person 2, cos(60°) = 0.5 to Alice
+        return faces.Gallery(
+            embeddings=np.stack([alice_vec, bob_vec]),
+            person_ids=np.array([1, 2], dtype=np.int64),
+            face_times=np.array([np.nan, np.nan]),
+            birth_times=np.array([np.nan, np.nan]),
+        )
+
+    def test_batch_neg_map_flips_to_next_best(self):
+        """Alice normally wins a near-tie; masking her for this face surfaces
+        Bob (the next-best, still above threshold) instead of None."""
+        gallery = self._two_person_gallery()
+        query = _fixed_vec(20)   # cos(20°)=.94 to Alice, cos(40°)=.77 to Bob
+        rows = [{"id": 100}]
+        unknowns = query[None, :]
+        times = np.array([np.nan])
+
+        baseline = faces.suggest_persons_batch(rows, gallery, unknowns=unknowns,
+                                               times=times, neg_map={})
+        assert baseline[0][0] == 1  # Alice
+
+        masked = faces.suggest_persons_batch(rows, gallery, unknowns=unknowns,
+                                             times=times, neg_map={100: {1}})
+        assert masked[0] is not None
+        assert masked[0][0] == 2  # Bob surfaces once Alice is masked
+
+    def test_rank_from_matrix_drops_masked_person_from_alternatives(self):
+        """A negated person is removed from the ranking entirely — not just
+        pushed down — so they can't reappear as an 'alternative' either."""
+        gallery = self._two_person_gallery()
+        query = _fixed_vec(20)
+        rows = [{"id": 200}]
+        unknowns = query[None, :]
+        times = np.array([np.nan])
+
+        ranked = faces._rank_from_matrix(rows, unknowns, times, gallery, neg_map={})
+        assert [pid for pid, _ in ranked[0]] == [1, 2]
+
+        ranked_masked = faces._rank_from_matrix(rows, unknowns, times, gallery,
+                                                neg_map={200: {1}})
+        assert [pid for pid, _ in ranked_masked[0]] == [2]
+
+    def test_suggest_for_person_gate_drops_negated_face(self):
+        """A face negated for person_id never reaches the rank pass — the
+        cheap single-person gate drops it first."""
+        alice_vec = _fixed_vec(0)
+        gallery = faces.Gallery(
+            embeddings=alice_vec[None, :],
+            person_ids=np.array([1], dtype=np.int64),
+            face_times=np.array([np.nan]),
+            birth_times=np.array([np.nan]),
+        )
+        query = _fixed_vec(10)   # cos(10°)=.98, clears threshold
+        rows = [{"id": 300}]
+        unknowns = query[None, :]
+        times = np.array([np.nan])
+
+        baseline = faces.suggest_for_person(rows, gallery, 1, unknowns=unknowns,
+                                            times=times, neg_map={})
+        assert len(baseline) == 1
+
+        gated = faces.suggest_for_person(rows, gallery, 1, unknowns=unknowns,
+                                         times=times, neg_map={300: {1}})
+        assert gated == []
+
+    def test_match_embedding_and_suggest_person_exclude(self):
+        """The single-face path (match_embedding/suggest_person) drops
+        excluded person_ids from the ranking the same way the batch paths do."""
+        gallery = self._two_person_gallery()
+        query = _fixed_vec(20)
+
+        ranked = faces.match_embedding(query, None, gallery)
+        assert ranked[0][0] == 1
+
+        ranked_excl = faces.match_embedding(query, None, gallery, exclude={1})
+        assert [pid for pid, _ in ranked_excl] == [2]
+
+        result = faces.suggest_person(query, None, gallery, exclude={1})
+        assert result is not None and result[0] == 2

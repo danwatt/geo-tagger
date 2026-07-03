@@ -917,31 +917,43 @@ function makeFaceCell(face, idx) {
   return cell;
 }
 
-// Green chip confirming the face as its top-suggested person.
+// Green chip confirming the face as its top-suggested person; the ✕ rejects it
+// instead ("not this person") so recognition falls through to the next-best guess.
 function makeSuggestChip(face) {
   const chip = document.createElement("div");
   chip.className = "face-suggest";
   chip.title = `Click to confirm: ${face.suggestion.person_name} (${face.suggestion.score})`;
   chip.innerHTML =
     `<span class="sug-check">✓</span>` +
-    `<span class="sug-name">${face.suggestion.person_name}?</span>`;
+    `<span class="sug-name">${face.suggestion.person_name}?</span>` +
+    `<span class="sug-reject" title="Not ${face.suggestion.person_name}">✕</span>`;
   chip.addEventListener("click", (e) => {
     e.stopPropagation();
+    if (e.target.closest(".sug-reject")) {
+      rejectSuggestion(face.id, face.suggestion.person_id, face.suggestion.person_name);
+      return;
+    }
     confirmFace(face.id, face.suggestion.person_id);
   });
   return chip;
 }
 
-// Amber chip tagging the face as a runner-up person instead of the suggestion.
+// Amber chip tagging the face as a runner-up person instead of the suggestion;
+// the ✕ rejects that alternative ("not this person either").
 function makeAltChip(face, alt) {
   const chip = document.createElement("div");
   chip.className = "face-alt";
   chip.title = `Click to tag as ${alt.person_name} instead (${alt.score})`;
   chip.innerHTML =
     `<span class="alt-arrow">→</span>` +
-    `<span class="sug-name">${alt.person_name}?</span>`;
+    `<span class="sug-name">${alt.person_name}?</span>` +
+    `<span class="sug-reject" title="Not ${alt.person_name}">✕</span>`;
   chip.addEventListener("click", (e) => {
     e.stopPropagation();
+    if (e.target.closest(".sug-reject")) {
+      rejectSuggestion(face.id, alt.person_id, alt.person_name);
+      return;
+    }
     confirmFace(face.id, alt.person_id);
   });
   return chip;
@@ -1532,6 +1544,13 @@ function updateDetail() {
     confirmBtn.textContent = "Confirm";
     confirmBtn.addEventListener("click", () => confirmFace(face.id, face.suggestion.person_id));
     primary.appendChild(confirmBtn);
+    const notBtn = document.createElement("button");
+    notBtn.className = "danger";
+    notBtn.textContent = `Not ${face.suggestion.person_name}`;
+    notBtn.title = `Mark this face as definitely not ${face.suggestion.person_name}`;
+    notBtn.addEventListener("click", () =>
+      rejectSuggestion(face.id, face.suggestion.person_id, face.suggestion.person_name));
+    primary.appendChild(notBtn);
     sug.appendChild(primary);
 
     if (alts.length) {
@@ -1542,17 +1561,55 @@ function updateDetail() {
       label.textContent = "…or maybe:";
       altWrap.appendChild(label);
       alts.forEach(alt => {
+        const group = document.createElement("span");
+        group.className = "sug-alt-group";
         const b = document.createElement("button");
         b.className = "alt-btn";
         b.textContent = `${alt.person_name} (${alt.score})`;
         b.title = `Tag this face as ${alt.person_name} instead`;
         b.addEventListener("click", () => confirmFace(face.id, alt.person_id));
-        altWrap.appendChild(b);
+        group.appendChild(b);
+        const notB = document.createElement("button");
+        notB.className = "alt-btn alt-not-btn";
+        notB.textContent = "✕";
+        notB.title = `Not ${alt.person_name}`;
+        notB.addEventListener("click", () => rejectSuggestion(face.id, alt.person_id, alt.person_name));
+        group.appendChild(notB);
+        altWrap.appendChild(group);
       });
       sug.appendChild(altWrap);
     }
   } else {
     sug.style.display = "none";
+  }
+
+  // Faces already marked "not this person" — reversible.
+  const negBox = document.getElementById("face-negatives");
+  const negatives = face.negatives || [];
+  if (negatives.length) {
+    negBox.style.display = "flex";
+    negBox.innerHTML = "";
+    const title = document.createElement("div");
+    title.className = "neg-title";
+    title.textContent = "Marked as NOT this face:";
+    negBox.appendChild(title);
+    negatives.forEach(pid => {
+      const name = persons.find(p => p.id === pid)?.name || "Unknown";
+      const row = document.createElement("div");
+      row.className = "neg-row";
+      const label = document.createElement("span");
+      label.textContent = name;
+      row.appendChild(label);
+      const undoBtn = document.createElement("button");
+      undoBtn.className = "neg-undo-btn";
+      undoBtn.textContent = "↩ Undo";
+      undoBtn.title = `Allow ${name} to be suggested for this face again`;
+      undoBtn.addEventListener("click", () => rejectSuggestion(face.id, pid, name, false));
+      row.appendChild(undoBtn);
+      negBox.appendChild(row);
+    });
+  } else {
+    negBox.style.display = "none";
   }
 }
 
@@ -1698,6 +1755,7 @@ function openFaceActions(anchor, face) {
         await loadFaces();
       } catch (err) { setStatus("Ignore failed: " + err.message, true); }
     },
+    onNotPerson: (personId, personName) => rejectSuggestion(face.id, personId, personName),
     onOpenPhoto: () => window.open(`/api/preview/${face.photo_id}`, "_blank"),
   });
 }
@@ -1716,6 +1774,24 @@ async function confirmFace(faceId, personId) {
     await loadFaces();
   } catch (err) {
     setStatus("Confirm failed: " + err.message, true);
+  }
+}
+
+// Mark (or undo marking) a face as "definitely not this person" — removes the
+// person from that face's recognition ranking so its next-best guess surfaces
+// instead of the face bouncing back to the same rejected suggestion on refetch.
+async function rejectSuggestion(faceId, personId, personName, negative = true) {
+  try {
+    const res = await fetch("/api/faces/negatives", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ face_ids: [faceId], person_id: personId, negative }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    setStatus(negative ? `Marked as not ${personName}.`
+                       : `Undid: ${personName} can be suggested again.`);
+    await loadFaces();
+  } catch (err) {
+    setStatus((negative ? "Reject" : "Undo") + " failed: " + err.message, true);
   }
 }
 

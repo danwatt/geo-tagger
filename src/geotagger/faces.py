@@ -262,6 +262,41 @@ _unlabeled_cache: tuple[int, int, list, np.ndarray, np.ndarray] | None = None
 # full matmul only runs when the generation actually changes, not on every
 # accept in the suggested-only review loop.
 _suggested_scores_cache: tuple[int, int, list] | None = None
+# face_id -> {excluded person_id, ...}, keyed on faces_generation() (see
+# get_negatives_map). The table is tiny (only user-rejected pairs), so a full
+# read is cheap and refreshed automatically by the same generation bump every
+# other face/person mutation already triggers.
+_negatives_cache: tuple[int, dict[int, set[int]]] | None = None
+
+
+def get_negatives_map() -> dict[int, set[int]]:
+    """Cached face_id -> {excluded person_id}, keyed on faces_generation()."""
+    global _negatives_cache
+    gen = index.faces_generation()
+    if _negatives_cache is not None and _negatives_cache[0] == gen:
+        return _negatives_cache[1]
+    m = index.get_all_face_negatives()
+    _negatives_cache = (gen, m)
+    return m
+
+
+def _apply_negatives(per_person: np.ndarray, rows, c0: int,
+                     gallery: "Gallery", neg_map: dict[int, set[int]] | None) -> None:
+    """In-place: -inf out (person, face) cells the user marked as negatives.
+
+    per_person is (P, chunk) for rows[c0 : c0+chunk]. Sparse: only faces present
+    in neg_map do any work. Persons not in this gallery (no confirmed examples)
+    simply have no group and are skipped."""
+    if not neg_map:
+        return
+    for j in range(per_person.shape[1]):
+        excl = neg_map.get(rows[c0 + j]["id"])
+        if not excl:
+            continue
+        for pid in excl:
+            g = gallery._pid_to_group.get(pid)
+            if g is not None:
+                per_person[g, j] = np.float32(-np.inf)
 
 
 def build_gallery() -> Gallery:
@@ -402,7 +437,8 @@ def drop_from_unlabeled_cache(face_ids):
     _unlabeled_cache = (index.faces_generation(), scan_cap, rows, unknowns, times)
 
 
-def match_embedding(vec: np.ndarray, photo_datetime, gallery: Gallery) -> list[tuple[int, float]]:
+def match_embedding(vec: np.ndarray, photo_datetime, gallery: Gallery,
+                    exclude: set[int] | None = None) -> list[tuple[int, float]]:
     """Rank persons for an embedding by best (age-adjusted) cosine similarity.
 
     Embeddings are L2-normalized, so the dot product is the cosine. When the
@@ -411,6 +447,9 @@ def match_embedding(vec: np.ndarray, photo_datetime, gallery: Gallery) -> list[t
     taken at a very different age than the unknown are penalized — so a baby
     photo is matched against baby examples, not 5-year-old ones.
     Each person is scored by their single best example after adjustment.
+    ``exclude`` is a set of person_ids to drop from the ranking entirely (this
+    single face's negatives — the caller looks them up by face_id, since this
+    function only sees the embedding).
     """
     if len(gallery) == 0:
         return []
@@ -438,6 +477,11 @@ def match_embedding(vec: np.ndarray, photo_datetime, gallery: Gallery) -> list[t
     if P == 0:
         return []
     per_person = np.array([scores[gs[i]:ge[i]].max() for i in range(P)], dtype=np.float32)
+    if exclude:
+        for pid in exclude:
+            g = gallery._pid_to_group.get(pid)
+            if g is not None:
+                per_person[g] = np.float32(-np.inf)
 
     mask  = np.isfinite(per_person)
     pids  = gallery._uniq_pids[mask]
@@ -447,11 +491,13 @@ def match_embedding(vec: np.ndarray, photo_datetime, gallery: Gallery) -> list[t
 
 
 def suggest_person(vec: np.ndarray, photo_datetime, gallery: Gallery,
-                   threshold: float | None = None) -> tuple[int, float] | None:
+                   threshold: float | None = None,
+                   exclude: set[int] | None = None) -> tuple[int, float] | None:
     """Return (person_id, score) if the top match clears the threshold, else None.
-    Defaults to the live ``config.FACE_MATCH_THRESHOLD`` setting."""
+    Defaults to the live ``config.FACE_MATCH_THRESHOLD`` setting. ``exclude``
+    (person_ids) is forwarded to ``match_embedding``."""
     threshold = _cfg(threshold, "FACE_MATCH_THRESHOLD")
-    ranked = match_embedding(vec, photo_datetime, gallery)
+    ranked = match_embedding(vec, photo_datetime, gallery, exclude=exclude)
     if ranked and ranked[0][1] >= threshold:
         return ranked[0]
     return None
@@ -516,7 +562,8 @@ def _best_per_person_f32(gallery: Gallery,
 def suggest_persons_batch(rows, gallery: Gallery,
                           threshold: float | None = None,
                           unknowns: np.ndarray | None = None,
-                          times: np.ndarray | None = None
+                          times: np.ndarray | None = None,
+                          neg_map: dict[int, set[int]] | None = None,
                           ) -> list[tuple[int, float] | None]:
     """Vectorized ``suggest_person`` for many faces at once.
 
@@ -527,6 +574,8 @@ def suggest_persons_batch(rows, gallery: Gallery,
     vectorized, instead of an N×gallery Python loop. Pass ``unknowns``/``times``
     (e.g. from ``get_unlabeled_matrix``) to skip decoding the embeddings again.
     ``threshold`` defaults to the live ``config.FACE_MATCH_THRESHOLD`` setting.
+    ``neg_map`` (face_id -> excluded person_ids) masks out rejected candidates
+    before ranking; defaults to the live ``get_negatives_map()``.
     """
     threshold = _cfg(threshold, "FACE_MATCH_THRESHOLD")
     n = len(rows)
@@ -535,12 +584,15 @@ def suggest_persons_batch(rows, gallery: Gallery,
 
     if unknowns is None or times is None:
         unknowns, times = _stack_rows(rows)
+    if neg_map is None:
+        neg_map = get_negatives_map()
     uniq = gallery._uniq_pids
 
     results: list[tuple[int, float] | None] = [None] * n
     for c0 in range(0, n, CHUNK):
         c1 = min(c0 + CHUNK, n)
         per_person = _best_per_person_f32(gallery, unknowns[c0:c1], times[c0:c1])
+        _apply_negatives(per_person, rows, c0, gallery, neg_map)
         best_i     = per_person.argmax(axis=0)
         best_score = per_person[best_i, np.arange(per_person.shape[1])]
         best_pid   = uniq[best_i]
@@ -551,8 +603,9 @@ def suggest_persons_batch(rows, gallery: Gallery,
     return results
 
 
-def _rank_from_matrix(unknowns: np.ndarray, times: np.ndarray, gallery: Gallery,
-                      threshold: float | None = None
+def _rank_from_matrix(rows, unknowns: np.ndarray, times: np.ndarray, gallery: Gallery,
+                      threshold: float | None = None,
+                      neg_map: dict[int, set[int]] | None = None,
                       ) -> list[list[tuple[int, float]]]:
     """Full per-face ranking from an already-decoded embedding matrix.
 
@@ -560,18 +613,24 @@ def _rank_from_matrix(unknowns: np.ndarray, times: np.ndarray, gallery: Gallery,
     ``threshold`` as a ``(person_id, score)`` list ordered best-first. Working
     from a matrix (not DB rows) lets callers reuse embeddings they already
     decoded instead of decoding them twice. Defaults to the live
-    ``config.FACE_MATCH_THRESHOLD`` setting.
+    ``config.FACE_MATCH_THRESHOLD`` setting. ``rows`` must line up 1:1 with
+    ``unknowns``/``times`` (e.g. a filtered ``cand_rows``, not the full row
+    list) — it's only used to key ``neg_map`` (face_id -> excluded person_ids,
+    defaults to the live ``get_negatives_map()``).
     """
     threshold = _cfg(threshold, "FACE_MATCH_THRESHOLD")
     n = unknowns.shape[0]
     if n == 0 or len(gallery) == 0:
         return [[] for _ in range(n)]
+    if neg_map is None:
+        neg_map = get_negatives_map()
 
     uniq = gallery._uniq_pids
     results: list[list[tuple[int, float]]] = [[] for _ in range(n)]
     for c0 in range(0, n, CHUNK):
         c1         = min(c0 + CHUNK, n)
         per_person = _best_per_person_f32(gallery, unknowns[c0:c1], times[c0:c1])
+        _apply_negatives(per_person, rows, c0, gallery, neg_map)
         # Batch argsort across all columns at once (one C call instead of one
         # per face), then filter per column in sorted order.
         order      = np.argsort(per_person, axis=0)[::-1]   # (P, chunk), descending
@@ -593,7 +652,8 @@ def suggest_for_person(rows, gallery: Gallery, person_id: int,
                        threshold: float | None = None,
                        margin: float | None = None,
                        unknowns: np.ndarray | None = None,
-                       times: np.ndarray | None = None) -> list[tuple]:
+                       times: np.ndarray | None = None,
+                       neg_map: dict[int, set[int]] | None = None) -> list[tuple]:
     """Faces from ``rows`` whose best match across all persons is ``person_id``,
     each paired with its score and any ambiguous alternatives.
 
@@ -610,10 +670,14 @@ def suggest_for_person(rows, gallery: Gallery, person_id: int,
 
     Pass ``unknowns``/``times`` (the decoded embedding matrix and photo times for
     ``rows``, e.g. from ``get_unlabeled_matrix``) to skip decoding here and in the
-    ranking step entirely.
+    ranking step entirely. ``neg_map`` (face_id -> excluded person_ids) drops
+    faces the user rejected for ``person_id`` at the gate, before the rank pass
+    even sees them; defaults to the live ``get_negatives_map()``.
     """
     threshold = _cfg(threshold, "FACE_MATCH_THRESHOLD")
     margin = _cfg(margin, "FACE_AMBIGUITY_MARGIN")
+    if neg_map is None:
+        neg_map = get_negatives_map()
     # O(1) dict lookup — _uniq_pids is no longer globally sorted (birth-dated
     # persons come first) so searchsorted would give wrong results.
     pid_pos = gallery._pid_to_group.get(person_id, -1)
@@ -670,6 +734,13 @@ def suggest_for_person(rows, gallery: Gallery, person_id: int,
         best[c0:c1] = scores.max(axis=0)
     _tg1 = _time.perf_counter()
 
+    if neg_map:
+        # Faces the user already marked "not person_id" can never be a
+        # suggestion for them — drop at the gate, the cheapest possible place.
+        for j, r in enumerate(rows):
+            if person_id in neg_map.get(r["id"], ()):
+                best[j] = np.float32(-np.inf)
+
     cand = np.nonzero(best >= threshold)[0]
     if len(cand) == 0:
         _log.debug("suggest_for_person pid=%d unlabeled=%d gate_embs=%d(/%d) "
@@ -678,7 +749,7 @@ def suggest_for_person(rows, gallery: Gallery, person_id: int,
         return []
     cand_rows = [rows[i] for i in cand]
     # Rank from the embeddings we already decoded instead of re-reading cand_rows.
-    ranked = _rank_from_matrix(unknowns[cand], times[cand], gallery, threshold)
+    ranked = _rank_from_matrix(cand_rows, unknowns[cand], times[cand], gallery, threshold, neg_map)
     _tr1 = _time.perf_counter()
     _log.debug("suggest_for_person pid=%d unlabeled=%d gate_embs=%d(/%d) gallery=%d "
                "gate=%.3fs candidates=%d rank=%.3fs",
