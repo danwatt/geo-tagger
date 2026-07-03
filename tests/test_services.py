@@ -59,6 +59,24 @@ class TestGeocodePending:
         assert res["processed"] == 0
         assert res["remaining"] == 1
 
+    def test_landmark_only_library_still_processes_without_geonames(self, db, geonames_dir, overture_dir):
+        # Regression: a library with only Overture landmark data (no GeoNames)
+        # must still run the batch job and resolve landmarks, rather than
+        # bailing out early just because the unrelated city data is missing.
+        import json
+        (overture_dir / "landmarks.jsonl").write_text(json.dumps({
+            "kind": "building", "name": "Test Tower", "category": "office",
+            "polygon": [[39.999, -74.001], [39.999, -73.999], [40.001, -73.999], [40.001, -74.001]],
+        }) + "\n", encoding="utf-8")
+        pid = _add_photo(db, lat=40.0, lng=-74.0)
+        res = geocode_service.geocode_pending()
+        assert res["available"] is True
+        assert res["processed"] == 1
+        assert res["matched"] == 1
+        row = index.get_photo(pid)
+        assert row["loc_landmark"] == "Test Tower"
+        assert row["loc_city"] is None
+
     def test_respects_limit(self, db, geonames_dir):
         _write_geonames(geonames_dir)
         for i in range(3):

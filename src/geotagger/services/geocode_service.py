@@ -9,8 +9,12 @@ from geotagger.exiftool_session import get_et_lock
 
 def geocode_pending(limit: int | None = None) -> dict:
     """Reverse-geocode photos that have coordinates but no location yet, storing
-    the result in the DB (not sidecars). Blocking; runs in the executor."""
-    if not geocode.is_available():
+    the result in the DB (not sidecars). Blocking; runs in the executor.
+
+    Either the city (GeoNames) or landmark (Overture) data source alone is
+    enough to run this — geocode.lookup() resolves whichever is installed, so
+    a landmark-only library isn't blocked on GeoNames being present too."""
+    if not geocode.is_available() and not geocode.landmarks_available():
         return {"processed": 0, "matched": 0, "available": False,
                 "remaining": index.count_photos_needing_geocode()}
     rows = index.get_photos_needing_geocode(limit)
@@ -36,7 +40,8 @@ def export_locations_to_sidecars() -> dict:
     err_samples: list[str] = []
     for r in rows:
         loc = {"city": r["loc_city"], "state": r["loc_state"],
-               "country": r["loc_country"], "country_code": r["loc_country_code"]}
+               "country": r["loc_country"], "country_code": r["loc_country_code"],
+               "landmark": r["loc_landmark"]}
         try:
             p = Path(r["path"])
             with lock:

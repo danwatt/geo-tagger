@@ -49,6 +49,21 @@ GEONAMES_DIR: Path = get_geonames_dir()
 # equator (and less at higher latitudes) — fine for city/state/country tagging.
 GEOCODE_PRECISION = int(os.environ.get("GEOTAGGER_GEOCODE_PRECISION", "4"))
 
+# ── Landmark resolution (offline, Overture Maps) ──
+# Directory holding the fetched Overture landmark data (landmarks.jsonl). Fetch with:
+#     uv run --group scripts python scripts/get_overture_landmarks.py
+def get_overture_dir() -> Path:
+    if env := os.environ.get("GEOTAGGER_OVERTURE_DIR"):
+        return Path(env)
+    return _PROJECT_ROOT / "data" / "overture"
+
+OVERTURE_DIR: Path = get_overture_dir()
+
+# Max distance (km) a coordinate can be from a curated POI point (sports venue,
+# monument, etc.) and still resolve to it. Buildings/parks use exact polygon
+# containment instead, so this only bounds the point-based POI tier.
+LANDMARK_POI_MAX_KM = float(os.environ.get("GEOTAGGER_LANDMARK_POI_MAX_KM", "0.3"))
+
 # Supported file extensions
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".heic", ".heif", ".nef", ".dng", ".tif", ".tiff", ".png"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".avi"}

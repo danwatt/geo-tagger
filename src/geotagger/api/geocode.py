@@ -24,6 +24,7 @@ async def api_geocode_status():
         **geocode.status(),
         "geocoded": index.count_geocoded_photos(),
         "pending": index.count_photos_needing_geocode(),
+        "landmarks": geocode.landmark_status(),
     }
 
 
@@ -58,6 +59,31 @@ async def api_geocode_voronoi(bbox: str = Query(...), limit: int = Query(4000, l
         get_executor(), geocode.voronoi_cells, min_lat, max_lat, min_lng, max_lng, limit
     )
     return {"cells": cells, "total": total, "truncated": total > len(cells)}
+
+
+@router.get("/api/geocode/landmarks")
+async def api_geocode_landmarks(bbox: str = Query(...), limit: int = Query(2000, le=8000)):
+    """Named landmarks (parks/buildings polygons + curated POI points) within a
+    viewport bbox, from local Overture Maps data — backs the Places DB map's
+    landmark layer."""
+    try:
+        min_lng, min_lat, max_lng, max_lat = map(float, bbox.split(","))
+    except ValueError:
+        raise HTTPException(400, "bbox must be minLng,minLat,maxLng,maxLat")
+    loop = asyncio.get_running_loop()
+    # landmarks_ready() (unlike landmarks_available()) triggers the one-time
+    # load and reflects whether it actually succeeded, not just whether the
+    # file exists — so a file that failed to parse surfaces as a 503 instead
+    # of a silently-empty 200. Run in the executor since the first call parses
+    # the whole file.
+    if not await loop.run_in_executor(get_executor(), geocode.landmarks_ready):
+        raise HTTPException(503, "Overture landmark data not installed or failed to load — run "
+                             "scripts/get_overture_landmarks.py")
+    polygons, points, total = await loop.run_in_executor(
+        get_executor(), geocode.landmarks_in_bbox, min_lat, max_lat, min_lng, max_lng, limit
+    )
+    return {"polygons": polygons, "points": points, "total": total,
+            "truncated": total > len(polygons) + len(points)}
 
 
 @router.post("/api/geocode/backfill")

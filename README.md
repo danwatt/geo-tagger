@@ -43,7 +43,24 @@ This downloads ~48 MB of [GeoNames](https://www.geonames.org) data (CC BY 4.0) i
 coordinates). If you skip this step, everything else still works — photos just won't get
 place names.
 
-### 4. Run
+### 4. Fetch landmark data (optional — enables named parks/buildings/POIs)
+
+```bash
+uv run --group scripts python scripts/get_overture_landmarks.py
+```
+
+Queries [Overture Maps](https://overturemaps.org)' public dataset for named parks,
+buildings, and curated points of interest (sports venues, monuments, museums, ...) in small
+bboxes around your own photo coordinates — not a country-wide download. Requires at least
+one geotagged photo already indexed (run a scan first), and internet access. The heavier
+fetch-only dependencies (`pyarrow`, `shapely`, `overturemaps`) live in the `scripts`
+dependency group, so they're never installed for the running app itself — only when you
+invoke this script with `uv run --group scripts`.
+
+If you skip this step, reverse geocoding still resolves city/state/county/country as
+above; photos just won't additionally resolve to a named landmark.
+
+### 5. Run
 
 ```bash
 uv run geotagger
@@ -72,20 +89,33 @@ resolved to **city / state / county / country** entirely offline — the nearest
 place is found via a spatial index. Coordinates are quantized (~11 m) so nearby photos
 share one lookup.
 
+If landmark data has also been fetched (see setup step 4), the same lookup additionally
+resolves to a named **landmark** — inside a named building polygon, else inside a park
+polygon, else the nearest curated point of interest (sports venue, monument, museum, ...)
+within `GEOTAGGER_LANDMARK_POI_MAX_KM` — sitting on top of, and independent from, the
+city/state/county/country resolution above (a photo with no landmark match still resolves
+to city/state/country as normal; a coordinate with no city match nearby can still resolve
+to a landmark on its own).
+
 - **On scan:** newly-indexed geotagged photos are reverse-geocoded automatically (stored in
   the database).
 - **On geotag:** dropping/applying a location also writes the place names.
 - Place names are stored in the database, and written into XMP sidecars as the standard
   IPTC/Photoshop fields (`photoshop:City`, `photoshop:State`, `photoshop:Country`,
-  `Iptc4xmpCore:CountryCode`) that Lightroom, Bridge, digiKam, etc. all read.
+  `Iptc4xmpCore:CountryCode`, `Iptc4xmpCore:Location` for the landmark) that Lightroom,
+  Bridge, digiKam, etc. all read.
+- The Places DB map (`/map.html`) has a **Landmarks** toggle showing fetched park/building
+  polygons and POI points, once zoomed in far enough — lets you check what a coordinate
+  would resolve to before geotagging.
 
 API:
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /api/geocode/status` | Geocoder availability + geocoded/pending counts |
-| `POST /api/geocode/backfill` | Reverse-geocode photos that have coords but no place yet (`{"limit": N}`; repeat until `remaining` is 0) |
-| `POST /api/geocode/export-sidecars` | Write resolved place names into the XMP sidecar of every geocoded photo |
+| `GET /api/geocode/status` | Geocoder availability + geocoded/pending counts (incl. landmark data status) |
+| `POST /api/geocode/backfill` | Reverse-geocode photos that have coords but no place yet (`{"limit": N}`; repeat until `remaining` is 0) — resolves landmarks in the same pass |
+| `POST /api/geocode/export-sidecars` | Write resolved place names (incl. landmark) into the XMP sidecar of every geocoded photo |
+| `GET /api/geocode/landmarks` | Landmark polygons/points within a viewport bbox (`?bbox=minLng,minLat,maxLng,maxLat`) — backs the Places DB map's Landmarks layer |
 
 ## Sidecar naming
 
@@ -108,3 +138,5 @@ GEOTAGGER_SIDECAR_MODE=fullname uv run geotagger
 | `GEOTAGGER_PORT` | `8000` | Port |
 | `GEOTAGGER_GEONAMES_DIR` | `data/geonames` | Directory holding the downloaded GeoNames files |
 | `GEOTAGGER_GEOCODE_PRECISION` | `4` | Decimal degrees of coordinate quantization for the geocode cache (4 ≈ 11 m) |
+| `GEOTAGGER_OVERTURE_DIR` | `data/overture` | Directory holding the fetched Overture landmark data (`landmarks.jsonl`) |
+| `GEOTAGGER_LANDMARK_POI_MAX_KM` | `0.3` | Max distance (km) a coordinate can be from a curated POI point and still resolve to it (buildings/parks use exact polygon containment instead) |

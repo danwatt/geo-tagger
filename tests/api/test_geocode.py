@@ -16,7 +16,7 @@ def _write_geonames(dir_, rows=None):
 
 def test_status_shape(client):
     s = client.get("/api/geocode/status").json()
-    assert {"available", "geocoded", "pending"} <= set(s)
+    assert {"available", "geocoded", "pending", "landmarks"} <= set(s)
     assert s["geocoded"] == 0 and s["pending"] == 0
 
 
@@ -51,6 +51,37 @@ def test_voronoi_503_without_data(client, geonames_dir):
 def test_voronoi_400_bad_bbox(client, geonames_dir):
     _write_geonames(geonames_dir)
     assert client.get("/api/geocode/voronoi?bbox=nonsense").status_code == 400
+
+
+def test_landmarks_503_without_data(client, overture_dir):
+    assert client.get("/api/geocode/landmarks?bbox=-1,-1,1,1").status_code == 503
+
+
+def test_landmarks_400_bad_bbox(client, overture_dir):
+    (overture_dir / "landmarks.jsonl").write_text("", encoding="utf-8")
+    assert client.get("/api/geocode/landmarks?bbox=nonsense").status_code == 400
+
+
+def test_landmarks_503_when_file_exists_but_fails_to_parse(client, overture_dir):
+    # A single malformed *row* is skipped gracefully (not a 503) — but a file
+    # that can't even be opened (e.g. "exists" as a directory, matching the
+    # equivalent GeoNames test) is a genuine load failure -> 503, not a silent
+    # 200 with empty results (see geocode.landmarks_ready()).
+    (overture_dir / "landmarks.jsonl").mkdir()
+    assert client.get("/api/geocode/landmarks?bbox=-1,-1,1,1").status_code == 503
+
+
+def test_landmarks_returns_polygons_and_points_within_bbox(client, overture_dir):
+    import json
+    building = {"kind": "building", "name": "Test Tower", "category": "office",
+                "polygon": [[39.999, -74.001], [39.999, -73.999], [40.001, -73.999], [40.001, -74.001]]}
+    (overture_dir / "landmarks.jsonl").write_text(json.dumps(building) + "\n", encoding="utf-8")
+    r = client.get("/api/geocode/landmarks?bbox=-75,39,-73,41")
+    assert r.status_code == 200
+    body = r.json()
+    assert {"polygons", "points", "total", "truncated"} <= set(body)
+    assert body["total"] == 1
+    assert body["polygons"][0]["name"] == "Test Tower"
 
 
 def test_voronoi_returns_cell_polygons(client, geonames_dir):

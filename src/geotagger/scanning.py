@@ -186,8 +186,10 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
             print(" ".ljust(100))
 
     # Reverse-geocode any newly-indexed photos that have coordinates (DB only;
-    # sidecars are written on demand via /api/geocode/export-sidecars).
-    if geocode.is_available():
+    # sidecars are written on demand via /api/geocode/export-sidecars). Either
+    # data source alone is enough to run this pass — geocode.lookup() resolves
+    # whichever of city/landmark data is actually installed.
+    if geocode.is_available() or geocode.landmarks_available():
         try:
             pending = index.count_photos_needing_geocode()
             if pending:
