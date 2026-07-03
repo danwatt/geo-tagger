@@ -42,6 +42,24 @@ async def api_geocode_places(bbox: str = Query(...), limit: int = Query(3000, le
     return {"places": places, "total": total, "truncated": total > len(places)}
 
 
+@router.get("/api/geocode/voronoi")
+async def api_geocode_voronoi(bbox: str = Query(...), limit: int = Query(4000, le=8000)):
+    """Voronoi cells for GeoNames places in a viewport bbox — for each place,
+    the exact area a coordinate must fall in to reverse-geocode to it. Backs
+    the Places DB map's cell overlay, shown once zoomed in far enough."""
+    try:
+        min_lng, min_lat, max_lng, max_lat = map(float, bbox.split(","))
+    except ValueError:
+        raise HTTPException(400, "bbox must be minLng,minLat,maxLng,maxLat")
+    if not geocode.is_available():
+        raise HTTPException(503, "GeoNames data not installed — run scripts/get_geonames.py")
+    loop = asyncio.get_running_loop()
+    cells, total = await loop.run_in_executor(
+        get_executor(), geocode.voronoi_cells, min_lat, max_lat, min_lng, max_lng, limit
+    )
+    return {"cells": cells, "total": total, "truncated": total > len(cells)}
+
+
 @router.post("/api/geocode/backfill")
 async def api_geocode_backfill(req: GeocodeBackfillRequest):
     """Reverse-geocode up to `limit` photos that have coordinates but no location.

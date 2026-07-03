@@ -215,6 +215,112 @@ class TestCitiesInBbox:
         assert p["population"] == 1_000_000
 
 
+class TestClipPolygonToBbox:
+    def test_polygon_fully_inside_is_unchanged(self):
+        poly = [(1.0, 1.0), (1.0, 2.0), (2.0, 2.0), (2.0, 1.0)]
+        clipped = geocode._clip_polygon_to_bbox(poly, 0.0, 5.0, 0.0, 5.0)
+        assert clipped == poly
+
+    def test_polygon_fully_outside_clips_to_nothing(self):
+        poly = [(10.0, 10.0), (10.0, 12.0), (12.0, 12.0), (12.0, 10.0)]
+        clipped = geocode._clip_polygon_to_bbox(poly, 0.0, 5.0, 0.0, 5.0)
+        assert clipped == []
+
+    def test_polygon_spanning_the_box_clips_down_to_it(self):
+        poly = [(-10.0, -10.0), (-10.0, 10.0), (10.0, 10.0), (10.0, -10.0)]
+        clipped = geocode._clip_polygon_to_bbox(poly, 0.0, 5.0, 0.0, 5.0)
+        lats = {round(la, 6) for la, ln in clipped}
+        lngs = {round(ln, 6) for la, ln in clipped}
+        assert lats == {0.0, 5.0}
+        assert lngs == {0.0, 5.0}
+
+
+class TestVoronoiCells:
+    def test_empty_when_data_unavailable(self, geonames_dir):
+        cells, total = geocode.voronoi_cells(0, 1, 0, 1)
+        assert cells == []
+        assert total == 0
+
+    def test_fewer_than_three_points_in_padded_region_returns_no_cells(self, geonames_dir):
+        _write_geonames_files(geonames_dir, [CITY_A, CITY_B])
+        cells, total = geocode.voronoi_cells(39.9, 40.2, -74.2, -73.9)
+        assert total == 2
+        assert cells == []
+
+    def test_symmetric_neighbours_yield_the_exact_bisector_square(self, geonames_dir):
+        # C has one neighbour in each cardinal direction, equidistant after
+        # longitude is scaled by cos(lat) — so C's Voronoi cell is exactly
+        # the axis-aligned square whose edges are the four perpendicular
+        # bisectors, independent of any qhull/clipping approximation.
+        import math
+
+        center_lat, center_lng = 40.0, -74.0
+        cos_lat = math.cos(math.radians(center_lat))
+        dlat = 0.01
+        dlng = dlat / cos_lat
+
+        pts = {
+            "Center": (center_lat, center_lng),
+            "North": (center_lat + dlat, center_lng),
+            "South": (center_lat - dlat, center_lng),
+            "East": (center_lat, center_lng + dlng),
+            "West": (center_lat, center_lng - dlng),
+        }
+        cities = [
+            dict(geonameid=i, name=name, lat=lat, lng=lng, cc="US", population=100)
+            for i, (name, (lat, lng)) in enumerate(pts.items(), start=1)
+        ]
+        _write_geonames_files(geonames_dir, cities)
+
+        cells, total = geocode.voronoi_cells(
+            center_lat - dlat / 2, center_lat + dlat / 2,
+            center_lng - dlng / 2, center_lng + dlng / 2,
+        )
+        assert total == 1
+        assert len(cells) == 1
+        cell = cells[0]
+        assert cell["city"] == "Center"
+
+        expected_lat_half = dlat / 2
+        expected_lng_half = (dlat / 2) / cos_lat
+        lats = {round(la, 6) for la, ln in cell["polygon"]}
+        lngs = {round(ln, 6) for la, ln in cell["polygon"]}
+        assert lats == {
+            round(center_lat - expected_lat_half, 6),
+            round(center_lat + expected_lat_half, 6),
+        }
+        assert lngs == {
+            round(center_lng - expected_lng_half, 6),
+            round(center_lng + expected_lng_half, 6),
+        }
+
+    def test_only_sites_inside_the_viewport_get_a_returned_cell(self, geonames_dir):
+        # North and East sit just outside the queried bbox but within
+        # Center's padding — they should shape Center's cell without getting
+        # one of their own back.
+        center = dict(geonameid=1, name="Center", lat=40.0, lng=-74.0, cc="US", population=100)
+        north = dict(geonameid=2, name="North", lat=40.012, lng=-74.0, cc="US", population=50)
+        east = dict(geonameid=3, name="East", lat=40.0, lng=-73.988, cc="US", population=50)
+        _write_geonames_files(geonames_dir, [center, north, east])
+        cells, total = geocode.voronoi_cells(39.995, 40.005, -74.005, -73.995)
+        assert total == 1
+        assert {c["city"] for c in cells} == {"Center"}
+
+    def test_includes_place_metadata_on_each_cell(self, geonames_dir):
+        # A third point out in the padding is needed alongside Testville and
+        # Smallburg — Voronoi needs 3+ points to produce a bounded region.
+        third = dict(geonameid=99, name="ThirdFar", lat=40.45, lng=-74.0, cc="US", population=10)
+        _write_geonames_files(geonames_dir, [CITY_A, CITY_B, third])
+        cells, total = geocode.voronoi_cells(39.9, 40.2, -74.2, -73.9)
+        assert total == 2
+        by_city = {c["city"]: c for c in cells}
+        assert by_city["Testville"]["state"] == "New York"
+        assert by_city["Testville"]["county"] == "New York County"
+        assert by_city["Testville"]["population"] == 1_000_000
+        assert by_city["Testville"]["lat"] == pytest.approx(40.0)
+        assert len(by_city["Testville"]["polygon"]) >= 3
+
+
 class TestLookupCacheIntegration:
     def test_none_coordinates_return_none(self, geonames_dir):
         assert geocode.lookup(None, -74.0) is None

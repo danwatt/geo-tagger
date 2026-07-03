@@ -235,6 +235,199 @@ def cities_in_bbox(min_lat: float, max_lat: float, min_lng: float, max_lng: floa
     return places, total
 
 
+def _clip_polygon_to_bbox(poly: list[tuple[float, float]], min_lat: float, max_lat: float,
+                           min_lng: float, max_lng: float) -> list[tuple[float, float]]:
+    """Sutherland-Hodgman clip of a (lat, lng) polygon against an axis-aligned
+    box, applied one half-plane at a time. The subject polygon (a Voronoi
+    cell) is convex, so this always yields a correct convex result."""
+
+    def clip_edge(points, keep, intersect):
+        if not points:
+            return points
+        out = []
+        prev = points[-1]
+        prev_in = keep(prev)
+        for curr in points:
+            curr_in = keep(curr)
+            if curr_in:
+                if not prev_in:
+                    out.append(intersect(prev, curr))
+                out.append(curr)
+            elif prev_in:
+                out.append(intersect(prev, curr))
+            prev, prev_in = curr, curr_in
+        return out
+
+    def lng_intersect(edge_lng):
+        def fn(p0, p1):
+            lat0, lng0 = p0
+            lat1, lng1 = p1
+            t = (edge_lng - lng0) / (lng1 - lng0)
+            return (lat0 + t * (lat1 - lat0), edge_lng)
+        return fn
+
+    def lat_intersect(edge_lat):
+        def fn(p0, p1):
+            lat0, lng0 = p0
+            lat1, lng1 = p1
+            t = (edge_lat - lat0) / (lat1 - lat0)
+            return (edge_lat, lng0 + t * (lng1 - lng0))
+        return fn
+
+    poly = clip_edge(poly, lambda p: p[1] >= min_lng, lng_intersect(min_lng))
+    poly = clip_edge(poly, lambda p: p[1] <= max_lng, lng_intersect(max_lng))
+    poly = clip_edge(poly, lambda p: p[0] >= min_lat, lat_intersect(min_lat))
+    poly = clip_edge(poly, lambda p: p[0] <= max_lat, lat_intersect(max_lat))
+    return poly
+
+
+def _finite_voronoi_regions(vor, radius: float):
+    """Turn a scipy.spatial.Voronoi's unbounded regions (the ones touching
+    the convex hull of the input points) into closed polygons, by extending
+    their open ridges `radius` units out along the correct bisector
+    direction. Standard recipe (the regions are later clipped to a bbox
+    anyway, so `radius` just needs to reach past that box).
+
+    Returns (regions, vertices): regions is a list of vertex-index lists
+    parallel to vor.points; vertices is the (possibly extended) vertex array.
+    """
+    import numpy as np
+
+    new_regions = []
+    new_vertices = vor.vertices.tolist()
+    center = vor.points.mean(axis=0)
+
+    ridges_by_point: dict[int, list[tuple[int, int, int]]] = {}
+    for (p1, p2), (v1, v2) in zip(vor.ridge_points, vor.ridge_vertices):
+        ridges_by_point.setdefault(p1, []).append((p2, v1, v2))
+        ridges_by_point.setdefault(p2, []).append((p1, v1, v2))
+
+    for p1, region_idx in enumerate(vor.point_region):
+        vertices = vor.regions[region_idx]
+        if all(v >= 0 for v in vertices):
+            new_regions.append(vertices)
+            continue
+
+        new_region = [v for v in vertices if v >= 0]
+        for p2, v1, v2 in ridges_by_point[p1]:
+            if v2 < 0:
+                v1, v2 = v2, v1
+            if v1 >= 0:
+                continue  # finite ridge, its vertex is already included above
+            t = vor.points[p2] - vor.points[p1]
+            t /= np.linalg.norm(t)
+            n = np.array([-t[1], t[0]])
+            midpoint = vor.points[[p1, p2]].mean(axis=0)
+            direction = np.sign(np.dot(midpoint - center, n)) * n
+            far_point = vor.vertices[v2] + direction * radius
+            new_region.append(len(new_vertices))
+            new_vertices.append(far_point.tolist())
+
+        vs = np.asarray([new_vertices[v] for v in new_region])
+        c = vs.mean(axis=0)
+        angles = np.arctan2(vs[:, 1] - c[1], vs[:, 0] - c[0])
+        new_region = list(np.array(new_region)[np.argsort(angles)])
+        new_regions.append(new_region)
+
+    return new_regions, np.asarray(new_vertices)
+
+
+def voronoi_cells(min_lat: float, max_lat: float, min_lng: float, max_lng: float,
+                   limit: int = 4000) -> tuple[list[dict], int]:
+    """Voronoi cells for the GeoNames places behind reverse geocoding — the
+    cell around each place is exactly the area where lookup()/_raw_lookup()
+    would resolve to that place, so the Places DB map can show where the
+    boundary between two places actually falls.
+
+    Computed as a planar Voronoi diagram on points projected to a local
+    equirectangular plane (longitude scaled by cos(latitude) so cells aren't
+    stretched east-west). This is an approximation of the true spherical
+    nearest-neighbour lookup the KD-tree does, but the error is negligible at
+    the scale this is shown at (zoomed in far enough to see cells — a few km
+    to tens of km across) — and unlike SphericalVoronoi, it doesn't blow up
+    numerically when all the points are nearly coplanar in 3D, which is
+    exactly what happens when they're clustered in a small viewport.
+
+    Sites are pulled from a bbox padded beyond the requested viewport so edge
+    cells have real neighbours to bound them against; unbounded regions are
+    closed off (see _finite_voronoi_regions) and every cell is clipped to the
+    padded bbox. Only cells whose site lies in the *unpadded* viewport are
+    returned, matching what cities_in_bbox would show as markers.
+
+    Returns (cells, total_in_viewport). Each cell is a place dict (as
+    cities_in_bbox) plus "polygon": a list of [lat, lng] pairs.
+    """
+    _ensure_loaded()
+    if _state != "ready" or _lats is None:
+        return [], 0
+    import numpy as np
+    from scipy.spatial import Voronoi, QhullError
+
+    in_view = (_lats >= min_lat) & (_lats <= max_lat) & (_lngs >= min_lng) & (_lngs <= max_lng)
+    total = int(np.count_nonzero(in_view))
+    if total == 0:
+        return [], 0
+
+    # Pad by a full viewport's worth on each side so cells for sites near the
+    # edge of the viewport have real neighbours to bound them against.
+    lat_pad = max(max_lat - min_lat, 0.01)
+    lng_pad = max(max_lng - min_lng, 0.01)
+    pad_min_lat = max(min_lat - lat_pad, -90.0)
+    pad_max_lat = min(max_lat + lat_pad, 90.0)
+    pad_min_lng = min_lng - lng_pad
+    pad_max_lng = max_lng + lng_pad
+
+    mask = (_lats >= pad_min_lat) & (_lats <= pad_max_lat) & (_lngs >= pad_min_lng) & (_lngs <= pad_max_lng)
+    idxs = np.nonzero(mask)[0]
+    if len(idxs) > limit:
+        # Prioritize sites nearest the viewport center, so the in-view sites
+        # (what we actually return cells for) are the ones kept.
+        center_lat = (min_lat + max_lat) / 2.0
+        center_lng = (min_lng + max_lng) / 2.0
+        d2 = (_lats[idxs] - center_lat) ** 2 + (_lngs[idxs] - center_lng) ** 2
+        idxs = idxs[np.argsort(d2)[:limit]]
+
+    # Dedupe exact-duplicate coordinates (rare data glitches) — Voronoi()
+    # raises on degenerate/coincident generators.
+    lat_lng = np.column_stack((_lats[idxs], _lngs[idxs]))
+    _, first = np.unique(np.round(lat_lng, 7), axis=0, return_index=True)
+    idxs = idxs[np.sort(first)]
+    if len(idxs) < 3:
+        return [], total
+
+    cos_lat = max(math.cos(math.radians((min_lat + max_lat) / 2.0)), 1e-6)
+    pts = np.column_stack((_lngs[idxs] * cos_lat, _lats[idxs]))
+    radius = 10 * max(pad_max_lat - pad_min_lat, (pad_max_lng - pad_min_lng) * cos_lat)
+
+    try:
+        vor = Voronoi(pts)
+        regions, vertices = _finite_voronoi_regions(vor, radius)
+    except (QhullError, ValueError):
+        logger.warning("Voronoi failed for bbox (%s,%s,%s,%s)", min_lat, max_lat, min_lng, max_lng)
+        return [], total
+
+    cells = []
+    for i, orig_idx in enumerate(idxs):
+        orig_idx = int(orig_idx)
+        lat, lng = float(_lats[orig_idx]), float(_lngs[orig_idx])
+        if not (min_lat <= lat <= max_lat and min_lng <= lng <= max_lng):
+            continue  # only return cells for sites the viewport actually contains
+        region = regions[i]
+        if len(region) < 3:
+            continue
+        poly = [(float(vertices[v][1]), float(vertices[v][0]) / cos_lat) for v in region]
+        poly = _clip_polygon_to_bbox(poly, pad_min_lat, pad_max_lat, pad_min_lng, pad_max_lng)
+        if len(poly) < 3:
+            continue
+        d = _place_dict(orig_idx)
+        d["lat"] = lat
+        d["lng"] = lng
+        d["population"] = int(_populations[orig_idx])
+        d["polygon"] = [[round(la, 6), round(ln, 6)] for la, ln in poly]
+        cells.append(d)
+    return cells, total
+
+
 def lookup(lat: float | None, lng: float | None, use_cache: bool = True) -> dict | None:
     """Reverse-geocode a coordinate to {city, state, county, country, country_code}.
 

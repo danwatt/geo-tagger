@@ -8,9 +8,16 @@
  * are fetched from /api/geocode/places and plotted with Leaflet.markercluster.
  * The server caps how many it returns per request and, when capped, prefers
  * the largest places by population so the view stays representative.
+ *
+ * Past MIN_ZOOM_FOR_VORONOI, /api/geocode/voronoi additionally supplies each
+ * place's Voronoi cell — the exact area a coordinate must fall in to
+ * reverse-geocode to that place — drawn as a translucent colored polygon
+ * underneath the markers so you can see where the boundary between two
+ * places actually falls.
  */
 
 const MIN_ZOOM_FOR_MARKERS = 8;
+const MIN_ZOOM_FOR_VORONOI = 11;
 const REFRESH_DEBOUNCE_MS = 250;
 
 let map;
@@ -18,8 +25,11 @@ let baseTileLayer = null;
 let overlayTileLayer = null;
 let activeBasemap = "street";
 let markerCluster = null;
+let voronoiLayer = null;
+let voronoiEnabled = true;
 let refreshTimer = null;
 let fetchSeq = 0;
+let voronoiFetchSeq = 0;
 
 const BASEMAPS = {
   street: {
@@ -43,6 +53,12 @@ const BASEMAPS = {
 document.addEventListener("DOMContentLoaded", () => {
   initMap();
   fitToLibrary();
+
+  const toggle = document.getElementById("voronoi-toggle");
+  toggle.addEventListener("change", () => {
+    voronoiEnabled = toggle.checked;
+    refreshVoronoi();
+  });
 });
 
 function initMap() {
@@ -50,6 +66,8 @@ function initMap() {
   setBasemap("street");
   addBasemapControl();
 
+  // Added before the marker layer so cell polygons render underneath markers.
+  voronoiLayer = L.layerGroup().addTo(map);
   markerCluster = L.markerClusterGroup({ maxClusterRadius: 60 });
   map.addLayer(markerCluster);
 
@@ -103,11 +121,15 @@ async function fitToLibrary() {
     // keep default world view
   }
   refreshMarkers();
+  refreshVoronoi();
 }
 
 function scheduleRefresh() {
   clearTimeout(refreshTimer);
-  refreshTimer = setTimeout(refreshMarkers, REFRESH_DEBOUNCE_MS);
+  refreshTimer = setTimeout(() => {
+    refreshMarkers();
+    refreshVoronoi();
+  }, REFRESH_DEBOUNCE_MS);
 }
 
 async function refreshMarkers() {
@@ -136,6 +158,9 @@ async function refreshMarkers() {
     const data = await res.json();
     if (seq !== fetchSeq) return; // a newer request superseded this one
     renderMarkers(data.places);
+    if (voronoiEnabled && zoom < MIN_ZOOM_FOR_VORONOI) {
+      showHint("Zoom in further to see place boundaries");
+    }
     const shown = data.places.length.toLocaleString();
     setStatus(data.truncated
       ? `Showing ${shown} largest of ${data.total.toLocaleString()} places in view — zoom in for the rest`
@@ -143,6 +168,53 @@ async function refreshMarkers() {
   } catch (e) {
     if (seq === fetchSeq) setStatus("Error loading places: " + e.message, true);
   }
+}
+
+async function refreshVoronoi() {
+  const zoom = map.getZoom();
+  if (!voronoiEnabled || zoom < MIN_ZOOM_FOR_VORONOI) {
+    voronoiLayer.clearLayers();
+    return;
+  }
+
+  const b = map.getBounds();
+  const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
+  const seq = ++voronoiFetchSeq;
+  try {
+    const res = await fetch(`/api/geocode/voronoi?bbox=${encodeURIComponent(bbox)}`);
+    if (!res.ok) return; // the marker fetch already surfaces load errors in the status bar
+    const data = await res.json();
+    if (seq !== voronoiFetchSeq) return; // a newer request superseded this one
+    renderVoronoi(data.cells);
+  } catch (e) {
+    // best-effort visual overlay; the marker fetch already reports errors
+  }
+}
+
+function renderVoronoi(cells) {
+  voronoiLayer.clearLayers();
+  cells.forEach((cell) => {
+    const color = cellColor(cell.city || `${cell.lat},${cell.lng}`);
+    L.polygon(cell.polygon, {
+      color,
+      weight: 1.5,
+      opacity: 0.8,
+      fillColor: color,
+      fillOpacity: 0.12,
+      interactive: false,
+    }).addTo(voronoiLayer);
+  });
+}
+
+// Deterministic color per place name/coordinate, so the same place gets the
+// same hue across refreshes (helps eyeballing a cell's shape as you pan).
+function cellColor(key) {
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) {
+    hash = (hash * 31 + key.charCodeAt(i)) | 0;
+  }
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue}, 65%, 55%)`;
 }
 
 function renderMarkers(places) {
