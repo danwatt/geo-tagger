@@ -57,6 +57,7 @@
     <div id="detail-placeholder">Select a photo to view details</div>
     <div id="detail-content" style="display:none">
       <img id="detail-img" src="" alt="Preview"/>
+      <button id="view-fullsize-btn" title="Decode the RAW at full resolution and open it in a new tab" style="display:none">🔍 View full size (RAW)</button>
       <table id="detail-meta"></table>
     </div>
   </div>
@@ -74,6 +75,7 @@
 </div>
 
 <script src="https://unpkg.com/vis-timeline@7.7.3/standalone/umd/vis-timeline-graph2d.min.js"></script>
+<script src="photo-fullsize.js"></script>
 <script src="nav.js"></script>
 <script src="timesync.js"></script>
 </body>

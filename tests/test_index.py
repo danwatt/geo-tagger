@@ -160,6 +160,33 @@ def _photo_with_faces(db, path, specs, scanned=True, media_type="image"):
     return pid
 
 
+class TestReplaceFacesDimension:
+    def _insert(self, db, path, ext):
+        index.upsert_photo(
+            path=path, filename=path, dir_=".", ext=ext, media_type="image",
+            mtime=1.0, size=1, lat=None, lng=None, geotag_source="none",
+            sidecar_path=None, sidecar_mtime=None,
+        )
+        return db.execute("SELECT id FROM photos WHERE path=?", (path,)).fetchone()["id"]
+
+    def test_records_det_dimension(self, db):
+        pid = self._insert(db, "raw.nef", ".nef")
+        index.replace_faces(pid, [], det_dimension=3000)
+        row = db.execute(
+            "SELECT faces_scanned_at, faces_det_dimension FROM photos WHERE id=?", (pid,)
+        ).fetchone()
+        assert row["faces_scanned_at"] is not None
+        assert row["faces_det_dimension"] == 3000
+
+    def test_defaults_to_null_for_embedded_preview_scans(self, db):
+        pid = self._insert(db, "p.jpg", ".jpg")
+        index.replace_faces(pid, [])   # no det_dimension → NULL (low-quality preview)
+        row = db.execute(
+            "SELECT faces_det_dimension FROM photos WHERE id=?", (pid,)
+        ).fetchone()
+        assert row["faces_det_dimension"] is None
+
+
 class TestFaceCoverage:
     def test_buckets_partition_scanned_image_photos(self, db):
         alice = index.create_person("Alice")

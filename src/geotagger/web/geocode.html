@@ -116,6 +116,9 @@
     <div id="detail-placeholder">Select a photo to view details</div>
     <div id="detail-content" style="display:none">
       <img id="detail-img" src="" alt="Preview"/>
+      <div id="detail-actions" style="display:none">
+        <button id="view-fullsize-btn" title="Decode the RAW at full resolution and open it (with face boxes) in a new tab">🔍 View full size (RAW)</button>
+      </div>
       <table id="detail-meta"></table>
       <div id="guess-bar" style="display:none">
         <button id="guess-btn">Guess location</button>
@@ -144,6 +147,7 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="face-grid.js"></script>
+<script src="photo-fullsize.js"></script>
 <script src="nav.js"></script>
 <script src="app.js"></script>
 </body>

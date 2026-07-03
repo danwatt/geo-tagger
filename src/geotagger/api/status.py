@@ -10,7 +10,8 @@ router = APIRouter()
 
 
 class UpdateSettingsRequest(BaseModel):
-    values: dict[str, float]  # {setting_key: new_value}; ints are coerced server-side
+    # {setting_key: new_value}; ints/bools are coerced server-side per SETTINGS_SPEC.
+    values: dict[str, float | bool]
 
 class ResetSettingsRequest(BaseModel):
     keys: list[str]

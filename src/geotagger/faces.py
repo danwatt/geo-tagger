@@ -99,20 +99,29 @@ def decode_embedding(blob: bytes) -> np.ndarray:
 
 # ── Detection ──
 
-def detect_faces(path: Path, mtime: float, size: int) -> list[dict]:
-    """Detect faces in a photo and return their normalized boxes + embeddings.
+def detect_faces(path: Path, mtime: float, size: int,
+                 orientation: int | None = None) -> tuple[list[dict], int | None]:
+    """Detect faces in a photo; return ``(faces, det_dimension)``.
 
-    Runs on the cached preview JPEG (reusing the thumbnail pipeline's decode of
-    RAW/HEIC), so bboxes are normalized to 0..1 and resolution-independent.
-    Returns a list of {bbox, det_score, embedding} ready for index.replace_faces.
+    Runs on the UPRIGHT detection image (``thumbnails.get_detection_preview`` — the
+    oriented display preview, or a full LibRaw decode rotated upright when
+    ``config.RAW_FULL_DECODE`` is on), because SCRFD/ArcFace expect upright faces; a
+    sideways face in a rotated photo would otherwise be missed. Detected boxes come out
+    in display space and are mapped back to SENSOR space (``unorient_bbox``) for storage,
+    keeping the sensor-space convention the rest of the pipeline relies on. ``faces`` is
+    a list of {bbox, det_score, embedding} ready for index.replace_faces; boxes are
+    normalized to 0..1 and resolution-independent. ``det_dimension`` is the long edge
+    (px) of the image detection ran on when that was a full/real decode, else None
+    (embedded/normal preview) — persisted so low-res RAW scans can be re-run later.
     """
     import cv2
 
-    preview = thumbnails.get_preview(path, mtime, size)  # cached JPEG bytes
+    preview, is_full = thumbnails.get_detection_preview(path, mtime, size, orientation)
     arr = cv2.imdecode(np.frombuffer(preview, np.uint8), cv2.IMREAD_COLOR)  # BGR
     if arr is None:
         raise RuntimeError(f"Could not decode preview for {path}")
     h, w = arr.shape[:2]
+    det_dimension = max(h, w) if is_full else None
 
     app = _get_app()
     with _app_lock:
@@ -121,23 +130,27 @@ def detect_faces(path: Path, mtime: float, size: int) -> list[dict]:
     results = []
     for f in faces:
         x1, y1, x2, y2 = f.bbox
-        # Clamp + normalize to the preview dimensions.
-        bbox = [
+        # Clamp + normalize to the (upright) detection image, then map back to sensor
+        # space so the stored box follows the sensor-space convention.
+        disp_bbox = [
             max(0.0, x1 / w), max(0.0, y1 / h),
             min(1.0, x2 / w), min(1.0, y2 / h),
         ]
+        bbox = thumbnails.unorient_bbox(disp_bbox, orientation)
         results.append({
             "bbox": ",".join(f"{v:.5f}" for v in bbox),
             "det_score": float(f.det_score),
             "embedding": encode_embedding(f.normed_embedding),
         })
-    return results
+    return results, det_dimension
 
 
 def detect_and_store(photo_row) -> int:
     """Detect faces for one indexed photo and persist them. Returns face count."""
-    faces = detect_faces(Path(photo_row["path"]), photo_row["mtime"], photo_row["size"])
-    index.replace_faces(photo_row["id"], faces)
+    faces, det_dimension = detect_faces(
+        Path(photo_row["path"]), photo_row["mtime"], photo_row["size"],
+        photo_row["orientation"])
+    index.replace_faces(photo_row["id"], faces, det_dimension)
     return len(faces)
 
 

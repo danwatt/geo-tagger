@@ -110,6 +110,7 @@ async function navigateTo(idx) {
   const photo = crowdPhotos[idx];
 
   document.getElementById("photo-filename").textContent = photo.filename;
+  wireFullSizeButton(document.getElementById("view-fullsize-btn"), photo.filename, photo.id);
   updateNavButtons();
 
   // Load full-resolution preview into the right pane

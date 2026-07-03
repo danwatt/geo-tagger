@@ -135,6 +135,21 @@ class TestOrientBbox:
         assert predicted == pytest.approx(actual, abs=0.02)
 
 
+class TestUnorientBbox:
+    @pytest.mark.parametrize("orientation", [1, 2, 3, 4, 5, 6, 7, 8])
+    def test_is_the_inverse_of_orient_bbox(self, orientation):
+        b = [0.1, 0.2, 0.35, 0.55]
+        # display = orient(sensor); unorient(display) must recover sensor.
+        display = thumbnails.orient_bbox(b, orientation)
+        assert thumbnails.unorient_bbox(display, orientation) == pytest.approx(b, abs=1e-6)
+        # and the reverse composition round-trips too
+        sensor = thumbnails.unorient_bbox(b, orientation)
+        assert thumbnails.orient_bbox(sensor, orientation) == pytest.approx(b, abs=1e-6)
+
+    def test_none_is_identity(self):
+        assert thumbnails.unorient_bbox([0.1, 0.2, 0.3, 0.4], None) == [0.1, 0.2, 0.3, 0.4]
+
+
 class TestStampPlayIcon:
     def test_draws_something_in_the_center(self):
         img = Image.new("RGB", (100, 100), (50, 50, 50))
@@ -242,6 +257,126 @@ class TestOpenImageRawFallback:
         img = Image.open(io.BytesIO(data))
         assert img.format == "JPEG"
         assert max(img.size) <= THUMB_SIZE
+
+
+class TestRawFullDecode:
+    def test_fd_suffix_only_for_raw_when_enabled(self, monkeypatch):
+        monkeypatch.setattr(thumbnails.config, "RAW_FULL_DECODE", True)
+        assert thumbnails._fd_suffix(Path("a.nef")) == "_fd"
+        assert thumbnails._fd_suffix(Path("a.DNG")) == "_fd"   # case-insensitive ext
+        assert thumbnails._fd_suffix(Path("a.jpg")) == ""      # not a RAW format
+        monkeypatch.setattr(thumbnails.config, "RAW_FULL_DECODE", False)
+        assert thumbnails._fd_suffix(Path("a.nef")) == ""      # setting off
+
+    def test_decode_raw_full_requests_sensor_orientation(self, monkeypatch):
+        # rawpy/LibRaw auto-rotates by default; _decode_raw_full MUST pass user_flip=0
+        # so the decode stays in sensor space (else face boxes get double-oriented on
+        # rotated photos). Guards the regression without needing a real RAW.
+        import numpy as np
+        import rawpy
+        captured = {}
+
+        class FakeRaw:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def postprocess(self, **kw):
+                captured.update(kw)
+                return np.zeros((4, 6, 3), dtype=np.uint8)  # (H, W, C)
+
+        monkeypatch.setattr(rawpy, "imread", lambda p: FakeRaw())
+        img = thumbnails._decode_raw_full(Path("x.nef"))
+        assert captured.get("user_flip") == 0      # sensor orientation, no auto-rotate
+        assert img.size == (6, 4)                   # PIL (W, H) from the (H, W, C) array
+
+    def test_preview_uses_libraw_and_caches_under_fd_suffix(self, thumbs_dir, monkeypatch):
+        monkeypatch.setattr(thumbnails.config, "RAW_FULL_DECODE", True)
+        calls = []
+
+        def fake_decode(path):
+            calls.append(path)
+            return Image.new("RGB", (2400, 1600), (10, 120, 200))
+
+        monkeypatch.setattr(thumbnails, "_decode_raw_full", fake_decode)
+
+        path = Path("/library/IMG_1234.nef")
+        data = thumbnails.get_preview(path, 1.0, 999)
+        assert calls == [path]                    # LibRaw decode used, not ExifTool
+        img = Image.open(io.BytesIO(data))
+        assert max(img.size) <= PREVIEW_SIZE      # served preview still capped at 1600
+
+        key = thumbnails._cache_key(path, 1.0, 999)
+        subdir = thumbs_dir / key[:2]
+        assert (subdir / f"{key}_preview_fd.jpg").exists()
+        assert not (subdir / f"{key}_preview.jpg").exists()
+
+    def test_detection_preview_full_decode_caps_at_decode_max_and_reports_full(
+            self, thumbs_dir, monkeypatch):
+        monkeypatch.setattr(thumbnails.config, "RAW_FULL_DECODE", True)
+        monkeypatch.setattr(thumbnails.config, "FACE_DECODE_MAX_DIM", 1000)
+        monkeypatch.setattr(thumbnails, "_decode_raw_full",
+                            lambda p: Image.new("RGB", (6000, 4000), (5, 5, 5)))
+
+        data, is_full = thumbnails.get_detection_preview(Path("x.dng"), 1.0, 1)
+        assert is_full is True
+        img = Image.open(io.BytesIO(data))
+        assert max(img.size) == 1000              # downscaled to the detect cap, not 1600
+
+    def test_detection_preview_plain_jpg_is_not_full_decode(self, thumbs_dir, tmp_path):
+        path = _make_photo(tmp_path, size=(800, 600))
+        fsize = path.stat().st_size
+        data, is_full = thumbnails.get_detection_preview(path, 1.0, fsize)
+        assert is_full is False
+        assert data == thumbnails.get_preview(path, 1.0, fsize)
+
+    def test_detection_preview_falls_back_when_decode_fails(self, monkeypatch):
+        # A real .nef isn't available; force the LibRaw path to raise and confirm we
+        # fall back to the canonical preview and report is_full=False (→ NULL column).
+        monkeypatch.setattr(thumbnails.config, "RAW_FULL_DECODE", True)
+
+        def boom(path):
+            raise RuntimeError("no libraw")
+
+        monkeypatch.setattr(thumbnails, "_decode_raw_full", boom)
+        monkeypatch.setattr(thumbnails, "get_preview", lambda *a, **k: b"CANON")
+        data, is_full = thumbnails.get_detection_preview(Path("x.nef"), 1.0, 1)
+        assert data == b"CANON" and is_full is False
+
+
+class TestRenderFullsize:
+    def test_draws_boxes_and_returns_full_res_jpeg(self, tmp_path):
+        path = _make_photo(tmp_path, size=(200, 150))
+        specs = [("0.1,0.1,0.4,0.4", "Alice", False),   # labeled → box + label
+                 ("0.5,0.5,0.9,0.9", None, False)]       # unlabeled → box only
+        data = thumbnails.render_fullsize_with_faces(path, 1, specs)
+        img = Image.open(io.BytesIO(data))
+        assert img.format == "JPEG"
+        assert img.size == (200, 150)      # full resolution, not the 1600 preview
+
+    def test_raw_goes_through_libraw_decode(self, monkeypatch):
+        called = []
+
+        def fake(p):
+            called.append(p)
+            return Image.new("RGB", (300, 200), (30, 30, 30))
+
+        monkeypatch.setattr(thumbnails, "_decode_raw_full", fake)
+        data = thumbnails.render_fullsize_with_faces(Path("x.nef"), 1, [])
+        assert called == [Path("x.nef")]   # LibRaw, not ExifTool/PIL
+        assert Image.open(io.BytesIO(data)).size == (300, 200)
+
+    def test_orientation_makes_the_image_upright(self, tmp_path):
+        path = _make_photo(tmp_path, size=(200, 100))
+        data = thumbnails.render_fullsize_with_faces(path, 6, [])  # 90° rotation
+        assert Image.open(io.BytesIO(data)).size == (100, 200)     # dims swapped
+
+    def test_unparseable_bbox_is_skipped_not_fatal(self, tmp_path):
+        path = _make_photo(tmp_path, size=(80, 60))
+        data = thumbnails.render_fullsize_with_faces(path, 1, [("garbage", None, False)])
+        assert Image.open(io.BytesIO(data)).size == (80, 60)
 
 
 class TestGetFaceCrop:

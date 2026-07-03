@@ -552,6 +552,7 @@ function updateDetailPane() {
   content.style.display = "flex";
 
   document.getElementById("detail-img").src = `/api/thumbnail/${photo.id}`;
+  wireFullSizeButton(document.getElementById("view-fullsize-btn"), photo.filename, photo.id);
 
   const table = document.getElementById("detail-meta");
   const offset = appliedOffsets[photo.id] || 0;

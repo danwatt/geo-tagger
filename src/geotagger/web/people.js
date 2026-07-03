@@ -1490,6 +1490,7 @@ function updateDetail() {
   content.style.display = "flex";
 
   document.getElementById("detail-img").src = `/api/preview/${face.photo_id}`;
+  wireFullSizeButton(document.getElementById("detail-fullsize-btn"), face.filename, face.photo_id);
 
   // Position the bbox overlay (normalized coords map directly to percentages).
   applyBbox(document.getElementById("face-box"), face.bbox);

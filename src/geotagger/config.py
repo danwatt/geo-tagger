@@ -53,6 +53,25 @@ GEOCODE_PRECISION = int(os.environ.get("GEOTAGGER_GEOCODE_PRECISION", "4"))
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".heic", ".heif", ".nef", ".dng", ".tif", ".tiff", ".png"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".avi"}
 ALL_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
+# Camera RAW formats we can fully demosaic to a JPEG via rawpy/LibRaw (see
+# RAW_FULL_DECODE below). Deliberately narrower than the RAW/TIFF set handled by
+# thumbnails._open_image's embedded-preview branch: .tif/.tiff/.heic have no LibRaw
+# full-decode path here and stay on the embedded-preview route.
+RAW_EXTENSIONS = {".nef", ".dng"}
+
+# ── RAW decoding ──
+# When True, camera RAW files (RAW_EXTENSIONS) are fully demosaiced to a JPEG via
+# rawpy/LibRaw for both the served preview and face detection, instead of using the
+# embedded preview ExifTool extracts (small/heavily-compressed on some cameras).
+# Off by default — the embedded preview is much faster. Runtime-tunable (see
+# SETTINGS_SPEC); full-decode renditions cache under a distinct "_fd" suffix so
+# toggling the setting never serves a stale, mixed cache.
+RAW_FULL_DECODE = os.environ.get("GEOTAGGER_RAW_FULL_DECODE", "0").lower() in ("1", "true", "yes", "on")
+# Long-edge (px) the full RAW decode is downscaled to for FACE DETECTION (the served
+# preview keeps PREVIEW_SIZE). Larger sharpens the ArcFace crops used for embeddings;
+# detection itself still resizes to FACE_DET_SIZE internally, so this mainly helps
+# small faces and future-proofs raising FACE_DET_SIZE.
+FACE_DECODE_MAX_DIM = int(os.environ.get("GEOTAGGER_FACE_DECODE_MAX_DIM", "3000"))
 
 # Server
 HOST = os.environ.get("GEOTAGGER_HOST", "127.0.0.1")
@@ -127,6 +146,12 @@ FACE_PROVIDERS = [
 # (module-attribute access) rather than `from geotagger.config import KEY`,
 # since only the module's own attribute gets mutated when a setting changes.
 SETTINGS_SPEC = [
+    {"key": "RAW_FULL_DECODE", "type": "bool",
+     "group": "RAW photos", "label": "Full RAW decode",
+     "help": "Fully demosaic RAW files (NEF/DNG) to a JPEG via LibRaw for the served preview and face detection, instead of the embedded preview. Higher quality but much slower; off uses the fast embedded preview."},
+    {"key": "FACE_DECODE_MAX_DIM", "type": "int", "min": 640, "max": 8000, "step": 100,
+     "group": "RAW photos", "label": "Face-detect decode size (px)",
+     "help": "When full RAW decode is on, the long edge the RAW is downscaled to for face detection (the served preview stays at the preview size). Recorded per-photo so low-res scans can be re-run later."},
     {"key": "FACE_MATCH_THRESHOLD", "type": "float", "min": 0.1, "max": 0.9, "step": 0.01,
      "group": "Face recognition", "label": "Match threshold",
      "help": "Cosine similarity required to accept a suggested identity. Lower finds more matches but more false positives."},
@@ -170,15 +195,21 @@ SETTINGS_SPEC = [
 SETTINGS_DEFAULTS = {spec["key"]: globals()[spec["key"]] for spec in SETTINGS_SPEC}
 
 
-def _coerce_setting(key: str, raw) -> float | int:
+def _coerce_setting(key: str, raw) -> float | int | bool:
     spec = next(s for s in SETTINGS_SPEC if s["key"] == key)
+    if spec["type"] == "bool":
+        # Accept a checkbox's 1/0, a JSON bool, or an env-style "true"/"on" string.
+        # Bools carry no min/max in the spec, so there is nothing to range-check.
+        if isinstance(raw, str):
+            return raw.strip().lower() in ("1", "true", "yes", "on")
+        return bool(raw)
     value = float(raw) if spec["type"] == "float" else int(raw)
     if not (spec["min"] <= value <= spec["max"]):
         raise ValueError(f"{key} must be between {spec['min']} and {spec['max']}")
     return value
 
 
-def apply_setting_override(key: str, raw) -> float | int:
+def apply_setting_override(key: str, raw) -> float | int | bool:
     """Validate, coerce, and apply one setting to this module's live attribute
     (visible to every consumer that reads it as `config.KEY`). Returns the
     coerced value so the caller can persist/report it."""

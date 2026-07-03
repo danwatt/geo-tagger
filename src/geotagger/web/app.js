@@ -1513,6 +1513,12 @@ async function showDetail(id) {
     document.getElementById("detail-content").style.display = "";
     document.getElementById("detail-img").src = `/api/preview/${id}`;
 
+    // "View full size" — RAW only. Opens an on-the-fly full-resolution LibRaw
+    // decode (with face boxes drawn) in a new tab (see photo-fullsize.js).
+    const isRaw = isRawName(data.filename);
+    document.getElementById("detail-actions").style.display = isRaw ? "" : "none";
+    document.getElementById("view-fullsize-btn").onclick = () => openFullSize(id);
+
     // Reverse-geocoded place name (city / state / country), when available.
     const loc = data.location;
     const placeStr = loc

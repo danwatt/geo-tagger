@@ -280,6 +280,37 @@ async def api_preview(photo_id: int, request: Request):
         raise HTTPException(500, str(e))
 
 
+@router.get("/api/photo/{photo_id}/fullsize")
+async def api_fullsize(photo_id: int):
+    """On-the-fly full-resolution render with detected face boxes drawn on, as JPEG.
+
+    Powers the detail pane's "View full size" button for RAW files: decodes the RAW
+    at full resolution via LibRaw (see thumbnails.render_fullsize_with_faces) and
+    draws each face's box + name, so the new tab shows the real pixels — not the
+    1600px preview. Heavy (full decode + draw), so it runs in the executor and is not
+    disk-cached; boxes reflect current labels, so it must not be cached either.
+    """
+    row = index.get_photo(photo_id)
+    if not row:
+        raise HTTPException(404)
+    faces = index.get_faces_for_photo(photo_id)
+    # Extract plain tuples so no sqlite Row crosses into the worker thread.
+    face_specs = [(f["bbox"], f["person_name"], bool(f["ignored"])) for f in faces]
+    try:
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(
+            get_executor(),
+            thumbnails.render_fullsize_with_faces,
+            Path(row["path"]),
+            row["orientation"],
+            face_specs,
+        )
+        return Response(content=data, media_type="image/jpeg",
+                        headers={"Cache-Control": "no-store"})
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 @router.get("/api/photo/{photo_id}")
 async def api_photo(photo_id: int):
     row = index.get_photo(photo_id)

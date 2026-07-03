@@ -276,6 +276,8 @@ select {
   display: block;
 }
 
+#detail-actions #view-fullsize-btn { width: 100%; }
+
 #detail-meta {
   width: 100%;
   border-collapse: collapse;

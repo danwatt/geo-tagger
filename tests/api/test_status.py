@@ -34,6 +34,24 @@ def test_settings_patch_then_reset_round_trip(client):
     assert match["value"] == match["default"]
 
 
+def test_settings_bool_patch_and_reset_round_trip(client):
+    # RAW_FULL_DECODE is a bool setting; the checkbox sends 1/0 and it round-trips
+    # as a JSON bool (coerced server-side per SETTINGS_SPEC).
+    r = client.patch("/api/settings", json={"values": {"RAW_FULL_DECODE": 1}})
+    assert r.status_code == 200
+    assert r.json() == {"updated": {"RAW_FULL_DECODE": True}}
+
+    raw = next(s for s in client.get("/api/settings").json()["settings"]
+               if s["key"] == "RAW_FULL_DECODE")
+    assert raw["type"] == "bool" and raw["value"] is True and raw["overridden"] is True
+
+    r = client.post("/api/settings/reset", json={"keys": ["RAW_FULL_DECODE"]})
+    assert r.status_code == 200
+    raw = next(s for s in client.get("/api/settings").json()["settings"]
+               if s["key"] == "RAW_FULL_DECODE")
+    assert raw["value"] is False and raw["overridden"] is False
+
+
 def test_settings_patch_unknown_key_400(client):
     r = client.patch("/api/settings", json={"values": {"NOPE": 1}})
     assert r.status_code == 400

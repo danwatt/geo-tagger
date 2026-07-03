@@ -65,6 +65,12 @@
   color: #eee;
 }
 .setting-control input[type="number"]:focus { border-color: #4a90d9; outline: none; }
+.setting-control input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: #4a90d9;
+  cursor: pointer;
+}
 
 .setting-saved-flash {
   font-size: 11px;

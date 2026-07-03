@@ -1,4 +1,4 @@
-const GROUP_ORDER = ["Face recognition", "Face clustering (Discover)", "Age-aware matching"];
+const GROUP_ORDER = ["RAW photos", "Face recognition", "Face clustering (Discover)", "Age-aware matching"];
 
 async function loadSettings() {
   const container = document.getElementById("settings-groups");
@@ -61,12 +61,17 @@ function renderRow(spec) {
   const controlWrap = document.createElement("div");
   controlWrap.className = "setting-control";
   const input = document.createElement("input");
-  input.type = "number";
   input.id = `input-${spec.key}`;
-  input.min = spec.min;
-  input.max = spec.max;
-  input.step = spec.step;
-  input.value = spec.value;
+  if (spec.type === "bool") {
+    input.type = "checkbox";
+    input.checked = !!spec.value;
+  } else {
+    input.type = "number";
+    input.min = spec.min;
+    input.max = spec.max;
+    input.step = spec.step;
+    input.value = spec.value;
+  }
   input.addEventListener("change", () => saveSetting(spec.key, input));
   controlWrap.appendChild(input);
 
@@ -96,7 +101,8 @@ function rowError(row, message) {
 async function saveSetting(key, input) {
   const row = input.closest(".setting-row");
   const flash = row.querySelector(".setting-saved-flash");
-  const value = parseFloat(input.value);
+  const value =
+    input.type === "checkbox" ? (input.checked ? 1 : 0) : parseFloat(input.value);
   try {
     const res = await fetch("/api/settings", {
       method: "PATCH",
@@ -106,7 +112,8 @@ async function saveSetting(key, input) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
     rowError(row, null);
-    input.value = data.updated[key];
+    if (input.type === "checkbox") input.checked = !!data.updated[key];
+    else input.value = data.updated[key];
     flash.classList.add("show");
     setTimeout(() => flash.classList.remove("show"), 1200);
     row.querySelector(".reset-btn").style.display = "";

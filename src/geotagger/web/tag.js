@@ -374,6 +374,7 @@ async function act(url, body, msg) {
 function openPreview(f) {
   el("overlay-img").src = `/api/preview/${f.photo_id}`;
   applyBbox(el("overlay-box"), f.bbox);
+  wireFullSizeButton(el("overlay-fullsize-btn"), f.filename, f.photo_id);
   el("overlay").hidden = false;
 }
 

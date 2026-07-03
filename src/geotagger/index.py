@@ -88,6 +88,12 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     # Timestamp of last face-detection pass for this photo (NULL = never scanned)
     if "faces_scanned_at" not in cols:
         _db.execute("ALTER TABLE photos ADD COLUMN faces_scanned_at REAL")
+    # Long edge (px) of the image the last face-detection pass ran on, when that was
+    # a full/real decode (a full RAW LibRaw decode, or a normal image). NULL means
+    # detection ran on the low-quality embedded preview (or predates this column) —
+    # the set to target for a higher-resolution progressive re-scan of RAWs.
+    if "faces_det_dimension" not in cols:
+        _db.execute("ALTER TABLE photos ADD COLUMN faces_det_dimension INTEGER")
     # Reverse-geocoded place names (from coordinates). geocoded_at NULL = not yet
     # looked up; a non-NULL geocoded_at with NULL names means "looked up, no match".
     if "loc_city" not in cols:
@@ -840,10 +846,13 @@ def get_unscanned_photo_ids() -> list[int]:
     return [r["id"] for r in rows]
 
 
-def replace_faces(photo_id: int, faces: list[dict]):
+def replace_faces(photo_id: int, faces: list[dict], det_dimension: int | None = None):
     """Replace all detected faces for a photo in one transaction and mark it scanned.
 
-    Each face dict: {bbox: str, det_score: float, embedding: bytes}.
+    Each face dict: {bbox: str, det_score: float, embedding: bytes}. ``det_dimension``
+    is the long edge (px) of the image detection ran on (see faces.detect_faces);
+    stored as photos.faces_det_dimension, NULL when detection used the low-quality
+    embedded preview.
     Manually-confirmed assignments are not touched here because detection always
     re-runs from scratch; assignments live by face id and are reapplied by the
     caller if it chooses to. For a first pass, faces start unassigned.
@@ -867,7 +876,8 @@ def replace_faces(photo_id: int, faces: list[dict]):
            VALUES (?, NULL, ?, ?, ?, 'detected', ?)""",
         [(photo_id, f["bbox"], f["det_score"], f["embedding"], now) for f in faces],
     )
-    db.execute("UPDATE photos SET faces_scanned_at=? WHERE id=?", (now, photo_id))
+    db.execute("UPDATE photos SET faces_scanned_at=?, faces_det_dimension=? WHERE id=?",
+               (now, det_dimension, photo_id))
     db.commit()
     # Prune replaced faces from the cache (re-tags to current generation in place).
     if old_ids:

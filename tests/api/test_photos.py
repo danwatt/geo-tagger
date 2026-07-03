@@ -56,6 +56,37 @@ def test_missing_ids_404(client):
     assert client.get("/api/thumbnail/999").status_code == 404
     assert client.get("/api/preview/999").status_code == 404
     assert client.get("/api/photo/999").status_code == 404
+    assert client.get("/api/photo/999/fullsize").status_code == 404
+
+
+def test_fullsize_renders_jpeg_with_face_boxes(client, tmp_path):
+    import io
+    from PIL import Image, ImageDraw
+
+    # A real image on disk so the on-the-fly render can decode it (non-RAW path).
+    p = tmp_path / "shot.jpg"
+    img = Image.new("RGB", (120, 90), (200, 50, 50))
+    ImageDraw.Draw(img).rectangle([10, 10, 60, 60], fill=(40, 40, 200))
+    img.save(p, "JPEG")
+    index.upsert_photo(
+        path=str(p), filename="shot.jpg", dir_=str(tmp_path), ext=".jpg",
+        media_type="image", mtime=1.0, size=1, lat=None, lng=None,
+        geotag_source="none", sidecar_path=None, sidecar_mtime=None, orientation=1,
+    )
+    pid = index.get_db().execute("SELECT id FROM photos WHERE path=?", (str(p),)).fetchone()[0]
+    # A detected face so the box-drawing branch runs.
+    index.get_db().execute(
+        "INSERT INTO faces (photo_id, person_id, bbox, det_score, embedding, source, "
+        "ignored, created_at) VALUES (?, NULL, '0.1,0.1,0.4,0.4', 0.9, X'00', 'detected', 0, 0)",
+        (pid,),
+    )
+    index.get_db().commit()
+
+    r = client.get(f"/api/photo/{pid}/fullsize")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/jpeg"
+    out = Image.open(io.BytesIO(r.content))
+    assert out.size == (120, 90)   # full resolution, upright
 
 
 def test_photo_detail(client):
