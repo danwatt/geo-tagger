@@ -260,6 +260,28 @@ def thumbnail_exists(path: Path, mtime: float, size: int) -> bool:
         return False
 
 
+def invalidate_photo_cache(path: Path, mtime: float, size: int) -> int:
+    """Delete every cached thumbnail/preview/face-crop file for one photo.
+
+    All of a photo's cached renditions (grid thumb, canonical + oriented previews,
+    every face crop, every RAW-full-decode/orientation variant) share the same
+    ``{key}`` prefix from ``_cache_key``, so a glob + unlink clears them all in one
+    go. Used before a forced rebuild (e.g. re-deriving RAW previews/crops from a
+    full decode) so no stale file lingers under a filename a later request could
+    still hit. Returns the number of files removed.
+    """
+    thumbs = _get_thumbs_dir()
+    key = _cache_key(path, mtime, size)
+    subdir = thumbs / key[:2]
+    if not subdir.exists():
+        return 0
+    removed = 0
+    for f in subdir.glob(f"{key}_*"):
+        f.unlink()
+        removed += 1
+    return removed
+
+
 def get_thumbnail(path: Path, mtime: float, size: int,
                   orientation: int | None = None) -> bytes:
     """Grid thumbnail, rotated upright for ``orientation`` (display-only path)."""
@@ -273,6 +295,32 @@ def get_thumbnail(path: Path, mtime: float, size: int,
         return cached.read_bytes()
     is_video = path.suffix.lower() in VIDEO_EXTENSIONS
     data = _make_thumbnail(path, THUMB_SIZE, is_video=is_video, orientation=orientation)
+    cached.write_bytes(data)
+    return data
+
+
+def rebuild_preview_from_full_decode(path: Path, mtime: float, size: int) -> bytes:
+    """Force a full native decode (LibRaw for RAW files) and write it into the
+    SAME cache slot ``get_preview()`` would read for the live
+    ``config.RAW_FULL_DECODE`` setting — regardless of that setting's value.
+
+    ``get_preview()`` only does a full RAW decode when the live setting is on, AND
+    only checks the ``_fd``-suffixed filename in that case; if a caller flips the
+    setting on just to force a decode, the result lands under a different filename
+    than a server running with the setting off will ever look up, so the rebuilt
+    image is silently never served. This bypasses that coupling: it always does the
+    real decode but names the file via ``_fd_suffix`` at the setting's CURRENT
+    value, so whatever a running server is actually configured to read gets the
+    freshly decoded pixels. Used by ``scripts/rescan_raw_faces.py``'s
+    ``--thumbnails-only`` mode. Non-RAW files just get their normal preview.
+    """
+    thumbs = _get_thumbs_dir()
+    key = _cache_key(path, mtime, size)
+    subdir = thumbs / key[:2]
+    subdir.mkdir(exist_ok=True)
+    is_raw = path.suffix.lower() in config.RAW_EXTENSIONS
+    data = _make_thumbnail(path, PREVIEW_SIZE, full_decode=is_raw)
+    cached = subdir / f"{key}_preview{_fd_suffix(path)}.jpg"
     cached.write_bytes(data)
     return data
 

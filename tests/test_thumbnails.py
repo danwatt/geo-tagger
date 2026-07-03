@@ -172,6 +172,45 @@ class TestThumbnailExists:
         assert thumbnails.thumbnail_exists(path, 1.0, fsize) is True
 
 
+class TestInvalidatePhotoCache:
+    def test_removes_every_cached_rendition_for_the_photo(self, thumbs_dir, tmp_path):
+        path = _make_photo(tmp_path, size=(400, 300))
+        fsize = path.stat().st_size
+        thumbnails.get_thumbnail(path, 1.0, fsize)
+        thumbnails.get_preview(path, 1.0, fsize)
+        thumbnails.get_face_crop(path, 1.0, fsize, (0.1, 0.1, 0.3, 0.3))
+
+        key = thumbnails._cache_key(path, 1.0, fsize)
+        subdir = thumbnails._get_thumbs_dir() / key[:2]
+        assert list(subdir.glob(f"{key}_*"))  # sanity: something got cached
+
+        removed = thumbnails.invalidate_photo_cache(path, 1.0, fsize)
+        assert removed == 3
+        assert list(subdir.glob(f"{key}_*")) == []
+
+        # Regenerates cleanly afterward.
+        assert thumbnails.thumbnail_exists(path, 1.0, fsize) is False
+        thumbnails.get_thumbnail(path, 1.0, fsize)
+        assert thumbnails.thumbnail_exists(path, 1.0, fsize) is True
+
+    def test_does_not_touch_a_different_photos_cache(self, thumbs_dir, tmp_path):
+        path_a = _make_photo(tmp_path, name="a.jpg")
+        path_b = _make_photo(tmp_path, name="b.jpg")
+        fsize_a, fsize_b = path_a.stat().st_size, path_b.stat().st_size
+        thumbnails.get_thumbnail(path_a, 1.0, fsize_a)
+        thumbnails.get_thumbnail(path_b, 1.0, fsize_b)
+
+        thumbnails.invalidate_photo_cache(path_a, 1.0, fsize_a)
+
+        assert thumbnails.thumbnail_exists(path_a, 1.0, fsize_a) is False
+        assert thumbnails.thumbnail_exists(path_b, 1.0, fsize_b) is True
+
+    def test_returns_zero_when_nothing_was_ever_cached(self, thumbs_dir, tmp_path):
+        path = _make_photo(tmp_path)
+        fsize = path.stat().st_size
+        assert thumbnails.invalidate_photo_cache(path, 1.0, fsize) == 0
+
+
 class TestGetThumbnail:
     def test_creates_and_caches_thumbnail(self, thumbs_dir, tmp_path):
         path = _make_photo(tmp_path, size=(400, 300))
