@@ -103,6 +103,14 @@ class TestLocationRoundTrip:
         assert tags.get("XMP:Country") == "United States"
         assert tags.get("XMP:CountryCode") == "US"
 
+    def test_write_location_writes_landmark_tag(self, et_session, sample_image):
+        location = {"city": "New York", "landmark": "Central Park"}
+        sc = sidecar.write_location(sample_image, location)
+
+        et = exiftool_session.get_et()
+        tags = et.get_tags([str(sc)], tags=["XMP-iptcCore:Location"])[0]
+        assert tags.get("XMP:Location") == "Central Park"
+
     def test_remove_gps_clears_place_names_too(self, et_session, sample_image):
         location = {"city": "Springfield", "state": "Illinois",
                     "country": "United States", "country_code": "US"}

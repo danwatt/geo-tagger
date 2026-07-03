@@ -195,6 +195,7 @@ def _location_args(location: dict | None) -> list[str]:
         f"-XMP-photoshop:State={loc.get('state') or ''}",
         f"-XMP-photoshop:Country={loc.get('country') or ''}",
         f"-XMP-iptcCore:CountryCode={loc.get('country_code') or ''}",
+        f"-XMP-iptcCore:Location={loc.get('landmark') or ''}",
     ]
 
 

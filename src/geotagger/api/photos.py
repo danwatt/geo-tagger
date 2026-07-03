@@ -341,7 +341,9 @@ async def api_photo(photo_id: int):
             "county": row["loc_county"],
             "country": row["loc_country"],
             "country_code": row["loc_country_code"],
-        } if row["loc_country_code"] else None,
+            "landmark": row["loc_landmark"],
+            "landmark_type": row["loc_landmark_type"],
+        } if (row["loc_country_code"] or row["loc_landmark"]) else None,
     }
 
 

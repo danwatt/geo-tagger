@@ -55,6 +55,43 @@ def geonames_dir(tmp_path, monkeypatch):
     _reset_geocode_state()
 
 
+def _reset_landmark_state():
+    geocode._landmark_state = "unloaded"
+    geocode._landmark_error = None
+    geocode._building_polygons = []
+    geocode._park_polygons = []
+    geocode._place_tree = None
+    geocode._place_names = []
+    geocode._place_categories = []
+    geocode._place_lats = None
+    geocode._place_lngs = None
+
+
+@pytest.fixture(autouse=True)
+def _isolate_landmark_data(tmp_path_factory, monkeypatch):
+    """geocode.lookup() unconditionally calls resolve_landmark() now, so every
+    test — even ones that never touch landmark data on purpose — must not be
+    able to see a developer's real local data/overture/landmarks.jsonl. Points
+    OVERTURE_DIR at an empty directory by default; tests that want to exercise
+    real landmark data use the `overture_dir` fixture below, which re-points it
+    at its own tmp_path (this fixture's patch is simply superseded for those)."""
+    empty_dir = tmp_path_factory.mktemp("empty_overture")
+    monkeypatch.setattr(geocode, "OVERTURE_DIR", empty_dir)
+    _reset_landmark_state()
+    yield
+    _reset_landmark_state()
+
+
+@pytest.fixture
+def overture_dir(tmp_path, monkeypatch):
+    """Point the landmark resolver at an isolated (initially empty) Overture
+    directory and reset its load-state singleton before and after the test."""
+    monkeypatch.setattr(geocode, "OVERTURE_DIR", tmp_path)
+    _reset_landmark_state()
+    yield tmp_path
+    _reset_landmark_state()
+
+
 @pytest.fixture(scope="session")
 def et_session():
     """Shared ExifTool process for sidecar round-trip tests. Skips the tests

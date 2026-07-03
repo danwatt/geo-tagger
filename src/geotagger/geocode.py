@@ -13,6 +13,12 @@ lookup.
 
 The data is downloaded with `scripts/get_geonames.py`. If it's missing, every
 lookup returns None and `status()` reports it — the rest of the app keeps working.
+
+Landmark resolution (named parks/buildings/POIs, from Overture Maps data — see
+`scripts/get_overture_landmarks.py`) is a second, independently-loaded layer:
+`resolve_landmark()` adds a `{landmark, landmark_type}` pair on top of the city
+result in `lookup()`. It has its own load state so missing landmark data never
+breaks city/state/country resolution, and vice versa.
 """
 
 import logging
@@ -20,7 +26,7 @@ import math
 import threading
 from pathlib import Path
 
-from geotagger.config import GEONAMES_DIR, GEOCODE_PRECISION
+from geotagger.config import GEONAMES_DIR, GEOCODE_PRECISION, OVERTURE_DIR, LANDMARK_POI_MAX_KM
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +46,21 @@ _populations = None
 _admin1_names: dict[str, str] = {}  # "<cc>.<a1>"        -> state/province name
 _admin2_names: dict[str, str] = {}  # "<cc>.<a1>.<a2>"   -> county/district name
 _country_names: dict[str, str] = {}  # cc                -> country name
+
+# Landmark load state — separate from the city state machine above, guarded by
+# the same _lock (both loaders are one-shot, so contention is a non-issue).
+_landmark_state = "unloaded"
+_landmark_error: str | None = None
+
+_building_polygons: list[dict] = []  # {"name","category","verts","bbox"}, bbox from polygon_bbox
+_park_polygons: list[dict] = []      # same shape as _building_polygons
+_place_tree = None                  # scipy.spatial.cKDTree over POI-point XYZ
+_place_names: list[str] = []        # parallel to _place_tree
+_place_categories: list[str] = []
+_place_lats = None                  # numpy array, parallel to _place_names — for bbox queries
+_place_lngs = None
+
+_EARTH_RADIUS_KM = 6371.0088
 
 
 def _cities_file() -> Path:
@@ -166,6 +187,191 @@ def _ensure_loaded():
     if _state == "unloaded":
         with _lock:
             _load()
+
+
+def _landmarks_file() -> Path:
+    return OVERTURE_DIR / "landmarks.jsonl"
+
+
+def landmarks_available() -> bool:
+    """True if the Overture landmark data has been fetched."""
+    return _landmarks_file().exists()
+
+
+def landmark_status() -> dict:
+    """Health/diagnostics for the /api/status endpoint."""
+    return {
+        "available": landmarks_available(),
+        "state": _landmark_state,
+        "error": _landmark_error,
+        "buildings": len(_building_polygons) if _landmark_state == "ready" else 0,
+        "parks": len(_park_polygons) if _landmark_state == "ready" else 0,
+        "places": len(_place_names) if _landmark_state == "ready" else 0,
+    }
+
+
+def landmarks_ready() -> bool:
+    """True if landmark data exists AND actually loaded successfully — unlike
+    landmarks_available(), which only checks the file is present. Routes that
+    serve landmark data (rather than just reporting status) should gate on
+    this, so a file that failed to parse surfaces as unavailable rather than
+    silently returning an empty result."""
+    _ensure_landmarks_loaded()
+    return _landmark_state == "ready"
+
+
+def _load_landmarks():
+    """Parse landmarks.jsonl and build the polygon lists + POI KD-tree. Idempotent;
+    call via _ensure_landmarks_loaded() so it runs once under the lock."""
+    global _landmark_state, _landmark_error, _place_tree, _place_lats, _place_lngs
+    if _landmark_state != "unloaded":
+        return
+    if not landmarks_available():
+        _landmark_state = "unavailable"
+        _landmark_error = (f"Overture landmark data not found in {OVERTURE_DIR}. "
+                            "Run: uv run --group scripts python scripts/get_overture_landmarks.py")
+        logger.warning(_landmark_error)
+        return
+    try:
+        import json as _json
+
+        import numpy as np
+        from scipy.spatial import cKDTree
+
+        from geotagger.contexts import polygon_bbox
+
+        place_lats: list[float] = []
+        place_lngs: list[float] = []
+        bad_rows = 0
+
+        with _landmarks_file().open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                # Each row is parsed in isolation so one malformed line (e.g. from
+                # an interrupted fetch-script run) only drops that row, rather than
+                # discarding every good row already accumulated in this pass.
+                try:
+                    row = _json.loads(line)
+                    kind = row.get("kind")
+                    if kind in ("building", "park"):
+                        verts = row["polygon"]
+                        if len(verts) < 3:
+                            continue
+                        entry = {"name": row["name"], "category": row.get("category"),
+                                  "verts": verts, "bbox": polygon_bbox(verts)}
+                        (_building_polygons if kind == "building" else _park_polygons).append(entry)
+                    elif kind == "place":
+                        lat, lng = row["point"]
+                        place_lats.append(lat)
+                        place_lngs.append(lng)
+                        _place_names.append(row["name"])
+                        _place_categories.append(row.get("category"))
+                except Exception:
+                    bad_rows += 1
+
+        if bad_rows:
+            logger.warning("Skipped %d malformed row(s) in %s", bad_rows, _landmarks_file())
+
+        if place_lats:
+            _place_lats = np.asarray(place_lats)
+            _place_lngs = np.asarray(place_lngs)
+            lat_r = np.radians(_place_lats)
+            lng_r = np.radians(_place_lngs)
+            cos_lat = np.cos(lat_r)
+            xyz = np.column_stack((cos_lat * np.cos(lng_r),
+                                   cos_lat * np.sin(lng_r),
+                                   np.sin(lat_r)))
+            _place_tree = cKDTree(xyz)
+
+        _landmark_state = "ready"
+        logger.info("Landmark resolver ready: %d buildings, %d parks, %d places from %s",
+                    len(_building_polygons), len(_park_polygons), len(_place_names), OVERTURE_DIR)
+    except Exception as e:  # noqa: BLE001 — degrade gracefully, never crash startup
+        _landmark_state = "unavailable"
+        _landmark_error = f"Failed to load Overture landmark data: {e}"
+        logger.exception("Landmark resolver failed to load")
+
+
+def _ensure_landmarks_loaded():
+    if _landmark_state == "unloaded":
+        with _lock:
+            _load_landmarks()
+
+
+def _chord_distance_for_km(km: float) -> float:
+    """Convert a great-circle distance (km) to the chord (Euclidean) distance
+    between the corresponding unit-sphere XYZ points, for use as a cKDTree
+    query radius/threshold."""
+    central_angle = km / _EARTH_RADIUS_KM
+    return 2 * math.sin(central_angle / 2)
+
+
+def resolve_landmark(lat: float, lng: float) -> dict | None:
+    """Resolve a coordinate to a named landmark: inside a building polygon,
+    else inside a park polygon, else the nearest curated POI point within
+    config.LANDMARK_POI_MAX_KM. Returns {"name", "kind", "category"} or None."""
+    _ensure_landmarks_loaded()
+    if _landmark_state != "ready":
+        return None
+    from geotagger.contexts import point_in_polygon
+
+    for kind, polygons in (("building", _building_polygons), ("park", _park_polygons)):
+        for entry in polygons:
+            min_lat, max_lat, min_lng, max_lng = entry["bbox"]
+            if not (min_lat <= lat <= max_lat and min_lng <= lng <= max_lng):
+                continue
+            if point_in_polygon(lat, lng, entry["verts"]):
+                return {"name": entry["name"], "kind": kind, "category": entry["category"]}
+    if _place_tree is not None:
+        lat_r = math.radians(lat)
+        lng_r = math.radians(lng)
+        cos_lat = math.cos(lat_r)
+        point = [cos_lat * math.cos(lng_r), cos_lat * math.sin(lng_r), math.sin(lat_r)]
+        dist, idx = _place_tree.query(point)
+        if dist <= _chord_distance_for_km(LANDMARK_POI_MAX_KM):
+            idx = int(idx)
+            return {"name": _place_names[idx], "kind": "place", "category": _place_categories[idx]}
+    return None
+
+
+def landmarks_in_bbox(min_lat: float, max_lat: float, min_lng: float, max_lng: float,
+                       limit: int = 2000) -> tuple[list[dict], list[dict], int]:
+    """Landmark features within a lat/lng box, for the Places DB map layer.
+
+    Returns (polygons, points, total) where polygons is a list of
+    {"kind": "building"|"park", "name", "category", "polygon"} and points is a
+    list of {"kind": "place", "name", "category", "lat", "lng"}."""
+    _ensure_landmarks_loaded()
+    polygons: list[dict] = []
+    points: list[dict] = []
+    if _landmark_state != "ready":
+        return polygons, points, 0
+
+    for kind, entries in (("building", _building_polygons), ("park", _park_polygons)):
+        for entry in entries:
+            e_min_lat, e_max_lat, e_min_lng, e_max_lng = entry["bbox"]
+            if e_max_lat < min_lat or e_min_lat > max_lat or e_max_lng < min_lng or e_min_lng > max_lng:
+                continue
+            polygons.append({"kind": kind, "name": entry["name"], "category": entry["category"],
+                              "polygon": entry["verts"]})
+
+    if _place_lats is not None:
+        import numpy as np
+
+        mask = (_place_lats >= min_lat) & (_place_lats <= max_lat) & \
+               (_place_lngs >= min_lng) & (_place_lngs <= max_lng)
+        for i in np.nonzero(mask)[0]:
+            i = int(i)
+            points.append({"kind": "place", "name": _place_names[i], "category": _place_categories[i],
+                           "lat": float(_place_lats[i]), "lng": float(_place_lngs[i])})
+
+    total = len(polygons) + len(points)
+    if total > limit:
+        polygons = polygons[:limit]
+        points = points[:max(0, limit - len(polygons))]
+    return polygons, points, total
 
 
 def quantize(lat: float, lng: float) -> tuple[int, int]:
@@ -429,27 +635,42 @@ def voronoi_cells(min_lat: float, max_lat: float, min_lng: float, max_lng: float
 
 
 def lookup(lat: float | None, lng: float | None, use_cache: bool = True) -> dict | None:
-    """Reverse-geocode a coordinate to {city, state, county, country, country_code}.
+    """Reverse-geocode a coordinate to {city, state, county, country, country_code,
+    landmark, landmark_type}.
 
-    Caches by quantized coordinate so nearby photos reuse one result. Returns
-    None when the GeoNames data isn't available or no place is found. Cache
-    access degrades silently if the DB isn't initialized (e.g. raw CLI use)."""
+    The city portion is cached by quantized coordinate so nearby photos reuse
+    one result (cache access degrades silently if the DB isn't initialized,
+    e.g. raw CLI use). Landmark resolution is deliberately NOT cached: it
+    depends on exact point-in-polygon containment, which the quantized cache
+    grid (~11m, see config.GEOCODE_PRECISION — sized for city-level fuzziness)
+    is too coarse for, and it must reflect the current landmarks.jsonl even
+    for coordinates that were already geocoded before that file existed.
+    Returns None when neither data source yields a match."""
     if lat is None or lng is None:
         return None
     qlat, qlng = quantize(lat, lng)
+    result = None
     if use_cache:
         try:
             from geotagger import index
-            cached = index.get_cached_geocode(qlat, qlng)
-            if cached is not None:
-                return cached
+            result = index.get_cached_geocode(qlat, qlng)
         except Exception:
             pass
-    result = _raw_lookup(lat, lng)
-    if use_cache and result is not None:
-        try:
-            from geotagger import index
-            index.put_cached_geocode(qlat, qlng, result)
-        except Exception:
-            pass
+    if result is None:
+        result = _raw_lookup(lat, lng)
+        if use_cache and result is not None:
+            try:
+                from geotagger import index
+                index.put_cached_geocode(qlat, qlng, result)
+            except Exception:
+                pass
+    landmark = resolve_landmark(lat, lng)
+    if landmark is not None:
+        result = result or {"city": None, "state": None, "county": None,
+                             "country": None, "country_code": None}
+        result["landmark"] = landmark["name"]
+        result["landmark_type"] = landmark["kind"]
+    elif result is not None:
+        result.setdefault("landmark", None)
+        result.setdefault("landmark_type", None)
     return result

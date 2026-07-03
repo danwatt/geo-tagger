@@ -333,10 +333,15 @@ class TestLookupCacheIntegration:
         assert result["city"] == "Testville"
 
     def test_lookup_writes_through_to_the_cache(self, geonames_dir, db):
+        # The cache stores the city portion only — landmark/landmark_type are
+        # deliberately never cached (see geocode.lookup()'s docstring).
         _write_geonames_files(geonames_dir, [CITY_A])
         result = geocode.lookup(40.001, -74.001)
         qlat, qlng = geocode.quantize(40.001, -74.001)
-        assert index.get_cached_geocode(qlat, qlng) == result
+        cached = index.get_cached_geocode(qlat, qlng)
+        assert cached == {"city": result["city"], "state": result["state"],
+                           "county": result["county"], "country": result["country"],
+                           "country_code": result["country_code"]}
 
     def test_lookup_reads_from_cache_before_the_kd_tree(self, geonames_dir, db):
         _write_geonames_files(geonames_dir, [CITY_A])

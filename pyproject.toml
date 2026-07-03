@@ -30,6 +30,9 @@ dev = [
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
 ]
+scripts = [
+    "overturemaps>=1.0.1",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

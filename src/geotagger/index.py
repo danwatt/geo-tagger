@@ -108,6 +108,13 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
         _db.execute("ALTER TABLE photos ADD COLUMN loc_country_code TEXT")
     if "geocoded_at" not in cols:
         _db.execute("ALTER TABLE photos ADD COLUMN geocoded_at REAL")
+    # Named landmark (park/building/POI) a photo's coordinates fall inside/near,
+    # resolved from local Overture Maps data (see scripts/get_overture_landmarks.py).
+    # landmark_type is "building" | "park" | "place"; both NULL if no match.
+    if "loc_landmark" not in cols:
+        _db.execute("ALTER TABLE photos ADD COLUMN loc_landmark TEXT")
+    if "loc_landmark_type" not in cols:
+        _db.execute("ALTER TABLE photos ADD COLUMN loc_landmark_type TEXT")
     # Files that don't matter for geocoding (e.g. screenshots). They still show
     # in the grid, but the Show filter and geotagged/not-geotagged counts treat
     # them as if they were already geotagged.
@@ -356,7 +363,7 @@ def update_geotag(photo_id: int, lat: float | None, lng: float | None,
     db.execute("""
         UPDATE photos SET lat=?, lng=?, gps_accuracy=?, geotag_source=?, sidecar_path=?, sidecar_mtime=?,
             loc_city=NULL, loc_state=NULL, loc_county=NULL, loc_country=NULL,
-            loc_country_code=NULL, geocoded_at=NULL
+            loc_country_code=NULL, loc_landmark=NULL, loc_landmark_type=NULL, geocoded_at=NULL
         WHERE id=?
     """, (lat, lng, gps_accuracy, geotag_source, sidecar_path, sidecar_mtime, photo_id))
     db.commit()
@@ -772,7 +779,13 @@ def contexts_for_point_time(lat: float, lng: float, ts: int) -> list[sqlite3.Row
 # ── Reverse geocoding ──
 
 def get_cached_geocode(qlat: int, qlng: int) -> dict | None:
-    """Return a cached location for quantized coords, or None on a miss."""
+    """Return a cached location for quantized coords, or None on a miss.
+
+    City-only — landmark resolution is intentionally never cached here (see
+    geocode.lookup()): it depends on exact point-in-polygon containment that
+    this ~11m quantization grid is too coarse for, and it must reflect the
+    current landmarks.jsonl even for coordinates geocoded long before it
+    existed."""
     row = get_db().execute(
         "SELECT city, state, county, country, country_code FROM geocode_cache "
         "WHERE qlat=? AND qlng=?",
@@ -785,7 +798,7 @@ def get_cached_geocode(qlat: int, qlng: int) -> dict | None:
 
 
 def put_cached_geocode(qlat: int, qlng: int, loc: dict, source: str = "local"):
-    """Cache a location result for quantized coords."""
+    """Cache a city-only location result for quantized coords."""
     db = get_db()
     db.execute(
         """INSERT OR REPLACE INTO geocode_cache
@@ -797,6 +810,14 @@ def put_cached_geocode(qlat: int, qlng: int, loc: dict, source: str = "local"):
     db.commit()
 
 
+def get_all_geotagged_coords() -> list[sqlite3.Row]:
+    """Every distinct coordinate in the library that has GPS data — used to seed
+    the Overture landmark fetch (one bbox query per unique location, not per photo)."""
+    return get_db().execute(
+        "SELECT DISTINCT lat, lng FROM photos WHERE lat IS NOT NULL AND lng IS NOT NULL"
+    ).fetchall()
+
+
 def update_photo_location(photo_id: int, loc: dict | None):
     """Store reverse-geocoded place names on a photo. geocoded_at is always set
     (so a no-match isn't retried endlessly); loc=None records 'looked up, no match'."""
@@ -804,15 +825,18 @@ def update_photo_location(photo_id: int, loc: dict | None):
     if loc is None:
         db.execute(
             "UPDATE photos SET loc_city=NULL, loc_state=NULL, loc_county=NULL, "
-            "loc_country=NULL, loc_country_code=NULL, geocoded_at=? WHERE id=?",
+            "loc_country=NULL, loc_country_code=NULL, loc_landmark=NULL, "
+            "loc_landmark_type=NULL, geocoded_at=? WHERE id=?",
             (time.time(), photo_id),
         )
     else:
         db.execute(
             "UPDATE photos SET loc_city=?, loc_state=?, loc_county=?, loc_country=?, "
-            "loc_country_code=?, geocoded_at=? WHERE id=?",
+            "loc_country_code=?, loc_landmark=?, loc_landmark_type=?, geocoded_at=? "
+            "WHERE id=?",
             (loc.get("city"), loc.get("state"), loc.get("county"), loc.get("country"),
-             loc.get("country_code"), time.time(), photo_id),
+             loc.get("country_code"), loc.get("landmark"), loc.get("landmark_type"),
+             time.time(), photo_id),
         )
     db.commit()
 
@@ -835,17 +859,18 @@ def count_photos_needing_geocode() -> int:
 
 
 def count_geocoded_photos() -> int:
-    """Photos that resolved to a location (geocoded with a country)."""
+    """Photos that resolved to a location — a country match, a landmark match,
+    or both (a landmark-only match still counts as geocoded)."""
     return get_db().execute(
-        "SELECT COUNT(*) FROM photos WHERE loc_country_code IS NOT NULL"
+        "SELECT COUNT(*) FROM photos WHERE loc_country_code IS NOT NULL OR loc_landmark IS NOT NULL"
     ).fetchone()[0]
 
 
 def get_photos_with_location() -> list[sqlite3.Row]:
     """All photos that have resolved location names — used to export to sidecars."""
     return get_db().execute(
-        "SELECT id, path, loc_city, loc_state, loc_country, loc_country_code "
-        "FROM photos WHERE loc_country_code IS NOT NULL"
+        "SELECT id, path, loc_city, loc_state, loc_country, loc_country_code, loc_landmark "
+        "FROM photos WHERE loc_country_code IS NOT NULL OR loc_landmark IS NOT NULL"
     ).fetchall()
 
 
@@ -991,7 +1016,7 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
         f"""SELECT f.id, f.photo_id, f.person_id, f.bbox, f.det_score, f.embedding,
                    f.ignored, f.assigned_at, f.ignored_at, p.name AS person_name, ph.filename,
                    ph.photo_datetime, ph.orientation,
-                   ph.loc_city, ph.loc_state, ph.loc_country
+                   ph.loc_city, ph.loc_state, ph.loc_country, ph.loc_landmark, ph.loc_landmark_type
             FROM faces f
             LEFT JOIN persons p ON p.id = f.person_id
             JOIN photos ph ON ph.id = f.photo_id

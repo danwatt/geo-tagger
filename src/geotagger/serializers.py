@@ -28,7 +28,9 @@ def photo_geocode_dict(r) -> dict:
             "city": r["loc_city"],
             "state": r["loc_state"],
             "country": r["loc_country"],
-        } if r["loc_country"] else None
+            "landmark": r["loc_landmark"],
+            "landmark_type": r["loc_landmark_type"],
+        } if (r["loc_country"] or r["loc_landmark"]) else None
     }
 
 
@@ -36,9 +38,14 @@ def row_location(r) -> dict | None:
     """Place names from a photo-joined row, or None. Defensive against rows that
     don't carry the loc_* columns (only list_faces rows do)."""
     keys = r.keys()
-    if "loc_country" not in keys or not r["loc_country"]:
+    if "loc_country" not in keys:
         return None
-    return {"city": r["loc_city"], "state": r["loc_state"], "country": r["loc_country"]}
+    landmark = r["loc_landmark"] if "loc_landmark" in keys else None
+    if not r["loc_country"] and not landmark:
+        return None
+    return {"city": r["loc_city"], "state": r["loc_state"], "country": r["loc_country"],
+            "landmark": landmark,
+            "landmark_type": r["loc_landmark_type"] if "loc_landmark_type" in keys else None}
 
 
 def face_item(r) -> dict:

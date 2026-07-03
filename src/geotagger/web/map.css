@@ -60,6 +60,17 @@ body {
   box-shadow: 0 0 3px rgba(0,0,0,0.6);
 }
 
+/* ── Landmark marker (Overture curated POI points) ── */
+.landmark-dot {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #e0a040;
+  border: 1.5px solid rgba(0,0,0,0.6);
+  box-shadow: 0 0 3px rgba(0,0,0,0.6);
+}
+
 /* ── Place popup ── */
 .map-popup-wrap .leaflet-popup-content-wrapper {
   background: #252525;

@@ -58,7 +58,17 @@ class TestPhotoGeocodeDict:
                    ("Paris", "Île-de-France", "France", pid))
         db.commit()
         d = serializers.photo_geocode_dict(index.get_photo(pid))
-        assert d["location"] == {"city": "Paris", "state": "Île-de-France", "country": "France"}
+        assert d["location"] == {"city": "Paris", "state": "Île-de-France", "country": "France",
+                                  "landmark": None, "landmark_type": None}
+
+    def test_nested_location_includes_landmark_when_present(self, db):
+        pid = _add_photo(db, lat=1.0, lng=2.0)
+        db.execute("UPDATE photos SET loc_landmark=?, loc_landmark_type=? WHERE id=?",
+                   ("Eiffel Tower", "building", pid))
+        db.commit()
+        d = serializers.photo_geocode_dict(index.get_photo(pid))
+        assert d["location"]["landmark"] == "Eiffel Tower"
+        assert d["location"]["landmark_type"] == "building"
 
 
 class TestRowLocation:
@@ -72,7 +82,19 @@ class TestRowLocation:
                    ("Rome", "Lazio", "Italy", pid))
         db.commit()
         assert serializers.row_location(index.get_photo(pid)) == {
-            "city": "Rome", "state": "Lazio", "country": "Italy"}
+            "city": "Rome", "state": "Lazio", "country": "Italy",
+            "landmark": None, "landmark_type": None}
+
+    def test_dict_when_only_landmark_present(self, db):
+        # A landmark-only match (no city/country) must still surface a location,
+        # not be dropped just because loc_country is empty.
+        pid = _add_photo(db)
+        db.execute("UPDATE photos SET loc_landmark=?, loc_landmark_type=? WHERE id=?",
+                   ("Colosseum", "building", pid))
+        db.commit()
+        loc = serializers.row_location(index.get_photo(pid))
+        assert loc["landmark"] == "Colosseum"
+        assert loc["landmark_type"] == "building"
 
     def test_defensive_against_rows_without_loc_columns(self, db):
         # A row that doesn't even carry the loc_* columns must not KeyError.

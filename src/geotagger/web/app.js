@@ -1519,10 +1519,12 @@ async function showDetail(id) {
     document.getElementById("detail-actions").style.display = isRaw ? "" : "none";
     document.getElementById("view-fullsize-btn").onclick = () => openFullSize(id);
 
-    // Reverse-geocoded place name (city / state / country), when available.
+    // Reverse-geocoded place name (landmark / city / state / country), when
+    // available — landmark (e.g. "Central Park") prefixes the city/state/country
+    // string, falling back through whichever of these is actually resolved.
     const loc = data.location;
     const placeStr = loc
-      ? [loc.city, loc.state, loc.country].filter(Boolean).join(", ")
+      ? [loc.landmark, loc.city, loc.state, loc.country].filter(Boolean).join(", ")
       : null;
 
     const rows = [

@@ -14,10 +14,15 @@
  * reverse-geocode to that place — drawn as a translucent colored polygon
  * underneath the markers so you can see where the boundary between two
  * places actually falls.
+ *
+ * Past MIN_ZOOM_FOR_LANDMARKS, /api/geocode/landmarks additionally supplies
+ * named landmarks fetched from Overture Maps (scripts/get_overture_landmarks.py):
+ * park/building polygons plus curated POI points (monuments, stadiums, etc).
  */
 
 const MIN_ZOOM_FOR_MARKERS = 8;
 const MIN_ZOOM_FOR_VORONOI = 11;
+const MIN_ZOOM_FOR_LANDMARKS = 11;
 const REFRESH_DEBOUNCE_MS = 250;
 
 let map;
@@ -27,9 +32,12 @@ let activeBasemap = "street";
 let markerCluster = null;
 let voronoiLayer = null;
 let voronoiEnabled = true;
+let landmarkLayer = null;
+let landmarkEnabled = true;
 let refreshTimer = null;
 let fetchSeq = 0;
 let voronoiFetchSeq = 0;
+let landmarkFetchSeq = 0;
 
 const BASEMAPS = {
   street: {
@@ -59,6 +67,12 @@ document.addEventListener("DOMContentLoaded", () => {
     voronoiEnabled = toggle.checked;
     refreshVoronoi();
   });
+
+  const landmarkToggle = document.getElementById("landmark-toggle");
+  landmarkToggle.addEventListener("change", () => {
+    landmarkEnabled = landmarkToggle.checked;
+    refreshLandmarks();
+  });
 });
 
 function initMap() {
@@ -66,8 +80,9 @@ function initMap() {
   setBasemap("street");
   addBasemapControl();
 
-  // Added before the marker layer so cell polygons render underneath markers.
+  // Added before the marker layer so cell/landmark polygons render underneath markers.
   voronoiLayer = L.layerGroup().addTo(map);
+  landmarkLayer = L.layerGroup().addTo(map);
   markerCluster = L.markerClusterGroup({ maxClusterRadius: 60 });
   map.addLayer(markerCluster);
 
@@ -122,6 +137,7 @@ async function fitToLibrary() {
   }
   refreshMarkers();
   refreshVoronoi();
+  refreshLandmarks();
 }
 
 function scheduleRefresh() {
@@ -129,6 +145,7 @@ function scheduleRefresh() {
   refreshTimer = setTimeout(() => {
     refreshMarkers();
     refreshVoronoi();
+    refreshLandmarks();
   }, REFRESH_DEBOUNCE_MS);
 }
 
@@ -215,6 +232,66 @@ function cellColor(key) {
   }
   const hue = Math.abs(hash) % 360;
   return `hsl(${hue}, 65%, 55%)`;
+}
+
+async function refreshLandmarks() {
+  const zoom = map.getZoom();
+  if (!landmarkEnabled || zoom < MIN_ZOOM_FOR_LANDMARKS) {
+    landmarkLayer.clearLayers();
+    return;
+  }
+
+  const b = map.getBounds();
+  const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
+  const seq = ++landmarkFetchSeq;
+  try {
+    const res = await fetch(`/api/geocode/landmarks?bbox=${encodeURIComponent(bbox)}`);
+    if (!res.ok) return; // e.g. 503 when landmark data isn't fetched yet — best-effort overlay
+    const data = await res.json();
+    if (seq !== landmarkFetchSeq) return; // a newer request superseded this one
+    renderLandmarks(data.polygons, data.points);
+  } catch (e) {
+    // best-effort visual overlay; the marker fetch already reports errors
+  }
+}
+
+const LANDMARK_COLORS = { building: "#7ab8f5", park: "#5fbf6e" };
+
+function renderLandmarks(polygons, points) {
+  landmarkLayer.clearLayers();
+  polygons.forEach((feature) => {
+    const color = LANDMARK_COLORS[feature.kind] || "#e0a040";
+    L.polygon(feature.polygon, {
+      color,
+      weight: 1.5,
+      opacity: 0.9,
+      fillColor: color,
+      fillOpacity: 0.2,
+    }).bindPopup(renderLandmarkPopup(feature), { className: "map-popup-wrap" })
+      .addTo(landmarkLayer);
+  });
+  points.forEach((feature) => {
+    L.marker([feature.lat, feature.lng], { icon: landmarkIcon() })
+      .bindPopup(renderLandmarkPopup(feature), { className: "map-popup-wrap" })
+      .addTo(landmarkLayer);
+  });
+}
+
+function landmarkIcon() {
+  return L.divIcon({
+    html: `<span class="landmark-dot"></span>`,
+    className: "",
+    iconSize: [12, 12],
+    iconAnchor: [6, 6],
+    popupAnchor: [0, -6],
+  });
+}
+
+function renderLandmarkPopup(feature) {
+  return `<div class="map-popup">
+    <div class="map-popup-name">${escHtml(feature.name)}</div>
+    <div class="map-popup-region">${escHtml(feature.kind)}${feature.category ? " · " + escHtml(feature.category) : ""}</div>
+  </div>`;
 }
 
 function renderMarkers(places) {
