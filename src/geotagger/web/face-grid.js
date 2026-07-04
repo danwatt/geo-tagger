@@ -280,6 +280,11 @@ function openQuickActions(anchor, face, opts) {
 }
 
 function _positionQa(panel, anchor) {
+  // Fixed-position (and off-flow) *before* measuring, else the panel is still
+  // a static block-level div spanning the full body width, and pr.width comes
+  // back huge — tripping the overflow clamp below and pinning it to the left
+  // edge no matter where the anchor is.
+  panel.style.position = "fixed";
   const cr = anchor.getBoundingClientRect();
   const pr = panel.getBoundingClientRect();
   const vw = window.innerWidth;
@@ -290,7 +295,6 @@ function _positionQa(panel, anchor) {
   let left = cr.left;
   if (left + pr.width > vw - 10) left = vw - pr.width - 10;
   left = Math.max(6, left);
-  panel.style.position = "fixed";
   panel.style.top = top + "px";
   panel.style.left = left + "px";
 }
