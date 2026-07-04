@@ -228,16 +228,6 @@ sidebar list of contexts (name, date range, vertex/photo count, edit/delete).
 
 ## App-wide / UX (2026-07-01 review)
 
-- **Home dashboard + shared nav** — a landing page at `/` showing library health
-  (total photos, % geotagged, % faces labeled, pending queues) with action links
-  into the right tool ("1,204 photos have a confident guess → Quick Geocode"),
-  plus one shared nav component to replace the per-page copies of the toolbar
-  buttons (crowd-review has no main nav; quick pages only have back links; the
-  geocode page hides legacy controls in a `display:none` div). All the stats
-  endpoints already exist (`/api/stats/*`, `/api/geocode/status`,
-  `/api/faces/scan/status`). **Planned — see `DASHBOARD_PLAN.md` for the
-  ready-to-execute handoff.**
-
 - **In-app rescan + background jobs with progress** — scanning only happens at
   server startup (the old `POST /api/scan` is gone), so new photos need a
   restart, and scan progress renders as ANSI text in the terminal — invisible
@@ -261,9 +251,3 @@ sidebar list of contexts (name, date range, vertex/photo count, edit/delete).
   network can write sidecars and edit people. A simple shared token/PIN
   (query-param or cookie, set via env/CLI flag) would cover the phone-tagging
   use case without real user management.
-
-- **Test suite** — there are no tests. Highest-value first targets: sidecar
-  round-trip (write GPS → read back → remove; place names; datetime), the
-  guess/context math (`point_in_polygon`, centroid fallback, time-neighbor
-  weighting), and scanner freshness/invalidation. Protects the immutability
-  guarantee as the codebase keeps growing.
