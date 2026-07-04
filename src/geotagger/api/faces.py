@@ -70,6 +70,9 @@ class NegativeFacesRequest(BaseModel):
 class ScanFacesRequest(BaseModel):
     limit: int = 50  # photos processed per call; repeat to continue
 
+class NukePhotoFacesRequest(BaseModel):
+    photo_ids: list[int]  # hard-wipe every face + cached rendition for these photos
+
 
 @router.get("/api/persons")
 async def api_get_persons(
@@ -319,6 +322,19 @@ async def api_ignore_faces(req: IgnoreFacesRequest):
     or restore them with ignored=false."""
     index.set_faces_ignored(req.face_ids, req.ignored)
     return {"updated": len(req.face_ids), "ignored": req.ignored}
+
+
+@router.post("/api/faces/nuke")
+async def api_nuke_photo_faces(req: NukePhotoFacesRequest):
+    """Nuclear option: hard-delete every face (detected, assigned, or ignored) for
+    the given photos and wipe every cached rendition (thumbnail, preview, face
+    crops) so a rescan starts completely from scratch. Irreversible."""
+    if not req.photo_ids:
+        raise HTTPException(400, "photo_ids required")
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        get_executor(), faces_service.nuke_photo_faces, req.photo_ids)
+    return result
 
 
 @router.post("/api/faces/negatives")

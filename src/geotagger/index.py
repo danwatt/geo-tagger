@@ -918,6 +918,39 @@ def replace_faces(photo_id: int, faces: list[dict], det_dimension: int | None = 
         _faces.drop_from_unlabeled_cache(old_ids)
 
 
+def delete_photo_faces(photo_ids: list[int]) -> int:
+    """Nuclear option: hard-delete every face (detected, assigned, OR ignored) for
+    these photos and reset their scan state, so the next face scan re-detects from
+    scratch. Unlike replace_faces (a routine rescan, which only replaces
+    source='detected' faces and leaves manual assignments alone), this drops
+    everything for the photo — for when detection went wrong and the whole slate
+    needs wiping. Returns the number of faces deleted.
+    """
+    if not photo_ids:
+        return 0
+    db = get_db()
+    placeholders = ",".join("?" * len(photo_ids))
+    old_ids = [r[0] for r in db.execute(
+        f"SELECT id FROM faces WHERE photo_id IN ({placeholders})", photo_ids
+    ).fetchall()]
+    if old_ids:
+        # FKs aren't enforced (no cascade) — drop negatives explicitly, same as
+        # replace_faces does for a routine rescan.
+        fplaceholders = ",".join("?" * len(old_ids))
+        db.execute(f"DELETE FROM face_negatives WHERE face_id IN ({fplaceholders})", old_ids)
+        db.execute(f"DELETE FROM faces WHERE id IN ({fplaceholders})", old_ids)
+    db.executemany(
+        "UPDATE photos SET faces_scanned_at=NULL, faces_det_dimension=NULL WHERE id=?",
+        [(pid,) for pid in photo_ids],
+    )
+    db.commit()
+    bump_faces_generation()
+    if old_ids:
+        from geotagger import faces as _faces
+        _faces.drop_from_unlabeled_cache(old_ids)
+    return len(old_ids)
+
+
 def get_faces_for_photo(photo_id: int) -> list[sqlite3.Row]:
     return get_db().execute(
         """SELECT f.id, f.photo_id, f.person_id, f.bbox, f.det_score, f.source,

@@ -3,8 +3,9 @@ unlabeled queue into display-ready groups. Framework-free; called from routes vi
 run_in_executor."""
 
 from collections import Counter
+from pathlib import Path
 
-from geotagger import index, faces, serializers
+from geotagger import index, faces, serializers, thumbnails
 
 # Most groups worth reviewing are the larger ones; cap the response/DOM.
 CLUSTER_DISPLAY_LIMIT = 100
@@ -25,6 +26,21 @@ def scan_faces_batch(photo_ids: list[int]) -> dict:
         except Exception as e:
             errors.append(f"{row['filename']}: {e}")
     return {"processed": processed, "faces_found": total_faces, "errors": errors}
+
+
+def nuke_photo_faces(photo_ids: list[int]) -> dict:
+    """Nuclear option: hard-delete every face for these photos and wipe every
+    cached rendition on disk, so a rescan starts completely from scratch."""
+    faces_deleted = index.delete_photo_faces(photo_ids)
+    files_deleted = 0
+    for pid in photo_ids:
+        row = index.get_photo(pid)
+        if not row:
+            continue
+        files_deleted += thumbnails.invalidate_photo_cache(
+            Path(row["path"]), row["mtime"], row["size"])
+    return {"photos": len(photo_ids), "faces_deleted": faces_deleted,
+            "files_deleted": files_deleted}
 
 
 def compute_clusters(rows, unknowns, times, gallery, names, threshold, min_size, full):

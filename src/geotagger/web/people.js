@@ -40,9 +40,11 @@ const FOCUS_SPATIAL_LS_KEY = "geotagger.people.focusSpatial";
 
 const FACE_LIMIT = 1000;
 // Auto-select bar for the Unlabeled queue: a suggestion only exists at all above
-// FACE_MATCH_THRESHOLD (0.35), so this higher cutoff pre-selects just the
-// confident guesses and leaves weaker ones for manual triage.
-const CONFIDENT_SCORE = 0.5;
+// FACE_MATCH_THRESHOLD, so this higher cutoff pre-selects just the confident
+// guesses and leaves weaker ones for manual triage. Loaded from the server's
+// FACE_PRESELECT_MIN_SCORE setting (see loadConfidentScore); this default is
+// only used if that fetch hasn't resolved yet.
+let CONFIDENT_SCORE = 0.5;
 // Bulk-accepting suggestions is one click and has to be undone per-face, so the
 // toolbar's "Accept suggestions" confirms once the selection exceeds this many.
 const ACCEPT_CONFIRM_THRESHOLD = 5;
@@ -52,11 +54,26 @@ const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
 /* ── Init ── */
 document.addEventListener("DOMContentLoaded", async () => {
   bindToolbar();
+  await loadConfidentScore();  // before loadFaces, so the first render pre-selects correctly
   await loadFocusContexts();   // restores any saved Focus before the first load
   await loadPersons();
   await loadFaces();
   setStatus("Select a person on the left, or scan for faces to begin.");
 });
+
+// Pulls the live FACE_PRESELECT_MIN_SCORE setting (tunable on the Settings page)
+// so the Unlabeled queue's pre-select cutoff stays in sync without a code change.
+async function loadConfidentScore() {
+  try {
+    const res = await fetch("/api/settings");
+    if (!res.ok) return;
+    const data = await res.json();
+    const spec = data.settings.find(s => s.key === "FACE_PRESELECT_MIN_SCORE");
+    if (spec) CONFIDENT_SCORE = spec.value;
+  } catch (e) {
+    // Keep the built-in default if settings can't be reached.
+  }
+}
 
 function setStatus(msg, isError = false) {
   const bar = document.getElementById("status-bar");
@@ -102,6 +119,7 @@ function bindToolbar() {
   document.getElementById("confirm-suggested-btn").addEventListener("click", acceptSuggestionsForSelection);
   // In the Ignored scope this button restores; everywhere else it ignores.
   document.getElementById("ignore-btn").addEventListener("click", () => ignoreSelected(scope !== "ignored"));
+  document.getElementById("nuke-btn").addEventListener("click", nukeSelectedPhotos);
 
   document.getElementById("review-guesses-btn").addEventListener("click", () => {
     const pid = parseInt(document.getElementById("guess-person-select").value);
@@ -1734,6 +1752,40 @@ async function ignoreSelected_ids(ids, ignored) {
     await loadFaces();
   } catch (err) {
     setStatus("Ignore failed: " + err.message, true);
+  }
+}
+
+// Nuclear option: wipe every face (detected/assigned/ignored) + every cached
+// rendition (thumb/preview/face-crop) for the photo(s) behind the selected
+// face(s), so a rescan re-detects those photos from scratch. Acts on the whole
+// photo, not just the selected face — a bad detection pass usually needs the
+// whole slate cleared, not one crop.
+async function nukeSelectedPhotos() {
+  const ids = selectionOrFocused();
+  if (ids.length === 0) { setStatus("Select one or more faces first.", true); return; }
+  const photoIds = [...new Set(ids.map(id => findFace(id)?.photo_id).filter(Boolean))];
+  if (photoIds.length === 0) { setStatus("Could not resolve photos for the selected face(s).", true); return; }
+  const plural = photoIds.length === 1 ? "photo" : "photos";
+  if (!confirm(
+    `Nuclear option: permanently delete ALL faces (detected, assigned, and ignored) ` +
+    `for ${photoIds.length} ${plural}, and wipe their cached thumbnails/previews so ` +
+    `detection starts completely from scratch. This cannot be undone. Continue?`
+  )) return;
+  try {
+    const res = await fetch("/api/faces/nuke", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ photo_ids: photoIds }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    setStatus(`Nuked ${data.faces_deleted} face(s) across ${data.photos} ${plural}. Rescan to re-detect.`);
+    selectedIds.clear();
+    focusedFaceId = null;
+    await loadPersons();
+    await loadFaces();
+  } catch (err) {
+    setStatus("Nuke failed: " + err.message, true);
   }
 }
 

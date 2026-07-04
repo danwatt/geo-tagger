@@ -135,6 +135,10 @@ FACE_SUGGEST_MIN_DET_SCORE = float(os.environ.get("GEOTAGGER_FACE_SUGGEST_MIN_DE
 # examples are excluded as match SOURCES (they stay labeled and visible — this
 # only affects the gallery matmul in build_gallery). 0 disables the floor.
 FACE_MIN_GALLERY_BBOX_AREA = float(os.environ.get("GEOTAGGER_FACE_MIN_GALLERY_BBOX_AREA", "0.01"))
+# Unlabeled queue (people.js): a suggestion is only ever shown above
+# FACE_MATCH_THRESHOLD, but this higher cutoff decides which of those visible
+# suggestions get pre-checked on page load vs. left for manual triage.
+FACE_PRESELECT_MIN_SCORE = float(os.environ.get("GEOTAGGER_FACE_PRESELECT_MIN_SCORE", "0.5"))
 
 # ── Large Crowd management ──
 # Photos with at least this many detected faces are treated as crowd photos.
@@ -193,6 +197,9 @@ SETTINGS_SPEC = [
     {"key": "FACE_MIN_GALLERY_BBOX_AREA", "type": "float", "min": 0.0, "max": 0.5, "step": 0.005,
      "group": "Face recognition", "label": "Min gallery bbox area",
      "help": "Labeled faces whose bounding box is smaller than this fraction of the image are excluded as match sources (still labeled and taggable by hand). 0 disables the floor."},
+    {"key": "FACE_PRESELECT_MIN_SCORE", "type": "float", "min": 0.1, "max": 0.95, "step": 0.01,
+     "group": "Face recognition", "label": "Unlabeled queue pre-select score",
+     "help": "On the Unlabeled queue, suggestions scoring at/above this are pre-checked for bulk-assign; weaker ones are shown but left unchecked for manual review."},
     {"key": "FACE_SUGGEST_SCAN_CAP", "type": "int", "min": 0, "max": 200000, "step": 100,
      "group": "Face recognition", "label": "Suggestion scan cap",
      "help": "Max unlabeled faces scanned when gathering guesses. 0 = exhaustive."},
