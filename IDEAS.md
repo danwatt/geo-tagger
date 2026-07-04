@@ -8,7 +8,6 @@ Parked ideas for geo-tagger, to revisit later.
 
 ## Consistency
 * Groups with date range and locations
-* Show sublocation if available
 
 ## Narrow the face detection to time/space
 

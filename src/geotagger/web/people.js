@@ -45,9 +45,14 @@ const FACE_LIMIT = 1000;
 // FACE_PRESELECT_MIN_SCORE setting (see loadConfidentScore); this default is
 // only used if that fetch hasn't resolved yet.
 let CONFIDENT_SCORE = 0.5;
-// Bulk-accepting suggestions is one click and has to be undone per-face, so the
-// toolbar's "Accept suggestions" confirms once the selection exceeds this many.
-const ACCEPT_CONFIRM_THRESHOLD = 5;
+// Every top-toolbar bulk action (assign/unassign/accept/ignore) is one click and
+// has to be undone per-face, so each confirms once the selection exceeds this
+// many. The nuclear option is the one exception — it always confirms.
+const SELECTION_CONFIRM_THRESHOLD = 3;
+
+function confirmSelection(count, message) {
+  return count <= SELECTION_CONFIRM_THRESHOLD || confirm(message);
+}
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
                      "July", "August", "September", "October", "November", "December"];
 
@@ -1690,6 +1695,10 @@ function selectionOrFocused() {
 async function assignSelected(personId, clear = false) {
   const ids = selectionOrFocused();
   if (ids.length === 0) { setStatus("Select one or more faces first.", true); return; }
+  const msg = clear
+    ? `Unassign ${ids.length} face(s)?`
+    : `Assign ${ids.length} face(s) to ${persons.find(p => p.id === personId)?.name || "this person"}?`;
+  if (!confirmSelection(ids.length, msg)) return;
   try {
     const res = await fetch("/api/faces/assign", {
       method: "POST",
@@ -1735,6 +1744,8 @@ async function assignFocusedFace({ personId = null, name = null, clear = false }
 async function ignoreSelected(ignored) {
   const ids = selectionOrFocused();
   if (ids.length === 0) { setStatus("Select one or more faces first.", true); return; }
+  const verb = ignored ? "Ignore" : "Restore";
+  if (!confirmSelection(ids.length, `${verb} ${ids.length} face(s)?`)) return;
   await ignoreSelected_ids(ids, ignored);
 }
 
@@ -1814,6 +1825,7 @@ async function assignSelectedToNewPerson() {
   if (ids.length === 0) { setStatus("Select one or more faces first.", true); return; }
   const name = prompt("Name for this person:");
   if (!name || !name.trim()) return;
+  if (!confirmSelection(ids.length, `Assign ${ids.length} face(s) to ${name.trim()}?`)) return;
   try {
     const res = await fetch("/api/faces/assign", {
       method: "POST",
@@ -1904,8 +1916,7 @@ async function acceptSuggestionsForSelection() {
   // or ignored) — the same predicate acceptSuggestionsFor uses — and confirm past
   // the threshold so a large accidental batch isn't approved in one click.
   const targets = faceList.filter(f => f.suggestion && !f.person_name && !f.ignored);
-  if (targets.length > ACCEPT_CONFIRM_THRESHOLD &&
-      !confirm(`Accept the suggested name for ${targets.length} selected face(s)?`)) {
+  if (!confirmSelection(targets.length, `Accept the suggested name for ${targets.length} face(s)?`)) {
     return;
   }
   await acceptSuggestionsFor(faceList);
