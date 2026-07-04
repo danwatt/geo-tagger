@@ -129,6 +129,12 @@ FACE_AMBIGUITY_MARGIN = float(os.environ.get("GEOTAGGER_FACE_AMBIGUITY_MARGIN", 
 # matches, so they're skipped when gathering guesses — but still detected, stored,
 # and taggable by hand. Lower it if too many real faces are excluded; 0 disables.
 FACE_SUGGEST_MIN_DET_SCORE = float(os.environ.get("GEOTAGGER_FACE_SUGGEST_MIN_DET_SCORE", "0.65"))
+# Minimum bbox area (fraction of the detection image, 0..1) for a *labeled* face
+# to be used as a gallery example when matching unlabeled faces. A tiny/distant
+# face embeds noisily even when correctly labeled, so a person's small-bbox
+# examples are excluded as match SOURCES (they stay labeled and visible — this
+# only affects the gallery matmul in build_gallery). 0 disables the floor.
+FACE_MIN_GALLERY_BBOX_AREA = float(os.environ.get("GEOTAGGER_FACE_MIN_GALLERY_BBOX_AREA", "0.01"))
 
 # ── Large Crowd management ──
 # Photos with at least this many detected faces are treated as crowd photos.
@@ -184,6 +190,9 @@ SETTINGS_SPEC = [
     {"key": "FACE_SUGGEST_MIN_DET_SCORE", "type": "float", "min": 0.0, "max": 1.0, "step": 0.05,
      "group": "Face recognition", "label": "Suggestion min detection score",
      "help": "Faces detected below this confidence are never offered as a suggestion (still detected and taggable by hand). 0 disables the floor."},
+    {"key": "FACE_MIN_GALLERY_BBOX_AREA", "type": "float", "min": 0.0, "max": 0.5, "step": 0.005,
+     "group": "Face recognition", "label": "Min gallery bbox area",
+     "help": "Labeled faces whose bounding box is smaller than this fraction of the image are excluded as match sources (still labeled and taggable by hand). 0 disables the floor."},
     {"key": "FACE_SUGGEST_SCAN_CAP", "type": "int", "min": 0, "max": 200000, "step": 100,
      "group": "Face recognition", "label": "Suggestion scan cap",
      "help": "Max unlabeled faces scanned when gathering guesses. 0 = exhaustive."},

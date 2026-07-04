@@ -943,7 +943,7 @@ def get_labeled_faces() -> list[sqlite3.Row]:
     reading every unlabeled face's embedding blob — which is ~6x slower here.
     """
     return get_db().execute(
-        """SELECT f.person_id, f.embedding, ph.photo_datetime, p.birth_date
+        """SELECT f.person_id, f.embedding, f.bbox, ph.photo_datetime, p.birth_date
            FROM faces f INDEXED BY idx_faces_person
            JOIN photos ph ON ph.id = f.photo_id
            JOIN persons p ON p.id = f.person_id

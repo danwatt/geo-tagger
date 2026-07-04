@@ -299,14 +299,30 @@ def _apply_negatives(per_person: np.ndarray, rows, c0: int,
                 per_person[g, j] = np.float32(-np.inf)
 
 
+def _bbox_area(bbox: str) -> float:
+    """Normalized bbox 'x1,y1,x2,y2' (0..1) -> area as a fraction of the image."""
+    x1, y1, x2, y2 = (float(v) for v in bbox.split(","))
+    return max(0.0, x2 - x1) * max(0.0, y2 - y1)
+
+
 def build_gallery() -> Gallery:
-    """Load all confirmed faces into a matrix for matching (cached, see above)."""
+    """Load all confirmed faces into a matrix for matching (cached, see above).
+
+    Labeled faces whose bbox is smaller than ``config.FACE_MIN_GALLERY_BBOX_AREA``
+    (fraction of the image) are excluded as match SOURCES — a tiny/distant face
+    embeds noisily even when correctly labeled, so it shouldn't anchor matches for
+    other unlabeled faces. The face stays labeled and visible; this only trims
+    what feeds the gallery matmul.
+    """
     global _gallery_cache
     gen = index.faces_generation()
     if _gallery_cache is not None and _gallery_cache[0] == gen:
         return _gallery_cache[1]
 
     labeled = index.get_labeled_faces()
+    min_area = config.FACE_MIN_GALLERY_BBOX_AREA
+    if min_area > 0:
+        labeled = [r for r in labeled if _bbox_area(r["bbox"]) >= min_area]
     if not labeled:
         z = np.zeros((0,), np.float64)
         gallery = Gallery(np.zeros((0, EMBED_DIM), np.float32), np.zeros((0,), np.int64), z, z)

@@ -47,16 +47,16 @@ function formatDateRange(startTs, endTs) {
 }
 
 /* ── Location label for a group of faces ──
- * Each face may carry a `location: {city, state, country}` resolved by the
- * reverse geocoder, or null when its photo isn't geocoded. `locationKey` is the
- * "City, State, Country" string for one face (missing parts dropped), or null.
- * `locationLabel` summarizes a group: the distinct places among its faces, most
- * common first, with a "+N" suffix when the group spans more than one place;
- * empty string when no face has a resolved location. */
+ * Each face may carry a `location: {city, sublocation, state, country}` resolved
+ * by the reverse geocoder, or null when its photo isn't geocoded. `locationKey` is
+ * the "City, Sublocation, State, Country" string for one face (missing parts
+ * dropped), or null. `locationLabel` summarizes a group: the most common place
+ * among its faces, plus " (and N other)" when the group spans more than one
+ * place; empty string when no face has a resolved location. */
 function locationKey(face) {
   const loc = face.location;
   if (!loc) return null;
-  return [loc.city, loc.state, loc.country].filter(Boolean).join(", ") || null;
+  return [loc.city, loc.sublocation, loc.state, loc.country].filter(Boolean).join(", ") || null;
 }
 
 function locationLabel(faces) {
@@ -67,7 +67,9 @@ function locationLabel(faces) {
   }
   if (!counts.size) return "";
   const sorted = [...counts.keys()].sort((a, b) => counts.get(b) - counts.get(a));
-  return sorted.length === 1 ? sorted[0] : `${sorted[0]} +${sorted.length - 1}`;
+  if (sorted.length === 1) return sorted[0];
+  const n = sorted.length - 1;
+  return `${sorted[0]} (and ${n} other${n > 1 ? "s" : ""})`;
 }
 
 /* ── Group header ──

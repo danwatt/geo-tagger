@@ -259,7 +259,7 @@ function formatMeta(photos) {
     if (!photos || photos.length === 0) return '';
 
     const dateRange = formatDateRange(photos);
-    const location = formatLocation(photos);
+    const location = locationLabel(photos);
 
     return [dateRange, location].filter(Boolean).join(' · ');
 }
@@ -279,15 +279,6 @@ function formatDateRange(photos) {
     } else {
         return `${min_date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} - ${max_date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
     }
-}
-
-function formatLocation(photos) {
-    const locations = photos.map(p => p.location).filter(Boolean);
-    if (locations.length === 0) return null;
-
-    // For simplicity, just use the first location
-    const loc = locations[0];
-    return [loc.city, loc.state, loc.country].filter(Boolean).join(', ');
 }
 
 function renderMapMarkers(data) {

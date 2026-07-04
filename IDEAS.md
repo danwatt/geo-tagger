@@ -3,7 +3,7 @@
 Parked ideas for geo-tagger, to revisit later.
 
 ## Bug Fixes
-* Image rotation issues
+* Image rotation issues. 20190724-IMG_1696.HEIC, 20190724-IMG_1706.HEIC, _20100508_170224__D301202.NEF
 * Starting to get a lot of false positives
 
 ## Consistency
