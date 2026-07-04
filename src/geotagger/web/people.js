@@ -221,10 +221,24 @@ async function loadFocusContexts() {
     sel.appendChild(grp);
   }
 
-  // Restore a previously chosen Focus so the window survives reloads.
-  const saved = localStorage.getItem(FOCUS_LS_KEY);
-  if (saved && (focusContexts.some(c => String(c.id) === saved) || focusYears.some(y => `y:${y}` === saved))) {
-    sel.value = saved;
+  // A "?month=YYYY-MM" URL argument (e.g. from the homepage face-coverage
+  // month chart) focuses on that month, same as picking a Year from the
+  // dropdown — takes priority over any saved Focus.
+  const monthArg = new URLSearchParams(window.location.search).get("month");
+  const monthMatch = monthArg && monthArg.match(/^(\d{4})-(\d{2})$/);
+  if (monthMatch) {
+    const year = parseInt(monthMatch[1], 10), month = parseInt(monthMatch[2], 10);
+    const opt = document.createElement("option");
+    opt.value = `m:${monthMatch[1]}-${monthMatch[2]}`;
+    opt.textContent = `${MONTH_NAMES[month - 1]} ${year}`;
+    sel.insertBefore(opt, sel.children[1] || null);
+    sel.value = opt.value;
+  } else {
+    // Restore a previously chosen Focus so the window survives reloads.
+    const saved = localStorage.getItem(FOCUS_LS_KEY);
+    if (saved && (focusContexts.some(c => String(c.id) === saved) || focusYears.some(y => `y:${y}` === saved))) {
+      sel.value = saved;
+    }
   }
   document.getElementById("focus-spatial-chk").checked =
     localStorage.getItem(FOCUS_SPATIAL_LS_KEY) === "1";
@@ -237,6 +251,23 @@ function applyFocusFromSelect() {
   const sel = document.getElementById("focus-context-select");
   const chk = document.getElementById("focus-spatial-chk");
   const val = sel.value;
+
+  if (val.startsWith("m:")) {
+    // A calendar month (from a "?month=YYYY-MM" URL argument), computed as a
+    // UTC range for the same reason the Year case is — matches photo_datetime
+    // bucketing. No polygon, so spatial narrowing doesn't apply. Not persisted
+    // to localStorage: URL-driven, one-shot on arrival, not a saved preference.
+    const [year, month] = val.slice(2).split("-").map(Number);
+    focusStartTs = Date.UTC(year, month - 1, 1) / 1000;
+    focusEndTs = Date.UTC(month === 12 ? year + 1 : year, month === 12 ? 0 : month, 1) / 1000;
+    focusLabel = `${MONTH_NAMES[month - 1]} ${year}`;
+    focusContextId = null;
+    chk.disabled = true;
+    document.getElementById("focus-spatial-label").classList.toggle("disabled", true);
+    focusSpatial = false;
+    updateFocusNote();
+    return;
+  }
 
   if (val.startsWith("y:")) {
     // A calendar year, computed as a UTC range to match how the backend buckets

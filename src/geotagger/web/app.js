@@ -118,7 +118,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   await loadPlaces();
   await loadContextsDropdown();
   await fitMapToAllLocations();
-  setStatus("Click 'Select Month' to begin");
+
+  // A "?month=YYYY-MM" URL argument (e.g. from the homepage month charts)
+  // jumps straight to that month, same as picking it from the Month Picker.
+  const monthArg = new URLSearchParams(window.location.search).get("month");
+  const monthMatch = monthArg && monthArg.match(/^(\d{4})-(\d{2})$/);
+  if (monthMatch) {
+    await selectMonth(parseInt(monthMatch[1], 10), parseInt(monthMatch[2], 10));
+  } else {
+    setStatus("Click 'Select Month' to begin");
+  }
 });
 
 async function checkStatus() {

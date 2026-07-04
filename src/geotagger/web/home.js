@@ -136,8 +136,10 @@ function renderFaceCoverage(cov) {
    `segments` is bottom-to-top-last stacking order: [{key, cls, label}, ...],
    each `key` reading a count off the month object. Bar height per segment is
    its share of that month's segment total (segments are expected to fully
-   partition the month, geo and faces both do). */
-function renderMonthBars(containerId, months, segments) {
+   partition the month, geo and faces both do). `linkPage` is the page
+   ("geocode.html" / "people.html") a click on a bar navigates to, with a
+   `?month=YYYY-MM` argument for that bar's month. */
+function renderMonthBars(containerId, months, segments, linkPage) {
   const container = document.getElementById(containerId);
   container.innerHTML = "";
   let lastYear = null;
@@ -147,6 +149,10 @@ function renderMonthBars(containerId, months, segments) {
     const total = segments.reduce((sum, s) => sum + m[s.key], 0);
     wrap.title = `${MONTH_NAMES[m.month - 1]} ${m.year} — ` +
       segments.map((s) => `${m[s.key].toLocaleString()} ${s.label}`).join(", ");
+    const monthKey = `${m.year}-${String(m.month).padStart(2, "0")}`;
+    wrap.addEventListener("click", () => {
+      window.location.href = `${linkPage}?month=${monthKey}`;
+    });
 
     segments.forEach((s) => {
       const pct = total > 0 ? (m[s.key] / total) * 100 : 0;
@@ -177,7 +183,7 @@ async function loadMonths() {
     renderMonthBars("months-bar-container", data.months.slice().reverse(), [
       { key: "not_geotagged", cls: "bar-untagged", label: "untagged" },
       { key: "geotagged", cls: "bar-tagged", label: "tagged" },
-    ]);
+    ], "geocode.html");
   } catch (e) {
     showError("card-months", e.message);
   }
@@ -195,7 +201,7 @@ async function loadFacesMonths() {
       { key: "none", cls: "cov-none", label: "none labeled" },
       { key: "partial", cls: "cov-partial", label: "partial" },
       { key: "full", cls: "cov-full", label: "full" },
-    ]);
+    ], "people.html");
   } catch (e) {
     showError("card-faces-months", e.message);
   }

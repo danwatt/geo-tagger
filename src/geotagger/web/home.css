@@ -130,7 +130,9 @@
   display: flex;
   flex-direction: column;
   position: relative;
+  cursor: pointer;
 }
+.month-bar:hover { outline: 1px solid #888; outline-offset: 1px; }
 .month-bar .bar-untagged { width: 100%; background: #4a4a4a; }
 .month-bar .bar-tagged { width: 100%; background: #5cb85c; }
 .month-year-label {
