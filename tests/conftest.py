@@ -1,6 +1,6 @@
 import pytest
 
-from geotagger import index, exiftool_session, thumbnails, geocode
+from geotagger import index, exiftool_session, thumbnails, geocode, osm_places, config
 
 
 @pytest.fixture
@@ -53,6 +53,72 @@ def geonames_dir(tmp_path, monkeypatch):
     _reset_geocode_state()
     yield tmp_path
     _reset_geocode_state()
+
+
+def _reset_osm_places_state():
+    if osm_places._conn is not None:
+        try:
+            osm_places._conn.close()
+        except Exception:
+            pass
+    osm_places._state = "unloaded"
+    osm_places._error = None
+    osm_places._conn = None
+
+
+@pytest.fixture(autouse=True)
+def _isolate_osm_places(tmp_path, monkeypatch):
+    """Default every test to 'OSM places not installed' (points config.OSM_DB_PATH
+    at an absent file + resets the singleton), so geocoding falls back to GeoNames
+    and tests don't depend on whether a real data/osm/places.sqlite exists locally.
+    Tests that want OSM data use the `osm_db` fixture, which repoints this."""
+    monkeypatch.setattr(config, "OSM_DB_PATH", tmp_path / "__no_osm__.sqlite")
+    _reset_osm_places_state()
+    yield
+    _reset_osm_places_state()
+
+
+@pytest.fixture
+def osm_db(tmp_path, monkeypatch):
+    """Point osm_places at an isolated (initially absent) places.sqlite and reset
+    its load-state singleton around the test. Yields a `build(rows)` callable that
+    writes the real schema + the given place rows.
+
+    A row is a dict: {name, category, admin_level?, area?, polygons}, where
+    polygons is the stored ring format [[outer, [hole,...]], ...] (ring=[[lat,lng],...])."""
+    import json as _json
+
+    db_path = tmp_path / "places.sqlite"
+    monkeypatch.setattr(config, "OSM_DB_PATH", db_path)
+    _reset_osm_places_state()
+
+    def build(rows):
+        conn = __import__("sqlite3").connect(str(db_path))
+        conn.execute("""CREATE TABLE places (
+            id INTEGER PRIMARY KEY, osm_type TEXT, osm_id INTEGER, name TEXT, category TEXT,
+            admin_level INTEGER, rank INTEGER, area REAL,
+            min_lat REAL, max_lat REAL, min_lng REAL, max_lng REAL, rings TEXT)""")
+        conn.execute("""CREATE VIRTUAL TABLE places_spatial USING rtree(
+            id, min_lat, max_lat, min_lng, max_lng)""")
+        conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        for i, r in enumerate(rows, start=1):
+            polys = r["polygons"]
+            lats = [pt[0] for outer, _ in polys for pt in outer]
+            lngs = [pt[1] for outer, _ in polys for pt in outer]
+            bbox = (min(lats), max(lats), min(lngs), max(lngs))
+            conn.execute(
+                "INSERT INTO places (id, osm_type, osm_id, name, category, admin_level, "
+                "rank, area, min_lat, max_lat, min_lng, max_lng, rings) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (i, "way", i, r["name"], r["category"], r.get("admin_level"),
+                 r.get("rank", 3), r.get("area", 1.0), *bbox, _json.dumps(polys)))
+            conn.execute("INSERT INTO places_spatial VALUES (?,?,?,?,?)", (i, *bbox))
+        conn.commit()
+        conn.close()
+        return db_path
+
+    yield build
+    _reset_osm_places_state()
 
 
 @pytest.fixture(scope="session")

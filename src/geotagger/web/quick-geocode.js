@@ -15,6 +15,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }).addTo(map);
 
     map.on('click', onMapClick);
+    map.on('moveend', correctWorldWrap);
     const mapContainer = el('map-container');
     mapContainer.addEventListener("dragover", (e) => {
         e.preventDefault();
@@ -36,6 +37,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
     loadNextGroup();
 });
+
+// Leaflet projects longitude linearly with no wraparound, so continuous
+// horizontal dragging lets the map's own center drift past +/-180. Markers are
+// placed at their canonical (wrapped) lat/lng, so once the view has drifted a
+// full world away, they'd render a full world-width off screen. Silently
+// re-centering to the CRS-wrapped equivalent view fixes this — visually a
+// no-op, since Leaflet's tile rendering is already seamless across world
+// copies — and keeps the map's own coordinate system from drifting further.
+function correctWorldWrap() {
+    const center = map.getCenter();
+    const wrapped = map.wrapLatLng(center);
+    if (Math.abs(wrapped.lng - center.lng) > 1e-9) {
+        map.setView(wrapped, map.getZoom(), { animate: false });
+    }
+}
 
 function onMapClick(e) {
     if (selectedLocationMarker) {

@@ -20,6 +20,7 @@ import math
 import threading
 from pathlib import Path
 
+from geotagger import config
 from geotagger.config import GEONAMES_DIR, GEOCODE_PRECISION
 
 logger = logging.getLogger(__name__)
@@ -428,11 +429,46 @@ def voronoi_cells(min_lat: float, max_lat: float, min_lng: float, max_lng: float
     return cells, total
 
 
-def lookup(lat: float | None, lng: float | None, use_cache: bool = True) -> dict | None:
-    """Reverse-geocode a coordinate to {city, state, county, country, country_code}.
+def _merged_lookup(lat: float, lng: float) -> dict | None:
+    """Combine OSM polygon containment (authoritative city + sub-location) with
+    the GeoNames nearest-point lookup (state/county/country).
 
-    Caches by quantized coordinate so nearby photos reuse one result. Returns
-    None when the GeoNames data isn't available or no place is found. Cache
+    OSM replaces the city: when the OSM places DB is installed, the city is the
+    boundary that contains the point (or None if the point is in no OSM city,
+    unless config.OSM_CITY_FALLBACK_GEONAMES). When OSM is *not* installed at all,
+    we fall back to the GeoNames city so the app still geocodes out of the box.
+    Sub-location is OSM-only (None without OSM)."""
+    from geotagger import osm_places
+    osm = osm_places.lookup(lat, lng)          # {city, sublocation} or None
+    gn = _raw_lookup(lat, lng) or {}           # state/county/country/cc (+ its own city)
+    if osm is None and not gn:
+        return None
+
+    if osm and osm.get("city"):
+        city = osm["city"]
+    elif osm_places.is_available() and not config.OSM_CITY_FALLBACK_GEONAMES:
+        city = None                            # OSM is the authority; point in no city
+    else:
+        city = gn.get("city")                  # OSM absent, or fallback enabled
+    return {
+        "city": city,
+        "sublocation": osm.get("sublocation") if osm else None,
+        "state": gn.get("state"),
+        "county": gn.get("county"),
+        "country": gn.get("country"),
+        "country_code": gn.get("country_code"),
+    }
+
+
+def lookup(lat: float | None, lng: float | None, use_cache: bool = True) -> dict | None:
+    """Reverse-geocode a coordinate to
+    {city, sublocation, state, county, country, country_code}.
+
+    City + sub-location come from OSM polygon containment; state/county/country
+    from GeoNames (see _merged_lookup). Caches by quantized coordinate so nearby
+    photos reuse one result — note the quantization grid (config.GEOCODE_PRECISION,
+    ~11 m) is coarser than a small building, so two photos in adjacent buildings
+    can share a bucket. Returns None when neither source resolves anything. Cache
     access degrades silently if the DB isn't initialized (e.g. raw CLI use)."""
     if lat is None or lng is None:
         return None
@@ -445,7 +481,7 @@ def lookup(lat: float | None, lng: float | None, use_cache: bool = True) -> dict
                 return cached
         except Exception:
             pass
-    result = _raw_lookup(lat, lng)
+    result = _merged_lookup(lat, lng)
     if use_cache and result is not None:
         try:
             from geotagger import index

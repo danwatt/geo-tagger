@@ -51,6 +51,19 @@ def normalize_lng(lng: float) -> float:
     return lng
 
 
+def normalize_lng_bbox(min_lng: float, max_lng: float) -> tuple[float, float]:
+    """Shift a bbox's longitudes by a common multiple of 360 so they land in a
+    sane range. map.getBounds() (Leaflet) returns raw, unwrapped longitudes once
+    the map has been panned all the way around the globe — e.g. -458.4/-456.1
+    instead of -98.4/-96.1 — which then matches nothing in a `lng BETWEEN` SQL
+    filter. Shifting both bounds by the same amount (derived from the bbox
+    center) preserves width and ordering, unlike normalizing each bound
+    independently which could invert a narrow bbox that straddles +/-180."""
+    center = (min_lng + max_lng) / 2.0
+    shift = normalize_lng(center) - center
+    return min_lng + shift, max_lng + shift
+
+
 def polygon_centroid(verts) -> tuple[float, float]:
     """Area-weighted centroid -> (lat, lng). Falls back to vertex mean for degenerate polygons."""
     n = len(verts)

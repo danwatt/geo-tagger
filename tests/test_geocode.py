@@ -321,6 +321,70 @@ class TestVoronoiCells:
         assert len(by_city["Testville"]["polygon"]) >= 3
 
 
+def _rect(min_lat, max_lat, min_lng, max_lng):
+    outer = [[min_lat, min_lng], [max_lat, min_lng], [max_lat, max_lng], [min_lat, max_lng]]
+    return [[outer, []]]
+
+
+class TestMergedLookup:
+    """geocode.lookup merges OSM polygon containment (city + sublocation) with the
+    GeoNames nearest-point lookup (state/county/country). OSM replaces the city."""
+
+    def test_osm_city_replaces_geonames_city(self, geonames_dir, osm_db):
+        _write_geonames_files(geonames_dir, [CITY_A])  # Testville @ (40,-74), NY
+        osm_db([dict(name="OsmCity", category="city", admin_level=8, area=1.0,
+                     polygons=_rect(39.9, 40.1, -74.1, -73.9))])
+        r = geocode.lookup(40.0, -74.0)
+        assert r["city"] == "OsmCity"                 # from OSM boundary, not GeoNames
+        assert r["state"] == "New York"               # still from GeoNames
+        assert r["country_code"] == "US"
+
+    def test_osm_sublocation_is_surfaced(self, geonames_dir, osm_db):
+        _write_geonames_files(geonames_dir, [CITY_A])
+        osm_db([
+            dict(name="OsmCity", category="city", admin_level=8, area=1.0,
+                 polygons=_rect(39.9, 40.1, -74.1, -73.9)),
+            dict(name="Riverside Park", category="park", area=0.001,
+                 polygons=_rect(39.99, 40.01, -74.01, -73.99)),
+        ])
+        r = geocode.lookup(40.0, -74.0)
+        assert r["city"] == "OsmCity"
+        assert r["sublocation"] == "Riverside Park"
+
+    def test_point_outside_every_osm_city_falls_back_to_geonames_by_default(self, geonames_dir, osm_db):
+        # Default OSM_CITY_FALLBACK_GEONAMES=True: a point outside every OSM
+        # polygon still gets a usable city (from GeoNames' nearest-point lookup)
+        # instead of "(none)" — the common case while OSM coverage is partial.
+        _write_geonames_files(geonames_dir, [CITY_A])
+        osm_db([dict(name="Elsewhere", category="city", admin_level=8, area=1.0,
+                     polygons=_rect(10.0, 11.0, 10.0, 11.0))])
+        r = geocode.lookup(40.0, -74.0)
+        assert r["city"] == "Testville"  # GeoNames city, since fallback defaults on
+        assert r["sublocation"] is None
+        assert r["state"] == "New York"
+        assert r["country_code"] == "US"
+
+    def test_point_in_no_osm_city_has_none_city_when_fallback_disabled(self, geonames_dir, osm_db, monkeypatch):
+        # Opt back into strict "OSM replaces city" (no fallback): a point inside
+        # no OSM city gets city None, while GeoNames still supplies state/country.
+        monkeypatch.setattr(geocode.config, "OSM_CITY_FALLBACK_GEONAMES", False)
+        _write_geonames_files(geonames_dir, [CITY_A])
+        osm_db([dict(name="Elsewhere", category="city", admin_level=8, area=1.0,
+                     polygons=_rect(10.0, 11.0, 10.0, 11.0))])
+        r = geocode.lookup(40.0, -74.0)
+        assert r["city"] is None
+        assert r["sublocation"] is None
+        assert r["state"] == "New York"
+        assert r["country_code"] == "US"
+
+    def test_falls_back_to_geonames_city_when_osm_not_installed(self, geonames_dir):
+        # No osm_db fixture → OSM DB absent → graceful GeoNames city, no sublocation.
+        _write_geonames_files(geonames_dir, [CITY_A])
+        r = geocode.lookup(40.001, -74.001)
+        assert r["city"] == "Testville"
+        assert r["sublocation"] is None
+
+
 class TestLookupCacheIntegration:
     def test_none_coordinates_return_none(self, geonames_dir):
         assert geocode.lookup(None, -74.0) is None

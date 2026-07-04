@@ -43,7 +43,27 @@ This downloads ~48 MB of [GeoNames](https://www.geonames.org) data (CC BY 4.0) i
 coordinates). If you skip this step, everything else still works — photos just won't get
 place names.
 
-### 4. Run
+### 4. Install OSM place boundaries (optional — polygon reverse geocoding)
+
+For accurate cities and **sub-locations** (parks, stadiums, campuses, neighborhoods, named
+buildings) a photo falls *inside*, build a place database from an OpenStreetMap extract.
+Download the region(s) where your photos are from [GeoFabrik](https://download.geofabrik.de/north-america.html)
+— start with a single US state (`https://download.geofabrik.de/north-america/us/<state>-latest.osm.pbf`,
+~0.3–2 GB) — then:
+
+```bash
+uv run python scripts/build_osm_places.py path/to/<state>-latest.osm.pbf
+# add more regions later without rebuilding:
+uv run python scripts/build_osm_places.py path/to/<another>.osm.pbf --append
+```
+
+This assembles named area polygons into `data/osm/places.sqlite`. When present, polygon
+containment becomes the source of a photo's **city + sub-location**; GeoNames then only
+supplies state/county/country. Skip it and geocoding falls back to GeoNames city names.
+OSM data © OpenStreetMap contributors (ODbL). View the boundaries on the **Places DB** map
+(`/map.html`) via the "OSM places" toggle.
+
+### 5. Run
 
 ```bash
 uv run geotagger
@@ -72,12 +92,36 @@ resolved to **city / state / county / country** entirely offline — the nearest
 place is found via a spatial index. Coordinates are quantized (~11 m) so nearby photos
 share one lookup.
 
+If the OSM place database is also built (setup step 4), the **city** instead comes from the
+actual administrative boundary the coordinate falls inside — and photos additionally get a
+**sub-location** (the smallest containing park / stadium / campus / neighborhood / named
+building). By default, a coordinate outside every imported OSM city polygon falls back to
+the GeoNames nearest-city name (GeoNames still fills state/county/country either way) —
+useful since OSM coverage is usually only a handful of imported regions. Once your imported
+regions cover your whole library, set `GEOTAGGER_OSM_CITY_FALLBACK_GEONAMES=0` for strict
+"OSM only" behavior, where a coordinate outside every polygon gets no city name at all.
+
 - **On scan:** newly-indexed geotagged photos are reverse-geocoded automatically (stored in
   the database).
 - **On geotag:** dropping/applying a location also writes the place names.
 - Place names are stored in the database, and written into XMP sidecars as the standard
   IPTC/Photoshop fields (`photoshop:City`, `photoshop:State`, `photoshop:Country`,
   `Iptc4xmpCore:CountryCode`) that Lightroom, Bridge, digiKam, etc. all read.
+
+`POST /api/geocode/backfill` only geocodes photos that have *never* been resolved — a photo
+already geocoded before you built (or later extended) the OSM place database won't pick up
+the new place names on its own. To force already-geocoded photos to be re-resolved:
+
+```bash
+uv run python scripts/regeocode.py --dry-run --bbox minLng,minLat,maxLng,maxLat --limit 20  # preview a subset
+uv run python scripts/regeocode.py --bbox minLng,minLat,maxLng,maxLat --limit 20            # verify a subset
+uv run python scripts/regeocode.py --bbox minLng,minLat,maxLng,maxLat                       # the whole region
+uv run python scripts/regeocode.py                                                          # the whole library
+```
+
+`--bbox` is handy to try just the region you imported OSM data for before committing to a
+full-library run (which can take a while on a large library). This also clears the geocode
+cache, since it's stale once OSM data changes the city-resolution rules globally.
 
 API:
 
@@ -108,3 +152,5 @@ GEOTAGGER_SIDECAR_MODE=fullname uv run geotagger
 | `GEOTAGGER_PORT` | `8000` | Port |
 | `GEOTAGGER_GEONAMES_DIR` | `data/geonames` | Directory holding the downloaded GeoNames files |
 | `GEOTAGGER_GEOCODE_PRECISION` | `4` | Decimal degrees of coordinate quantization for the geocode cache (4 ≈ 11 m) |
+| `GEOTAGGER_OSM_DB` | `data/osm/places.sqlite` | OSM place-boundary database (built by `scripts/build_osm_places.py`) |
+| `GEOTAGGER_OSM_CITY_FALLBACK_GEONAMES` | `1` | `0` = strict OSM-only city (no fallback for coordinates outside every imported polygon) |

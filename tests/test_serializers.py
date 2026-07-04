@@ -58,7 +58,16 @@ class TestPhotoGeocodeDict:
                    ("Paris", "Île-de-France", "France", pid))
         db.commit()
         d = serializers.photo_geocode_dict(index.get_photo(pid))
-        assert d["location"] == {"city": "Paris", "state": "Île-de-France", "country": "France"}
+        assert d["location"] == {"city": "Paris", "sublocation": None,
+                                 "state": "Île-de-France", "country": "France"}
+
+    def test_nested_location_includes_sublocation(self, db):
+        pid = _add_photo(db, lat=1.0, lng=2.0)
+        db.execute("UPDATE photos SET loc_city=?, loc_sublocation=?, loc_country=? WHERE id=?",
+                   ("Paris", "Eiffel Tower", "France", pid))
+        db.commit()
+        d = serializers.photo_geocode_dict(index.get_photo(pid))
+        assert d["location"]["sublocation"] == "Eiffel Tower"
 
 
 class TestRowLocation:
@@ -72,7 +81,7 @@ class TestRowLocation:
                    ("Rome", "Lazio", "Italy", pid))
         db.commit()
         assert serializers.row_location(index.get_photo(pid)) == {
-            "city": "Rome", "state": "Lazio", "country": "Italy"}
+            "city": "Rome", "sublocation": None, "state": "Lazio", "country": "Italy"}
 
     def test_defensive_against_rows_without_loc_columns(self, db):
         # A row that doesn't even carry the loc_* columns must not KeyError.

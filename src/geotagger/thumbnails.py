@@ -168,7 +168,8 @@ def _frame_via_av(path: Path) -> Image.Image:
     raise RuntimeError("Could not decode any video frame")
 
 
-def _open_image(path: Path, full_decode: bool = False) -> Image.Image:
+def _open_image(path: Path, full_decode: bool = False,
+                orientation: int | None = None) -> Image.Image:
     ext = path.suffix.lower()
 
     if ext in VIDEO_EXTENSIONS:
@@ -186,7 +187,15 @@ def _open_image(path: Path, full_decode: bool = False) -> Image.Image:
         try:
             import pillow_heif
             pillow_heif.register_heif_opener()
-            return Image.open(path)
+            img = Image.open(path)
+            # Unlike every other branch here, libheif bakes the container's own
+            # rotation/mirror (irot/imir) into the decoded pixels — it's a mandatory
+            # HEIF transform, not a hint like EXIF orientation. That breaks this
+            # module's sensor-space contract, since these HEICs (no PreviewImage to
+            # fall back to) also carry a legacy EXIF orientation tag describing the
+            # same rotation for compatibility. Undo the bake so callers can apply
+            # that tag once via apply_orientation(), same as every other path.
+            return apply_orientation(img, _INVERSE_ORIENTATION.get(orientation or 1, orientation or 1))
         except Exception:
             raise RuntimeError(f"Cannot decode HEIC: {path}")
 
@@ -209,10 +218,16 @@ def _open_image(path: Path, full_decode: bool = False) -> Image.Image:
 
 
 def _make_thumbnail(path: Path, max_size: int, is_video: bool = False,
-                    orientation: int | None = None, full_decode: bool = False) -> bytes:
-    img = _open_image(path, full_decode=full_decode)
+                    orientation: int | None = None, full_decode: bool = False,
+                    sensor_space: bool = False) -> bytes:
+    """``orientation`` is always passed down to ``_open_image`` (needed to undo
+    HEIC's baked-in container rotation regardless of display intent). ``sensor_space``
+    skips the *display* rotation afterwards — set by ``get_preview``'s canonical,
+    orientation-independent rendition."""
+    img = _open_image(path, full_decode=full_decode, orientation=orientation)
     img = img.convert("RGB")
-    img = apply_orientation(img, orientation)
+    if not sensor_space:
+        img = apply_orientation(img, orientation)
     img.thumbnail((max_size, max_size), Image.LANCZOS)
 
     if is_video:
@@ -325,13 +340,18 @@ def rebuild_preview_from_full_decode(path: Path, mtime: float, size: int) -> byt
     return data
 
 
-def get_preview(path: Path, mtime: float, size: int) -> bytes:
+def get_preview(path: Path, mtime: float, size: int,
+                orientation: int | None = None) -> bytes:
     """Canonical preview in sensor orientation (NOT rotated).
 
     The source for face crops and the served webapp preview, so its pixels — and the
     face bboxes normalized to them — stay in a fixed space. Face *detection* runs on
     ``get_detection_preview`` (same canonical space, but a larger full RAW decode when
     ``config.RAW_FULL_DECODE`` is on). Use ``get_preview_oriented`` for display.
+
+    ``orientation`` doesn't change this preview's pixels (still sensor space, and
+    not part of the cache key) — it's only needed to undo HEIC's baked-in container
+    rotation in ``_open_image`` so "sensor space" holds for those files too.
     """
     thumbs = _get_thumbs_dir()
     key = _cache_key(path, mtime, size)
@@ -343,7 +363,8 @@ def get_preview(path: Path, mtime: float, size: int) -> bytes:
     if cached.exists():
         return cached.read_bytes()
     is_video = path.suffix.lower() in VIDEO_EXTENSIONS
-    data = _make_thumbnail(path, PREVIEW_SIZE, is_video=is_video, full_decode=bool(fd))
+    data = _make_thumbnail(path, PREVIEW_SIZE, is_video=is_video, orientation=orientation,
+                           full_decode=bool(fd), sensor_space=True)
     cached.write_bytes(data)
     return data
 
@@ -356,7 +377,7 @@ def get_preview_oriented(path: Path, mtime: float, size: int,
     rotated photos the canonical preview is rotated once and cached separately.
     """
     if not orientation or orientation == 1:
-        return get_preview(path, mtime, size)
+        return get_preview(path, mtime, size, orientation)
     thumbs = _get_thumbs_dir()
     key = _cache_key(path, mtime, size)
     subdir = thumbs / key[:2]
@@ -364,7 +385,7 @@ def get_preview_oriented(path: Path, mtime: float, size: int,
     cached = subdir / f"{key}_preview{_fd_suffix(path)}_o{orientation}.jpg"
     if cached.exists():
         return cached.read_bytes()
-    img = Image.open(io.BytesIO(get_preview(path, mtime, size))).convert("RGB")
+    img = Image.open(io.BytesIO(get_preview(path, mtime, size, orientation))).convert("RGB")
     img = apply_orientation(img, orientation)
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=85)
@@ -427,7 +448,7 @@ def get_face_crop(path: Path, mtime: float, size: int, bbox: tuple[float, float,
     if cached.exists():
         return cached.read_bytes()
 
-    img = Image.open(io.BytesIO(get_preview(path, mtime, size))).convert("RGB")
+    img = Image.open(io.BytesIO(get_preview(path, mtime, size, orientation))).convert("RGB")
     w, h = img.size
     x1, y1, x2, y2 = bbox[0] * w, bbox[1] * h, bbox[2] * w, bbox[3] * h
     bw, bh = x2 - x1, y2 - y1
@@ -483,7 +504,7 @@ def render_fullsize_with_faces(path: Path, orientation: int | None,
     executor, never the event loop. Not disk-cached: it's an on-demand full-size view.
     """
     ext = path.suffix.lower()
-    img = _decode_raw_full(path) if ext in config.RAW_EXTENSIONS else _open_image(path)
+    img = _decode_raw_full(path) if ext in config.RAW_EXTENSIONS else _open_image(path, orientation=orientation)
     img = img.convert("RGB")
     img = apply_orientation(img, orientation)
     w, h = img.size

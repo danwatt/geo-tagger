@@ -26,6 +26,7 @@ def photo_geocode_dict(r) -> dict:
         "gps_accuracy": r["gps_accuracy"] if r["gps_accuracy"] and r["gps_accuracy"] > 0 else None,
         "location": {
             "city": r["loc_city"],
+            "sublocation": r["loc_sublocation"] if "loc_sublocation" in r.keys() else None,
             "state": r["loc_state"],
             "country": r["loc_country"],
         } if r["loc_country"] else None
@@ -38,7 +39,9 @@ def row_location(r) -> dict | None:
     keys = r.keys()
     if "loc_country" not in keys or not r["loc_country"]:
         return None
-    return {"city": r["loc_city"], "state": r["loc_state"], "country": r["loc_country"]}
+    return {"city": r["loc_city"],
+            "sublocation": r["loc_sublocation"] if "loc_sublocation" in keys else None,
+            "state": r["loc_state"], "country": r["loc_country"]}
 
 
 def face_item(r) -> dict:

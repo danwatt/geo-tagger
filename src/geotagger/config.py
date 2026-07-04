@@ -49,6 +49,29 @@ GEONAMES_DIR: Path = get_geonames_dir()
 # equator (and less at higher latitudes) — fine for city/state/country tagging.
 GEOCODE_PRECISION = int(os.environ.get("GEOTAGGER_GEOCODE_PRECISION", "4"))
 
+# ── OSM places (offline, polygon reverse geocoding) ──
+# SQLite DB of OSM area polygons (cities, parks, stadiums, campuses, neighborhoods,
+# named buildings) built from GeoFabrik .osm.pbf extract(s) with:
+#     uv run python scripts/build_osm_places.py <region>.osm.pbf
+# When present, polygon containment is the source of a photo's city + sub-location
+# (see osm_places.py); GeoNames then only supplies state/county/country.
+def get_osm_db() -> Path:
+    if env := os.environ.get("GEOTAGGER_OSM_DB"):
+        return Path(env)
+    return _PROJECT_ROOT / "data" / "osm" / "places.sqlite"
+
+OSM_DB_PATH: Path = get_osm_db()
+
+# When True, fall back to the GeoNames nearest-city name for photos that fall
+# outside every OSM city polygon (e.g. rural areas, or a region not yet ingested).
+# Default True: OSM cities still take priority wherever a photo falls inside one,
+# but a coordinate outside every ingested OSM polygon still gets a usable city
+# instead of "(none)" — the common case while OSM coverage is only ever a
+# handful of imported regions. Set to "0" for strict "OSM replaces city" (no
+# fallback) once your imported regions cover the whole library and "(none)"
+# should mean "genuinely outside my library's area."
+OSM_CITY_FALLBACK_GEONAMES = os.environ.get("GEOTAGGER_OSM_CITY_FALLBACK_GEONAMES", "1") == "1"
+
 # Supported file extensions
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".heic", ".heif", ".nef", ".dng", ".tif", ".tiff", ".png"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".avi"}

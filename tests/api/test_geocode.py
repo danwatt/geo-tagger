@@ -67,3 +67,46 @@ def test_voronoi_returns_cell_polygons(client, geonames_dir):
     cell = next(c for c in body["cells"] if c["city"] == "Testville")
     assert len(cell["polygon"]) >= 3
     assert all(len(pt) == 2 for pt in cell["polygon"])
+
+
+def _osm_city_row(name, min_lat, max_lat, min_lng, max_lng, area=1.0):
+    outer = [[min_lat, min_lng], [max_lat, min_lng], [max_lat, max_lng], [min_lat, max_lng]]
+    return dict(name=name, category="city", admin_level=8, area=area, polygons=[[outer, []]])
+
+
+def test_osm_places_503_without_data(client, osm_db):
+    assert client.get("/api/geocode/osm-places?bbox=-1,-1,1,1").status_code == 503
+
+
+def test_osm_places_400_bad_bbox(client, osm_db):
+    osm_db([_osm_city_row("Testville", 39.9, 40.1, -74.1, -73.9)])
+    assert client.get("/api/geocode/osm-places?bbox=nonsense").status_code == 400
+
+
+def test_osm_places_returns_geojson_feature_collection_within_bbox(client, osm_db):
+    osm_db([_osm_city_row("Testville", 39.9, 40.1, -74.1, -73.9)])
+    r = client.get("/api/geocode/osm-places?bbox=-75,39,-73,41")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["type"] == "FeatureCollection"
+    assert body["total"] == 1
+    assert len(body["features"]) == 1
+    feature = body["features"][0]
+    assert feature["type"] == "Feature"
+    assert feature["properties"]["name"] == "Testville"
+    assert feature["geometry"]["type"] == "MultiPolygon"
+
+
+def test_osm_places_unwraps_a_bbox_panned_around_the_globe(client, osm_db):
+    # Regression: Leaflet's getBounds() after panning past +/-180 sent raw,
+    # unwrapped longitudes like these for a Fort Worth, TX viewport, which
+    # matched nothing until the bbox was unwrapped back into [-180, 180].
+    osm_db([_osm_city_row("Fort Worth", 32.5, 33.1, -97.5, -96.0)])
+    r = client.get(
+        "/api/geocode/osm-places"
+        "?bbox=-458.4223937988281,32.5635873170885,-456.0946655273438,33.0926823840692"
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert body["features"][0]["properties"]["name"] == "Fort Worth"

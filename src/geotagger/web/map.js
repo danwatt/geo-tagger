@@ -14,11 +14,29 @@
  * reverse-geocode to that place — drawn as a translucent colored polygon
  * underneath the markers so you can see where the boundary between two
  * places actually falls.
+ *
+ * Past MIN_ZOOM_FOR_OSM, /api/geocode/osm-places additionally supplies real
+ * OSM boundaries (cities, parks, stadiums, campuses, neighborhoods, named
+ * buildings) as a GeoJSON FeatureCollection, rendered with Leaflet's built-in
+ * L.geoJSON() layer (no extra plugin needed — GeoJSON support is core Leaflet).
  */
 
 const MIN_ZOOM_FOR_MARKERS = 8;
 const MIN_ZOOM_FOR_VORONOI = 11;
+const MIN_ZOOM_FOR_OSM = 11;
 const REFRESH_DEBOUNCE_MS = 250;
+
+// Distinct color per OSM place category so a stadium vs. a park vs. a campus
+// reads at a glance. Keep in sync with build_osm_places.classify categories.
+const OSM_CATEGORY_COLORS = {
+  city: "#4f8cff",
+  neighbourhood: "#00b3a4",
+  park: "#3fbf5f",
+  venue: "#ff8c42",
+  campus: "#a06bff",
+  attraction: "#ff5fa2",
+  building: "#9aa0a6",
+};
 
 let map;
 let baseTileLayer = null;
@@ -27,9 +45,12 @@ let activeBasemap = "street";
 let markerCluster = null;
 let voronoiLayer = null;
 let voronoiEnabled = true;
+let osmLayer = null;
+let osmEnabled = false;
 let refreshTimer = null;
 let fetchSeq = 0;
 let voronoiFetchSeq = 0;
+let osmFetchSeq = 0;
 
 const BASEMAPS = {
   street: {
@@ -59,6 +80,12 @@ document.addEventListener("DOMContentLoaded", () => {
     voronoiEnabled = toggle.checked;
     refreshVoronoi();
   });
+
+  const osmToggle = document.getElementById("osm-toggle");
+  osmToggle.addEventListener("change", () => {
+    osmEnabled = osmToggle.checked;
+    refreshOsm();
+  });
 });
 
 function initMap() {
@@ -67,11 +94,38 @@ function initMap() {
   addBasemapControl();
 
   // Added before the marker layer so cell polygons render underneath markers.
+  // osmLayer is added after voronoiLayer so its outlines draw over the
+  // translucent Voronoi fills; both stay under the marker pane.
   voronoiLayer = L.layerGroup().addTo(map);
+  osmLayer = L.geoJSON(null, { style: osmFeatureStyle, onEachFeature: bindOsmPopup }).addTo(map);
   markerCluster = L.markerClusterGroup({ maxClusterRadius: 60 });
   map.addLayer(markerCluster);
 
+  map.on("moveend", correctWorldWrap);
   map.on("moveend zoomend", scheduleRefresh);
+}
+
+// Leaflet projects longitude linearly with no wraparound, so continuous
+// horizontal dragging lets the map's own center drift past +/-180 (the same
+// root cause as getBounds() returning e.g. lng=-458 instead of -98 — see
+// contexts.normalize_lng_bbox on the backend, which fixes the *query*). But
+// every vector layer we draw (GeoNames markers, Voronoi cells, OSM polygons)
+// is placed at its canonical (wrapped) longitude, so once the view has
+// drifted a full world away, those layers render a full world-width off
+// screen. Silently re-centering to the CRS-wrapped equivalent view fixes
+// this for every layer at once — visually a no-op, since Leaflet's tile
+// rendering is already seamless across world copies — and keeps the map's
+// own coordinate system in sync with the canonical data going forward.
+function correctWorldWrap() {
+  const center = map.getCenter();
+  const wrapped = map.wrapLatLng(center);
+  // Epsilon, not strict equality: wrapping an already-in-range value can
+  // reintroduce a little floating-point noise via its internal modulo, which
+  // would otherwise trigger a spurious (if harmless-looking) setView on every
+  // single pan.
+  if (Math.abs(wrapped.lng - center.lng) > 1e-9) {
+    map.setView(wrapped, map.getZoom(), { animate: false });
+  }
 }
 
 function setBasemap(key) {
@@ -122,6 +176,7 @@ async function fitToLibrary() {
   }
   refreshMarkers();
   refreshVoronoi();
+  refreshOsm();
 }
 
 function scheduleRefresh() {
@@ -129,6 +184,7 @@ function scheduleRefresh() {
   refreshTimer = setTimeout(() => {
     refreshMarkers();
     refreshVoronoi();
+    refreshOsm();
   }, REFRESH_DEBOUNCE_MS);
 }
 
@@ -189,6 +245,50 @@ async function refreshVoronoi() {
   } catch (e) {
     // best-effort visual overlay; the marker fetch already reports errors
   }
+}
+
+async function refreshOsm() {
+  const zoom = map.getZoom();
+  if (!osmEnabled || zoom < MIN_ZOOM_FOR_OSM) {
+    osmLayer.clearLayers();
+    return;
+  }
+
+  const b = map.getBounds();
+  const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
+  const seq = ++osmFetchSeq;
+  try {
+    const res = await fetch(`/api/geocode/osm-places?bbox=${encodeURIComponent(bbox)}`);
+    if (res.status === 503) {
+      osmLayer.clearLayers();
+      setStatus("OSM places DB not built — run scripts/build_osm_places.py <region>.osm.pbf", true);
+      return;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const geojson = await res.json();
+    if (seq !== osmFetchSeq) return; // a newer request superseded this one
+    osmLayer.clearLayers();
+    osmLayer.addData(geojson);
+  } catch (e) {
+    if (seq === osmFetchSeq) setStatus("Error loading OSM places: " + e.message, true);
+  }
+}
+
+// style/onEachFeature callbacks for the osmLayer L.geoJSON() instance (created
+// once in initMap; refreshOsm just swaps the data via clearLayers()/addData()).
+function osmFeatureStyle(feature) {
+  const color = OSM_CATEGORY_COLORS[feature.properties.category] || "#888";
+  return { color, weight: 2, opacity: 0.9, fillColor: color, fillOpacity: 0.12 };
+}
+
+function bindOsmPopup(feature, layer) {
+  layer.bindPopup(
+    `<div class="map-popup">
+      <div class="map-popup-name">${escHtml(feature.properties.name)}</div>
+      <div class="map-popup-region">${escHtml(feature.properties.category)}</div>
+    </div>`,
+    { className: "map-popup-wrap" }
+  );
 }
 
 function renderVoronoi(cells) {

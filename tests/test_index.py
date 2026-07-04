@@ -4,10 +4,12 @@ from geotagger import index
 
 
 def _upsert(db, path="p1.jpg", mtime=1000.0, sidecar_path=None, sidecar_mtime=None,
-            camera="Canon EOS", photo_datetime=123, gps_accuracy=5.0, orientation=1):
+            camera="Canon EOS", photo_datetime=123, gps_accuracy=5.0, orientation=1,
+            lat=None, lng=None):
     index.upsert_photo(
         path=path, filename=path, dir_=".", ext=".jpg", media_type="image",
-        mtime=mtime, size=100, lat=None, lng=None, geotag_source="none",
+        mtime=mtime, size=100, lat=lat, lng=lng,
+        geotag_source="sidecar" if lat is not None else "none",
         sidecar_path=sidecar_path, sidecar_mtime=sidecar_mtime,
         camera=camera, photo_datetime=photo_datetime,
         gps_accuracy=gps_accuracy, orientation=orientation,
@@ -270,3 +272,20 @@ class TestContextsForPointTime:
             100, 200, 0, 1, 0, 1,
         )
         assert index.contexts_for_point_time(0.5, 0.5, 999) == []
+
+
+class TestGetPhotosBbox:
+    def test_filters_to_bbox(self, db):
+        _upsert(db, path="in.jpg", lat=40.0, lng=-74.0)
+        _upsert(db, path="out.jpg", lat=10.0, lng=10.0)
+        rows = index.get_photos(bbox="-75,39,-73,41")
+        assert [r["path"] for r in rows] == ["in.jpg"]
+
+    def test_unwraps_a_bbox_panned_around_the_globe(self, db):
+        # Regression: Leaflet's getBounds() after panning past +/-180 returns
+        # raw, unwrapped longitudes — this bbox is a Fort Worth, TX viewport
+        # that arrives as -458.4/-456.1 instead of -98.4/-96.1.
+        _upsert(db, path="fw.jpg", lat=32.75, lng=-97.3)
+        rows = index.get_photos(
+            bbox="-458.4223937988281,32.5635873170885,-456.0946655273438,33.0926823840692")
+        assert [r["path"] for r in rows] == ["fw.jpg"]

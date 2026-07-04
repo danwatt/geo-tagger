@@ -106,6 +106,10 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
         _db.execute("ALTER TABLE photos ADD COLUMN loc_country TEXT")
     if "loc_country_code" not in cols:
         _db.execute("ALTER TABLE photos ADD COLUMN loc_country_code TEXT")
+    # Smallest containing OSM named feature (park/stadium/campus/neighborhood/
+    # building) from polygon reverse geocoding — a sub-location under loc_city.
+    if "loc_sublocation" not in cols:
+        _db.execute("ALTER TABLE photos ADD COLUMN loc_sublocation TEXT")
     if "geocoded_at" not in cols:
         _db.execute("ALTER TABLE photos ADD COLUMN geocoded_at REAL")
     # Files that don't matter for geocoding (e.g. screenshots). They still show
@@ -158,6 +162,10 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
             PRIMARY KEY (qlat, qlng)
         )
     """)
+    # OSM sub-location cached alongside the GeoNames names (additive migration).
+    cache_cols = {r[1] for r in _db.execute("PRAGMA table_info(geocode_cache)").fetchall()}
+    if "sublocation" not in cache_cols:
+        _db.execute("ALTER TABLE geocode_cache ADD COLUMN sublocation TEXT")
 
     _db.execute("""
         CREATE TABLE IF NOT EXISTS contexts (
@@ -387,7 +395,9 @@ def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str |
     if bbox:
         # bbox=minLng,minLat,maxLng,maxLat
         try:
+            from geotagger.contexts import normalize_lng_bbox
             min_lng, min_lat, max_lng, max_lat = map(float, bbox.split(","))
+            min_lng, max_lng = normalize_lng_bbox(min_lng, max_lng)
             clauses.append("lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?")
             params += [min_lat, max_lat, min_lng, max_lng]
         except ValueError:
@@ -774,13 +784,14 @@ def contexts_for_point_time(lat: float, lng: float, ts: int) -> list[sqlite3.Row
 def get_cached_geocode(qlat: int, qlng: int) -> dict | None:
     """Return a cached location for quantized coords, or None on a miss."""
     row = get_db().execute(
-        "SELECT city, state, county, country, country_code FROM geocode_cache "
+        "SELECT city, sublocation, state, county, country, country_code FROM geocode_cache "
         "WHERE qlat=? AND qlng=?",
         (qlat, qlng),
     ).fetchone()
     if row is None:
         return None
-    return {"city": row["city"], "state": row["state"], "county": row["county"],
+    return {"city": row["city"], "sublocation": row["sublocation"],
+            "state": row["state"], "county": row["county"],
             "country": row["country"], "country_code": row["country_code"]}
 
 
@@ -789,10 +800,10 @@ def put_cached_geocode(qlat: int, qlng: int, loc: dict, source: str = "local"):
     db = get_db()
     db.execute(
         """INSERT OR REPLACE INTO geocode_cache
-               (qlat, qlng, city, state, county, country, country_code, source, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (qlat, qlng, loc.get("city"), loc.get("state"), loc.get("county"),
-         loc.get("country"), loc.get("country_code"), source, time.time()),
+               (qlat, qlng, city, sublocation, state, county, country, country_code, source, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (qlat, qlng, loc.get("city"), loc.get("sublocation"), loc.get("state"),
+         loc.get("county"), loc.get("country"), loc.get("country_code"), source, time.time()),
     )
     db.commit()
 
@@ -803,16 +814,16 @@ def update_photo_location(photo_id: int, loc: dict | None):
     db = get_db()
     if loc is None:
         db.execute(
-            "UPDATE photos SET loc_city=NULL, loc_state=NULL, loc_county=NULL, "
-            "loc_country=NULL, loc_country_code=NULL, geocoded_at=? WHERE id=?",
+            "UPDATE photos SET loc_city=NULL, loc_sublocation=NULL, loc_state=NULL, "
+            "loc_county=NULL, loc_country=NULL, loc_country_code=NULL, geocoded_at=? WHERE id=?",
             (time.time(), photo_id),
         )
     else:
         db.execute(
-            "UPDATE photos SET loc_city=?, loc_state=?, loc_county=?, loc_country=?, "
-            "loc_country_code=?, geocoded_at=? WHERE id=?",
-            (loc.get("city"), loc.get("state"), loc.get("county"), loc.get("country"),
-             loc.get("country_code"), time.time(), photo_id),
+            "UPDATE photos SET loc_city=?, loc_sublocation=?, loc_state=?, loc_county=?, "
+            "loc_country=?, loc_country_code=?, geocoded_at=? WHERE id=?",
+            (loc.get("city"), loc.get("sublocation"), loc.get("state"), loc.get("county"),
+             loc.get("country"), loc.get("country_code"), time.time(), photo_id),
         )
     db.commit()
 
@@ -844,7 +855,7 @@ def count_geocoded_photos() -> int:
 def get_photos_with_location() -> list[sqlite3.Row]:
     """All photos that have resolved location names — used to export to sidecars."""
     return get_db().execute(
-        "SELECT id, path, loc_city, loc_state, loc_country, loc_country_code "
+        "SELECT id, path, loc_city, loc_sublocation, loc_state, loc_country, loc_country_code "
         "FROM photos WHERE loc_country_code IS NOT NULL"
     ).fetchall()
 
@@ -991,7 +1002,7 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
         f"""SELECT f.id, f.photo_id, f.person_id, f.bbox, f.det_score, f.embedding,
                    f.ignored, f.assigned_at, f.ignored_at, p.name AS person_name, ph.filename,
                    ph.photo_datetime, ph.orientation,
-                   ph.loc_city, ph.loc_state, ph.loc_country
+                   ph.loc_city, ph.loc_sublocation, ph.loc_state, ph.loc_country
             FROM faces f
             LEFT JOIN persons p ON p.id = f.person_id
             JOIN photos ph ON ph.id = f.photo_id

@@ -43,10 +43,26 @@ function initMap() {
   map = L.map("map").setView([20, 0], 2);
   setBasemap("street");
   addBasemapControl();
+  map.on("moveend", correctWorldWrap);
 
   // Init Leaflet-Geoman
   map.pm.setGlobalOptions({ snappable: true, snapDistance: 15 });
   map.on("pm:create", onGeomanCreate);
+}
+
+// Leaflet projects longitude linearly with no wraparound, so continuous
+// horizontal dragging lets the map's own center drift past +/-180. Context
+// polygons are drawn at their canonical (wrapped) vertices, so once the view
+// has drifted a full world away, they'd render a full world-width off screen.
+// Silently re-centering to the CRS-wrapped equivalent view fixes this —
+// visually a no-op, since Leaflet's tile rendering is already seamless across
+// world copies — and keeps the map's own coordinate system from drifting further.
+function correctWorldWrap() {
+  const center = map.getCenter();
+  const wrapped = map.wrapLatLng(center);
+  if (Math.abs(wrapped.lng - center.lng) > 1e-9) {
+    map.setView(wrapped, map.getZoom(), { animate: false });
+  }
 }
 
 function setBasemap(key) {

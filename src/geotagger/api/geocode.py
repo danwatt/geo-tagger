@@ -6,7 +6,8 @@ import asyncio
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from geotagger import index, geocode, serializers
+from geotagger import index, geocode, osm_places, serializers
+from geotagger.contexts import normalize_lng_bbox
 from geotagger.executor import get_executor
 from geotagger.services import geocode_service
 
@@ -17,11 +18,25 @@ class GeocodeBackfillRequest(BaseModel):
     limit: int = 1000  # photos geocoded per call; repeat until remaining == 0
 
 
+def _parse_bbox(bbox: str) -> tuple[float, float, float, float]:
+    """-> (min_lat, max_lat, min_lng, max_lng), with longitude unwrapped back into
+    [-180, 180]. map.getBounds() (Leaflet) returns raw longitudes outside that
+    range once the map has been panned all the way around the globe — see
+    contexts.normalize_lng_bbox."""
+    try:
+        min_lng, min_lat, max_lng, max_lat = map(float, bbox.split(","))
+    except ValueError:
+        raise HTTPException(400, "bbox must be minLng,minLat,maxLng,maxLat")
+    min_lng, max_lng = normalize_lng_bbox(min_lng, max_lng)
+    return min_lat, max_lat, min_lng, max_lng
+
+
 @router.get("/api/geocode/status")
 async def api_geocode_status():
     """Geocoder availability plus how many photos are geocoded vs. pending."""
     return {
         **geocode.status(),
+        "osm": osm_places.status(),
         "geocoded": index.count_geocoded_photos(),
         "pending": index.count_photos_needing_geocode(),
     }
@@ -32,10 +47,7 @@ async def api_geocode_places(bbox: str = Query(...), limit: int = Query(3000, le
     """GeoNames places within a viewport bbox — backs the Places DB map, which
     plots the raw reverse-geocode reference data (not photos) so the user can
     verify what place names a coordinate would resolve to."""
-    try:
-        min_lng, min_lat, max_lng, max_lat = map(float, bbox.split(","))
-    except ValueError:
-        raise HTTPException(400, "bbox must be minLng,minLat,maxLng,maxLat")
+    min_lat, max_lat, min_lng, max_lng = _parse_bbox(bbox)
     if not geocode.is_available():
         raise HTTPException(503, "GeoNames data not installed — run scripts/get_geonames.py")
     places, total = geocode.cities_in_bbox(min_lat, max_lat, min_lng, max_lng, limit=limit)
@@ -47,10 +59,7 @@ async def api_geocode_voronoi(bbox: str = Query(...), limit: int = Query(4000, l
     """Voronoi cells for GeoNames places in a viewport bbox — for each place,
     the exact area a coordinate must fall in to reverse-geocode to it. Backs
     the Places DB map's cell overlay, shown once zoomed in far enough."""
-    try:
-        min_lng, min_lat, max_lng, max_lat = map(float, bbox.split(","))
-    except ValueError:
-        raise HTTPException(400, "bbox must be minLng,minLat,maxLng,maxLat")
+    min_lat, max_lat, min_lng, max_lng = _parse_bbox(bbox)
     if not geocode.is_available():
         raise HTTPException(503, "GeoNames data not installed — run scripts/get_geonames.py")
     loop = asyncio.get_running_loop()
@@ -58,6 +67,29 @@ async def api_geocode_voronoi(bbox: str = Query(...), limit: int = Query(4000, l
         get_executor(), geocode.voronoi_cells, min_lat, max_lat, min_lng, max_lng, limit
     )
     return {"cells": cells, "total": total, "truncated": total > len(cells)}
+
+
+@router.get("/api/geocode/osm-places")
+async def api_geocode_osm_places(bbox: str = Query(...), limit: int = Query(4000, le=8000)):
+    """OSM place polygons overlapping a viewport bbox, as a GeoJSON FeatureCollection
+    — backs the Places DB map's OSM boundary overlay (cities, parks, stadiums,
+    campuses, neighborhoods, named buildings), rendered via Leaflet's L.geoJSON().
+    503 if the OSM places DB hasn't been built. `total`/`truncated` are extra
+    top-level fields alongside the standard `type`/`features` — GeoJSON consumers
+    that only look at `features` are unaffected."""
+    min_lat, max_lat, min_lng, max_lng = _parse_bbox(bbox)
+    if not osm_places.is_available():
+        raise HTTPException(503, "OSM places DB not built — run scripts/build_osm_places.py <region>.osm.pbf")
+    loop = asyncio.get_running_loop()
+    places, total = await loop.run_in_executor(
+        get_executor(), osm_places.places_in_bbox, min_lat, max_lat, min_lng, max_lng, limit
+    )
+    return {
+        "type": "FeatureCollection",
+        "features": [osm_places.place_to_geojson_feature(p) for p in places],
+        "total": total,
+        "truncated": total > len(places),
+    }
 
 
 @router.post("/api/geocode/backfill")

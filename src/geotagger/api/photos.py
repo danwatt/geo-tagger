@@ -337,6 +337,7 @@ async def api_photo(photo_id: int):
         "geocode_ignored": bool(row["geocode_ignored"]),
         "location": {
             "city": row["loc_city"],
+            "sublocation": row["loc_sublocation"],
             "state": row["loc_state"],
             "county": row["loc_county"],
             "country": row["loc_country"],

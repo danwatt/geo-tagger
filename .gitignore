@@ -12,3 +12,8 @@ dist/
 .pytest_cache/
 .coverage
 htmlcov/
+
+data/
+
+
+.idea

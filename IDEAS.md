@@ -2,6 +2,13 @@
 
 Parked ideas for geo-tagger, to revisit later.
 
+## Bug Fixes
+* Image rotation issues
+* Starting to get a lot of false positives
+
+## Consistency
+* Groups with date range and locations
+* Show sublocation if available
 
 ## Narrow the face detection to time/space
 
