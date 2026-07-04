@@ -132,37 +132,29 @@ function renderFaceCoverage(cov) {
   ).join("");
 }
 
-/* ── Coverage-by-month card ── */
-async function loadMonths() {
-  try {
-    const res = await fetch("/api/stats/months");
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    clearError("card-months");
-    renderMonths(data.months.slice().reverse());
-  } catch (e) {
-    showError("card-months", e.message);
-  }
-}
-
-function renderMonths(months) {
-  const container = document.getElementById("months-bar-container");
+/* ── Shared stacked-bar-by-month renderer ──
+   `segments` is bottom-to-top-last stacking order: [{key, cls, label}, ...],
+   each `key` reading a count off the month object. Bar height per segment is
+   its share of that month's segment total (segments are expected to fully
+   partition the month, geo and faces both do). */
+function renderMonthBars(containerId, months, segments) {
+  const container = document.getElementById(containerId);
   container.innerHTML = "";
   let lastYear = null;
   months.forEach((m) => {
     const wrap = document.createElement("div");
     wrap.className = "month-bar";
-    const pctTagged = m.total > 0 ? (m.geotagged / m.total) * 100 : 0;
-    wrap.title = `${MONTH_NAMES[m.month - 1]} ${m.year} — ${m.geotagged.toLocaleString()} of ${m.total.toLocaleString()} tagged`;
+    const total = segments.reduce((sum, s) => sum + m[s.key], 0);
+    wrap.title = `${MONTH_NAMES[m.month - 1]} ${m.year} — ` +
+      segments.map((s) => `${m[s.key].toLocaleString()} ${s.label}`).join(", ");
 
-    const untagged = document.createElement("div");
-    untagged.className = "bar-untagged";
-    untagged.style.height = `${100 - pctTagged}%`;
-    const tagged = document.createElement("div");
-    tagged.className = "bar-tagged";
-    tagged.style.height = `${pctTagged}%`;
-    wrap.appendChild(untagged);
-    wrap.appendChild(tagged);
+    segments.forEach((s) => {
+      const pct = total > 0 ? (m[s.key] / total) * 100 : 0;
+      const seg = document.createElement("div");
+      seg.className = s.cls;
+      seg.style.height = `${pct}%`;
+      wrap.appendChild(seg);
+    });
 
     if (m.year !== lastYear) {
       const label = document.createElement("span");
@@ -173,6 +165,40 @@ function renderMonths(months) {
     }
     container.appendChild(wrap);
   });
+}
+
+/* ── Coverage-by-month card ── */
+async function loadMonths() {
+  try {
+    const res = await fetch("/api/stats/months");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    clearError("card-months");
+    renderMonthBars("months-bar-container", data.months.slice().reverse(), [
+      { key: "not_geotagged", cls: "bar-untagged", label: "untagged" },
+      { key: "geotagged", cls: "bar-tagged", label: "tagged" },
+    ]);
+  } catch (e) {
+    showError("card-months", e.message);
+  }
+}
+
+/* ── Face-coverage-by-month card ── */
+async function loadFacesMonths() {
+  try {
+    const res = await fetch("/api/stats/faces-months");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    clearError("card-faces-months");
+    renderMonthBars("faces-months-bar-container", data.months.slice().reverse(), [
+      { key: "no_faces", cls: "cov-noface", label: "no faces" },
+      { key: "none", cls: "cov-none", label: "none labeled" },
+      { key: "partial", cls: "cov-partial", label: "partial" },
+      { key: "full", cls: "cov-full", label: "full" },
+    ]);
+  } catch (e) {
+    showError("card-faces-months", e.message);
+  }
 }
 
 /* ── Reverse-geocode backfill loop ── */
@@ -245,6 +271,7 @@ async function runFacesScan() {
     btn.textContent = "Detect faces";
     await loadSummary();
     await loadFaceCoverage();
+    await loadFacesMonths();
   }
 }
 
@@ -257,3 +284,4 @@ document.getElementById("detect-faces-stop-btn").addEventListener("click", () =>
 loadSummary();
 loadFaceCoverage();
 loadMonths();
+loadFacesMonths();

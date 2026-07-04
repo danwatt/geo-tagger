@@ -42,6 +42,56 @@ async def api_stats_months():
         raise HTTPException(500, str(e))
 
 
+@router.get("/api/stats/faces-months")
+async def api_stats_faces_months():
+    """Get scanned-image-photo counts grouped by year/month, bucketed the same way
+    as get_face_coverage (full / partial / none / no_faces). Unscanned photos are
+    excluded, matching the face-coverage card's denominator."""
+    try:
+        db = index.get_db()
+        rows = db.execute("""
+            WITH photo_face_stats AS (
+                SELECT
+                    ph.id AS pid,
+                    strftime('%Y', ph.photo_datetime, 'unixepoch') as year,
+                    strftime('%m', ph.photo_datetime, 'unixepoch') as month,
+                    COUNT(f.id) AS total,
+                    COUNT(CASE WHEN f.person_id IS NOT NULL THEN 1 END) AS labeled,
+                    COUNT(CASE WHEN f.person_id IS NULL AND f.ignored = 0 THEN 1 END) AS unlabeled
+                FROM photos ph
+                LEFT JOIN faces f ON f.photo_id = ph.id
+                WHERE ph.media_type = 'image' AND ph.faces_scanned_at IS NOT NULL
+                  AND ph.photo_datetime IS NOT NULL AND ph.photo_datetime > 0
+                GROUP BY ph.id
+            )
+            SELECT
+                year, month,
+                SUM(CASE WHEN total = 0 THEN 1 ELSE 0 END) AS no_faces,
+                SUM(CASE WHEN total > 0 AND unlabeled = 0 THEN 1 ELSE 0 END) AS full,
+                SUM(CASE WHEN labeled > 0 AND unlabeled > 0 THEN 1 ELSE 0 END) AS partial,
+                SUM(CASE WHEN labeled = 0 AND unlabeled > 0 THEN 1 ELSE 0 END) AS none_labeled
+            FROM photo_face_stats
+            GROUP BY year, month
+            ORDER BY year DESC, month DESC
+        """).fetchall()
+
+        return {
+            "months": [
+                {
+                    "year": int(r["year"]),
+                    "month": int(r["month"]),
+                    "full": r["full"],
+                    "partial": r["partial"],
+                    "none": r["none_labeled"],
+                    "no_faces": r["no_faces"],
+                }
+                for r in rows
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 @router.get("/api/stats/summary")
 async def api_stats_summary():
     """One-shot health snapshot for the home dashboard: library size, geotagging /

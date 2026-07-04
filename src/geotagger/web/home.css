@@ -115,7 +115,7 @@
 .coverage-legend .sw { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
 
 /* ── Coverage-by-month bars ── */
-#months-bar-container {
+.months-bar-container {
   display: flex;
   align-items: flex-end;
   gap: 1px;
