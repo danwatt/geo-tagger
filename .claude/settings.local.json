@@ -24,7 +24,11 @@
       "Bash(command -v node)",
       "Bash(node --check src/geotagger/web/face-grid.js)",
       "Bash(node --check src/geotagger/web/people.js)",
-      "Bash(curl -s -X POST http://127.0.0.1:8123/api/persons -H \"Content-Type: application/json\" -d '{\"name\":\"Alice\"}')"
+      "Bash(curl -s -X POST http://127.0.0.1:8123/api/persons -H \"Content-Type: application/json\" -d '{\"name\":\"Alice\"}')",
+      "Bash(node --check src/geotagger/web/people-manage.js)",
+      "Bash(node --check src/geotagger/web/tag.js)",
+      "Bash(mkdir -p /tmp/geo_scratch)",
+      "Bash(cp \"C:/temp/geotagger/prod/index.db\" /tmp/geo_scratch/index_test.db)"
     ]
   }
 }

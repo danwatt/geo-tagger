@@ -59,6 +59,17 @@ function locationKey(face) {
   return [loc.city, loc.sublocation, loc.state, loc.country].filter(Boolean).join(", ") || null;
 }
 
+// Last path segment of a face's containing directory (its `dir` field, the
+// photo's parent folder) — the fallback grouping key when there's no resolved
+// location, e.g. undated scanned photos with no GPS. "Unknown folder" if the
+// photo somehow carries no directory at all.
+function dirLabel(face) {
+  const d = face.dir;
+  if (!d) return "Unknown folder";
+  const parts = d.replace(/[\\/]+$/, "").split(/[\\/]/);
+  return parts[parts.length - 1] || d;
+}
+
 function locationLabel(faces) {
   const counts = new Map();
   for (const f of faces) {
@@ -267,6 +278,10 @@ function openQuickActions(anchor, face, opts) {
  * }) */
 let _ppBackdrop = null;
 
+function isPersonPickerOpen() {
+  return _ppBackdrop !== null;
+}
+
 function closePersonPicker() {
   document.removeEventListener("keydown", _ppEscape);
   if (_ppBackdrop) _ppBackdrop.remove();
@@ -339,7 +354,7 @@ function openPersonPicker(persons, opts) {
       const nameEl = document.createElement("span");
       nameEl.textContent = p.name;
       row.appendChild(nameEl);
-      if (p.face_count !== undefined) {
+      if (p.face_count !== undefined && p.face_count !== null) {
         const countEl = document.createElement("span");
         countEl.className = "pp-count";
         countEl.textContent = p.face_count;
@@ -355,9 +370,34 @@ function openPersonPicker(persons, opts) {
       empty.textContent = "No people yet — type a name to create one.";
       list.appendChild(empty);
     }
+
+    _ppHighlightIdx = list.querySelectorAll(".pp-item").length ? 0 : -1;
+    _ppUpdateHighlight(list);
   }
 
   search.addEventListener("input", (e) => renderList(e.target.value));
+
+  // Arrow keys move a highlight over the (search-filtered) list; Enter picks
+  // whichever row is highlighted (defaults to the top match) without requiring
+  // the mouse — mirrors the up/down + Enter pattern used on the People grid.
+  search.addEventListener("keydown", (e) => {
+    const items = Array.from(list.children);
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (!items.length) return;
+      _ppHighlightIdx = Math.min(items.length - 1, _ppHighlightIdx + 1);
+      _ppUpdateHighlight(list);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!items.length) return;
+      _ppHighlightIdx = Math.max(0, _ppHighlightIdx - 1);
+      _ppUpdateHighlight(list);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const target = items[_ppHighlightIdx] || items[0];
+      if (target) target.click();
+    }
+  });
 
   backdrop.appendChild(modal);
   document.body.appendChild(backdrop);
@@ -365,6 +405,16 @@ function openPersonPicker(persons, opts) {
   renderList("");
   search.focus();
   document.addEventListener("keydown", _ppEscape);
+}
+
+let _ppHighlightIdx = -1;
+
+function _ppUpdateHighlight(list) {
+  const items = Array.from(list.children);
+  items.forEach((el, i) => el.classList.toggle("pp-hl", i === _ppHighlightIdx));
+  if (_ppHighlightIdx >= 0 && items[_ppHighlightIdx]) {
+    items[_ppHighlightIdx].scrollIntoView({ block: "nearest" });
+  }
 }
 
 function _positionQa(panel, anchor) {

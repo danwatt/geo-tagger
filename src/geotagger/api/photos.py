@@ -25,8 +25,11 @@ async def api_photos(
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     context_id: int | None = Query(None),
+    undated: bool = Query(False),
 ):
-    """Get photos, optionally filtered by date range or Life Context.
+    """Get photos, optionally filtered by date range, Life Context, or (undated=true)
+    photos with no timestamp at all — mutually exclusive with date_from/date_to and
+    context_id, which are meaningless without a photo_datetime.
 
     When context_id is supplied all other filtering is handled here:
       - Geotagged photos: R*Tree bbox prefilter in SQL, then exact point-in-polygon
@@ -103,7 +106,7 @@ async def api_photos(
     else:
         rows = index.get_photos(
             geotagged=geotagged, bbox=bbox,
-            date_from=date_from, date_to=date_to,
+            date_from=date_from, date_to=date_to, undated=undated,
         )
 
     return [serializers.photo_to_dict(r) for r in rows]

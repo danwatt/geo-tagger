@@ -6,13 +6,17 @@ from geotagger import index, thumbnails, contexts
 
 
 def photo_to_dict(r) -> dict:
-    """Grid/list shape for a photo row (carries geocode_ignored, no place names)."""
+    """Grid/list shape for a photo row (carries geocode_ignored, dir, and place names —
+    dir/location are only consumed by the Undated grid's location-else-directory
+    grouping; every other page ignores them)."""
     return {
         "id": r["id"], "filename": r["filename"], "media_type": r["media_type"],
         "lat": r["lat"], "lng": r["lng"], "geotag_source": r["geotag_source"],
         "camera": r["camera"], "photo_datetime": r["photo_datetime"],
         "gps_accuracy": r["gps_accuracy"] if r["gps_accuracy"] and r["gps_accuracy"] > 0 else None,
         "geocode_ignored": bool(r["geocode_ignored"]),
+        "dir": r["dir"] if "dir" in r.keys() else None,
+        "location": row_location(r),
     }
 
 
@@ -58,6 +62,7 @@ def face_item(r) -> dict:
         "photo_datetime": r["photo_datetime"],
         "assigned_at": r["assigned_at"],
         "ignored_at": r["ignored_at"],
+        "dir": r["dir"] if "dir" in r.keys() else None,
         "location": row_location(r),
         "suggestion": None,
         "alternatives": [],

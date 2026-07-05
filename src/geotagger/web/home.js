@@ -173,6 +173,17 @@ function renderMonthBars(containerId, months, segments, linkPage) {
   });
 }
 
+// Shows/hides the "N undated" link below a month-bar card, linking to
+// `linkPage?month=undated`. `total` is the undated photo/face count for that
+// page's queue; hidden entirely when there are none.
+function renderUndatedLink(linkId, total, linkPage) {
+  const link = document.getElementById(linkId);
+  if (!total) { link.style.display = "none"; return; }
+  link.style.display = "";
+  link.href = `${linkPage}?month=undated`;
+  link.textContent = `📁 ${total.toLocaleString()} undated photo${total === 1 ? "" : "s"} →`;
+}
+
 /* ── Coverage-by-month card ── */
 async function loadMonths() {
   try {
@@ -184,6 +195,7 @@ async function loadMonths() {
       { key: "not_geotagged", cls: "bar-untagged", label: "untagged" },
       { key: "geotagged", cls: "bar-tagged", label: "tagged" },
     ], "geocode.html");
+    renderUndatedLink("months-undated-link", data.undated.total, "geocode.html");
   } catch (e) {
     showError("card-months", e.message);
   }
@@ -202,6 +214,8 @@ async function loadFacesMonths() {
       { key: "partial", cls: "cov-partial", label: "partial" },
       { key: "full", cls: "cov-full", label: "full" },
     ], "people.html");
+    const u = data.undated;
+    renderUndatedLink("faces-months-undated-link", u.full + u.partial + u.none + u.no_faces, "people.html");
   } catch (e) {
     showError("card-faces-months", e.message);
   }

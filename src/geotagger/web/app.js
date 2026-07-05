@@ -14,6 +14,7 @@ let guessContextLayers = [];   // context polygons shown during guess
 let accuracyCircle = null;     // L.circle shown for selected photo's GPS accuracy
 let selectedYear = null;
 let selectedMonth = null;
+let undatedMode = false;  // true when browsing the Undated queue instead of a month/year
 
 /* ── Places state ── */
 let places = [];
@@ -121,10 +122,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // A "?month=YYYY-MM" URL argument (e.g. from the homepage month charts)
   // jumps straight to that month, same as picking it from the Month Picker.
+  // "?month=undated" (from the homepage's Undated link) jumps to the Undated
+  // queue instead.
   const monthArg = new URLSearchParams(window.location.search).get("month");
   const monthMatch = monthArg && monthArg.match(/^(\d{4})-(\d{2})$/);
   if (monthMatch) {
     await selectMonth(parseInt(monthMatch[1], 10), parseInt(monthMatch[2], 10));
+  } else if (monthArg === "undated") {
+    await selectUndated();
   } else {
     setStatus("Click 'Select Month' to begin");
   }
@@ -354,8 +359,25 @@ async function showMonthPicker() {
     const list = document.getElementById("month-picker-list");
     list.innerHTML = "";
 
+    if (data.undated && data.undated.total > 0) {
+      const item = document.createElement("div");
+      item.className = "month-item";
+      item.innerHTML = `
+        <div class="month-name">📁 Undated</div>
+        <div class="month-counts">
+          <span class="count-badge count-total">${data.undated.total} total</span>
+          <span class="count-badge count-geotagged">${data.undated.geotagged} geotagged</span>
+          <span class="count-badge count-not-geotagged">${data.undated.not_geotagged} not geotagged</span>
+        </div>
+      `;
+      item.addEventListener("click", selectUndated);
+      list.appendChild(item);
+    }
+
     if (!data.months || data.months.length === 0) {
-      list.innerHTML = "<p>No photos found with timestamps.</p>";
+      if (!data.undated || data.undated.total === 0) {
+        list.innerHTML = "<p>No photos found with timestamps.</p>";
+      }
       document.getElementById("month-picker-modal").style.display = "flex";
       return;
     }
@@ -424,6 +446,8 @@ async function selectMonth(year, month) {
   selectedYear = year;
   selectedMonth = month;
   dayIsolation = null;
+  undatedMode = false;
+  document.getElementById("timeline").style.display = "";
   hideMonthPicker();
 
   // Clear area and context selections
@@ -450,6 +474,8 @@ async function selectYear(year) {
   selectedYear = year;
   selectedMonth = null;
   dayIsolation = null;
+  undatedMode = false;
+  document.getElementById("timeline").style.display = "";
   hideMonthPicker();
 
   areaSelectParams = null;
@@ -461,6 +487,31 @@ async function selectYear(year) {
   clearContextFilter();
 
   document.getElementById("selected-month-label").textContent = `${year} (all months)`;
+
+  await loadPhotos(true);
+}
+
+// The Undated queue: photos with no timestamp at all, so there's no month/day
+// to drill into — no histogram, no day timeline, just the grid (grouped by
+// location if geotagged despite the missing date, else by containing directory
+// — see renderGrid's undatedSubGroups).
+async function selectUndated() {
+  selectedYear = null;
+  selectedMonth = null;
+  dayIsolation = null;
+  undatedMode = true;
+  hideMonthPicker();
+
+  areaSelectParams = null;
+  if (areaSelectCircle) {
+    map.removeLayer(areaSelectCircle);
+    areaSelectCircle = null;
+  }
+  document.getElementById("selected-area-label").textContent = "";
+  clearContextFilter();
+
+  document.getElementById("selected-month-label").textContent = "Undated photos";
+  document.getElementById("timeline").style.display = "none";
 
   await loadPhotos(true);
 }
@@ -1029,7 +1080,7 @@ function buildHistogramFromDateStats(dateStats) {
 
 /* ── Load photos ── */
 async function loadPhotos(fitMap = false) {
-  if (!selectedYear) {
+  if (!selectedYear && !undatedMode) {
     setStatus("Please select a month first", true);
     return;
   }
@@ -1037,25 +1088,33 @@ async function loadPhotos(fitMap = false) {
   const filter = document.getElementById("filter-select").value;
   const apiFilter = filter === "mixed" ? "all" : filter;
 
-  let dateFrom, dateTo;
-  if (selectedMonth) {
-    dateFrom = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-01`;
-    const lastDay = new Date(selectedYear, selectedMonth, 0).getDate();
-    dateTo = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${lastDay}`;
+  let url;
+  if (undatedMode) {
+    url = `/api/photos?geotagged=${apiFilter}&undated=true`;
   } else {
-    dateFrom = `${selectedYear}-01-01`;
-    dateTo = `${selectedYear}-12-31`;
+    let dateFrom, dateTo;
+    if (selectedMonth) {
+      dateFrom = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-01`;
+      const lastDay = new Date(selectedYear, selectedMonth, 0).getDate();
+      dateTo = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${lastDay}`;
+    } else {
+      dateFrom = `${selectedYear}-01-01`;
+      dateTo = `${selectedYear}-12-31`;
+    }
+    url = `/api/photos?geotagged=${apiFilter}&date_from=${dateFrom}&date_to=${dateTo}`;
   }
 
   try {
-    const url = `/api/photos?geotagged=${apiFilter}&date_from=${dateFrom}&date_to=${dateTo}`;
-
     const res = await fetch(url);
     photos = await res.json();
     // Pre-assign colors so the legend order is stable
     photos.forEach(p => camColor(p.camera));
     renderLegend();
-    buildHistogram();
+    if (undatedMode) {
+      histBuckets = [];  // no dates here — the timeline stays hidden
+    } else {
+      buildHistogram();
+    }
     applyFilters(fitMap);
   } catch (err) {
     setStatus("Load error: " + err.message, true);
@@ -1211,64 +1270,92 @@ function renderGrid() {
       }
     }
 
-    const sec = document.createElement("div");
-    sec.className = `face-group-section group-tint-${groupIdx % 6}`;
+    // The Undated day-bucket (group.key === null) collapses every dateless photo
+    // into one pile — split it further by resolved location (for the few that are
+    // geotagged despite missing a timestamp) or else by containing directory, so a
+    // large undated backlog isn't one giant unsorted section. Dated days pass
+    // through as a single "sub-group" so the loop below is a no-op for them.
+    const subGroups = group.date
+      ? [{ place: null, dir: null, photos: group.photos }]
+      : undatedSubGroups(group.photos);
 
-    const title = group.date
-      ? `${DAY_ABBRS[group.date.getDay()]} ${group.day}`
-      : "Undated";
-    const count = group.photos.length;
-    const isIsolated = group.key !== null && dayIsolation === group.key;
-    const taggedInDay   = group.photos.filter(({ photo }) => photo.lat != null && photo.lng != null);
-    const untaggedInDay = group.photos.filter(({ photo }) => photo.lat == null && !photo.geocode_ignored);
+    subGroups.forEach(sub => {
+      const sec = document.createElement("div");
+      sec.className = `face-group-section group-tint-${groupIdx % 6}`;
 
-    sec.appendChild(faceGroupHeader({
-      title,
-      meta: `· ${count} photo${count !== 1 ? "s" : ""}`,
-      buttons: group.key ? [
-        {
-          icon: "📍",
-          label: isIsolated ? "Show all days on map" : "Show only this day on map",
-          title: isIsolated ? "Show all days on map" : "Show only this day on map",
-          kind: isIsolated ? "active" : "",
-          onClick: () => isolateDay(group.key),
-        },
-        {
-          icon: "⛶",
-          label: "Zoom to this day",
-          title: taggedInDay.length
-            ? `Zoom map to fit ${taggedInDay.length} geotagged photo${taggedInDay.length !== 1 ? "s" : ""} on this day`
-            : "No geotagged photos on this day",
-          disabled: taggedInDay.length === 0,
-          onClick: () => {
-            const bounds = L.latLngBounds(taggedInDay.map(({ photo }) => [photo.lat, photo.lng]));
-            map.flyToBounds(bounds, { padding: [40, 40], maxZoom: 16, duration: 0.8 });
+      const title = group.date
+        ? `${DAY_ABBRS[group.date.getDay()]} ${group.day}`
+        : sub.place ? `📍 ${sub.place}` : sub.dir ? `📁 ${sub.dir}` : "Undated";
+      const count = sub.photos.length;
+      const isIsolated = group.key !== null && dayIsolation === group.key;
+      const taggedInDay   = sub.photos.filter(({ photo }) => photo.lat != null && photo.lng != null);
+      const untaggedInDay = sub.photos.filter(({ photo }) => photo.lat == null && !photo.geocode_ignored);
+
+      sec.appendChild(faceGroupHeader({
+        title,
+        meta: `· ${count} photo${count !== 1 ? "s" : ""}`,
+        buttons: group.key ? [
+          {
+            icon: "📍",
+            label: isIsolated ? "Show all days on map" : "Show only this day on map",
+            title: isIsolated ? "Show all days on map" : "Show only this day on map",
+            kind: isIsolated ? "active" : "",
+            onClick: () => isolateDay(group.key),
           },
-        },
-        {
-          icon: "☐",
-          label: "Select untagged",
-          title: untaggedInDay.length
-            ? `Select ${untaggedInDay.length} untagged photo${untaggedInDay.length !== 1 ? "s" : ""} on this day`
-            : "No untagged photos on this day",
-          disabled: untaggedInDay.length === 0,
-          onClick: () => {
-            selectedIds.clear();
-            untaggedInDay.forEach(({ photo }) => selectedIds.add(photo.id));
-            refreshSelectionUI();
-            setStatus(`Selected ${untaggedInDay.length} untagged photo(s) on ${title}.`);
+          {
+            icon: "⛶",
+            label: "Zoom to this day",
+            title: taggedInDay.length
+              ? `Zoom map to fit ${taggedInDay.length} geotagged photo${taggedInDay.length !== 1 ? "s" : ""} on this day`
+              : "No geotagged photos on this day",
+            disabled: taggedInDay.length === 0,
+            onClick: () => {
+              const bounds = L.latLngBounds(taggedInDay.map(({ photo }) => [photo.lat, photo.lng]));
+              map.flyToBounds(bounds, { padding: [40, 40], maxZoom: 16, duration: 0.8 });
+            },
           },
-        },
-      ] : [],
-    }));
+          {
+            icon: "☐",
+            label: "Select untagged",
+            title: untaggedInDay.length
+              ? `Select ${untaggedInDay.length} untagged photo${untaggedInDay.length !== 1 ? "s" : ""} on this day`
+              : "No untagged photos on this day",
+            disabled: untaggedInDay.length === 0,
+            onClick: () => {
+              selectedIds.clear();
+              untaggedInDay.forEach(({ photo }) => selectedIds.add(photo.id));
+              refreshSelectionUI();
+              setStatus(`Selected ${untaggedInDay.length} untagged photo(s) on ${title}.`);
+            },
+          },
+        ] : [],
+      }));
 
-    const cells = document.createElement("div");
-    cells.className = "face-group-cells";
-    group.photos.forEach(({ photo, idx }) => cells.appendChild(makeThumbCell(photo, idx)));
-    sec.appendChild(cells);
-    grid.appendChild(sec);
-    groupIdx++;
+      const cells = document.createElement("div");
+      cells.className = "face-group-cells";
+      sub.photos.forEach(({ photo, idx }) => cells.appendChild(makeThumbCell(photo, idx)));
+      sec.appendChild(cells);
+      grid.appendChild(sec);
+      groupIdx++;
+    });
   });
+}
+
+// Buckets one day-group's undated photos by resolved location (locationKey,
+// from face-grid.js — same {city, sublocation, state, country} shape as the
+// People page) if geotagged despite the missing timestamp, else by containing
+// directory (dirLabel, also from face-grid.js).
+function undatedSubGroups(photoEntries) {
+  const buckets = new Map();
+  photoEntries.forEach(entry => {
+    const loc = locationKey(entry.photo);
+    const dir = loc ? null : dirLabel(entry.photo);
+    const key = loc ? `loc:${loc}` : `dir:${dir}`;
+    let b = buckets.get(key);
+    if (!b) { b = { place: loc || null, dir, photos: [] }; buckets.set(key, b); }
+    b.photos.push(entry);
+  });
+  return [...buckets.values()];
 }
 
 function handleThumbClick(e, id, idx) {

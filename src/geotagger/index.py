@@ -248,6 +248,15 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     # rows already ordered by det_score, so SQLite skips the temp-b-tree sort and
     # only touches the LIMIT rows instead of reading every unlabeled embedding.
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_queue ON faces(ignored, person_id, det_score)")
+    # Serves the People page's time/spatial Focus on the unlabeled queue: leads
+    # with photo_id so a small pre-resolved photo_id set (see
+    # index._photo_ids_in_window / list_faces) drives the scan instead of
+    # idx_faces_queue's free det_score ordering — the latter otherwise forces a
+    # full read of every unlabeled face's row (embedding blob included, just to
+    # get its photo_id) until LIMIT is satisfied, which a narrow/sparse window
+    # may never do. Measured ~500ms -> <1ms on a 78K-unlabeled-face library for
+    # a window with zero matches.
+    _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_photo_queue ON faces(photo_id, ignored, person_id, det_score)")
     # Serves tag-order / "recently tagged" / undo queries (ORDER BY assigned_at DESC).
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_assigned_at ON faces(assigned_at)")
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_ignored_at ON faces(ignored_at)")
@@ -384,7 +393,8 @@ def set_geocode_ignored(photo_ids: list[int], ignored: bool):
     db.commit()
 
 
-def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str | None = None, date_to: str | None = None) -> list[sqlite3.Row]:
+def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str | None = None,
+               date_to: str | None = None, undated: bool = False) -> list[sqlite3.Row]:
     db = get_db()
     clauses = []
     params: list = []
@@ -392,6 +402,11 @@ def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str |
         clauses.append("(lat IS NOT NULL OR geocode_ignored = 1)")
     elif geotagged == "no":
         clauses.append("lat IS NULL AND geocode_ignored = 0")
+    if undated:
+        # No timestamp to filter by — date_from/date_to don't apply.
+        clauses.append("(photo_datetime IS NULL OR photo_datetime <= 0)")
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        return db.execute(f"SELECT * FROM photos {where} ORDER BY filename", params).fetchall()
     if bbox:
         # bbox=minLng,minLat,maxLng,maxLat
         try:
@@ -984,6 +999,22 @@ def get_labeled_faces() -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def _photo_ids_in_window(start_ts: int | None, end_ts: int | None) -> list[int]:
+    """Photo ids with photo_datetime in [start_ts, end_ts] (either bound optional),
+    via idx_photos_datetime. Used to pre-resolve a time Focus to a small photo_id
+    set — see list_faces for why."""
+    conds, params = [], []
+    if start_ts is not None:
+        conds.append("photo_datetime >= ?")
+        params.append(start_ts)
+    if end_ts is not None:
+        conds.append("photo_datetime <= ?")
+        params.append(end_ts)
+    return [r[0] for r in get_db().execute(
+        f"SELECT id FROM photos WHERE {' AND '.join(conds)}", params
+    ).fetchall()]
+
+
 def list_faces(scope: str = "unlabeled", person_id: int | None = None,
                limit: int = 500, min_det_score: float | None = None,
                start_ts: int | None = None, end_ts: int | None = None,
@@ -998,6 +1029,20 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
     ``start_ts``/``end_ts`` (epoch secs) window by photo_datetime — the People
     page's time Focus passes these for the unlabeled queue; undated faces
     (NULL photo_datetime) fall out of any window.
+
+    A start_ts/end_ts window is resolved to a photo_id set up front (via
+    idx_photos_datetime) rather than joined as ``ph.photo_datetime BETWEEN``,
+    same as the ``photo_ids`` spatial Focus below — measured on a 78K-row
+    unlabeled queue: with the direct join, idx_faces_queue drives the scan in
+    det_score order (to satisfy ORDER BY for free) and photo_datetime can only
+    be checked *after* a rowid lookup into photos per candidate face, so a
+    narrow/sparse window can't shortcut LIMIT and ends up probing nearly every
+    unlabeled face. Pre-resolving flips the join to drive off the (usually much
+    smaller) matching-photos set instead — but only actually pays off once the
+    ORDER BY stops preferring idx_faces_queue (see the ``+f.det_score`` trick
+    below), since a plain ``photo_id IN (...)`` still lets SQLite keep scanning
+    det_score order and Bloom-filter-test each row, which still means reading
+    every unlabeled row (embedding blob and all) to get its photo_id.
     """
     clause = ""
     params: list = []
@@ -1017,24 +1062,29 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
     if min_det_score is not None:
         clause += (" AND " if clause else "WHERE ") + "f.det_score >= ?"
         params.append(min_det_score)
-    if start_ts is not None:
-        clause += (" AND " if clause else "WHERE ") + "ph.photo_datetime >= ?"
-        params.append(start_ts)
-    if end_ts is not None:
-        clause += (" AND " if clause else "WHERE ") + "ph.photo_datetime <= ?"
-        params.append(end_ts)
+    if start_ts is not None or end_ts is not None:
+        window_ids = _photo_ids_in_window(start_ts, end_ts)
+        photo_ids = window_ids if photo_ids is None else list(set(window_ids) & set(photo_ids))
     if photo_ids is not None:
-        # Spatial Focus: restrict to photos inside a context's polygon. json_each
-        # keeps this to one bound param regardless of how many ids (SQLite has a
-        # ~999-variable cap on a literal IN list).
+        # Time and/or spatial Focus, pre-resolved to a photo_id set (see above /
+        # docstring). json_each keeps this to one bound param regardless of how
+        # many ids (SQLite has a ~999-variable cap on a literal IN list).
         import json as _json
         clause += (" AND " if clause else "WHERE ") + \
                   "f.photo_id IN (SELECT value FROM json_each(?))"
         params.append(_json.dumps(photo_ids))
+        if scope == "unlabeled":
+            # Defeat idx_faces_queue's "ORDER BY det_score for free" so the
+            # planner actually weighs idx_faces_photo_queue(photo_id, ignored,
+            # person_id, det_score) — driven by the small photo_id set, with a
+            # real (but cheap, since it's over just the matches) sort after.
+            # EXPLAIN QUERY PLAN confirms the switch; measured ~500ms -> <1ms on
+            # a sparse window, ~50ms on a window with a full page of matches.
+            order_by = "+f.det_score DESC"
     return get_db().execute(
         f"""SELECT f.id, f.photo_id, f.person_id, f.bbox, f.det_score, f.embedding,
                    f.ignored, f.assigned_at, f.ignored_at, p.name AS person_name, ph.filename,
-                   ph.photo_datetime, ph.orientation,
+                   ph.photo_datetime, ph.orientation, ph.dir,
                    ph.loc_city, ph.loc_sublocation, ph.loc_state, ph.loc_country
             FROM faces f
             LEFT JOIN persons p ON p.id = f.person_id
@@ -1057,20 +1107,21 @@ def count_faces(scope: str = "unlabeled", person_id: int | None = None,
             return get_db().execute(
                 "SELECT COUNT(*) FROM faces WHERE person_id IS NULL AND ignored = 0"
             ).fetchone()[0]
+        # Resolve the time window to a photo_id set up front (idx_photos_datetime)
+        # instead of joining photos — same reasoning as list_faces: it lets this
+        # stay a plain faces-table query (photo_id is already indexed there), no
+        # per-candidate-face lookup into photos needed.
+        if start_ts is not None or end_ts is not None:
+            window_ids = _photo_ids_in_window(start_ts, end_ts)
+            photo_ids = window_ids if photo_ids is None else list(set(window_ids) & set(photo_ids))
         clause = "WHERE f.person_id IS NULL AND f.ignored = 0"
         params: list = []
-        if start_ts is not None:
-            clause += " AND ph.photo_datetime >= ?"
-            params.append(start_ts)
-        if end_ts is not None:
-            clause += " AND ph.photo_datetime <= ?"
-            params.append(end_ts)
         if photo_ids is not None:
             import json as _json
             clause += " AND f.photo_id IN (SELECT value FROM json_each(?))"
             params.append(_json.dumps(photo_ids))
         return get_db().execute(
-            f"SELECT COUNT(*) FROM faces f JOIN photos ph ON ph.id = f.photo_id {clause}",
+            f"SELECT COUNT(*) FROM faces f {clause}",
             params,
         ).fetchone()[0]
     if scope == "ignored":
@@ -1357,22 +1408,25 @@ def get_or_create_person(name: str) -> int:
 
 def get_persons(start_ts: int | None = None, end_ts: int | None = None,
                 photo_ids: list[int] | None = None) -> list[sqlite3.Row]:
-    """All persons with a count of confirmed faces and family info.
+    """All persons, with family info. No ``face_count`` in the unwindowed (plain)
+    case — a live COUNT(*) join over the whole faces table on every call was the
+    People page's biggest single latency cost at scale, and nothing currently
+    needs the number there.
 
     With a ``start_ts``/``end_ts`` window (epoch secs, the People page's time
     Focus) and/or ``photo_ids`` (its "also limit to this area" spatial Focus —
-    photos inside a context's polygon), face_count reflects only faces whose photo
-    falls in the window and persons with none drop out — so the left nav lists just
-    who appears in range.
+    photos inside a context's polygon), ``face_count`` *is* computed (reflecting
+    only faces whose photo falls in the window) since it's load-bearing there —
+    HAVING uses it to drop people with none, so the left nav lists just who
+    appears in range.
     """
     if start_ts is None and end_ts is None and photo_ids is None:
         return get_db().execute(
             """SELECT p.id, p.name, p.birth_date, p.created_at, p.family_id,
-                      fam.name AS family_name, COUNT(f.id) AS face_count
+                      fam.name AS family_name
                FROM persons p
                LEFT JOIN families fam ON fam.id = p.family_id
-               LEFT JOIN faces f ON f.person_id = p.id
-               GROUP BY p.id ORDER BY p.name"""
+               ORDER BY p.name"""
         ).fetchall()
     # Count only in-window faces (via a conditional COUNT over the photos join),
     # then HAVING drops people with no faces in range.

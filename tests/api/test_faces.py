@@ -257,8 +257,10 @@ def test_persons_window_hides_out_of_range_and_counts_in_range(client):
     ff.seed_person(db, "Bob", ff.cluster_around(rng, c2, 2, intra_cos=0.9),
                    photo_datetimes=ff.epoch(2020, 6, 1))
 
+    # Unwindowed: face_count isn't computed (too expensive to do on every load —
+    # see index.get_persons), so it comes back null for everyone.
     full = {p["name"]: p["face_count"] for p in client.get("/api/persons").json()}
-    assert full == {"Alice": 3, "Bob": 2}
+    assert full == {"Alice": None, "Bob": None}
 
     start, end = _2015
     win = client.get(f"/api/persons?start_ts={start}&end_ts={end}").json()

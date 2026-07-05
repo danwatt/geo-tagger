@@ -32,6 +32,7 @@ class TestPhotoToDict:
             "lat": 10.0, "lng": 20.0, "geotag_source": "sidecar",
             "camera": "Canon EOS", "photo_datetime": 1_600_000_000,
             "gps_accuracy": 5.0, "geocode_ignored": False,
+            "dir": ".", "location": None,
         }
 
     def test_zero_accuracy_becomes_none(self, db):
@@ -99,7 +100,7 @@ class TestFaceItem:
         assert set(item) == {
             "id", "photo_id", "filename", "bbox", "det_score", "person_id",
             "person_name", "ignored", "photo_datetime", "assigned_at",
-            "ignored_at", "location", "suggestion", "alternatives", "negatives",
+            "ignored_at", "dir", "location", "suggestion", "alternatives", "negatives",
         }
         assert item["suggestion"] is None
         assert item["alternatives"] == []

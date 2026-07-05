@@ -83,10 +83,12 @@ async def api_get_persons(
     """List persons. With a start_ts/end_ts window (the People page's time Focus)
     and/or spatial_context_id (its "also limit to this area" Focus — photos inside
     that context's polygon), face_count reflects only in-range faces and people
-    with none are omitted."""
+    with none are omitted. Without a window, face_count is omitted (null) — see
+    index.get_persons."""
     photo_ids = _spatial_photo_ids(spatial_context_id)
     return [
-        {"id": p["id"], "name": p["name"], "face_count": p["face_count"],
+        {"id": p["id"], "name": p["name"],
+         "face_count": p["face_count"] if "face_count" in p.keys() else None,
          "birth_date": p["birth_date"], "created_at": p["created_at"],
          "family_id": p["family_id"], "family_name": p["family_name"]}
         for p in index.get_persons(start_ts=start_ts, end_ts=end_ts, photo_ids=photo_ids)

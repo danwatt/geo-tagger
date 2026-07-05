@@ -35,6 +35,7 @@ let focusContextId = null;      // active Context's id (drives the spatial Focus
 let focusSpatial = false;       // also limit to the active Context's polygon
 let focusContexts = [];         // contexts that have a time component
 let focusYears = [];            // distinct years present in the library, descending
+let jumpToUndated = false;      // one-shot: scroll to the Undated section once loaded (?month=undated)
 const FOCUS_LS_KEY = "geotagger.people.focusContextId";
 const FOCUS_SPATIAL_LS_KEY = "geotagger.people.focusSpatial";
 
@@ -59,6 +60,7 @@ const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
 /* ── Init ── */
 document.addEventListener("DOMContentLoaded", async () => {
   bindToolbar();
+  bindKeyboardShortcuts();
   await loadConfidentScore();  // before loadFaces, so the first render pre-selects correctly
   await loadFocusContexts();   // restores any saved Focus before the first load
   await loadPersons();
@@ -114,14 +116,7 @@ function bindToolbar() {
     if (scope === "unlabeled") applyUnlabeledView();
   });
 
-  document.getElementById("assign-btn").addEventListener("click", () => {
-    const ids = selectionOrFocused();
-    if (ids.length === 0) { setStatus("Select one or more faces first.", true); return; }
-    openPersonPicker(persons, {
-      title: `Assign ${ids.length} face(s) to…`,
-      onPick: (who, label) => assignSelectedTo(who, label),
-    });
-  });
+  document.getElementById("assign-btn").addEventListener("click", openAssignPickerForSelection);
   document.getElementById("unassign-btn").addEventListener("click", () => assignSelected(null, true));
   document.getElementById("confirm-suggested-btn").addEventListener("click", acceptSuggestionsForSelection);
   // In the Ignored scope this button restores; everywhere else it ignores.
@@ -168,6 +163,23 @@ function bindToolbar() {
   document.getElementById("detail-open-photo-btn").addEventListener("click", () => {
     const f = findFace(focusedFaceId);
     if (f) window.open(`/api/preview/${f.photo_id}`, "_blank");
+  });
+
+  document.getElementById("shortcuts-help-btn").addEventListener("click", openShortcutsHelp);
+  document.getElementById("shortcuts-help-close").addEventListener("click", closeShortcutsHelp);
+  document.getElementById("shortcuts-help-backdrop").addEventListener("click", (e) => {
+    if (e.target.id === "shortcuts-help-backdrop") closeShortcutsHelp();
+  });
+}
+
+// Opens the "Assign selection to…" picker — shared by the toolbar button and
+// the `a`/Enter keyboard shortcut.
+function openAssignPickerForSelection() {
+  const ids = selectionOrFocused();
+  if (ids.length === 0) { setStatus("Select one or more faces first.", true); return; }
+  openPersonPicker(persons, {
+    title: `Assign ${ids.length} face(s) to…`,
+    onPick: (who, label) => assignSelectedTo(who, label),
   });
 }
 
@@ -233,6 +245,12 @@ async function loadFocusContexts() {
     opt.textContent = `${MONTH_NAMES[month - 1]} ${year}`;
     sel.insertBefore(opt, sel.children[1] || null);
     sel.value = opt.value;
+  } else if (monthArg === "undated") {
+    // "?month=undated" (from the homepage's Undated link) — leave Focus at "All
+    // time" and skip restoring any saved Focus below: a saved time window would
+    // hide undated faces entirely (no photo_datetime to fall inside any window).
+    // loadFaces scrolls to the Undated section once the queue renders.
+    jumpToUndated = true;
   } else {
     // Restore a previously chosen Focus so the window survives reloads.
     const saved = localStorage.getItem(FOCUS_LS_KEY);
@@ -585,6 +603,7 @@ async function loadFaces() {
       unlabeledMeta = { total: data.total, returned: data.returned };
       populateSuggestFilter();
       applyUnlabeledView();   // owns faces/selection/render/status for this scope
+      if (jumpToUndated) { jumpToUndated = false; scrollToUndatedSection(); }
       return;
     } else if (scope === "person") {
       faces.sort((a, b) => (a.photo_datetime || 0) - (b.photo_datetime || 0));
@@ -707,6 +726,20 @@ function applyUnlabeledView() {
   setStatus(msg + preselNote + focusStatusSuffix());
 }
 
+// Scrolls the grid to the "Undated" year divider (arrival via "?month=undated").
+// Undated faces always sort first, so this is normally already at the top —
+// but scroll explicitly rather than assume, and give a clear status if there
+// turn out to be none.
+function scrollToUndatedSection() {
+  const divider = [...document.querySelectorAll("#grid .grid-year-divider")]
+    .find(el => el.textContent === "Undated");
+  if (divider) {
+    divider.scrollIntoView({ block: "start" });
+  } else {
+    setStatus("No undated faces — every face here has a timestamp.");
+  }
+}
+
 function makeGroupSection(groupIdx) {
   const sec = document.createElement("div");
   sec.className = `face-group-section group-tint-${groupIdx % 6}`;
@@ -794,8 +827,8 @@ function renderGrid() {
       }
       const sec = makeGroupSection(groupIdx++);
       sec.appendChild(makeGroupHeader(group, {
-        title: group.place ? `📍 ${group.place}` : "No location",
-        label: group.place || "No location",
+        title: group.place ? `📍 ${group.place}` : group.dir ? `📁 ${group.dir}` : "No location",
+        label: group.place || group.dir || "No location",
         meta: `· ${facesDateRange(group.faces)}`,
         ignoreAll: true,
       }));
@@ -898,19 +931,26 @@ function computeMonthGroups(list) {
 // Month → location grouping. Within each chronological month, faces are bucketed
 // by resolved location; buckets keep first-seen order, which (because `list` is
 // chronological) is the order each location first appears that month. Faces with
-// no location collect into one "No location" bucket per month. Each bucket's faces
-// are then clustered by suggested person (see sortBucketBySuggestion) so the same
-// person is contiguous — this is what makes `unlabeledAll` (the flat selection list)
+// no location collect into one "No location" bucket per month — except in the
+// Undated month (no timestamp to group by either), where a lone "No location"
+// bucket would dump every stranger photo in the library into one pile, so it's
+// split further by containing directory (folder is often the only surviving
+// hint of what a scanned/undated batch is). Each bucket's faces are then
+// clustered by suggested person (see sortBucketBySuggestion) so the same person
+// is contiguous — this is what makes `unlabeledAll` (the flat selection list)
 // and the render agree, so the ordering must live here, in the shared choke point.
 function computeMonthLocationGroups(list) {
   const out = [];
   computeMonthGroups(list).forEach(mg => {
-    const buckets = new Map();   // locationKey ("" = none) → group
+    const undated = mg.year === null;
+    const buckets = new Map();   // bucket key → group
     mg.faces.forEach(f => {
-      const key = locationKey(f) || "";
+      const loc = locationKey(f);
+      const dir = !loc && undated ? dirLabel(f) : null;
+      const key = loc ? `loc:${loc}` : (dir ? `dir:${dir}` : "");
       let b = buckets.get(key);
       if (!b) {
-        b = { year: mg.year, month: mg.month, place: key || null, faces: [] };
+        b = { year: mg.year, month: mg.month, place: loc || null, dir, faces: [] };
         buckets.set(key, b);
       }
       b.faces.push(f);
@@ -1266,6 +1306,151 @@ function handleCellClick(e, face, idx) {
   lastClickedIndex = idx;
   renderGrid();
   updateDetail();
+}
+
+/* ── Keyboard shortcuts ──
+ * Only active over the flat face grids (not Discover's clusters or Crowds'
+ * photo cards, which have no single `faces` list to walk), and only when
+ * focus isn't in a text field or the person-picker modal (which has its own
+ * arrow/Enter handling — see face-grid.js). */
+const FLAT_GRID_SCOPES = new Set(["unlabeled", "all", "person", "suggested", "ignored", "recent"]);
+
+function isFlatGridScope() {
+  return FLAT_GRID_SCOPES.has(scope);
+}
+
+function scrollFaceIntoView(faceId) {
+  document.querySelector(`.thumb-cell[data-id="${faceId}"]`)?.scrollIntoView({ block: "nearest" });
+}
+
+// Moves focus by `delta` faces and collapses the selection to just that face
+// (mirrors a plain click on the destination cell).
+function moveFocus(delta) {
+  if (!faces.length) return;
+  let idx = faces.findIndex(f => f.id === focusedFaceId);
+  idx = idx === -1 ? (delta > 0 ? -1 : 0) : idx;
+  idx = Math.max(0, Math.min(faces.length - 1, idx + delta));
+  selectedIds.clear();
+  selectedIds.add(faces[idx].id);
+  focusedFaceId = faces[idx].id;
+  lastClickedIndex = idx;
+  renderGrid();
+  updateDetail();
+  scrollFaceIntoView(focusedFaceId);
+}
+
+// Extends the selection from the last click/nav anchor to `delta` faces past
+// the current focus (mirrors shift-click's range select).
+function extendFocus(delta) {
+  if (!faces.length) return;
+  const anchor = lastClickedIndex >= 0 ? lastClickedIndex :
+    Math.max(0, faces.findIndex(f => f.id === focusedFaceId));
+  let idx = faces.findIndex(f => f.id === focusedFaceId);
+  idx = idx === -1 ? anchor : idx;
+  idx = Math.max(0, Math.min(faces.length - 1, idx + delta));
+  const start = Math.min(anchor, idx);
+  const end = Math.max(anchor, idx);
+  for (let i = start; i <= end; i++) selectedIds.add(faces[i].id);
+  focusedFaceId = faces[idx].id;
+  lastClickedIndex = idx;
+  renderGrid();
+  updateDetail();
+  scrollFaceIntoView(focusedFaceId);
+}
+
+function toggleFocusedSelection() {
+  if (!focusedFaceId) return;
+  selectedIds.has(focusedFaceId) ? selectedIds.delete(focusedFaceId) : selectedIds.add(focusedFaceId);
+  renderGrid();
+  updateDetail();
+}
+
+function selectAllFaces() {
+  if (!faces.length) return;
+  selectedIds = new Set(faces.map(f => f.id));
+  renderGrid();
+  updateDetail();
+  setStatus(`Selected all ${faces.length} face(s).`);
+}
+
+function openShortcutsHelp() {
+  document.getElementById("shortcuts-help-backdrop").style.display = "flex";
+}
+
+function closeShortcutsHelp() {
+  document.getElementById("shortcuts-help-backdrop").style.display = "none";
+}
+
+function isShortcutsHelpOpen() {
+  return document.getElementById("shortcuts-help-backdrop").style.display !== "none";
+}
+
+function bindKeyboardShortcuts() {
+  document.addEventListener("keydown", (e) => {
+    // Let text inputs/selects and the person-picker modal handle their own keys.
+    const tag = document.activeElement?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    if (typeof isPersonPickerOpen === "function" && isPersonPickerOpen()) return;
+
+    if (isShortcutsHelpOpen()) {
+      if (e.key === "Escape" || e.key === "?") { e.preventDefault(); closeShortcutsHelp(); }
+      return;
+    }
+
+    if (e.key === "?") { e.preventDefault(); openShortcutsHelp(); return; }
+
+    if (!isFlatGridScope()) return;
+
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+      e.preventDefault();
+      selectAllFaces();
+      return;
+    }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;  // leave browser/OS chords alone
+
+    switch (e.key) {
+      case "ArrowDown": case "j":
+        e.preventDefault();
+        if (e.shiftKey) extendFocus(1); else moveFocus(1);
+        break;
+      case "ArrowUp": case "k":
+        e.preventDefault();
+        if (e.shiftKey) extendFocus(-1); else moveFocus(-1);
+        break;
+      case " ":
+        e.preventDefault();
+        toggleFocusedSelection();
+        break;
+      case "Escape":
+        deselectAll();
+        break;
+      case "Enter": case "a":
+        e.preventDefault();
+        openAssignPickerForSelection();
+        break;
+      case "u": case "Backspace":
+        e.preventDefault();
+        assignSelected(null, true);
+        break;
+      case "x": case "i":
+        e.preventDefault();
+        ignoreSelected(scope !== "ignored");
+        break;
+      case "c":
+        e.preventDefault();
+        acceptSuggestionsForSelection();
+        break;
+      case "o":
+        if (findFace(focusedFaceId)) document.getElementById("detail-open-photo-btn").click();
+        break;
+      case "f":
+        if (findFace(focusedFaceId)) document.getElementById("detail-fullsize-btn").click();
+        break;
+      case "N":
+        if (e.shiftKey) { e.preventDefault(); nukeSelectedPhotos(); }
+        break;
+    }
+  });
 }
 
 /* ── Discover view (unsupervised clusters of unlabeled faces) ── */

@@ -9,7 +9,9 @@ router = APIRouter()
 
 @router.get("/api/stats/months")
 async def api_stats_months():
-    """Get photo counts grouped by year/month with geotagged breakdown."""
+    """Get photo counts grouped by year/month with geotagged breakdown, plus a
+    separate `undated` total (photos with no timestamp — excluded from `months`
+    since they have no year/month to bucket into)."""
     try:
         db = index.get_db()
         # Get monthly counts with geotagged breakdown
@@ -26,6 +28,15 @@ async def api_stats_months():
             ORDER BY year DESC, month DESC
         """).fetchall()
 
+        undated = db.execute("""
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN lat IS NOT NULL OR geocode_ignored = 1 THEN 1 ELSE 0 END) as geotagged,
+                SUM(CASE WHEN lat IS NULL AND geocode_ignored = 0 THEN 1 ELSE 0 END) as not_geotagged
+            FROM photos
+            WHERE photo_datetime IS NULL OR photo_datetime <= 0
+        """).fetchone()
+
         return {
             "months": [
                 {
@@ -36,7 +47,12 @@ async def api_stats_months():
                     "not_geotagged": r["not_geotagged"]
                 }
                 for r in rows
-            ]
+            ],
+            "undated": {
+                "total": undated["total"],
+                "geotagged": undated["geotagged"] or 0,
+                "not_geotagged": undated["not_geotagged"] or 0,
+            }
         }
     except Exception as e:
         raise HTTPException(500, str(e))
@@ -46,7 +62,9 @@ async def api_stats_months():
 async def api_stats_faces_months():
     """Get scanned-image-photo counts grouped by year/month, bucketed the same way
     as get_face_coverage (full / partial / none / no_faces). Unscanned photos are
-    excluded, matching the face-coverage card's denominator."""
+    excluded, matching the face-coverage card's denominator. `undated` is the same
+    breakdown for scanned photos with no timestamp, kept separate since they have
+    no year/month to bucket into."""
     try:
         db = index.get_db()
         rows = db.execute("""
@@ -75,6 +93,27 @@ async def api_stats_faces_months():
             ORDER BY year DESC, month DESC
         """).fetchall()
 
+        undated = db.execute("""
+            WITH photo_face_stats AS (
+                SELECT
+                    ph.id AS pid,
+                    COUNT(f.id) AS total,
+                    COUNT(CASE WHEN f.person_id IS NOT NULL THEN 1 END) AS labeled,
+                    COUNT(CASE WHEN f.person_id IS NULL AND f.ignored = 0 THEN 1 END) AS unlabeled
+                FROM photos ph
+                LEFT JOIN faces f ON f.photo_id = ph.id
+                WHERE ph.media_type = 'image' AND ph.faces_scanned_at IS NOT NULL
+                  AND (ph.photo_datetime IS NULL OR ph.photo_datetime <= 0)
+                GROUP BY ph.id
+            )
+            SELECT
+                SUM(CASE WHEN total = 0 THEN 1 ELSE 0 END) AS no_faces,
+                SUM(CASE WHEN total > 0 AND unlabeled = 0 THEN 1 ELSE 0 END) AS full,
+                SUM(CASE WHEN labeled > 0 AND unlabeled > 0 THEN 1 ELSE 0 END) AS partial,
+                SUM(CASE WHEN labeled = 0 AND unlabeled > 0 THEN 1 ELSE 0 END) AS none_labeled
+            FROM photo_face_stats
+        """).fetchone()
+
         return {
             "months": [
                 {
@@ -86,7 +125,13 @@ async def api_stats_faces_months():
                     "no_faces": r["no_faces"],
                 }
                 for r in rows
-            ]
+            ],
+            "undated": {
+                "full": undated["full"] or 0,
+                "partial": undated["partial"] or 0,
+                "none": undated["none_labeled"] or 0,
+                "no_faces": undated["no_faces"] or 0,
+            }
         }
     except Exception as e:
         raise HTTPException(500, str(e))

@@ -31,6 +31,10 @@
       <input type="checkbox" id="suggested-only-chk"/> Only suggested
     </label>
   </div>
+  <div class="toolbar-spacer"></div>
+  <div class="toolbar-group">
+    <button id="shortcuts-help-btn" class="icon-btn" title="Keyboard shortcuts" aria-label="Keyboard shortcuts">?</button>
+  </div>
 </div>
 
 <div id="people-main">
@@ -118,6 +122,31 @@
 </div>
 
 <div id="status-bar"></div>
+
+<div id="shortcuts-help-backdrop" style="display:none">
+  <div id="shortcuts-help-modal">
+    <div class="sh-head">
+      <span>Keyboard shortcuts</span>
+      <button id="shortcuts-help-close" class="sh-close" aria-label="Close">✕</button>
+    </div>
+    <table class="sh-table">
+      <tr><td><kbd>↑</kbd> <kbd>↓</kbd> / <kbd>k</kbd> <kbd>j</kbd></td><td>Move focus to prev/next face</td></tr>
+      <tr><td><kbd>Shift</kbd>+<kbd>↑</kbd>/<kbd>↓</kbd></td><td>Extend selection range</td></tr>
+      <tr><td><kbd>Space</kbd></td><td>Toggle selection of focused face</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>A</kbd></td><td>Select all faces in view</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>Deselect all / close dialog</td></tr>
+      <tr><td><kbd>Enter</kbd> / <kbd>a</kbd></td><td>Assign selection to a person</td></tr>
+      <tr><td><kbd>u</kbd> / <kbd>Backspace</kbd></td><td>Unassign selection</td></tr>
+      <tr><td><kbd>x</kbd> / <kbd>i</kbd></td><td>Ignore (or restore, in Ignored view)</td></tr>
+      <tr><td><kbd>c</kbd></td><td>Confirm suggested name</td></tr>
+      <tr><td><kbd>o</kbd></td><td>Open focused face's photo</td></tr>
+      <tr><td><kbd>f</kbd></td><td>View focused face full size (RAW)</td></tr>
+      <tr><td><kbd>Shift</kbd>+<kbd>N</kbd></td><td>Nuclear option: wipe faces for selected photo(s)</td></tr>
+      <tr><td><kbd>?</kbd></td><td>Show this help</td></tr>
+    </table>
+    <div class="sh-foot">Shortcuts are ignored while typing in a text field.</div>
+  </div>
+</div>
 
 <script src="face-grid.js"></script>
 <script src="photo-fullsize.js"></script>

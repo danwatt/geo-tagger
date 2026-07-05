@@ -149,6 +149,7 @@
   cursor: pointer;
 }
 .pp-item:hover { background: #3a3a3a; }
+.pp-item.pp-hl { background: #2a4a6e; border-color: #4a90d9; }
 .pp-item .pp-count { color: #9aa; font-size: 11px; }
 .pp-new { background: #2a4a6e; border-color: #4a90d9; color: #eaf4ff; }
 .pp-new:hover { background: #305686; }

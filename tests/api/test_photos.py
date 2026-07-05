@@ -28,7 +28,8 @@ def test_photo_list_shape(client):
     _add("t.jpg", lat=10, lng=20)
     p = client.get("/api/photos").json()[0]
     assert set(p) == {"id", "filename", "media_type", "lat", "lng", "geotag_source",
-                      "camera", "photo_datetime", "gps_accuracy", "geocode_ignored"}
+                      "camera", "photo_datetime", "gps_accuracy", "geocode_ignored",
+                      "dir", "location"}
 
 
 def test_context_filter_uses_polygon_and_dates(client):

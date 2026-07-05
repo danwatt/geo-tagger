@@ -266,7 +266,7 @@ function makePersonRow(p) {
   // ── Faces count ──
   const facesTd = document.createElement("td");
   facesTd.className = "col-faces";
-  facesTd.textContent = p.face_count;
+  facesTd.textContent = p.face_count ?? "—";
 
   // ── Delete ──
   const actTd = document.createElement("td");
