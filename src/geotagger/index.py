@@ -683,20 +683,42 @@ def update_place(place_id: int, bounds: str):
 
 # ── Contexts ──
 
-def get_contexts() -> list[sqlite3.Row]:
+def get_contexts() -> list[dict]:
+    """All contexts, each with a bbox-approximate photo count (no exact polygon
+    test — see get_context_photo_ids for that).
+
+    Computed as one targeted, indexed query per context rather than a single SQL
+    statement with a correlated subquery: the ``c.start_ts IS NULL OR
+    p.photo_datetime >= c.start_ts``-style conditions reference the outer row, so
+    SQLite can't use idx_photos_datetime or the photos_spatial R*Tree — every
+    context forced a full table scan of photos. Per-context, the filters are
+    concrete params instead, so each query can actually use those indexes."""
     db = get_db()
-    return db.execute("""
-        SELECT c.*,
-               (SELECT COUNT(*) FROM photos p
-                WHERE (c.start_ts IS NULL OR p.photo_datetime >= c.start_ts)
-                  AND (c.end_ts   IS NULL OR p.photo_datetime <= c.end_ts)
-                  AND (c.min_lat IS NULL OR (
-                       p.lat BETWEEN c.min_lat AND c.max_lat AND
-                       p.lng BETWEEN c.min_lng AND c.max_lng))
-               ) AS photo_count_approx
-        FROM contexts c
-        ORDER BY c.name
-    """).fetchall()
+    contexts = db.execute("SELECT * FROM contexts ORDER BY name").fetchall()
+    out = []
+    for c in contexts:
+        conds, params = [], []
+        if c["start_ts"] is not None:
+            conds.append("p.photo_datetime >= ?")
+            params.append(c["start_ts"])
+        if c["end_ts"] is not None:
+            conds.append("p.photo_datetime <= ?")
+            params.append(c["end_ts"])
+        if c["min_lat"] is not None:
+            # R*Tree bbox prefilter (indexed), same pattern as get_context_photo_ids.
+            sql = f"""SELECT COUNT(*) FROM photos_spatial s
+                      JOIN photos p ON p.id = s.id
+                      WHERE s.max_lat >= ? AND s.min_lat <= ?
+                        AND s.max_lng >= ? AND s.min_lng <= ?
+                        {"AND " + " AND ".join(conds) if conds else ""}"""
+            bbox_params = [c["min_lat"], c["max_lat"], c["min_lng"], c["max_lng"], *params]
+        else:
+            where = " AND ".join(conds) if conds else "1=1"
+            sql = f"SELECT COUNT(*) FROM photos p WHERE {where}"
+            bbox_params = params
+        count = db.execute(sql, bbox_params).fetchone()[0]
+        out.append({**dict(c), "photo_count_approx": count})
+    return out
 
 
 def get_context(context_id: int) -> sqlite3.Row | None:
@@ -1422,7 +1444,13 @@ def get_persons(start_ts: int | None = None, end_ts: int | None = None,
     With a ``start_ts``/``end_ts`` window (epoch secs, the People page's time
     Focus) and/or ``photo_ids`` (its "also limit to this area" spatial Focus —
     photos inside a context's polygon), the list is filtered to just people who
-    have at least one face in range (via EXISTS, no count needed).
+    have at least one face in range.
+
+    The filter is a single uncorrelated ``IN`` subquery over faces (materialized
+    once), not a per-person correlated EXISTS — the latter re-runs per person and,
+    for a person with no faces in range, only gives up after scanning that
+    person's *entire* face history. The photos join is skipped entirely when only
+    photo_ids is given (no time bound), since faces.photo_id alone is enough.
     """
     if start_ts is None and end_ts is None and photo_ids is None:
         return get_db().execute(
@@ -1432,7 +1460,8 @@ def get_persons(start_ts: int | None = None, end_ts: int | None = None,
                LEFT JOIN families fam ON fam.id = p.family_id
                ORDER BY p.name"""
         ).fetchall()
-    conds, params = ["f.person_id = p.id"], []
+    conds, params = ["f.person_id IS NOT NULL"], []
+    needs_photos = start_ts is not None or end_ts is not None
     if start_ts is not None:
         conds.append("ph.photo_datetime >= ?")
         params.append(start_ts)
@@ -1441,19 +1470,17 @@ def get_persons(start_ts: int | None = None, end_ts: int | None = None,
         params.append(end_ts)
     if photo_ids is not None:
         import json as _json
-        conds.append("ph.id IN (SELECT value FROM json_each(?))")
+        photo_col = "ph.id" if needs_photos else "f.photo_id"
+        conds.append(f"{photo_col} IN (SELECT value FROM json_each(?))")
         params.append(_json.dumps(photo_ids))
     where = " AND ".join(conds)
+    join = "JOIN photos ph ON ph.id = f.photo_id" if needs_photos else ""
     return get_db().execute(
         f"""SELECT p.id, p.name, p.birth_date, p.created_at, p.family_id,
                    fam.name AS family_name
             FROM persons p
             LEFT JOIN families fam ON fam.id = p.family_id
-            WHERE EXISTS (
-                SELECT 1 FROM faces f
-                JOIN photos ph ON ph.id = f.photo_id
-                WHERE {where}
-            )
+            WHERE p.id IN (SELECT f.person_id FROM faces f {join} WHERE {where})
             ORDER BY p.name""",
         params,
     ).fetchall()
