@@ -80,6 +80,17 @@ def test_months(client):
             "geotagged": 1, "not_geotagged": 1} in months
 
 
+def test_years(client):
+    _add("a.jpg", dt=JAN_2020)
+    _add("b.jpg", dt=1_483_228_800)  # 2017-01-01
+    _add("undated.jpg", dt=None)
+    assert client.get("/api/stats/years").json()["years"] == [2020, 2017]
+
+
+def test_years_empty(client):
+    assert client.get("/api/stats/years").json()["years"] == []
+
+
 def test_dates_all_and_filtered(client):
     _add("a.jpg", dt=JAN_2020)
     assert {"date": "2020-01-01", "count": 1} in client.get("/api/stats/dates").json()["dates"]

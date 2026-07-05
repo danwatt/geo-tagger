@@ -201,10 +201,10 @@ async function loadFocusContexts() {
     focusContexts = [];   // non-fatal: Focus just stays at "All time"
   }
   try {
-    const res = await fetch("/api/stats/months");
+    const res = await fetch("/api/stats/years");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    focusYears = [...new Set(data.months.map(m => m.year))].sort((a, b) => b - a);
+    focusYears = data.years;
   } catch (err) {
     focusYears = [];   // non-fatal: no Year options, Contexts still work
   }

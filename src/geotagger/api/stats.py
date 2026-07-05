@@ -58,6 +58,45 @@ async def api_stats_months():
         raise HTTPException(500, str(e))
 
 
+@router.get("/api/stats/years")
+async def api_stats_years():
+    """Distinct years with a dated photo, newest first — the People page's Year
+    Focus dropdown used to get this by fetching /api/stats/months and picking out
+    the years, which forced a strftime()-per-row + GROUP BY over the whole photos
+    table just to throw away the month/geotag breakdown. Instead, walk year
+    boundaries via idx_photos_datetime: each year is a single indexed
+    "does a row exist in [start, end)" range-seek that stops at the first match."""
+    try:
+        import calendar
+        from datetime import datetime, timedelta, timezone
+
+        db = index.get_db()
+        row = db.execute(
+            "SELECT MIN(photo_datetime) AS lo, MAX(photo_datetime) AS hi FROM photos "
+            "WHERE photo_datetime IS NOT NULL AND photo_datetime > 0"
+        ).fetchone()
+        if row["lo"] is None:
+            return {"years": []}
+
+        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        lo_year = (epoch + timedelta(seconds=row["lo"])).year
+        hi_year = (epoch + timedelta(seconds=row["hi"])).year
+
+        years = []
+        for y in range(hi_year, lo_year - 1, -1):
+            start = calendar.timegm((y, 1, 1, 0, 0, 0, 0, 0, 0))
+            end = calendar.timegm((y + 1, 1, 1, 0, 0, 0, 0, 0, 0))
+            hit = db.execute(
+                "SELECT 1 FROM photos WHERE photo_datetime >= ? AND photo_datetime < ? LIMIT 1",
+                (start, end),
+            ).fetchone()
+            if hit:
+                years.append(y)
+        return {"years": years}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 @router.get("/api/stats/faces-months")
 async def api_stats_faces_months():
     """Get scanned-image-photo counts grouped by year/month, bucketed the same way
