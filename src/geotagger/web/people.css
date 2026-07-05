@@ -369,6 +369,15 @@
   font-style: italic;
 }
 
+/* Come-back faces are tinted amber and badged, distinct from the grayed-out
+ * ignored treatment — this queue is a deliberate "not yet", not a dismissal. */
+.thumb-cell.come-back img { opacity: 0.75; filter: sepia(0.35); }
+.thumb-cell .face-label.come-back-label {
+  background: rgba(130, 95, 15, .85);
+  color: #ffd699;
+  font-style: italic;
+}
+
 /* ── Right: face detail with bbox overlay ── */
 /* Stack the detail pane in one column: photo, then actions, then metadata. */
 #detail-content { display: flex; flex-direction: column; gap: 10px; }

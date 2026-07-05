@@ -2,12 +2,13 @@
 Backfill the full EXIF snapshot (and orientation) for the indexed photo library.
 
 For every indexed file that doesn't have one yet, reads the complete ExifTool
-metadata and stores it as JSON in photos.exif_json so every tag is searchable
-later. Orientation (1..8) is derived from the same read and kept in its own
-photos.orientation column, which the grid, previews, and face crops read to
-render upright. The scanner now fills both columns for new/changed files itself;
-this one-time pass is for rows indexed before the columns existed (exif_json=NULL).
-Safe to re-run — it only touches rows where exif_json IS NULL. Files ExifTool
+metadata and stores it as JSON in the photo_exif table (photo_id -> exif_json)
+so every tag is searchable later. Orientation (1..8) is derived from the same
+read and kept in its own photos.orientation column, which the grid, previews,
+and face crops read to render upright. The scanner now fills both for
+new/changed files itself; this one-time pass is for rows indexed before that
+(no photo_exif row yet). Safe to re-run — it only touches rows with no
+photo_exif row. Files ExifTool
 can't read (or that time out) get orientation 1 and a small error marker so the
 run completes and they aren't retried into the hang.
 
@@ -108,7 +109,8 @@ def main():
 
     if args.rescan:
         db = index.get_db()
-        db.execute("UPDATE photos SET orientation=NULL, exif_json=NULL")
+        db.execute("UPDATE photos SET orientation=NULL")
+        db.execute("DELETE FROM photo_exif")
         db.commit()
 
     pending = index.get_photos_missing_exif(args.limit or None)

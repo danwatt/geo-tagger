@@ -117,11 +117,12 @@ class TestExifBackfill:
         pid = db.execute("SELECT id FROM photos WHERE path='a.jpg'").fetchone()["id"]
         index.set_exif([(6, '{"EXIF:Make": "Canon"}', pid)])
         assert index.count_photos_missing_exif() == 0
-        row = db.execute(
-            "SELECT orientation, exif_json FROM photos WHERE id=?", (pid,)
-        ).fetchone()
-        assert row["orientation"] == 6
-        assert row["exif_json"] == '{"EXIF:Make": "Canon"}'
+        assert db.execute(
+            "SELECT orientation FROM photos WHERE id=?", (pid,)
+        ).fetchone()["orientation"] == 6
+        assert db.execute(
+            "SELECT exif_json FROM photo_exif WHERE photo_id=?", (pid,)
+        ).fetchone()["exif_json"] == '{"EXIF:Make": "Canon"}'
 
     def test_upsert_stores_exif_json_at_scan_time(self, db):
         # The scanner passes exif_json into upsert_photo directly; a row indexed
@@ -133,8 +134,9 @@ class TestExifBackfill:
             exif_json='{"EXIF:Model": "Pixel"}',
         )
         assert index.count_photos_missing_exif() == 0
+        pid = db.execute("SELECT id FROM photos WHERE path='s.jpg'").fetchone()["id"]
         assert db.execute(
-            "SELECT exif_json FROM photos WHERE path='s.jpg'"
+            "SELECT exif_json FROM photo_exif WHERE photo_id=?", (pid,)
         ).fetchone()["exif_json"] == '{"EXIF:Model": "Pixel"}'
 
 

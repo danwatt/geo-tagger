@@ -99,8 +99,9 @@ class TestFaceItem:
         item = serializers.face_item(row)
         assert set(item) == {
             "id", "photo_id", "filename", "bbox", "det_score", "person_id",
-            "person_name", "ignored", "photo_datetime", "assigned_at",
-            "ignored_at", "dir", "location", "suggestion", "alternatives", "negatives",
+            "person_name", "ignored", "come_back", "photo_datetime", "assigned_at",
+            "ignored_at", "come_back_at", "dir", "location", "suggestion",
+            "alternatives", "negatives",
         }
         assert item["suggestion"] is None
         assert item["alternatives"] == []

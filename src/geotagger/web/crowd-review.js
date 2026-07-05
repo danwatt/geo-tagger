@@ -176,6 +176,9 @@ function renderBboxes() {
     } else if (f.ignored) {
       box.style.borderColor = "#555";
       box.style.opacity = "0.35";
+    } else if (f.come_back) {
+      box.style.borderColor = "#c99a3a";
+      box.style.opacity = "0.6";
     } else if (f.suggestion) {
       box.style.borderColor = "#4a90d9";
     } else {
@@ -212,9 +215,10 @@ function highlightCard(faceId) {
 function renderFaces() {
   closeQuickActions();
 
-  const labeled  = photoFaces.filter(f => f.person_id !== null);
-  const ignored  = photoFaces.filter(f => f.ignored);
-  const active   = photoFaces.filter(f => f.person_id === null && !f.ignored);
+  const labeled   = photoFaces.filter(f => f.person_id !== null);
+  const ignored   = photoFaces.filter(f => f.ignored);
+  const comeBack  = photoFaces.filter(f => f.come_back);
+  const active    = photoFaces.filter(f => f.person_id === null && !f.ignored && !f.come_back);
 
   const byPerson = {};
   const unknown  = [];
@@ -244,12 +248,13 @@ function renderFaces() {
   renderTaggedSection(labeled);
   renderSuggestedSection(byPerson);
   renderUnknownSection(unknown);
+  renderComeBackSection(comeBack);
   renderIgnoredSection(ignored);
   renderBboxes();
 
   setStatus(unlabeledCount === 0
     ? `✓ Done — ${labeled.length} tagged, ${ignored.length} ignored.`
-    : `${labeled.length} tagged · ${unlabeledCount} unlabeled · ${ignored.length} ignored`);
+    : `${labeled.length} tagged · ${unlabeledCount} unlabeled · ${comeBack.length} come back · ${ignored.length} ignored`);
 }
 
 /* ── Section renderers ── */
@@ -293,6 +298,18 @@ function renderUnknownSection(unknown) {
   const strip = document.createElement("div");
   strip.className = "face-strip";
   unknown.forEach(f => strip.appendChild(makeAssignableCard(f)));
+  sec.appendChild(strip);
+}
+
+function renderComeBackSection(comeBack) {
+  const sec = document.getElementById("section-comeback");
+  sec.innerHTML = "";
+  if (!comeBack.length) return;
+  sec.appendChild(makeSectionHeader("Come Back", comeBack.length,
+    "face(s) — known/suspected, deferred — click to restore", { variant: "amber" }));
+  const strip = document.createElement("div");
+  strip.className = "face-strip";
+  comeBack.forEach(f => strip.appendChild(makeComeBackCard(f)));
   sec.appendChild(strip);
 }
 
@@ -384,6 +401,22 @@ function makeIgnoredCard(f) {
   return card;
 }
 
+function makeComeBackCard(f) {
+  const card = document.createElement("div");
+  card.className = "face-card come-back-card";
+  card.dataset.faceId = String(f.id);
+  card.appendChild(faceCropImg(f));
+  const lbl = document.createElement("div");
+  lbl.className = "face-come-back-chip";
+  lbl.textContent = "come back";
+  card.appendChild(lbl);
+  // Left-click highlights the bbox; right-click opens the menu (which offers
+  // Restore for a come-back face).
+  card.addEventListener("click", () => highlightBbox(f.id));
+  card.addEventListener("contextmenu", (e) => { e.preventDefault(); openFaceActions(card, f); });
+  return card;
+}
+
 /* ── Suggested group card ── */
 function makeSuggestedGroup(pid, group) {
   const card = document.createElement("div");
@@ -421,6 +454,7 @@ function openFaceActions(anchor, f) {
     onAssign: (pid) => doAssign(f.id, pid),          // pid null ⇒ unassign
     onAssignNew: (name) => doAssignByName(f.id, name),
     onIgnore: (ignored) => ignored ? ignoreFaces([f.id]) : restoreFace(f.id),
+    onComeBack: (comeBack) => comeBackFace(f.id, comeBack),
     onOpenPhoto: () => window.open(`/api/preview/${crowdPhotos[currentIdx].id}`, "_blank"),
   });
 }
@@ -494,6 +528,20 @@ async function restoreFace(faceId) {
     await loadPhotoFaces(crowdPhotos[currentIdx].id);
   } catch (err) {
     setStatus("Restore failed: " + err.message, true);
+  }
+}
+
+async function comeBackFace(faceId, comeBack) {
+  try {
+    const res = await fetch("/api/faces/come-back", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ face_ids: [faceId], come_back: comeBack }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await loadPhotoFaces(crowdPhotos[currentIdx].id);
+  } catch (err) {
+    setStatus("Come back failed: " + err.message, true);
   }
 }
 

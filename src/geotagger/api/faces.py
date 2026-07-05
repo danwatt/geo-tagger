@@ -62,6 +62,10 @@ class IgnoreFacesRequest(BaseModel):
     face_ids: list[int]
     ignored: bool = True          # False restores faces to the unlabeled queue
 
+class ComeBackFacesRequest(BaseModel):
+    face_ids: list[int]
+    come_back: bool = True        # False restores faces to the unlabeled queue
+
 class NegativeFacesRequest(BaseModel):
     face_ids: list[int]
     person_id: int          # the person these faces are NOT
@@ -166,7 +170,7 @@ async def api_delete_person(person_id: int):
 
 @router.get("/api/faces")
 async def api_list_faces(
-    scope: str = Query("unlabeled", pattern="^(unlabeled|person|ignored|suggested|recent|all)$"),
+    scope: str = Query("unlabeled", pattern="^(unlabeled|person|ignored|come_back|suggested|recent|all)$"),
     person_id: int | None = Query(None),
     limit: int = Query(500, ge=1, le=2000),
     suggested_only: bool = Query(False),
@@ -324,6 +328,16 @@ async def api_ignore_faces(req: IgnoreFacesRequest):
     return {"updated": len(req.face_ids), "ignored": req.ignored}
 
 
+@router.post("/api/faces/come-back")
+async def api_come_back_faces(req: ComeBackFacesRequest):
+    """Move faces to the come-back queue: people we know or suspect but aren't
+    ready to assign yet. Distinct from /ignore (that's for strangers/false
+    detections we never want to see again). come_back=false restores faces to
+    the unlabeled queue."""
+    index.set_faces_come_back(req.face_ids, req.come_back)
+    return {"updated": len(req.face_ids), "come_back": req.come_back}
+
+
 @router.post("/api/faces/nuke")
 async def api_nuke_photo_faces(req: NukePhotoFacesRequest):
     """Nuclear option: hard-delete every face (detected, assigned, or ignored) for
@@ -373,6 +387,7 @@ async def api_photo_faces(photo_id: int):
             "person_name": r["person_name"],
             "assigned_at": r["assigned_at"],
             "ignored": bool(r["ignored"]),
+            "come_back": bool(r["come_back"]),
             "suggestion": None,
             "negatives": negatives,
         }
@@ -434,6 +449,7 @@ async def api_faces_scan_status(
         "unlabeled_faces": index.count_faces("unlabeled", start_ts=start_ts,
                                              end_ts=end_ts, photo_ids=photo_ids),
         "ignored_faces": index.count_faces("ignored"),
+        "come_back_faces": index.count_faces("come_back"),
         "tagged_faces": index.count_faces("recent"),
     }
 
@@ -518,6 +534,7 @@ async def api_crowds(
             "labeled_faces": row["labeled_faces"],
             "unlabeled_faces": row["unlabeled_faces"],
             "ignored_faces": row["ignored_faces"],
+            "come_back_faces": row["come_back_faces"],
         })
         g["total_faces"] += row["total_faces"]
         g["unlabeled_faces"] += row["unlabeled_faces"]

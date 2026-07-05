@@ -50,8 +50,8 @@ def read_orientations(paths: list) -> dict[Path, int]:
 
 def read_all_metadata(paths: list) -> dict[Path, dict]:
     """Batch-read the *full* ExifTool metadata for many files in one call, keyed by
-    Path. Used by the EXIF backfill to snapshot every tag into photos.exif_json for
-    later searching (orientation is derived from the same read).
+    Path. Used by the EXIF backfill to snapshot every tag into the photo_exif table
+    for later searching (orientation is derived from the same read).
 
     Values come back already JSON-serializable — pyexiftool parses ExifTool's -j
     output, and our common_args ("-G -n") give group-prefixed keys and numeric
@@ -70,7 +70,7 @@ def read_all_metadata(paths: list) -> dict[Path, dict]:
 
 
 def dumps_exif(meta: dict) -> str:
-    """Serialize an ExifTool metadata dict to the JSON stored in photos.exif_json.
+    """Serialize an ExifTool metadata dict to the JSON stored in photo_exif.exif_json.
     ensure_ascii=False keeps non-Latin tag values (place/camera names) readable;
     default=str is a safety net for any stray non-JSON-native value. Shared by the
     scanner (read_metadata full=True) and scripts/backfill_orientation.py so both

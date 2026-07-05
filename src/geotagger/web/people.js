@@ -121,6 +121,8 @@ function bindToolbar() {
   document.getElementById("confirm-suggested-btn").addEventListener("click", acceptSuggestionsForSelection);
   // In the Ignored scope this button restores; everywhere else it ignores.
   document.getElementById("ignore-btn").addEventListener("click", () => ignoreSelected(scope !== "ignored"));
+  // In the Come Back scope this button restores; everywhere else it defers.
+  document.getElementById("come-back-btn").addEventListener("click", () => comeBackSelected(scope !== "come_back"));
   document.getElementById("nuke-btn").addEventListener("click", nukeSelectedPhotos);
 
   document.getElementById("review-guesses-btn").addEventListener("click", () => {
@@ -159,6 +161,12 @@ function bindToolbar() {
     if (!f) { setStatus("Select a face first.", true); return; }
     // Act on the previewed face only — not the grid selection.
     ignoreSelected_ids([f.id], !f.ignored);
+  });
+  document.getElementById("detail-come-back-btn").addEventListener("click", () => {
+    const f = findFace(focusedFaceId);
+    if (!f) { setStatus("Select a face first.", true); return; }
+    // Act on the previewed face only — not the grid selection.
+    comeBackSelected_ids([f.id], !f.come_back);
   });
   document.getElementById("detail-open-photo-btn").addEventListener("click", () => {
     const f = findFace(focusedFaceId);
@@ -398,14 +406,15 @@ async function loadPersons() {
 
     const totalFaces = status.total_faces || 0;
     renderPeopleList(status.unlabeled_faces || 0, totalFaces,
-                     status.ignored_faces || 0, status.tagged_faces || 0);
+                     status.ignored_faces || 0, status.come_back_faces || 0,
+                     status.tagged_faces || 0);
     populatePersonSelects();
   } catch (err) {
     setStatus("Failed to load people: " + err.message, true);
   }
 }
 
-function renderPeopleList(unlabeledCount, allCount, ignoredCount, taggedCount) {
+function renderPeopleList(unlabeledCount, allCount, ignoredCount, comeBackCount, taggedCount) {
   const list = document.getElementById("people-list");
   list.innerHTML = "";
 
@@ -415,6 +424,7 @@ function renderPeopleList(unlabeledCount, allCount, ignoredCount, taggedCount) {
   list.appendChild(makeScopeItem("Recently tagged", taggedCount, "recent", null));
   list.appendChild(makeScopeItem("All faces", allCount, "all", null));
   list.appendChild(makeScopeItem("Ignored", ignoredCount, "ignored", null));
+  list.appendChild(makeScopeItem("Come Back", comeBackCount, "come_back", null));
 
   const sep = document.createElement("div");
   sep.className = "people-sep";
@@ -642,7 +652,7 @@ async function loadFaces() {
         setStatus(msg);
       }
     } else {
-      const label = scope === "person" ? personName : scope;
+      const label = scope === "person" ? personName : scope === "come_back" ? "Come Back" : scope;
       let msg = `${data.returned} of ${data.total} faces — ${label}`;
       if (data.total > data.returned) msg += ` (showing first ${data.returned})`;
       setStatus(msg);
@@ -777,6 +787,22 @@ function renderGrid() {
     computeIgnoreBatches(faces).forEach(group => {
       const sec = makeGroupSection(groupIdx++);
       sec.appendChild(makeIgnoreBatchHeader(group));
+      const cells = document.createElement("div");
+      cells.className = "face-group-cells";
+      group.faces.forEach(face => { cells.appendChild(makeFaceCell(face, idx)); idx++; });
+      sec.appendChild(cells);
+      grid.appendChild(sec);
+    });
+    return;
+  }
+
+  // Come Back: group by come-back batch (shared come_back_at), newest first,
+  // each batch header offering a one-click "Restore all".
+  if (scope === "come_back") {
+    let idx = 0, groupIdx = 0;
+    computeComeBackBatches(faces).forEach(group => {
+      const sec = makeGroupSection(groupIdx++);
+      sec.appendChild(makeComeBackBatchHeader(group));
       const cells = document.createElement("div");
       cells.className = "face-group-cells";
       group.faces.forEach(face => { cells.appendChild(makeFaceCell(face, idx)); idx++; });
@@ -1001,7 +1027,8 @@ function makeFaceCell(face, idx) {
   const cell = document.createElement("div");
   cell.className = "thumb-cell" +
     (selectedIds.has(face.id) ? " selected" : "") +
-    (face.ignored ? " ignored" : "");
+    (face.ignored ? " ignored" : "") +
+    (face.come_back ? " come-back" : "");
   cell.dataset.id = face.id;
 
   cell.appendChild(faceCropImg(face));
@@ -1015,6 +1042,11 @@ function makeFaceCell(face, idx) {
     const label = document.createElement("div");
     label.className = "face-label ignored-label";
     label.textContent = "Ignored";
+    cell.appendChild(label);
+  } else if (face.come_back) {
+    const label = document.createElement("div");
+    label.className = "face-label come-back-label";
+    label.textContent = "Come back";
     cell.appendChild(label);
   } else if (face.person_name && scope === "recent") {
     // In the recently-tagged view the name is a one-click un-tag.
@@ -1127,6 +1159,35 @@ function makeIgnoreBatchHeader(group) {
       { label: `Restore all (${group.faces.length})`, kind: "primary",
         title: "Un-ignore every face in this batch (returns them to the Unlabeled queue)",
         onClick: () => ignoreSelected_ids(group.faces.map(f => f.id), false) },
+    ],
+  });
+}
+
+/* ── Come-back-batch grouping (Come Back view) ── */
+function computeComeBackBatches(list) {
+  // `list` is newest-first by come_back_at; faces deferred together share a value.
+  const groups = [];
+  let cur = null;
+  list.forEach(f => {
+    const key = f.come_back_at ?? null;
+    if (!cur || cur.ts !== key) { cur = { ts: key, faces: [] }; groups.push(cur); }
+    cur.faces.push(f);
+  });
+  return groups;
+}
+
+function makeComeBackBatchHeader(group) {
+  const when = group.ts ? formatRelativeTime(group.ts) : "unknown time";
+  return faceGroupHeader({
+    title: `Come back ${when}`,
+    meta: `· ${group.faces.length} face(s)`,
+    buttons: [
+      { label: "Select all",
+        title: "Add every face in this batch to the current selection",
+        onClick: () => { group.faces.forEach(f => selectedIds.add(f.id)); renderGrid(); updateDetail(); } },
+      { label: `Restore all (${group.faces.length})`, kind: "primary",
+        title: "Move every face in this batch back to the Unlabeled queue",
+        onClick: () => comeBackSelected_ids(group.faces.map(f => f.id), false) },
     ],
   });
 }
@@ -1313,7 +1374,7 @@ function handleCellClick(e, face, idx) {
  * photo cards, which have no single `faces` list to walk), and only when
  * focus isn't in a text field or the person-picker modal (which has its own
  * arrow/Enter handling — see face-grid.js). */
-const FLAT_GRID_SCOPES = new Set(["unlabeled", "all", "person", "suggested", "ignored", "recent"]);
+const FLAT_GRID_SCOPES = new Set(["unlabeled", "all", "person", "suggested", "ignored", "come_back", "recent"]);
 
 function isFlatGridScope() {
   return FLAT_GRID_SCOPES.has(scope);
@@ -1435,6 +1496,10 @@ function bindKeyboardShortcuts() {
       case "x": case "i":
         e.preventDefault();
         ignoreSelected(scope !== "ignored");
+        break;
+      case "b":
+        e.preventDefault();
+        comeBackSelected(scope !== "come_back");
         break;
       case "c":
         e.preventDefault();
@@ -1798,7 +1863,9 @@ function updateDetail() {
     ? new Date(face.photo_datetime * 1000).toLocaleString() : "Unknown";
   const personCell = face.ignored
     ? "<i style='color:#999'>Ignored</i>"
-    : (face.person_name || "<i style='color:#777'>Unassigned</i>");
+    : face.come_back
+      ? "<i style='color:#dab35a'>Come back later</i>"
+      : (face.person_name || "<i style='color:#777'>Unassigned</i>");
   const loc = face.location;
   const placeStr = loc
     ? [loc.city, loc.state, loc.country].filter(Boolean).join(", ")
@@ -1814,6 +1881,11 @@ function updateDetail() {
   detailIgnoreBtn.textContent = face.ignored ? "↩" : "🚫";
   detailIgnoreBtn.title = face.ignored ? "Restore" : "Ignore";
   detailIgnoreBtn.setAttribute("aria-label", detailIgnoreBtn.title);
+
+  const detailComeBackBtn = document.getElementById("detail-come-back-btn");
+  detailComeBackBtn.textContent = face.come_back ? "↩" : "🕒";
+  detailComeBackBtn.title = face.come_back ? "Restore" : "Come back later";
+  detailComeBackBtn.setAttribute("aria-label", detailComeBackBtn.title);
 
   const sug = document.getElementById("face-suggestion");
   const alts = face.alternatives || [];
@@ -1977,6 +2049,31 @@ async function ignoreSelected_ids(ids, ignored) {
   }
 }
 
+async function comeBackSelected(comeBack) {
+  const ids = selectionOrFocused();
+  if (ids.length === 0) { setStatus("Select one or more faces first.", true); return; }
+  const verb = comeBack ? "Move to Come Back" : "Restore";
+  if (!confirmSelection(ids.length, `${verb} ${ids.length} face(s)?`)) return;
+  await comeBackSelected_ids(ids, comeBack);
+}
+
+async function comeBackSelected_ids(ids, comeBack) {
+  try {
+    const res = await fetch("/api/faces/come-back", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ face_ids: ids, come_back: comeBack }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    setStatus(comeBack ? `Moved ${ids.length} face(s) to Come Back.` : `Restored ${ids.length} face(s).`);
+    selectedIds.clear();
+    await loadPersons();
+    await loadFaces();
+  } catch (err) {
+    setStatus("Come back failed: " + err.message, true);
+  }
+}
+
 // Nuclear option: wipe every face (detected/assigned/ignored) + every cached
 // rendition (thumb/preview/face-crop) for the photo(s) behind the selected
 // face(s), so a rescan re-detects those photos from scratch. Acts on the whole
@@ -2022,6 +2119,15 @@ function updateActionButtons() {
     ? "Restore selected faces"
     : "Hide selected faces from the queue (background strangers, false detections)";
   ignoreBtn.setAttribute("aria-label", restoring ? "Restore" : "Ignore");
+
+  // Same toggle for the Come Back queue.
+  const comeBackBtn = document.getElementById("come-back-btn");
+  const restoringComeBack = scope === "come_back";
+  comeBackBtn.textContent = restoringComeBack ? "↩" : "🕒";
+  comeBackBtn.title = restoringComeBack
+    ? "Restore selected faces to the Unlabeled queue"
+    : "Move selected faces to the Come Back queue — people you know or suspect but aren't ready to assign yet";
+  comeBackBtn.setAttribute("aria-label", restoringComeBack ? "Restore" : "Come back later");
 
   // "Only suggested" applies to the Unlabeled queue only.
   const chk = document.getElementById("suggested-only-chk");
@@ -2079,6 +2185,16 @@ function openFaceActions(anchor, face) {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         await loadFaces();
       } catch (err) { setStatus("Ignore failed: " + err.message, true); }
+    },
+    onComeBack: async (comeBack) => {
+      try {
+        const res = await fetch("/api/faces/come-back", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ face_ids: [face.id], come_back: comeBack }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await loadFaces();
+      } catch (err) { setStatus("Come back failed: " + err.message, true); }
     },
     onNotPerson: (personId, personName) => rejectSuggestion(face.id, personId, personName),
     onOpenPhoto: () => window.open(`/api/preview/${face.photo_id}`, "_blank"),

@@ -149,6 +149,7 @@ function faceGroupHeader({ title, meta, buttons = [], extraClass = "" }) {
  *   onAssign,    // (personId|null) => any   (null = unassign)   REQUIRED
  *   onAssignNew, // (name) => any            optional
  *   onIgnore,    // (ignored:boolean) => any optional
+ *   onComeBack,  // (come_back:boolean) => any optional
  *   onNotPerson, // (personId, personName) => any  optional — rejects face.suggestion
  *   onOpenPhoto, // () => void               optional
  *   showConfirm, // override; default = face.suggestion && !face.person_name
@@ -234,6 +235,14 @@ function openQuickActions(anchor, face, opts) {
     b.className = face.ignored ? "expand-btn" : "danger expand-btn";
     b.textContent = face.ignored ? "↩ Restore" : "🚫 Ignore";
     b.addEventListener("click", run(() => opts.onIgnore(!face.ignored)));
+    panel.appendChild(b);
+  }
+
+  if (opts.onComeBack) {
+    const b = document.createElement("button");
+    b.className = "expand-btn";
+    b.textContent = face.come_back ? "↩ Restore" : "🕒 Come back later";
+    b.addEventListener("click", run(() => opts.onComeBack(!face.come_back)));
     panel.appendChild(b);
   }
 

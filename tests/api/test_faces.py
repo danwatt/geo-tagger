@@ -59,8 +59,33 @@ def test_ignore_moves_faces_out_of_unlabeled(client):
 def test_scan_status_empty(client):
     assert client.get("/api/faces/scan/status").json() == {
         "remaining_photos": 0, "total_faces": 0, "unlabeled_faces": 0,
-        "ignored_faces": 0, "tagged_faces": 0,
+        "ignored_faces": 0, "come_back_faces": 0, "tagged_faces": 0,
     }
+
+
+def test_come_back_moves_faces_out_of_unlabeled_and_restores(client):
+    db = index.get_db()
+    rng = np.random.default_rng(2)
+    ids = ff.seed_unlabeled(db, ff.unit_vectors(rng, 2))
+    r = client.post("/api/faces/come-back", json={"face_ids": ids, "come_back": True})
+    assert r.status_code == 200 and r.json() == {"updated": 2, "come_back": True}
+    assert client.get("/api/faces?scope=unlabeled").json()["total"] == 0
+    assert client.get("/api/faces?scope=come_back").json()["total"] == 2
+
+    r = client.post("/api/faces/come-back", json={"face_ids": ids, "come_back": False})
+    assert r.status_code == 200 and r.json() == {"updated": 2, "come_back": False}
+    assert client.get("/api/faces?scope=come_back").json()["total"] == 0
+    assert client.get("/api/faces?scope=unlabeled").json()["total"] == 2
+
+
+def test_assign_clears_come_back(client):
+    db = index.get_db()
+    rng = np.random.default_rng(3)
+    ids = ff.seed_unlabeled(db, ff.unit_vectors(rng, 1))
+    client.post("/api/faces/come-back", json={"face_ids": ids, "come_back": True})
+    r = client.post("/api/faces/assign", json={"face_ids": ids, "name": "Bob"})
+    assert r.status_code == 200 and r.json()["assigned"] == 1
+    assert client.get("/api/faces?scope=come_back").json()["total"] == 0
 
 
 def test_clusters_recovers_two_groups(client):

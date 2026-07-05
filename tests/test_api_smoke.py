@@ -120,7 +120,8 @@ def test_faces_and_geocode_status(client):
     res = client.get("/api/faces/scan/status")
     assert res.status_code == 200
     assert res.json() == {"remaining_photos": 0, "total_faces": 0,
-                          "unlabeled_faces": 0, "ignored_faces": 0, "tagged_faces": 0}
+                          "unlabeled_faces": 0, "ignored_faces": 0,
+                          "come_back_faces": 0, "tagged_faces": 0}
 
     res = client.get("/api/faces")  # scope=unlabeled default
     assert res.status_code == 200

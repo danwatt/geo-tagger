@@ -152,6 +152,8 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 .labeled-card { border-color: #2a5a2a !important; }
 .ignored-card  { opacity: 0.45; }
 .ignored-card:hover { opacity: 0.7; }
+.come-back-card { opacity: 0.75; }
+.come-back-card:hover { opacity: 1; }
 
 /* ── Face chips ── */
 .face-name-chip {
@@ -195,6 +197,15 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   background: #222;
   color: #555;
   font-size: 10px;
+}
+
+.face-come-back-chip {
+  text-align: center;
+  padding: 2px 4px;
+  background: #2a2218;
+  color: #d8b88a;
+  font-size: 10px;
+  font-style: italic;
 }
 
 /* ── Suggested groups ── */

@@ -198,6 +198,7 @@ function openFaceActions(anchor, f) {
       pid === null ? { face_ids: [f.id], clear: true } : { face_ids: [f.id], person_id: pid }),
     onAssignNew: (name) => faceAction(f, "/api/faces/assign", { face_ids: [f.id], name }),
     onIgnore: (ignored) => faceAction(f, "/api/faces/ignore", { face_ids: [f.id], ignored }),
+    onComeBack: (comeBack) => faceAction(f, "/api/faces/come-back", { face_ids: [f.id], come_back: comeBack }),
     onOpenPhoto: () => openPreview(f),
   });
 }

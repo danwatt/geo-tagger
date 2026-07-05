@@ -91,6 +91,7 @@
         <button id="unassign-btn" class="danger icon-btn" title="Unassign" aria-label="Unassign">×</button>
         <button id="confirm-suggested-btn" class="icon-btn" title="Confirm the suggested name for every selected face" aria-label="Accept suggestions">✓</button>
         <button id="ignore-btn" class="icon-btn" title="Hide selected faces from the queue (background strangers, false detections)" aria-label="Ignore">🚫</button>
+        <button id="come-back-btn" class="icon-btn" title="Move selected faces to the Come Back queue — people you know or suspect but aren't ready to assign yet" aria-label="Come back later">🕒</button>
         <button id="nuke-btn" class="danger icon-btn" title="Nuclear option: permanently delete ALL faces (detected, assigned, and ignored) for the photo(s) behind the selected face(s), and wipe their cached thumbnails/previews so detection starts completely from scratch" aria-label="Nuclear option">🧨</button>
       </div>
     </div>
@@ -112,6 +113,7 @@
           <button id="detail-assign-btn" class="primary" title="Assign this face to a person">Assign…</button>
           <button id="detail-unassign-btn" class="danger icon-btn" title="Unassign" aria-label="Unassign">×</button>
           <button id="detail-ignore-btn" class="icon-btn" title="Ignore" aria-label="Ignore">🚫</button>
+          <button id="detail-come-back-btn" class="icon-btn" title="Come back later" aria-label="Come back later">🕒</button>
           <button id="detail-open-photo-btn" class="icon-btn" title="Open photo" aria-label="Open photo">🖼</button>
           <button id="detail-fullsize-btn" class="icon-btn" title="View full size (RAW)" aria-label="View full size (RAW)" style="display:none">🔍</button>
         </div>
@@ -138,6 +140,7 @@
       <tr><td><kbd>Enter</kbd> / <kbd>a</kbd></td><td>Assign selection to a person</td></tr>
       <tr><td><kbd>u</kbd> / <kbd>Backspace</kbd></td><td>Unassign selection</td></tr>
       <tr><td><kbd>x</kbd> / <kbd>i</kbd></td><td>Ignore (or restore, in Ignored view)</td></tr>
+      <tr><td><kbd>b</kbd></td><td>Come back later (or restore, in Come Back view)</td></tr>
       <tr><td><kbd>c</kbd></td><td>Confirm suggested name</td></tr>
       <tr><td><kbd>o</kbd></td><td>Open focused face's photo</td></tr>
       <tr><td><kbd>f</kbd></td><td>View focused face full size (RAW)</td></tr>
