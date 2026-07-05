@@ -26,6 +26,7 @@ import threading
 
 from geotagger import config
 from geotagger.contexts import point_in_polygon
+from geotagger.db_timing import TimedConnection
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +72,7 @@ def _load():
         # Read-only, shared across executor threads (guarded by _lock). The DB is
         # built with a rollback journal, so a clean single file opens read-only.
         uri = f"file:{config.OSM_DB_PATH.as_posix()}?mode=ro"
-        _conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
+        _conn = sqlite3.connect(uri, uri=True, check_same_thread=False, factory=TimedConnection)
         _conn.row_factory = sqlite3.Row
         n = _conn.execute("SELECT COUNT(*) FROM places").fetchone()[0]
         _state = "ready"

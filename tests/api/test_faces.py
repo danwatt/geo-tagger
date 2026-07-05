@@ -247,7 +247,7 @@ def test_unlabeled_scope_windows_by_photo_time(client):
     assert wide["total"] == 5
 
 
-def test_persons_window_hides_out_of_range_and_counts_in_range(client):
+def test_persons_window_hides_out_of_range(client):
     db = index.get_db()
     rng = np.random.default_rng(11)
     c1, c2 = ff.unit_vectors(rng, 2)
@@ -257,15 +257,16 @@ def test_persons_window_hides_out_of_range_and_counts_in_range(client):
     ff.seed_person(db, "Bob", ff.cluster_around(rng, c2, 2, intra_cos=0.9),
                    photo_datetimes=ff.epoch(2020, 6, 1))
 
-    # Unwindowed: face_count isn't computed (too expensive to do on every load —
-    # see index.get_persons), so it comes back null for everyone.
-    full = {p["name"]: p["face_count"] for p in client.get("/api/persons").json()}
-    assert full == {"Alice": None, "Bob": None}
+    # No face_count anywhere (too expensive to compute — see index.get_persons).
+    full = client.get("/api/persons").json()
+    assert all("face_count" not in p for p in full)
+    assert {p["name"] for p in full} == {"Alice", "Bob"}
 
     start, end = _2015
     win = client.get(f"/api/persons?start_ts={start}&end_ts={end}").json()
-    # Bob (no 2015 faces) drops out; Alice's count reflects only her in-range faces.
-    assert {p["name"]: p["face_count"] for p in win} == {"Alice": 2}
+    # Bob (no 2015 faces) drops out; Alice (has some) stays, still with no count.
+    assert {p["name"] for p in win} == {"Alice"}
+    assert all("face_count" not in p for p in win)
 
 
 def test_scan_status_window_scopes_unlabeled_only(client):

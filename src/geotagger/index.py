@@ -2,6 +2,7 @@ import sqlite3
 import time
 from pathlib import Path
 from geotagger.config import CACHE_DIR_NAME, get_cache_dir
+from geotagger.db_timing import TimedConnection
 
 _db: sqlite3.Connection | None = None
 _db_path: Path | None = None
@@ -36,7 +37,7 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     _db_path = cache_dir / "index.db"
-    _db = sqlite3.connect(str(_db_path), check_same_thread=False)
+    _db = sqlite3.connect(str(_db_path), check_same_thread=False, factory=TimedConnection)
     _db.row_factory = sqlite3.Row
     _db.execute("PRAGMA journal_mode=WAL")
     # 64 MB page cache — default 2 MB is far too small for 93K embedding blobs.
@@ -260,6 +261,12 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     # Serves tag-order / "recently tagged" / undo queries (ORDER BY assigned_at DESC).
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_assigned_at ON faces(assigned_at)")
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_ignored_at ON faces(ignored_at)")
+    # Partial index for count_faces("recent")'s COUNT(*) WHERE assigned_at IS NOT
+    # NULL AND person_id IS NOT NULL — index-only scan instead of a full table scan.
+    _db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_faces_assigned_count ON faces(assigned_at) "
+        "WHERE assigned_at IS NOT NULL AND person_id IS NOT NULL"
+    )
 
     # Negative labels: "face F is definitely NOT person P". Orthogonal to the
     # labeled/ignored/unlabeled state — the face stays in the queue and can still
@@ -1408,17 +1415,14 @@ def get_or_create_person(name: str) -> int:
 
 def get_persons(start_ts: int | None = None, end_ts: int | None = None,
                 photo_ids: list[int] | None = None) -> list[sqlite3.Row]:
-    """All persons, with family info. No ``face_count`` in the unwindowed (plain)
-    case — a live COUNT(*) join over the whole faces table on every call was the
-    People page's biggest single latency cost at scale, and nothing currently
-    needs the number there.
+    """All persons, with family info. No ``face_count`` ever — a live COUNT(*)
+    join over the whole faces table on every call was the People page's biggest
+    single latency cost at scale, and nothing currently needs the number.
 
     With a ``start_ts``/``end_ts`` window (epoch secs, the People page's time
     Focus) and/or ``photo_ids`` (its "also limit to this area" spatial Focus —
-    photos inside a context's polygon), ``face_count`` *is* computed (reflecting
-    only faces whose photo falls in the window) since it's load-bearing there —
-    HAVING uses it to drop people with none, so the left nav lists just who
-    appears in range.
+    photos inside a context's polygon), the list is filtered to just people who
+    have at least one face in range (via EXISTS, no count needed).
     """
     if start_ts is None and end_ts is None and photo_ids is None:
         return get_db().execute(
@@ -1428,9 +1432,7 @@ def get_persons(start_ts: int | None = None, end_ts: int | None = None,
                LEFT JOIN families fam ON fam.id = p.family_id
                ORDER BY p.name"""
         ).fetchall()
-    # Count only in-window faces (via a conditional COUNT over the photos join),
-    # then HAVING drops people with no faces in range.
-    conds, params = [], []
+    conds, params = ["f.person_id = p.id"], []
     if start_ts is not None:
         conds.append("ph.photo_datetime >= ?")
         params.append(start_ts)
@@ -1441,17 +1443,17 @@ def get_persons(start_ts: int | None = None, end_ts: int | None = None,
         import json as _json
         conds.append("ph.id IN (SELECT value FROM json_each(?))")
         params.append(_json.dumps(photo_ids))
-    when = " AND ".join(conds)
+    where = " AND ".join(conds)
     return get_db().execute(
         f"""SELECT p.id, p.name, p.birth_date, p.created_at, p.family_id,
-                   fam.name AS family_name,
-                   COUNT(CASE WHEN {when} THEN 1 END) AS face_count
+                   fam.name AS family_name
             FROM persons p
             LEFT JOIN families fam ON fam.id = p.family_id
-            LEFT JOIN faces f ON f.person_id = p.id
-            LEFT JOIN photos ph ON ph.id = f.photo_id
-            GROUP BY p.id
-            HAVING face_count > 0
+            WHERE EXISTS (
+                SELECT 1 FROM faces f
+                JOIN photos ph ON ph.id = f.photo_id
+                WHERE {where}
+            )
             ORDER BY p.name""",
         params,
     ).fetchall()
