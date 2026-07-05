@@ -83,12 +83,7 @@
            current grid. Shown in every scope except Discover/Crowds, which use
            cluster/photo cards with their own buttons. -->
       <div id="grid-nav-selection" style="display:none">
-        <label>Assign selection:</label>
-        <select id="assign-person-select">
-          <option value="">Choose person…</option>
-        </select>
-        <button id="assign-btn" class="primary">Assign</button>
-        <button id="assign-new-btn" class="icon-btn" title="New person…" aria-label="New person…">👤</button>
+        <button id="assign-btn" class="primary" title="Assign selected faces to a person">Assign…</button>
         <button id="unassign-btn" class="danger icon-btn" title="Unassign" aria-label="Unassign">×</button>
         <button id="confirm-suggested-btn" class="icon-btn" title="Confirm the suggested name for every selected face" aria-label="Accept suggestions">✓</button>
         <button id="ignore-btn" class="icon-btn" title="Hide selected faces from the queue (background strangers, false detections)" aria-label="Ignore">🚫</button>
@@ -110,13 +105,7 @@
         <div id="face-suggestion" style="display:none"></div>
         <div id="face-negatives" style="display:none"></div>
         <div class="face-assign-row">
-          <select id="detail-person-select">
-            <option value="">Choose person…</option>
-          </select>
-          <button id="detail-assign-btn" class="primary">Assign</button>
-        </div>
-        <div class="face-assign-row">
-          <button id="detail-new-btn" class="icon-btn" title="New person…" aria-label="New person…">👤</button>
+          <button id="detail-assign-btn" class="primary" title="Assign this face to a person">Assign…</button>
           <button id="detail-unassign-btn" class="danger icon-btn" title="Unassign" aria-label="Unassign">×</button>
           <button id="detail-ignore-btn" class="icon-btn" title="Ignore" aria-label="Ignore">🚫</button>
           <button id="detail-open-photo-btn" class="icon-btn" title="Open photo" aria-label="Open photo">🖼</button>

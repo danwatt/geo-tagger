@@ -115,11 +115,13 @@ function bindToolbar() {
   });
 
   document.getElementById("assign-btn").addEventListener("click", () => {
-    const pid = parseInt(document.getElementById("assign-person-select").value);
-    if (!pid) { setStatus("Pick a person from the dropdown first.", true); return; }
-    assignSelected(pid);
+    const ids = selectionOrFocused();
+    if (ids.length === 0) { setStatus("Select one or more faces first.", true); return; }
+    openPersonPicker(persons, {
+      title: `Assign ${ids.length} face(s) to…`,
+      onPick: (who, label) => assignSelectedTo(who, label),
+    });
   });
-  document.getElementById("assign-new-btn").addEventListener("click", assignSelectedToNewPerson);
   document.getElementById("unassign-btn").addEventListener("click", () => assignSelected(null, true));
   document.getElementById("confirm-suggested-btn").addEventListener("click", acceptSuggestionsForSelection);
   // In the Ignored scope this button restores; everywhere else it ignores.
@@ -150,13 +152,11 @@ function bindToolbar() {
   // grid selection (the toolbar's "Assign selection" is for that). Mirrors the
   // detail Ignore button below, which already scopes to the focused face.
   document.getElementById("detail-assign-btn").addEventListener("click", () => {
-    const pid = parseInt(document.getElementById("detail-person-select").value);
-    if (!pid) { setStatus("Pick a person from the dropdown first.", true); return; }
-    assignFocusedFace({ personId: pid });
-  });
-  document.getElementById("detail-new-btn").addEventListener("click", () => {
-    const name = prompt("Name for this person:");
-    if (name && name.trim()) assignFocusedFace({ name: name.trim() });
+    if (!findFace(focusedFaceId)) { setStatus("Select a face first.", true); return; }
+    openPersonPicker(persons, {
+      title: "Assign to…",
+      onPick: (who) => assignFocusedFace(who.person_id ? { personId: who.person_id } : { name: who.name }),
+    });
   });
   document.getElementById("detail-unassign-btn").addEventListener("click", () => assignFocusedFace({ clear: true }));
   document.getElementById("detail-ignore-btn").addEventListener("click", () => {
@@ -501,7 +501,7 @@ function makeScopeItem(name, count, itemScope, personId) {
 }
 
 function populatePersonSelects() {
-  ["assign-person-select", "detail-person-select", "guess-person-select"].forEach(id => {
+  ["guess-person-select"].forEach(id => {
     const sel = document.getElementById(id);
     const prev = sel.value;
     sel.innerHTML = '<option value="">Choose person…</option>';
@@ -567,12 +567,10 @@ async function loadFaces() {
 
     if (scope === "suggested") {
       // Order chronologically (undated last) so event groups are contiguous,
-      // then pre-select every guess and aim the Assign dropdowns at the person.
+      // then pre-select every guess (Accept suggestions confirms them in bulk).
       faces.sort((a, b) => (a.photo_datetime || Infinity) - (b.photo_datetime || Infinity));
       selectedIds = new Set(faces.map(f => f.id));
       focusedFaceId = faces.length ? faces[0].id : null;
-      document.getElementById("assign-person-select").value = scopePersonId;
-      document.getElementById("detail-person-select").value = scopePersonId;
     } else if (scope === "recent") {
       // Newest tag first (the server already orders this way; keep it explicit).
       faces.sort((a, b) => (b.assigned_at || 0) - (a.assigned_at || 0));
@@ -1726,10 +1724,7 @@ function selectionOrFocused() {
 async function assignSelected(personId, clear = false) {
   const ids = selectionOrFocused();
   if (ids.length === 0) { setStatus("Select one or more faces first.", true); return; }
-  const msg = clear
-    ? `Unassign ${ids.length} face(s)?`
-    : `Assign ${ids.length} face(s) to ${persons.find(p => p.id === personId)?.name || "this person"}?`;
-  if (!confirmSelection(ids.length, msg)) return;
+  if (!confirmSelection(ids.length, `Unassign ${ids.length} face(s)?`)) return;
   try {
     const res = await fetch("/api/faces/assign", {
       method: "POST",
@@ -1737,7 +1732,7 @@ async function assignSelected(personId, clear = false) {
       body: JSON.stringify({ face_ids: ids, person_id: personId, clear }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    setStatus(clear ? `Unassigned ${ids.length} face(s).` : `Assigned ${ids.length} face(s).`);
+    setStatus(`Unassigned ${ids.length} face(s).`);
     selectedIds.clear();
     await loadPersons();
     await loadFaces();
@@ -1747,8 +1742,8 @@ async function assignSelected(personId, clear = false) {
 }
 
 // Detail-pane assignment: act on the single previewed face (focusedFaceId) via the
-// per-face endpoint, leaving the grid selection untouched. Handles all three detail
-// buttons — assign to a person, create a new person (name), or unassign (clear).
+// per-face endpoint, leaving the grid selection untouched. Handles both detail
+// buttons — assign to a person (existing or newly created) or unassign (clear).
 async function assignFocusedFace({ personId = null, name = null, clear = false } = {}) {
   const f = findFace(focusedFaceId);
   if (!f) { setStatus("Select a face first.", true); return; }
@@ -1851,20 +1846,20 @@ function updateActionButtons() {
     scope === "unlabeled" ? "1" : "0.45";
 }
 
-async function assignSelectedToNewPerson() {
+// Assign the current selection to a person (existing or newly created) picked
+// from the shared person-picker modal. `who` is {person_id} or {name}.
+async function assignSelectedTo(who, label) {
   const ids = selectionOrFocused();
   if (ids.length === 0) { setStatus("Select one or more faces first.", true); return; }
-  const name = prompt("Name for this person:");
-  if (!name || !name.trim()) return;
-  if (!confirmSelection(ids.length, `Assign ${ids.length} face(s) to ${name.trim()}?`)) return;
+  if (!confirmSelection(ids.length, `Assign ${ids.length} face(s) to ${label}?`)) return;
   try {
     const res = await fetch("/api/faces/assign", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ face_ids: ids, name: name.trim() }),
+      body: JSON.stringify({ face_ids: ids, ...who }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    setStatus(`Assigned ${ids.length} face(s) to ${name.trim()}.`);
+    setStatus(`Assigned ${ids.length} face(s) to ${label}.`);
     selectedIds.clear();
     await loadPersons();
     await loadFaces();

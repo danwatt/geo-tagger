@@ -53,18 +53,7 @@
   gap: 5px;
   box-shadow: 0 6px 20px rgba(0,0,0,.8);
 }
-.expand-row { display: flex; gap: 4px; align-items: center; }
 .expand-btn { font-size: 11px; padding: 3px 8px; white-space: nowrap; }
-.expand-select {
-  flex: 1;
-  font-size: 11px;
-  padding: 3px 4px;
-  background: #333;
-  color: #ddd;
-  border: 1px solid #555;
-  border-radius: 3px;
-  min-width: 0;
-}
 
 /* Bottom-sheet variant for narrow/touch viewports (e.g. Quick Tag on a phone).
  * Same buttons, larger tap targets, anchored to the bottom edge. */
@@ -84,6 +73,83 @@
   padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
   gap: 10px;
 }
-.face-expand.as-sheet .expand-btn,
-.face-expand.as-sheet .expand-select { font-size: 16px; padding: 14px; }
-.face-expand.as-sheet .expand-row { gap: 8px; }
+.face-expand.as-sheet .expand-btn { font-size: 16px; padding: 14px; }
+
+/* ── Person picker modal ──
+ * Shared "assign to…" typeahead: small centered dialog, compact desktop text
+ * (not the Quick Tag bottom sheet, which is touch-sized). Built by
+ * openPersonPicker() and used by the People toolbar, People detail pane, and
+ * the quick-action popup above. */
+.pp-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  background: rgba(0, 0, 0, .55);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+}
+.pp-modal {
+  width: 260px;
+  max-height: 60vh;
+  background: #2a2a2a;
+  border: 1px solid #4a90d9;
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.8);
+}
+.pp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: #cfe6ff;
+}
+.pp-close {
+  background: none;
+  border: none;
+  color: #aaa;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 4px;
+  line-height: 1;
+}
+.pp-search {
+  width: 100%;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  border: 1px solid #444;
+  background: #1a1a1a;
+  color: #eee;
+}
+.pp-list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.pp-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  font-size: 12px;
+  border: 1px solid #383838;
+  border-radius: 5px;
+  background: #333;
+  color: #eee;
+  cursor: pointer;
+}
+.pp-item:hover { background: #3a3a3a; }
+.pp-item .pp-count { color: #9aa; font-size: 11px; }
+.pp-new { background: #2a4a6e; border-color: #4a90d9; color: #eaf4ff; }
+.pp-new:hover { background: #305686; }
+.pp-empty { color: #888; text-align: center; padding: 14px; font-size: 12px; }

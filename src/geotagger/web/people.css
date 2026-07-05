@@ -124,9 +124,8 @@
 /* Push the selection-action bar to the right edge of #grid-nav, after whichever
  * scope sub-bar is showing (or on its own when none is). */
 #grid-nav-selection { margin-left: auto; }
-#grid-nav-selection select { max-width: 240px; }
 /* Icon-only selection actions, matching the detail-pane and group-header icon
- * buttons (👤 new · × unassign · ✓ accept suggestions · 🚫 ignore). */
+ * buttons (× unassign · ✓ accept suggestions · 🚫 ignore). */
 #grid-nav-selection button.icon-btn { padding: 2px 8px; font-size: 14px; line-height: 1.2; }
 
 .thumb-cell .face-label {
@@ -394,7 +393,6 @@
   border: 1px solid #383838;
 }
 .face-assign-row { display: flex; gap: 6px; align-items: center; }
-.face-assign-row select { flex: 1; }
 .face-assign-row button.icon-btn { padding: 2px 8px; font-size: 14px; line-height: 1.2; }
 
 #face-suggestion {

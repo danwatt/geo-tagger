@@ -200,49 +200,23 @@ function openQuickActions(anchor, face, opts) {
     panel.appendChild(b);
   }
 
-  // Assign to an existing person.
-  const row = document.createElement("div");
-  row.className = "expand-row";
-  const sel = document.createElement("select");
-  sel.className = "expand-select";
-  const blank = document.createElement("option");
-  blank.value = "";
-  blank.textContent = "Assign to…";
-  sel.appendChild(blank);
-  (opts.persons || []).forEach((p) => {
-    const o = document.createElement("option");
-    o.value = p.id;
-    o.textContent = p.name;
-    sel.appendChild(o);
-  });
-  row.appendChild(sel);
+  // Assign to an existing or new person — opens the shared typeahead picker.
   const assignBtn = document.createElement("button");
   assignBtn.className = "expand-btn";
-  assignBtn.textContent = "✓";
-  assignBtn.title = "Assign to selected person";
+  assignBtn.textContent = "Assign to…";
   assignBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    const pid = parseInt(sel.value);
-    if (!pid) return;
     closeQuickActions();
-    opts.onAssign(pid);
-  });
-  row.appendChild(assignBtn);
-  panel.appendChild(row);
-
-  if (opts.onAssignNew) {
-    const b = document.createElement("button");
-    b.className = "expand-btn";
-    b.textContent = "+ New person";
-    b.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const name = prompt("New person name:");
-      if (!name || !name.trim()) return;
-      closeQuickActions();
-      opts.onAssignNew(name.trim());
+    openPersonPicker(opts.persons || [], {
+      title: "Assign to…",
+      allowCreate: !!opts.onAssignNew,
+      onPick: (who) => {
+        if (who.person_id) opts.onAssign(who.person_id);
+        else if (who.name) opts.onAssignNew(who.name);
+      },
     });
-    panel.appendChild(b);
-  }
+  });
+  panel.appendChild(assignBtn);
 
   if (opts.onIgnore) {
     const b = document.createElement("button");
@@ -277,6 +251,120 @@ function openQuickActions(anchor, face, opts) {
 
   // Defer the outside-close listener so the opening click doesn't trip it.
   setTimeout(() => document.addEventListener("click", _qaOutside), 0);
+}
+
+/* ── Person picker modal ──
+ * The one typeahead-with-create-new picker for "assign to a person", used by
+ * the People toolbar, the People detail pane, and the quick-action popup above
+ * (which itself is used by People/Crowd Review/Quick Tag context menus). Small
+ * centered modal — deliberately not the Quick Tag bottom sheet, which is sized
+ * for touch; this is desktop-density text.
+ *
+ * openPersonPicker(persons, {
+ *   title,        // header text, e.g. "Assign 3 face(s) to…"
+ *   allowCreate,  // default true — offer "Create “name”" for unmatched text
+ *   onPick,       // ({person_id} | {name}, label) => void            REQUIRED
+ * }) */
+let _ppBackdrop = null;
+
+function closePersonPicker() {
+  document.removeEventListener("keydown", _ppEscape);
+  if (_ppBackdrop) _ppBackdrop.remove();
+  _ppBackdrop = null;
+}
+
+function _ppEscape(e) {
+  if (e.key === "Escape") closePersonPicker();
+}
+
+function openPersonPicker(persons, opts) {
+  closePersonPicker();
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "pp-backdrop";
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) closePersonPicker(); });
+
+  const modal = document.createElement("div");
+  modal.className = "pp-modal";
+
+  const head = document.createElement("div");
+  head.className = "pp-head";
+  const title = document.createElement("span");
+  title.textContent = opts.title || "Assign to…";
+  head.appendChild(title);
+  const close = document.createElement("button");
+  close.className = "pp-close";
+  close.textContent = "✕";
+  close.setAttribute("aria-label", "Close");
+  close.addEventListener("click", closePersonPicker);
+  head.appendChild(close);
+  modal.appendChild(head);
+
+  const search = document.createElement("input");
+  search.type = "text";
+  search.className = "pp-search";
+  search.autocomplete = "off";
+  search.placeholder = "Search people, or type a new name…";
+  modal.appendChild(search);
+
+  const list = document.createElement("div");
+  list.className = "pp-list";
+  modal.appendChild(list);
+
+  const allowCreate = opts.allowCreate ?? true;
+
+  function pick(who, label) {
+    closePersonPicker();
+    opts.onPick(who, label);
+  }
+
+  function renderList(q) {
+    list.innerHTML = "";
+    const ql = q.trim().toLowerCase();
+    const matches = persons
+      .filter((p) => p.name.toLowerCase().includes(ql))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    if (ql && allowCreate && !persons.some((p) => p.name.toLowerCase() === ql)) {
+      const row = document.createElement("button");
+      row.className = "pp-item pp-new";
+      row.textContent = `➕ Create "${q.trim()}"`;
+      row.addEventListener("click", () => pick({ name: q.trim() }, q.trim()));
+      list.appendChild(row);
+    }
+
+    matches.forEach((p) => {
+      const row = document.createElement("button");
+      row.className = "pp-item";
+      const nameEl = document.createElement("span");
+      nameEl.textContent = p.name;
+      row.appendChild(nameEl);
+      if (p.face_count !== undefined) {
+        const countEl = document.createElement("span");
+        countEl.className = "pp-count";
+        countEl.textContent = p.face_count;
+        row.appendChild(countEl);
+      }
+      row.addEventListener("click", () => pick({ person_id: p.id }, p.name));
+      list.appendChild(row);
+    });
+
+    if (!matches.length && !ql) {
+      const empty = document.createElement("div");
+      empty.className = "pp-empty";
+      empty.textContent = "No people yet — type a name to create one.";
+      list.appendChild(empty);
+    }
+  }
+
+  search.addEventListener("input", (e) => renderList(e.target.value));
+
+  backdrop.appendChild(modal);
+  document.body.appendChild(backdrop);
+  _ppBackdrop = backdrop;
+  renderList("");
+  search.focus();
+  document.addEventListener("keydown", _ppEscape);
 }
 
 function _positionQa(panel, anchor) {

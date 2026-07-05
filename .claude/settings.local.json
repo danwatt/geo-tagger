@@ -12,7 +12,19 @@
       "Read(//c/temp/geotagger/prod/**)",
       "Bash(uv run *)",
       "Bash(git mv *)",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://127.0.0.1:8000/api/status)"
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://127.0.0.1:8000/api/status)",
+      "Bash(powershell -NoProfile -Command \"Get-NetTCPConnection -LocalPort 8123 -ErrorAction SilentlyContinue | Select OwningProcess\")",
+      "Bash(netstat -ano)",
+      "Bash(powershell -NoProfile -Command \"Stop-Process -Id 81688 -Force\")",
+      "Bash(rm -rf /tmp/gt_smoke)",
+      "Bash(mkdir -p /tmp/gt_smoke/lib /tmp/gt_smoke/cache)",
+      "Bash(GEOTAGGER_CACHE_DIR=\"/tmp/gt_smoke/cache\" nohup uv run geotagger --port 8123 --scan-dir /tmp/gt_smoke/lib)",
+      "Bash(curl -s http://127.0.0.1:8123/api/persons)",
+      "Read(//tmp/**)",
+      "Bash(command -v node)",
+      "Bash(node --check src/geotagger/web/face-grid.js)",
+      "Bash(node --check src/geotagger/web/people.js)",
+      "Bash(curl -s -X POST http://127.0.0.1:8123/api/persons -H \"Content-Type: application/json\" -d '{\"name\":\"Alice\"}')"
     ]
   }
 }
