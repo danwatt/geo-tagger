@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from geotagger import index, sidecar, geocode
+from geotagger import config, index, sidecar, geocode
 from geotagger.executor import get_executor
 
 router = APIRouter()
@@ -40,14 +40,23 @@ async def api_geotag(req: GeotagRequest):
         if not row:
             continue
         p = Path(index.photo_path(row))
-        sc = sidecar.write_gps(p, req.lat, req.lng, location=loc, gps_accuracy=req.gps_accuracy)
-        sc_mtime = sc.stat().st_mtime if sc.exists() else None
-        index.update_geotag(photo_id, req.lat, req.lng, "sidecar", sc.name, sc_mtime, gps_accuracy=req.gps_accuracy)
+        if config.WRITE_XMP_ON_GEOTAG:
+            sc = sidecar.write_gps(p, req.lat, req.lng, location=loc, gps_accuracy=req.gps_accuracy)
+            sc_mtime = sc.stat().st_mtime if sc.exists() else None
+            source, sc_name = "sidecar", sc.name
+        else:
+            # DB-only: leave any existing sidecar untouched and record whatever
+            # is actually on disk, so a later scan's freshness check (index.is_fresh)
+            # doesn't see a mismatch and re-read a stale/absent sidecar over this.
+            sc = sidecar.sidecar_path(p)
+            sc_mtime = sc.stat().st_mtime if sc.exists() else None
+            source, sc_name = "database", (sc.name if sc.exists() else None)
+        index.update_geotag(photo_id, req.lat, req.lng, source, sc_name, sc_mtime, gps_accuracy=req.gps_accuracy)
         if loc is not None:
             index.update_photo_location(photo_id, loc)
         results.append({
             "id": photo_id, "lat": req.lat, "lng": req.lng,
-            "geotag_source": "sidecar", "sidecar_path": sc.name,
+            "geotag_source": source, "sidecar_path": sc_name,
             "location": loc,
             "gps_accuracy": req.gps_accuracy,
         })

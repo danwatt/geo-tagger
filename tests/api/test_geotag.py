@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from geotagger import index
+from geotagger import config, index
 from geotagger.exiftool_session import exiftool_status
 
 
@@ -34,9 +34,10 @@ def test_ignore_toggles_flag(client):
     assert client.get(f"/api/photo/{pid}").json()["geocode_ignored"] is False
 
 
-def test_geotag_write_and_remove(client, tmp_path):
-    if not exiftool_status()["ok"]:
-        pytest.skip("ExifTool unavailable")
+def test_geotag_write_and_remove_db_only_by_default(client, tmp_path):
+    """WRITE_XMP_ON_GEOTAG defaults to off: geotag lands in the DB, no sidecar
+    is created."""
+    assert config.WRITE_XMP_ON_GEOTAG is False
     img = tmp_path / "g.jpg"
     Image.new("RGB", (8, 8), "green").save(img, "JPEG")
     pid = _add(str(img), dt=1000)
@@ -44,14 +45,32 @@ def test_geotag_write_and_remove(client, tmp_path):
     r = client.post("/api/geotag", json={"ids": [pid], "lat": 10.0, "lng": 20.0})
     assert r.status_code == 200
     body = r.json()
-    assert body[0]["geotag_source"] == "sidecar"
+    assert body[0]["geotag_source"] == "database"
     assert body[0]["lat"] == 10.0 and body[0]["lng"] == 20.0
-    assert (tmp_path / "g.xmp").exists()
+    assert not (tmp_path / "g.xmp").exists()
     assert client.get(f"/api/photo/{pid}").json()["lat"] == 10.0
 
     r = client.post("/api/geotag/remove", json={"ids": [pid]})
     assert r.json()[0]["geotag_source"] == "none"
     assert client.get(f"/api/photo/{pid}").json()["lat"] is None
+
+
+def test_geotag_writes_sidecar_when_setting_enabled(client, tmp_path):
+    if not exiftool_status()["ok"]:
+        pytest.skip("ExifTool unavailable")
+    img = tmp_path / "g2.jpg"
+    Image.new("RGB", (8, 8), "green").save(img, "JPEG")
+    pid = _add(str(img), dt=1000)
+
+    config.apply_setting_override("WRITE_XMP_ON_GEOTAG", True)
+    try:
+        r = client.post("/api/geotag", json={"ids": [pid], "lat": 10.0, "lng": 20.0})
+        assert r.status_code == 200
+        body = r.json()
+        assert body[0]["geotag_source"] == "sidecar"
+        assert (tmp_path / "g2.xmp").exists()
+    finally:
+        config.reset_setting("WRITE_XMP_ON_GEOTAG")
 
 
 def test_guess_uses_time_neighbors(client):

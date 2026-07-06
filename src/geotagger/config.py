@@ -83,6 +83,13 @@ OSM_DB_PATH: Path = get_osm_db()
 # should mean "genuinely outside my library's area."
 OSM_CITY_FALLBACK_GEONAMES = os.environ.get("GEOTAGGER_OSM_CITY_FALLBACK_GEONAMES", "1") == "1"
 
+# When True, placing/editing a geotag also writes GPS coordinates into the photo's
+# XMP sidecar immediately. Default False: the geotag is stored in the DB only, and
+# sidecars (GPS + resolved place names) are brought up to date later via the
+# on-demand export action (see geotagger/services/geocode_service.export_to_sidecars,
+# /api/geocode/export-sidecars). Runtime-tunable (see SETTINGS_SPEC).
+WRITE_XMP_ON_GEOTAG = os.environ.get("GEOTAGGER_WRITE_XMP_ON_GEOTAG", "0").lower() in ("1", "true", "yes", "on")
+
 # Supported file extensions
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".heic", ".heif", ".nef", ".dng", ".tif", ".tiff", ".png"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".avi"}
@@ -206,6 +213,9 @@ FACE_PROVIDERS = [
 # (module-attribute access) rather than `from geotagger.config import KEY`,
 # since only the module's own attribute gets mutated when a setting changes.
 SETTINGS_SPEC = [
+    {"key": "WRITE_XMP_ON_GEOTAG", "type": "bool",
+     "group": "Geotagging", "label": "Write GPS to XMP sidecar immediately",
+     "help": "When on, placing/editing a geotag writes GPS coordinates into the XMP sidecar right away. When off (default), geotags are stored in the database only — use the sidecar export action to catch sidecars up on demand."},
     {"key": "RAW_FULL_DECODE", "type": "bool",
      "group": "RAW photos", "label": "Full RAW decode",
      "help": "Fully demosaic RAW files (NEF/DNG) to a JPEG via LibRaw for the served preview and face detection, instead of the embedded preview. Higher quality but much slower; off uses the fast embedded preview."},

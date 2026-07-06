@@ -73,8 +73,8 @@ class TestGeocodePending:
         assert res["remaining"] == 1
 
 
-class TestExportLocationsToSidecars:
-    def test_writes_sidecar_for_geocoded_photo(self, db, tmp_path, et_session):
+class TestExportToSidecars:
+    def test_writes_gps_and_location_for_geocoded_photo(self, db, tmp_path, et_session):
         img = _make_jpg(tmp_path / "e.jpg")
         pid = _add_photo(db, path=img, lat=1.0, lng=2.0)
         db.execute(
@@ -82,15 +82,29 @@ class TestExportLocationsToSidecars:
             ("Testville", "New York", "United States", "US", pid))
         db.commit()
 
-        res = geocode_service.export_locations_to_sidecars()
+        res = geocode_service.export_to_sidecars()
         assert res["written"] == 1
         assert res["errors"] == 0
         assert (tmp_path / "e.xmp").exists()
-        # Sidecar tracking is kept current so the next scan won't re-index the row.
-        assert index.get_photo(pid)["sidecar_path"] is not None
+        row = index.get_photo(pid)
+        # Sidecar tracking + source are kept current so the next scan won't re-index the row.
+        assert row["sidecar_path"] is not None
+        assert row["geotag_source"] == "sidecar"
 
-    def test_noop_when_nothing_geocoded(self, db, et_session):
-        assert geocode_service.export_locations_to_sidecars() == {
+    def test_writes_gps_for_geotagged_photo_without_location(self, db, tmp_path, et_session):
+        """A photo geotagged DB-only (config.WRITE_XMP_ON_GEOTAG=False) but not
+        yet reverse-geocoded still gets its GPS exported."""
+        img = _make_jpg(tmp_path / "e2.jpg")
+        pid = _add_photo(db, path=img, lat=1.0, lng=2.0)
+
+        res = geocode_service.export_to_sidecars()
+        assert res["written"] == 1
+        assert (tmp_path / "e2.xmp").exists()
+        assert index.get_photo(pid)["geotag_source"] == "sidecar"
+
+    def test_noop_when_nothing_geotagged(self, db, et_session):
+        _add_photo(db)  # no lat/lng
+        assert geocode_service.export_to_sidecars() == {
             "written": 0, "errors": 0, "error_samples": []}
 
 

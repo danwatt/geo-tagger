@@ -25,25 +25,29 @@ def geocode_pending(limit: int | None = None) -> dict:
             "remaining": index.count_photos_needing_geocode()}
 
 
-def export_locations_to_sidecars() -> dict:
-    """Write resolved place names into the XMP sidecar of every geocoded photo.
-    Blocking; runs in the executor. Acquires the ExifTool lock per file so it
-    doesn't starve thumbnail/preview requests for the whole run."""
-    rows = index.get_photos_with_location()
+def export_to_sidecars() -> dict:
+    """Write every geotagged photo's GPS coordinates (plus resolved place names,
+    where available) into its XMP sidecar — the on-demand catch-up for photos
+    geotagged/geocoded DB-only (see config.WRITE_XMP_ON_GEOTAG). Blocking; runs
+    in the executor. Acquires the ExifTool lock per file so it doesn't starve
+    thumbnail/preview requests for the whole run."""
+    rows = index.get_photos_to_export()
     lock = get_et_lock()
     db = index.get_db()
     written = errors = 0
     err_samples: list[str] = []
     for r in rows:
-        loc = {"city": r["loc_city"], "state": r["loc_state"],
-               "country": r["loc_country"], "country_code": r["loc_country_code"]}
+        loc = None
+        if r["loc_country_code"] is not None:
+            loc = {"city": r["loc_city"], "state": r["loc_state"],
+                   "country": r["loc_country"], "country_code": r["loc_country_code"]}
         try:
             p = Path(index.photo_path(r))
             with lock:
-                sc = sidecar.write_location(p, loc)
+                sc = sidecar.write_gps(p, r["lat"], r["lng"], location=loc, gps_accuracy=r["gps_accuracy"])
             sc_mtime = sc.stat().st_mtime if sc.exists() else None
-            # Keep sidecar tracking current so the next scan doesn't re-index this row.
-            db.execute("UPDATE photos SET sidecar_path=?, sidecar_mtime=? WHERE id=?",
+            # Keep sidecar tracking + source current so the next scan doesn't re-index this row.
+            db.execute("UPDATE photos SET sidecar_path=?, sidecar_mtime=?, geotag_source='sidecar' WHERE id=?",
                        (sc.name, sc_mtime, r["id"]))
             db.commit()
             written += 1

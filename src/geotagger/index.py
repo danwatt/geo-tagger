@@ -1025,11 +1025,14 @@ def count_geocoded_photos() -> int:
     ).fetchone()[0]
 
 
-def get_photos_with_location() -> list[sqlite3.Row]:
-    """All photos that have resolved location names — used to export to sidecars."""
+def get_photos_to_export() -> list[sqlite3.Row]:
+    """All geotagged photos — used by the on-demand DB-to-sidecar export. Location
+    columns are included but may be NULL (not yet reverse-geocoded); the exporter
+    only writes place-name tags when they're populated."""
     return get_db().execute(
-        "SELECT id, dir, filename, loc_city, loc_sublocation, loc_state, loc_country, loc_country_code "
-        "FROM photos WHERE loc_country_code IS NOT NULL"
+        "SELECT id, dir, filename, lat, lng, gps_accuracy, "
+        "loc_city, loc_state, loc_country, loc_country_code "
+        "FROM photos WHERE lat IS NOT NULL AND lng IS NOT NULL"
     ).fetchall()
 
 

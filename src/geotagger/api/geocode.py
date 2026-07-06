@@ -105,9 +105,10 @@ async def api_geocode_backfill(req: GeocodeBackfillRequest):
 
 @router.post("/api/geocode/export-sidecars")
 async def api_geocode_export_sidecars():
-    """Write resolved place names into the XMP sidecars of all geocoded photos."""
+    """Write every geotagged photo's GPS coordinates (plus resolved place names,
+    where available) into its XMP sidecar."""
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(get_executor(), geocode_service.export_locations_to_sidecars)
+    return await loop.run_in_executor(get_executor(), geocode_service.export_to_sidecars)
 
 
 @router.get("/api/geocode/next-group")
