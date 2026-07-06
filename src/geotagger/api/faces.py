@@ -351,6 +351,50 @@ async def api_nuke_photo_faces(req: NukePhotoFacesRequest):
     return result
 
 
+@router.post("/api/faces/dedup/recompute")
+async def api_dedup_recompute():
+    """Recompute representative-face flags for every person with enough
+    labeled faces (see the Representative faces settings group). Safe to
+    re-run any time — e.g. after tagging more photos, retagging, or tuning
+    the threshold/fraction settings; always recomputed from scratch."""
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(get_executor(), faces_service.recompute_all_representatives)
+    return result
+
+
+@router.get("/api/faces/dedup/persons")
+async def api_dedup_persons():
+    """People who currently have representative-flagged faces (from the last
+    recompute) — the picker for the Representative Faces review page."""
+    return [
+        {"person_id": r["id"], "name": r["name"], "total": r["total"], "representative": r["representative"]}
+        for r in index.get_persons_with_representatives()
+    ]
+
+
+@router.get("/api/faces/dedup/groups")
+async def api_dedup_groups(person_id: int = Query(...), group_limit: int = Query(49, ge=1, le=200)):
+    """Representative-led review groups for one person: each stored
+    representative face, paired with up to `group_limit` other labeled faces
+    (same person) ranked closest-to-representative first. Based on the stored
+    representative flags, not a fresh re-cluster — run Recompute first if a
+    person doesn't show up in /api/faces/dedup/persons yet."""
+    loop = asyncio.get_running_loop()
+    clusters = await loop.run_in_executor(
+        get_executor(), faces.get_representative_groups, person_id, group_limit)
+    if not clusters:
+        return {"groups": [], "total": 0}
+    rows = index.list_faces(scope="person", person_id=person_id, limit=200_000)
+    by_id = {r["id"]: r for r in rows}
+    groups = [
+        {"representative": serializers.face_item(by_id[c["representative_face_id"]]),
+         "others": [serializers.face_item(by_id[fid]) for fid in c["other_face_ids"]],
+         "size": c["size"]}
+        for c in clusters if c["representative_face_id"] in by_id
+    ]
+    return {"groups": groups, "total": len(rows)}
+
+
 @router.post("/api/faces/negatives")
 async def api_face_negatives(req: NegativeFacesRequest):
     """Mark faces as 'definitely not person_id' (negative=true), or lift that

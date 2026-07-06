@@ -151,6 +151,22 @@ FACE_MIN_GALLERY_BBOX_AREA = float(os.environ.get("GEOTAGGER_FACE_MIN_GALLERY_BB
 # suggestions get pre-checked on page load vs. left for manual triage.
 FACE_PRESELECT_MIN_SCORE = float(os.environ.get("GEOTAGGER_FACE_PRESELECT_MIN_SCORE", "0.5"))
 
+# ── Representative-face picking (prolific people accumulate many near-duplicate
+# labels; cluster them and keep one medoid per look instead of every example) ──
+# Only people with at least this many labeled faces get clustered — someone with
+# a handful of labels already has an all-representative set, nothing to collapse.
+FACE_DEDUP_MIN_FACES = int(os.environ.get("GEOTAGGER_FACE_DEDUP_MIN_FACES", "50"))
+# Cosine similarity at/above which two of one person's labeled faces are the
+# "same look" and get clustered together (see faces.cluster_unlabeled — this
+# reuses that connected-components method, just scoped to one person's labels
+# instead of the whole unlabeled queue).
+FACE_DEDUP_THRESHOLD = float(os.environ.get("GEOTAGGER_FACE_DEDUP_THRESHOLD", "0.65"))
+# Cap on kept representatives, as a fraction of the person's total labeled faces.
+# Normally one representative per cluster is far below this; it only bites when
+# a very prolific person's faces are unusually diverse (many small clusters),
+# in which case only the largest (most-repeated) clusters keep a representative.
+FACE_DEDUP_MAX_FRACTION = float(os.environ.get("GEOTAGGER_FACE_DEDUP_MAX_FRACTION", "0.10"))
+
 # ── Large Crowd management ──
 # Photos with at least this many detected faces are treated as crowd photos.
 FACE_CROWD_MIN_SIZE = int(os.environ.get("GEOTAGGER_FACE_CROWD_MIN_SIZE", "50"))
@@ -220,6 +236,15 @@ SETTINGS_SPEC = [
     {"key": "FACE_CROWD_MIN_SIZE", "type": "int", "min": 2, "max": 500, "step": 1,
      "group": "Face recognition", "label": "Crowd photo min faces",
      "help": "Photos with at least this many detected faces are treated as crowd photos."},
+    {"key": "FACE_DEDUP_MIN_FACES", "type": "int", "min": 5, "max": 5000, "step": 5,
+     "group": "Representative faces", "label": "Min labeled faces to dedup",
+     "help": "Only people with at least this many labeled faces get clustered into representatives; smaller label sets are left entirely representative."},
+    {"key": "FACE_DEDUP_THRESHOLD", "type": "float", "min": 0.3, "max": 0.95, "step": 0.01,
+     "group": "Representative faces", "label": "Cluster threshold",
+     "help": "Cosine similarity at/above which two of one person's labeled faces are treated as the same look and clustered together."},
+    {"key": "FACE_DEDUP_MAX_FRACTION", "type": "float", "min": 0.01, "max": 1.0, "step": 0.01,
+     "group": "Representative faces", "label": "Max representative fraction",
+     "help": "Cap on kept representatives as a fraction of a person's total labeled faces. Only bites when someone's faces are unusually diverse (many small clusters)."},
     {"key": "FACE_CLUSTER_THRESHOLD", "type": "float", "min": 0.3, "max": 0.95, "step": 0.01,
      "group": "Face clustering (Discover)", "label": "Cluster threshold",
      "help": "Cosine similarity at/above which two unlabeled faces are linked into one group. Tighter = purer groups, looser = more chaining."},

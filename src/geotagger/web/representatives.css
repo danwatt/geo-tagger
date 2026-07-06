@@ -1,0 +1,140 @@
+/* Representative Faces review page layout */
+html, body { height: 100%; margin: 0; padding: 0; }
+
+body {
+  display: flex;
+  flex-direction: column;
+  font-family: sans-serif;
+  font-size: 14px;
+  background: #1a1a1a;
+  color: #e0e0e0;
+}
+
+#main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── Sidebar: person picker ── */
+#sidebar {
+  width: 300px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: #252525;
+  border-right: 1px solid #444;
+  overflow: hidden;
+}
+
+#sidebar-header {
+  padding: 10px 12px;
+  border-bottom: 1px solid #444;
+  flex-shrink: 0;
+}
+#sidebar-header h2 { margin: 0; font-size: 15px; }
+
+#person-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+#no-persons-hint {
+  color: #888;
+  font-style: italic;
+  padding: 16px 10px;
+  line-height: 1.5;
+}
+
+.person-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  background: #2d2d2d;
+  border: 1px solid #444;
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 6px;
+  cursor: pointer;
+}
+.person-item:hover { border-color: #4a90d9; }
+.person-item.selected { border-color: #4a90d9; background: #1e2f42; }
+.person-item-name { font-weight: bold; font-size: 13px; }
+.person-item-count { color: #999; font-size: 11px; white-space: nowrap; }
+
+/* ── Groups pane ── */
+#groups-pane {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+#groups-empty {
+  color: #888;
+  font-style: italic;
+  text-align: center;
+  padding: 40px 16px;
+}
+
+#groups-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.rep-group-card {
+  background: #1a2230;
+  border: 1px solid #2a3d54;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.rep-group-faces {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 4px;
+  padding: 8px 10px;
+}
+.rep-group-faces img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 3px;
+  background: #1a1a1a;
+  display: block;
+}
+
+/* The representative itself: distinct border + badge so it reads as "the one
+ * kept" at a glance among its near-duplicates. */
+.rep-face-wrap { position: relative; }
+.rep-face-wrap img { border: 2px solid #e0a020; }
+.rep-face-badge {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  background: #e0a020;
+  color: #1a1a1a;
+  font-size: 10px;
+  font-weight: bold;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+.rep-group-more { color: #888; font-size: 11px; padding: 6px 4px; align-self: center; }
+
+/* ── Status bar ── */
+#status-bar {
+  padding: 4px 12px;
+  font-size: 12px;
+  color: #999;
+  background: #2d2d2d;
+  border-top: 1px solid #444;
+  flex-shrink: 0;
+  min-height: 22px;
+}
+#status-bar.error { color: #f88; }

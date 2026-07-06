@@ -319,6 +319,13 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
         _db.execute("ALTER TABLE faces ADD COLUMN come_back INTEGER NOT NULL DEFAULT 0")
     if "come_back_at" not in face_cols:
         _db.execute("ALTER TABLE faces ADD COLUMN come_back_at REAL")
+    # Marks a labeled face as a kept "representative" example for its person —
+    # one medoid per look-alike cluster, picked by faces.compute_representatives_for_person.
+    # Storage reclamation (emptying non-representative embeddings) is a later step;
+    # for now this only flags which examples would be kept, and get_labeled_faces
+    # still returns every labeled face regardless of this flag.
+    if "representative" not in face_cols:
+        _db.execute("ALTER TABLE faces ADD COLUMN representative INTEGER NOT NULL DEFAULT 0")
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id)")
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id)")
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_ignored ON faces(ignored)")
@@ -341,6 +348,7 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_assigned_at ON faces(assigned_at)")
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_ignored_at ON faces(ignored_at)")
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_come_back_at ON faces(come_back_at)")
+    _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_person_representative ON faces(person_id, representative)")
     # Partial index for count_faces("recent")'s COUNT(*) WHERE assigned_at IS NOT
     # NULL AND person_id IS NOT NULL — index-only scan instead of a full table scan.
     _db.execute(
@@ -1129,6 +1137,56 @@ def get_labeled_faces() -> list[sqlite3.Row]:
            JOIN persons p ON p.id = f.person_id
            WHERE f.person_id IS NOT NULL"""
     ).fetchall()
+
+
+def get_persons_with_min_labeled_faces(min_faces: int) -> list[int]:
+    """Person ids with at least ``min_faces`` labeled examples — the pool
+    representative-picking applies to (see faces.compute_representatives_for_person).
+    Small/rarely-seen people are left alone; their whole label set already IS the
+    representative set."""
+    return [r[0] for r in get_db().execute(
+        """SELECT person_id FROM faces WHERE person_id IS NOT NULL
+           GROUP BY person_id HAVING COUNT(*) >= ?""",
+        (min_faces,),
+    ).fetchall()]
+
+
+def get_labeled_faces_for_person(person_id: int) -> list[sqlite3.Row]:
+    """One person's labeled faces (id, embedding, representative flag), for
+    representative-cluster picking (faces.compute_representatives_for_person)
+    and the group-review page (faces.get_representative_groups)."""
+    return get_db().execute(
+        "SELECT id, embedding, representative FROM faces WHERE person_id=?", (person_id,)
+    ).fetchall()
+
+
+def get_persons_with_representatives() -> list[sqlite3.Row]:
+    """Persons who currently have at least one representative-flagged face —
+    the picker for the Representative Faces review page. Reflects whatever the
+    last recompute decided, not live eligibility (see get_persons_with_min_labeled_faces)."""
+    return get_db().execute(
+        """SELECT p.id, p.name, COUNT(f.id) AS total, SUM(f.representative) AS representative
+           FROM persons p JOIN faces f ON f.person_id = p.id
+           GROUP BY p.id
+           HAVING SUM(f.representative) > 0
+           ORDER BY p.name COLLATE NOCASE"""
+    ).fetchall()
+
+
+def set_person_representatives(person_id: int, representative_ids: list[int]):
+    """Flag exactly ``representative_ids`` as representative=1 among person_id's
+    labeled faces, everyone else representative=0. Recomputed from scratch each
+    call (safe to re-run any time — after retagging, or after tuning the dedup
+    settings)."""
+    db = get_db()
+    db.execute("UPDATE faces SET representative=0 WHERE person_id=?", (person_id,))
+    if representative_ids:
+        placeholders = ",".join("?" * len(representative_ids))
+        db.execute(
+            f"UPDATE faces SET representative=1 WHERE id IN ({placeholders})",
+            representative_ids,
+        )
+    db.commit()
 
 
 def _photo_ids_in_window(start_ts: int | None, end_ts: int | None) -> list[int]:

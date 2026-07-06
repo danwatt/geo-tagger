@@ -7,6 +7,7 @@
     { key: "map", label: "🌍 Places DB", href: "/map.html" },
     { key: "timesync", label: "🕐 Time Sync", href: "/timesync.html" },
     { key: "people", label: "🙂 People", href: "/people.html" },
+    { key: "representatives", label: "⭐ Representatives", href: "/representatives.html" },
     { key: "contexts", label: "🗺️ Contexts", href: "/contexts.html" },
     { key: "settings", label: "⚙ Settings", href: "/settings.html" },
   ];

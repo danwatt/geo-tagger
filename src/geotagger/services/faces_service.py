@@ -5,7 +5,7 @@ run_in_executor."""
 from collections import Counter
 from pathlib import Path
 
-from geotagger import index, faces, serializers, thumbnails
+from geotagger import index, faces, serializers, thumbnails, config
 
 # Most groups worth reviewing are the larger ones; cap the response/DOM.
 CLUSTER_DISPLAY_LIMIT = 100
@@ -41,6 +41,20 @@ def nuke_photo_faces(photo_ids: list[int]) -> dict:
             Path(index.photo_path(row)), row["mtime"], row["size"])
     return {"photos": len(photo_ids), "faces_deleted": faces_deleted,
             "files_deleted": files_deleted}
+
+
+def recompute_all_representatives() -> dict:
+    """Recluster every person with enough labeled faces (config.FACE_DEDUP_MIN_FACES)
+    and flag one representative per look-alike cluster. Pure read + numpy
+    clustering + write over already-computed embeddings (no model inference),
+    but still routed through the executor by the caller since a very prolific
+    library's full recompute can take a noticeable moment."""
+    persons = []
+    for pid in index.get_persons_with_min_labeled_faces(config.FACE_DEDUP_MIN_FACES):
+        reps, total = faces.compute_representatives_for_person(pid)
+        index.set_person_representatives(pid, reps)
+        persons.append({"person_id": pid, "total": total, "representative": len(reps)})
+    return {"persons": persons}
 
 
 def compute_clusters(rows, unknowns, times, gallery, names, threshold, min_size, full):

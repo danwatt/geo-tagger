@@ -834,3 +834,81 @@ def cluster_unlabeled(unknowns: np.ndarray,
     clusters = [idxs for idxs in groups.values() if len(idxs) >= min_size]
     clusters.sort(key=len, reverse=True)
     return clusters
+
+
+# ── Representative-face picking ──
+# A person tagged 1000s of times (close family) accumulates many near-duplicate
+# labels of the same handful of looks. Rather than every label feeding the
+# gallery matmul forever, cluster one person's labels and keep only the medoid
+# (most-central member) of each look-alike cluster as its "representative".
+# Flag-only for now (see index.faces schema note) — nothing is deleted; this
+# just marks which examples a later storage-reclamation pass could keep.
+
+def compute_representatives_for_person(
+    person_id: int, threshold: float | None = None, max_fraction: float | None = None,
+) -> tuple[list[int], int]:
+    """Cluster person_id's labeled faces by look and pick one representative
+    (the medoid — highest total similarity to the rest of its cluster) per
+    cluster. Clusters are capped at ``max_fraction`` of the person's total
+    labeled face count, largest (most-repeated) clusters kept first, so an
+    unusually diverse prolific person doesn't blow past the target ratio.
+
+    Returns (representative_face_ids, total_labeled_faces). Safe to call for
+    anyone — an empty or tiny label set just returns everything as its own
+    representative.
+    """
+    threshold = _cfg(threshold, "FACE_DEDUP_THRESHOLD")
+    max_fraction = _cfg(max_fraction, "FACE_DEDUP_MAX_FRACTION")
+    rows = index.get_labeled_faces_for_person(person_id)
+    n = len(rows)
+    if n == 0:
+        return [], 0
+
+    embs = _embeddings_matrix(rows)
+    clusters = cluster_unlabeled(embs, threshold=threshold, min_size=1)
+    cap = max(1, int(n * max_fraction))
+    reps = []
+    for idxs in clusters[:cap]:
+        sub = embs[idxs]
+        centrality = (sub @ sub.T).sum(axis=1)   # each member's total similarity to its cluster
+        medoid = idxs[int(np.argmax(centrality))]
+        reps.append(rows[medoid]["id"])
+    return reps, n
+
+
+def get_representative_groups(person_id: int, group_limit: int = 49) -> list[dict]:
+    """Representative-led review groups for one person, from the *stored*
+    representative flags (whatever the last recompute decided — this does not
+    re-cluster). Every non-representative labeled face is assigned to its
+    nearest representative by cosine similarity; each group's ``other_face_ids``
+    are capped at ``group_limit``, closest match first, but ``size`` counts the
+    whole group (see cluster_unlabeled's ``cl.size`` vs sample-length convention).
+
+    Empty if this person has no representative faces yet (recompute hasn't run
+    for them, or they're below config.FACE_DEDUP_MIN_FACES).
+    """
+    rows = index.get_labeled_faces_for_person(person_id)
+    reps = [r for r in rows if r["representative"]]
+    if not reps:
+        return []
+    others = [r for r in rows if not r["representative"]]
+
+    rep_ids = [r["id"] for r in reps]
+    groups = {rid: {"representative_face_id": rid, "other_face_ids": [], "size": 1}
+              for rid in rep_ids}
+
+    if others:
+        rep_embs = _embeddings_matrix(reps)
+        other_embs = _embeddings_matrix(others)
+        sims = other_embs @ rep_embs.T                     # (O, R) cosine
+        best_rep = np.argmax(sims, axis=1)
+        best_sim = sims[np.arange(len(others)), best_rep]
+        for i in np.argsort(-best_sim):                    # closest matches first, overall
+            g = groups[rep_ids[best_rep[i]]]
+            g["size"] += 1
+            if len(g["other_face_ids"]) < group_limit:
+                g["other_face_ids"].append(others[i]["id"])
+
+    result = list(groups.values())
+    result.sort(key=lambda g: g["size"], reverse=True)
+    return result

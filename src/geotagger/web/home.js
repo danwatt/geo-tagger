@@ -297,6 +297,31 @@ async function runFacesScan() {
 
 document.getElementById("backfill-btn").addEventListener("click", runBackfill);
 document.getElementById("detect-faces-btn").addEventListener("click", runFacesScan);
+
+/* ── Representative-face recompute (one-shot, no batching needed) ── */
+async function runDedupRecompute() {
+  const btn = document.getElementById("dedup-recompute-btn");
+  const stats = document.getElementById("dedup-stats");
+  btn.disabled = true;
+  btn.textContent = "Recomputing…";
+  try {
+    const res = await fetch("/api/faces/dedup/recompute", { method: "POST" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const totalFaces = data.persons.reduce((sum, p) => sum + p.total, 0);
+    const totalReps = data.persons.reduce((sum, p) => sum + p.representative, 0);
+    stats.textContent = data.persons.length
+      ? `${data.persons.length} people processed: ${totalFaces.toLocaleString()} labeled faces -> ${totalReps.toLocaleString()} representatives`
+      : "No one has enough labeled faces yet (see Settings for the threshold).";
+  } catch (e) {
+    showError("card-faces", e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Recompute representative faces";
+  }
+}
+
+document.getElementById("dedup-recompute-btn").addEventListener("click", runDedupRecompute);
 document.getElementById("detect-faces-stop-btn").addEventListener("click", () => {
   facesScanStopRequested = true;
 });
