@@ -7,6 +7,8 @@ binary isn't available; face detection (scan_faces_batch's happy path) needs the
 275 MB InsightFace model, so only its model-free branch is covered here.
 """
 
+from pathlib import Path
+
 import numpy as np
 from PIL import Image
 
@@ -17,14 +19,17 @@ import face_fixtures as ff
 
 
 def _add_photo(db, path="p.jpg", lat=None, lng=None, photo_datetime=1_600_000_000) -> int:
+    p = Path(path)
     index.upsert_photo(
-        path=path, filename=path.rsplit("/", 1)[-1], dir_=".", ext=".jpg",
+        filename=p.name, dir_=str(p.parent), ext=".jpg",
         media_type="image", mtime=1.0, size=100, lat=lat, lng=lng,
         geotag_source="sidecar" if lat is not None else "none",
         sidecar_path=None, sidecar_mtime=None, camera="Cam",
         photo_datetime=photo_datetime, gps_accuracy=None, orientation=1,
     )
-    return db.execute("SELECT id FROM photos WHERE path=?", (path,)).fetchone()[0]
+    return db.execute(
+        "SELECT id FROM photos WHERE dir=? AND filename=?", (str(p.parent), p.name)
+    ).fetchone()[0]
 
 
 def _make_jpg(path) -> str:

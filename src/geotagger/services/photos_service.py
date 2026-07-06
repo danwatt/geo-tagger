@@ -41,7 +41,7 @@ def update_photo_times(updates: dict[int, int]) -> int:
         new_dt = original_dt + offset_seconds
 
         # Write to sidecar
-        photo_path = Path(photo["path"])
+        photo_path = Path(index.photo_path(photo))
         sc = write_datetime(photo_path, new_dt)
         sc_mtime = sc.stat().st_mtime if sc.exists() else None
 
@@ -51,7 +51,7 @@ def update_photo_times(updates: dict[int, int]) -> int:
         db = index.get_db()
         db.execute(
             "UPDATE photos SET photo_datetime=?, sidecar_path=?, sidecar_mtime=? WHERE id=?",
-            (new_dt, str(sc), sc_mtime, photo_id),
+            (new_dt, sc.name, sc_mtime, photo_id),
         )
         db.commit()
 

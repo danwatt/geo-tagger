@@ -244,7 +244,7 @@ async def api_thumbnail(photo_id: int, request: Request):
         data = await loop.run_in_executor(
             get_executor(),
             thumbnails.get_thumbnail,
-            Path(row["path"]),
+            Path(index.photo_path(row)),
             row["mtime"],
             row["size"],
             row["orientation"],
@@ -253,7 +253,7 @@ async def api_thumbnail(photo_id: int, request: Request):
                         headers={"Cache-Control": "max-age=86400", "ETag": etag})
     except Exception as e:
         import traceback
-        print(f"Error generating thumbnail for {photo_id} ({row['path']}): {e}")
+        print(f"Error generating thumbnail for {photo_id} ({index.photo_path(row)}): {e}")
         traceback.print_exc()
         raise HTTPException(500, str(e))
 
@@ -272,7 +272,7 @@ async def api_preview(photo_id: int, request: Request):
         data = await loop.run_in_executor(
             get_executor(),
             thumbnails.get_preview_oriented,
-            Path(row["path"]),
+            Path(index.photo_path(row)),
             row["mtime"],
             row["size"],
             row["orientation"],
@@ -304,7 +304,7 @@ async def api_fullsize(photo_id: int):
         data = await loop.run_in_executor(
             get_executor(),
             thumbnails.render_fullsize_with_faces,
-            Path(row["path"]),
+            Path(index.photo_path(row)),
             row["orientation"],
             face_specs,
         )
@@ -321,11 +321,11 @@ async def api_photo(photo_id: int):
         raise HTTPException(404)
     # Fetch extra metadata from exiftool in thread pool
     loop = asyncio.get_event_loop()
-    extra = await loop.run_in_executor(get_executor(), photos_service.get_photo_metadata, row["path"])
+    extra = await loop.run_in_executor(get_executor(), photos_service.get_photo_metadata, index.photo_path(row))
 
     return {
         "id": row["id"],
-        "path": row["path"],
+        "path": index.photo_path(row),
         "filename": row["filename"],
         "media_type": row["media_type"],
         "ext": row["ext"],

@@ -1,5 +1,7 @@
 """Endpoint tests for geotagger.api.geotag (geotag write/remove/ignore, guess)."""
 
+from pathlib import Path
+
 import pytest
 from PIL import Image
 
@@ -8,14 +10,17 @@ from geotagger.exiftool_session import exiftool_status
 
 
 def _add(path, lat=None, lng=None, dt=1000):
+    p = Path(path)
     index.upsert_photo(
-        path=path, filename=path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1], dir_=".",
+        filename=p.name, dir_=str(p.parent),
         ext=".jpg", media_type="image", mtime=1.0, size=1, lat=lat, lng=lng,
         geotag_source="sidecar" if lat is not None else "none",
         sidecar_path=None, sidecar_mtime=None, camera="c",
         photo_datetime=dt, gps_accuracy=None, orientation=1,
     )
-    return index.get_db().execute("SELECT id FROM photos WHERE path=?", (path,)).fetchone()[0]
+    return index.get_db().execute(
+        "SELECT id FROM photos WHERE dir=? AND filename=?", (str(p.parent), p.name)
+    ).fetchone()[0]
 
 
 def test_ignore_toggles_flag(client):

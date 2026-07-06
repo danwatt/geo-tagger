@@ -302,7 +302,7 @@ async def api_face_crop(face_id: int, request: Request):
         data = await loop.run_in_executor(
             get_executor(),
             lambda: thumbnails.get_face_crop(
-                Path(row["path"]), row["mtime"], row["size"], bbox,
+                Path(index.photo_path(row)), row["mtime"], row["size"], bbox,
                 orientation=row["orientation"]),
         )
         return Response(content=data, media_type="image/jpeg",

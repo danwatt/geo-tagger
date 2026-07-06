@@ -33,7 +33,8 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
             stat = p.stat()
             sc = sidecar.sidecar_path(p)
             sc_mtime = sc.stat().st_mtime if sc.exists() else None
-            sc_path_str = str(sc) if sc.exists() else None
+            # Filename only — the sidecar always sits next to the image (same `dir`).
+            sc_path_str = sc.name if sc.exists() else None
             files_to_process.append((p, media_type, stat, sc_path_str, sc_mtime))
         except Exception as e:
             warnings.append(f"Error reading {p.name}: {e}")
@@ -84,13 +85,10 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
                 worker_status[worker_id] = (p.name, "Indexing")
                 update_display()
 
-            if index.is_fresh(str(p), stat.st_mtime, sc_path_str, sc_mtime):
+            if index.is_fresh(str(p.parent), p.name, stat.st_mtime, sc_path_str, sc_mtime):
                 was_skipped = True
             else:
-                # full=True so the complete ExifTool dump is captured into
-                # exif_json (searchable later), in the same read that yields the
-                # promoted columns below.
-                meta = sidecar.read_metadata(p, full=True)
+                meta = sidecar.read_metadata(p)
                 # Hash the file bytes for integrity/dedup. Non-fatal: a hash
                 # failure (e.g. a transient read error) shouldn't cost us the
                 # metadata index — the row is left checksum=NULL and the one-time
@@ -101,14 +99,14 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
                     checksum = None
                     error_msg = f"Error checksumming {p.name}: {e}"
                 index.upsert_photo(
-                    path=str(p), filename=p.name, dir_=str(p.parent),
+                    filename=p.name, dir_=str(p.parent),
                     ext=p.suffix.lower(), media_type=media_type,
                     mtime=stat.st_mtime, size=stat.st_size,
                     lat=meta["lat"], lng=meta["lng"], geotag_source=meta["geotag_source"],
                     sidecar_path=sc_path_str, sidecar_mtime=sc_mtime,
                     camera=meta["camera"], photo_datetime=meta["photo_datetime"],
                     gps_accuracy=meta["gps_accuracy"], orientation=meta["orientation"],
-                    checksum=checksum, exif_json=meta["exif_json"],
+                    checksum=checksum,
                 )
                 was_indexed = True
 

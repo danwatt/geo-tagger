@@ -148,7 +148,7 @@ def detect_faces(path: Path, mtime: float, size: int,
 def detect_and_store(photo_row) -> int:
     """Detect faces for one indexed photo and persist them. Returns face count."""
     faces, det_dimension = detect_faces(
-        Path(photo_row["path"]), photo_row["mtime"], photo_row["size"],
+        Path(index.photo_path(photo_row)), photo_row["mtime"], photo_row["size"],
         photo_row["orientation"])
     index.replace_faces(photo_row["id"], faces, det_dimension)
     return len(faces)

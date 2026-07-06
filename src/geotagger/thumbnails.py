@@ -275,6 +275,23 @@ def thumbnail_exists(path: Path, mtime: float, size: int) -> bool:
         return False
 
 
+def face_crop_exists(path: Path, mtime: float, size: int,
+                     bbox: tuple[float, float, float, float],
+                     orientation: int | None = None) -> bool:
+    """Check if a face crop already exists in the cache (mirrors ``get_face_crop``'s
+    cache filename, minus the ``margin``/``out_size`` params — those aren't part of
+    the cache key, so any prior crop for this bbox/orientation counts)."""
+    try:
+        thumbs = _get_thumbs_dir()
+        bbox_key = hashlib.sha1(",".join(f"{v:.4f}" for v in bbox).encode()).hexdigest()[:10]
+        key = _cache_key(path, mtime, size)
+        subdir = thumbs / key[:2]
+        cached = subdir / f"{key}_face_{bbox_key}{_fd_suffix(path)}{_orient_suffix(orientation)}.jpg"
+        return cached.exists()
+    except Exception:
+        return False
+
+
 def invalidate_photo_cache(path: Path, mtime: float, size: int) -> int:
     """Delete every cached thumbnail/preview/face-crop file for one photo.
 

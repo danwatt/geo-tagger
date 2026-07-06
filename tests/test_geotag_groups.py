@@ -11,12 +11,12 @@ def _ts(y, m, d, h=12, mi=0, s=0):
 
 def _upsert(path, photo_datetime, lat=None, lng=None, geotag_source="none"):
     index.upsert_photo(
-        path=path, filename=path, dir_=".", ext=".jpg", media_type="image",
+        filename=path, dir_=".", ext=".jpg", media_type="image",
         mtime=1.0, size=1, lat=lat, lng=lng, geotag_source=geotag_source,
         sidecar_path=None, sidecar_mtime=None,
         camera=None, photo_datetime=photo_datetime, gps_accuracy=None, orientation=1,
     )
-    return index.get_db().execute("SELECT id FROM photos WHERE path=?", (path,)).fetchone()["id"]
+    return index.get_db().execute("SELECT id FROM photos WHERE filename=?", (path,)).fetchone()["id"]
 
 
 class TestNoGroupAvailable:

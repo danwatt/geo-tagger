@@ -92,7 +92,7 @@ def find_candidates(target_dim: int, include_labeled: bool, all_raw: bool = Fals
     params = list(exts) if all_raw else [*exts, target_dim]
     rows = index.get_db().execute(
         f"""
-        SELECT ph.id, ph.filename, ph.path, ph.faces_det_dimension AS dim,
+        SELECT ph.id, ph.filename, ph.dir, ph.faces_det_dimension AS dim,
                COUNT(CASE WHEN f.person_id IS NOT NULL THEN 1 END) AS labeled
         FROM photos ph
         LEFT JOIN faces f ON f.photo_id = ph.id
@@ -105,7 +105,7 @@ def find_candidates(target_dim: int, include_labeled: bool, all_raw: bool = Fals
         params,
     ).fetchall()
     if dir_filter is not None:
-        rows = [r for r in rows if _under_dir(r["path"], dir_filter)]
+        rows = [r for r in rows if _under_dir(index.photo_path(r), dir_filter)]
 
     todo, skipped = [], []
     for r in rows:
@@ -127,7 +127,7 @@ def find_thumbnail_candidates(dir_filter: Path | None = None):
     placeholders = ",".join("?" * len(exts))
     rows = index.get_db().execute(
         f"""
-        SELECT ph.id, ph.filename, ph.path, ph.faces_det_dimension AS dim,
+        SELECT ph.id, ph.filename, ph.dir, ph.faces_det_dimension AS dim,
                COUNT(f.id) AS face_count
         FROM photos ph
         JOIN faces f ON f.photo_id = ph.id
@@ -139,7 +139,7 @@ def find_thumbnail_candidates(dir_filter: Path | None = None):
         exts,
     ).fetchall()
     if dir_filter is not None:
-        rows = [r for r in rows if _under_dir(r["path"], dir_filter)]
+        rows = [r for r in rows if _under_dir(index.photo_path(r), dir_filter)]
     return rows
 
 
@@ -179,7 +179,7 @@ def rebuild_thumbnails(todo, dry_run: bool) -> None:
             row = index.get_photo(r["id"])
             if not row:
                 continue
-            path = Path(row["path"])
+            path = Path(index.photo_path(row))
             try:
                 thumbnails.invalidate_photo_cache(path, row["mtime"], row["size"])
                 thumbnails.rebuild_preview_from_full_decode(path, row["mtime"], row["size"])

@@ -38,17 +38,17 @@ def export_locations_to_sidecars() -> dict:
         loc = {"city": r["loc_city"], "state": r["loc_state"],
                "country": r["loc_country"], "country_code": r["loc_country_code"]}
         try:
-            p = Path(r["path"])
+            p = Path(index.photo_path(r))
             with lock:
                 sc = sidecar.write_location(p, loc)
             sc_mtime = sc.stat().st_mtime if sc.exists() else None
             # Keep sidecar tracking current so the next scan doesn't re-index this row.
             db.execute("UPDATE photos SET sidecar_path=?, sidecar_mtime=? WHERE id=?",
-                       (str(sc), sc_mtime, r["id"]))
+                       (sc.name, sc_mtime, r["id"]))
             db.commit()
             written += 1
         except Exception as e:
             errors += 1
             if len(err_samples) < 5:
-                err_samples.append(f"{Path(r['path']).name}: {e}")
+                err_samples.append(f"{r['filename']}: {e}")
     return {"written": written, "errors": errors, "error_samples": err_samples}

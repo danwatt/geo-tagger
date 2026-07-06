@@ -38,7 +38,7 @@ def nuke_photo_faces(photo_ids: list[int]) -> dict:
         if not row:
             continue
         files_deleted += thumbnails.invalidate_photo_cache(
-            Path(row["path"]), row["mtime"], row["size"])
+            Path(index.photo_path(row)), row["mtime"], row["size"])
     return {"photos": len(photo_ids), "faces_deleted": faces_deleted,
             "files_deleted": files_deleted}
 

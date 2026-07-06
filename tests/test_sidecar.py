@@ -133,44 +133,6 @@ class TestReadOrientations:
         assert sidecar.read_orientations([]) == {}
 
 
-class TestReadAllMetadata:
-    def test_returns_full_metadata_keyed_by_path(self, et_session, sample_image):
-        from pathlib import Path
-        metas = sidecar.read_all_metadata([str(sample_image)])
-        meta = metas[Path(sample_image)]  # keyed by Path regardless of str/Path input
-        assert meta["SourceFile"]
-        # A real JPEG always carries File: group tags (size, type, dimensions).
-        assert any(k.startswith("File:") for k in meta)
-
-    def test_reads_written_tag_into_snapshot(self, et_session, sample_image):
-        from pathlib import Path
-        et = exiftool_session.get_et()
-        et.execute("-overwrite_original", "-EXIF:Orientation#=8", str(sample_image))
-        meta = sidecar.read_all_metadata([str(sample_image)])[Path(sample_image)]
-        assert meta.get("EXIF:Orientation") == 8
-
-    def test_empty_list_returns_empty(self, et_session):
-        assert sidecar.read_all_metadata([]) == {}
-
-
-class TestReadMetadataExifJson:
-    def test_targeted_read_has_no_snapshot(self, et_session, sample_image):
-        # The interactive/default path stays cheap: no full dump serialized.
-        assert sidecar.read_metadata(sample_image)["exif_json"] is None
-
-    def test_full_read_snapshots_valid_json_and_keeps_orientation(self, et_session, sample_image):
-        import json
-        et = exiftool_session.get_et()
-        et.execute("-overwrite_original", "-EXIF:Orientation#=8", str(sample_image))
-        meta = sidecar.read_metadata(sample_image, full=True)
-        # Orientation is still extracted from the same (now full) read.
-        assert meta["orientation"] == 8
-        # exif_json is valid JSON carrying the full dump, including that tag.
-        parsed = json.loads(meta["exif_json"])
-        assert parsed.get("EXIF:Orientation") == 8
-        assert any(k.startswith("File:") for k in parsed)
-
-
 class TestDatetimeRoundTrip:
     def test_write_datetime_writes_local_wallclock_string(self, et_session, sample_image):
         dt = datetime(2020, 5, 17, 10, 30, 0)

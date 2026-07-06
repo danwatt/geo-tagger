@@ -133,16 +133,17 @@ def _insert_faces(db, embeddings: np.ndarray, person_id: int | None,
     face_ids: list[int] = []
     for vec, dt in zip(embeddings, dts):
         n = next(_photo_seq)
-        path = f"/test/face_{n}.jpg"
         # Real photo-insert path — exercises upsert_photo and gives the join in
         # get_labeled_faces / list_faces a photos row to hang photo_datetime on.
         index.upsert_photo(
-            path=path, filename=f"face_{n}.jpg", dir_="/test", ext=".jpg",
+            filename=f"face_{n}.jpg", dir_="/test", ext=".jpg",
             media_type="image", mtime=0.0, size=0, lat=None, lng=None,
             geotag_source="none", sidecar_path=None, sidecar_mtime=None,
             photo_datetime=dt,
         )
-        photo_id = db.execute("SELECT id FROM photos WHERE path=?", (path,)).fetchone()[0]
+        photo_id = db.execute(
+            "SELECT id FROM photos WHERE dir=? AND filename=?", ("/test", f"face_{n}.jpg")
+        ).fetchone()[0]
         cur = db.execute(
             """INSERT INTO faces (photo_id, person_id, bbox, det_score, embedding,
                                   source, ignored, created_at, assigned_at)

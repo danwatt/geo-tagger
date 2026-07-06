@@ -14,13 +14,13 @@ import face_fixtures as ff
 def _add_photo(db, path="p.jpg", lat=None, lng=None, camera="Canon EOS",
                photo_datetime=1_600_000_000, gps_accuracy=None, media_type="image") -> int:
     index.upsert_photo(
-        path=path, filename=path, dir_=".", ext=".jpg", media_type=media_type,
+        filename=path, dir_=".", ext=".jpg", media_type=media_type,
         mtime=1.0, size=100, lat=lat, lng=lng,
         geotag_source="sidecar" if lat is not None else "none",
         sidecar_path=None, sidecar_mtime=None, camera=camera,
         photo_datetime=photo_datetime, gps_accuracy=gps_accuracy, orientation=1,
     )
-    return db.execute("SELECT id FROM photos WHERE path=?", (path,)).fetchone()[0]
+    return db.execute("SELECT id FROM photos WHERE filename=?", (path,)).fetchone()[0]
 
 
 class TestPhotoToDict:

@@ -39,15 +39,15 @@ async def api_geotag(req: GeotagRequest):
         row = index.get_photo(photo_id)
         if not row:
             continue
-        p = Path(row["path"])
+        p = Path(index.photo_path(row))
         sc = sidecar.write_gps(p, req.lat, req.lng, location=loc, gps_accuracy=req.gps_accuracy)
         sc_mtime = sc.stat().st_mtime if sc.exists() else None
-        index.update_geotag(photo_id, req.lat, req.lng, "sidecar", str(sc), sc_mtime, gps_accuracy=req.gps_accuracy)
+        index.update_geotag(photo_id, req.lat, req.lng, "sidecar", sc.name, sc_mtime, gps_accuracy=req.gps_accuracy)
         if loc is not None:
             index.update_photo_location(photo_id, loc)
         results.append({
             "id": photo_id, "lat": req.lat, "lng": req.lng,
-            "geotag_source": "sidecar", "sidecar_path": str(sc),
+            "geotag_source": "sidecar", "sidecar_path": sc.name,
             "location": loc,
             "gps_accuracy": req.gps_accuracy,
         })
@@ -152,7 +152,7 @@ async def api_geotag_remove(req: RemoveGeotagRequest):
         row = index.get_photo(photo_id)
         if not row:
             continue
-        p = Path(row["path"])
+        p = Path(index.photo_path(row))
         sc = sidecar.remove_gps(p)
         sc_mtime = sc.stat().st_mtime if sc.exists() else None
         index.update_geotag(photo_id, None, None, "none", str(sc), sc_mtime)

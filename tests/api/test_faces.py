@@ -348,12 +348,12 @@ def test_crowds_groups_and_ignore(client):
     from geotagger import faces as faces_mod
     db = index.get_db()
     index.upsert_photo(
-        path="crowd.jpg", filename="crowd.jpg", dir_=".", ext=".jpg",
+        filename="crowd.jpg", dir_=".", ext=".jpg",
         media_type="image", mtime=0.0, size=0, lat=None, lng=None,
         geotag_source="none", sidecar_path=None, sidecar_mtime=None,
         photo_datetime=1_609_459_200,  # 2021-01-01 UTC
     )
-    photo_id = db.execute("SELECT id FROM photos WHERE path='crowd.jpg'").fetchone()[0]
+    photo_id = db.execute("SELECT id FROM photos WHERE filename='crowd.jpg'").fetchone()[0]
     # get_crowd_photos only considers photos that have been face-scanned.
     db.execute("UPDATE photos SET faces_scanned_at=1 WHERE id=?", (photo_id,))
     vec = faces_mod.encode_embedding(ff.unit_vectors(np.random.default_rng(7), 1)[0])
@@ -388,11 +388,11 @@ def test_crowds_window_filters_photos(client):
 
     def seed_crowd(path, dt):
         index.upsert_photo(
-            path=path, filename=path, dir_=".", ext=".jpg", media_type="image",
+            filename=path, dir_=".", ext=".jpg", media_type="image",
             mtime=0.0, size=0, lat=None, lng=None, geotag_source="none",
             sidecar_path=None, sidecar_mtime=None, photo_datetime=dt,
         )
-        pid = db.execute("SELECT id FROM photos WHERE path=?", (path,)).fetchone()[0]
+        pid = db.execute("SELECT id FROM photos WHERE filename=?", (path,)).fetchone()[0]
         db.execute("UPDATE photos SET faces_scanned_at=1 WHERE id=?", (pid,))
         vec = faces_mod.encode_embedding(ff.unit_vectors(rng, 1)[0])
         for _ in range(3):

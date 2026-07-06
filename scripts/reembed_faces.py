@@ -80,7 +80,7 @@ def find_candidates(target_dim: int, all_raw: bool, dir_filter: Path | None = No
     params = list(exts) if all_raw else [*exts, target_dim]
     rows = index.get_db().execute(
         f"""
-        SELECT ph.id, ph.filename, ph.path, ph.faces_det_dimension AS dim,
+        SELECT ph.id, ph.filename, ph.dir, ph.faces_det_dimension AS dim,
                COUNT(f.id) AS face_count,
                COUNT(CASE WHEN f.person_id IS NOT NULL THEN 1 END) AS labeled_count,
                COUNT(CASE WHEN f.ignored = 1 THEN 1 END) AS ignored_count
@@ -95,7 +95,7 @@ def find_candidates(target_dim: int, all_raw: bool, dir_filter: Path | None = No
         params,
     ).fetchall()
     if dir_filter is not None:
-        rows = [r for r in rows if _under_dir(r["path"], dir_filter)]
+        rows = [r for r in rows if _under_dir(index.photo_path(r), dir_filter)]
     return rows
 
 

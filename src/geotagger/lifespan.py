@@ -12,6 +12,23 @@ from geotagger.executor import init_executor
 from geotagger.scanning import scan_directory
 
 
+def _auto_vacuum():
+    """Reclaim DB free-list space if it's grown large (see index.vacuum_if_needed).
+    Best-effort: a VACUUM failure (e.g. no free disk space for the rewrite)
+    shouldn't block startup."""
+    if not config.AUTO_VACUUM:
+        return
+    try:
+        result = index.vacuum_if_needed(config.AUTO_VACUUM_THRESHOLD, config.AUTO_VACUUM_PAGE_SIZE)
+        if result["vacuumed"]:
+            resize_note = f", page_size→{result['page_size']}" if result.get("resized") else ""
+            print(f"Vacuumed database: {result['freelist_count']}/{result['page_count']} "
+                  f"free pages ({result['free_ratio']:.0%}) reclaimed in {result['seconds']:.1f}s"
+                  f"{resize_note}")
+    except Exception as e:
+        print(f"Auto-vacuum skipped: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app):
     # Initialize thread pool
@@ -29,6 +46,7 @@ async def lifespan(app):
                 # Initialize DB and thumbnails once (not tied to a specific root)
                 index.init_db()
                 config.apply_all_overrides(index.get_all_settings())
+                _auto_vacuum()
                 thumbnails.init_thumbs()
                 faces.init_faces()
 
@@ -58,6 +76,7 @@ async def lifespan(app):
                 try:
                     index.init_db(root)
                     config.apply_all_overrides(index.get_all_settings())
+                    _auto_vacuum()
                     thumbnails.init_thumbs(root)
                     faces.init_faces(root)
                     if no_scan:

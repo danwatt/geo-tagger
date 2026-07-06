@@ -7,13 +7,13 @@ from geotagger import index
 
 def _add(path, lat=None, lng=None, dt=1000):
     index.upsert_photo(
-        path=path, filename=path, dir_=".", ext=".jpg", media_type="image",
+        filename=path, dir_=".", ext=".jpg", media_type="image",
         mtime=1.0, size=1, lat=lat, lng=lng,
         geotag_source="sidecar" if lat is not None else "none",
         sidecar_path=None, sidecar_mtime=None, camera="c",
         photo_datetime=dt, gps_accuracy=None, orientation=1,
     )
-    return index.get_db().execute("SELECT id FROM photos WHERE path=?", (path,)).fetchone()[0]
+    return index.get_db().execute("SELECT id FROM photos WHERE filename=?", (path,)).fetchone()[0]
 
 
 def test_geotagged_filter(client):
@@ -70,11 +70,13 @@ def test_fullsize_renders_jpeg_with_face_boxes(client, tmp_path):
     ImageDraw.Draw(img).rectangle([10, 10, 60, 60], fill=(40, 40, 200))
     img.save(p, "JPEG")
     index.upsert_photo(
-        path=str(p), filename="shot.jpg", dir_=str(tmp_path), ext=".jpg",
+        filename="shot.jpg", dir_=str(tmp_path), ext=".jpg",
         media_type="image", mtime=1.0, size=1, lat=None, lng=None,
         geotag_source="none", sidecar_path=None, sidecar_mtime=None, orientation=1,
     )
-    pid = index.get_db().execute("SELECT id FROM photos WHERE path=?", (str(p),)).fetchone()[0]
+    pid = index.get_db().execute(
+        "SELECT id FROM photos WHERE dir=? AND filename=?", (str(tmp_path), "shot.jpg")
+    ).fetchone()[0]
     # A detected face so the box-drawing branch runs.
     index.get_db().execute(
         "INSERT INTO faces (photo_id, person_id, bbox, det_score, embedding, source, "

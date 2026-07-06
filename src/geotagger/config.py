@@ -25,6 +25,17 @@ def get_cache_dir() -> Path | None:
 
 CACHE_DIR_NAME = ".geotagger"  # Used when get_cache_dir() returns None
 
+# Reclaim free-list space (deleted-row pages) at startup via VACUUM, gated on
+# the free-page ratio so a mostly-compact DB isn't fully rewritten every run.
+AUTO_VACUUM = os.environ.get("GEOTAGGER_AUTO_VACUUM", "1") == "1"
+AUTO_VACUUM_THRESHOLD = float(os.environ.get("GEOTAGGER_AUTO_VACUUM_THRESHOLD", "0.1"))
+# Target SQLite page size. 16384 (vs SQLite's 4096 default) cuts wasted space in
+# the faces table: an embedding-heavy row (~2.1KB) only just misses fitting two
+# to a 4096-byte page, stranding ~47% of every page; larger pages pack several
+# rows each. Applied once via the same VACUUM (see index.vacuum_if_needed) —
+# a no-op once the DB is already at this page size.
+AUTO_VACUUM_PAGE_SIZE = int(os.environ.get("GEOTAGGER_VACUUM_PAGE_SIZE", "16384"))
+
 # Thumbnail and preview dimensions
 THUMB_SIZE = 256
 PREVIEW_SIZE = 1600

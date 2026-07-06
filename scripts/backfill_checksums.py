@@ -63,7 +63,7 @@ def main():
     done = errors = 0
     pairs: list[tuple[str, int]] = []  # (checksum, photo_id) buffered for a batch commit
     for i, row in enumerate(pending, 1):
-        path = Path(row["path"])
+        path = Path(index.photo_path(row))
         try:
             pairs.append((scanner.file_checksum(path), row["id"]))
             done += 1

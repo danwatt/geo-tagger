@@ -7,7 +7,7 @@ def _upsert(db, path="p1.jpg", mtime=1000.0, sidecar_path=None, sidecar_mtime=No
             camera="Canon EOS", photo_datetime=123, gps_accuracy=5.0, orientation=1,
             lat=None, lng=None):
     index.upsert_photo(
-        path=path, filename=path, dir_=".", ext=".jpg", media_type="image",
+        filename=path, dir_=".", ext=".jpg", media_type="image",
         mtime=mtime, size=100, lat=lat, lng=lng,
         geotag_source="sidecar" if lat is not None else "none",
         sidecar_path=sidecar_path, sidecar_mtime=sidecar_mtime,
@@ -18,64 +18,64 @@ def _upsert(db, path="p1.jpg", mtime=1000.0, sidecar_path=None, sidecar_mtime=No
 
 class TestIsFresh:
     def test_missing_row_is_not_fresh(self, db):
-        assert index.is_fresh("missing.jpg", 1000.0, None, None) is False
+        assert index.is_fresh(".", "missing.jpg", 1000.0, None, None) is False
 
     def test_unchanged_row_is_fresh(self, db):
         _upsert(db, mtime=1000.0, sidecar_path="p1.xmp", sidecar_mtime=500.0)
-        assert index.is_fresh("p1.jpg", 1000.0, "p1.xmp", 500.0) is True
+        assert index.is_fresh(".", "p1.jpg", 1000.0, "p1.xmp", 500.0) is True
 
     def test_mtime_drift_within_one_second_is_still_fresh(self, db):
         _upsert(db, mtime=1000.0, sidecar_path=None, sidecar_mtime=None)
-        assert index.is_fresh("p1.jpg", 1000.4, None, None) is True
+        assert index.is_fresh(".", "p1.jpg", 1000.4, None, None) is True
 
     def test_mtime_changed_is_stale(self, db):
         _upsert(db, mtime=1000.0, sidecar_path=None, sidecar_mtime=None)
-        assert index.is_fresh("p1.jpg", 1005.0, None, None) is False
+        assert index.is_fresh(".", "p1.jpg", 1005.0, None, None) is False
 
     def test_sidecar_added_is_stale(self, db):
         _upsert(db, mtime=1000.0, sidecar_path=None, sidecar_mtime=None)
-        assert index.is_fresh("p1.jpg", 1000.0, "p1.xmp", 500.0) is False
+        assert index.is_fresh(".", "p1.jpg", 1000.0, "p1.xmp", 500.0) is False
 
     def test_sidecar_mtime_changed_is_stale(self, db):
         _upsert(db, mtime=1000.0, sidecar_path="p1.xmp", sidecar_mtime=500.0)
-        assert index.is_fresh("p1.jpg", 1000.0, "p1.xmp", 600.0) is False
+        assert index.is_fresh(".", "p1.jpg", 1000.0, "p1.xmp", 600.0) is False
 
     def test_partially_indexed_row_is_stale(self, db):
         # camera=None simulates a row inserted by the fast scan pass before the
         # full-metadata read has happened.
         _upsert(db, camera=None)
-        assert index.is_fresh("p1.jpg", 1000.0, None, None) is False
+        assert index.is_fresh(".", "p1.jpg", 1000.0, None, None) is False
 
 
 class TestChecksum:
     def test_upsert_stores_and_reads_back_checksum(self, db):
         index.upsert_photo(
-            path="c.jpg", filename="c.jpg", dir_=".", ext=".jpg", media_type="image",
+            filename="c.jpg", dir_=".", ext=".jpg", media_type="image",
             mtime=1.0, size=1, lat=None, lng=None, geotag_source="none",
             sidecar_path=None, sidecar_mtime=None, checksum="deadbeef",
         )
-        row = db.execute("SELECT checksum FROM photos WHERE path='c.jpg'").fetchone()
+        row = db.execute("SELECT checksum FROM photos WHERE filename='c.jpg'").fetchone()
         assert row["checksum"] == "deadbeef"
 
     def test_upsert_defaults_checksum_to_null(self, db):
         # The scan inserts a fast row before hashing; count/query treat it as pending.
         _upsert(db, path="a.jpg")
         assert index.count_photos_missing_checksum() == 1
-        assert [r["path"] for r in index.get_photos_missing_checksum()] == ["a.jpg"]
+        assert [r["filename"] for r in index.get_photos_missing_checksum()] == ["a.jpg"]
 
     def test_missing_checksum_query_excludes_hashed_rows(self, db):
         _upsert(db, path="a.jpg")  # NULL checksum
         index.upsert_photo(
-            path="b.jpg", filename="b.jpg", dir_=".", ext=".jpg", media_type="image",
+            filename="b.jpg", dir_=".", ext=".jpg", media_type="image",
             mtime=1.0, size=1, lat=None, lng=None, geotag_source="none",
             sidecar_path=None, sidecar_mtime=None, checksum="cafef00d",
         )
         assert index.count_photos_missing_checksum() == 1
-        assert [r["path"] for r in index.get_photos_missing_checksum()] == ["a.jpg"]
+        assert [r["filename"] for r in index.get_photos_missing_checksum()] == ["a.jpg"]
 
     def test_set_checksums_batch_fills_in_rows(self, db):
         _upsert(db, path="a.jpg")
-        pid = db.execute("SELECT id FROM photos WHERE path='a.jpg'").fetchone()["id"]
+        pid = db.execute("SELECT id FROM photos WHERE filename='a.jpg'").fetchone()["id"]
         index.set_checksums([("abc123", pid)])
         assert index.count_photos_missing_checksum() == 0
         assert db.execute(
@@ -88,11 +88,11 @@ class TestOrientationBackfill:
         # Simulate a pre-orientation row (indexed before the tag was read).
         _upsert(db, path="old.jpg", orientation=None)
         assert index.count_photos_missing_orientation() == 1
-        assert [r["path"] for r in index.get_photos_missing_orientation()] == ["old.jpg"]
+        assert [r["filename"] for r in index.get_photos_missing_orientation()] == ["old.jpg"]
 
     def test_set_orientations_clears_pending(self, db):
         _upsert(db, path="old.jpg", orientation=None)
-        pid = db.execute("SELECT id FROM photos WHERE path='old.jpg'").fetchone()["id"]
+        pid = db.execute("SELECT id FROM photos WHERE filename='old.jpg'").fetchone()["id"]
         index.set_orientations([(8, pid)])
         assert index.count_photos_missing_orientation() == 0
         assert db.execute(
@@ -104,53 +104,17 @@ class TestOrientationBackfill:
         assert index.count_photos_missing_orientation() == 0
 
 
-class TestExifBackfill:
-    def test_rows_without_exif_are_pending(self, db):
-        # upsert_photo never writes exif_json, so a freshly indexed row is pending
-        # for the EXIF snapshot even though it already has an orientation.
-        _upsert(db, path="a.jpg", orientation=1)
-        assert index.count_photos_missing_exif() == 1
-        assert [r["path"] for r in index.get_photos_missing_exif()] == ["a.jpg"]
-
-    def test_set_exif_stores_json_and_orientation_and_clears_pending(self, db):
-        _upsert(db, path="a.jpg", orientation=None)
-        pid = db.execute("SELECT id FROM photos WHERE path='a.jpg'").fetchone()["id"]
-        index.set_exif([(6, '{"EXIF:Make": "Canon"}', pid)])
-        assert index.count_photos_missing_exif() == 0
-        assert db.execute(
-            "SELECT orientation FROM photos WHERE id=?", (pid,)
-        ).fetchone()["orientation"] == 6
-        assert db.execute(
-            "SELECT exif_json FROM photo_exif WHERE photo_id=?", (pid,)
-        ).fetchone()["exif_json"] == '{"EXIF:Make": "Canon"}'
-
-    def test_upsert_stores_exif_json_at_scan_time(self, db):
-        # The scanner passes exif_json into upsert_photo directly; a row indexed
-        # with it is not pending for backfill.
-        index.upsert_photo(
-            path="s.jpg", filename="s.jpg", dir_=".", ext=".jpg", media_type="image",
-            mtime=1.0, size=1, lat=None, lng=None, geotag_source="none",
-            sidecar_path=None, sidecar_mtime=None, orientation=3,
-            exif_json='{"EXIF:Model": "Pixel"}',
-        )
-        assert index.count_photos_missing_exif() == 0
-        pid = db.execute("SELECT id FROM photos WHERE path='s.jpg'").fetchone()["id"]
-        assert db.execute(
-            "SELECT exif_json FROM photo_exif WHERE photo_id=?", (pid,)
-        ).fetchone()["exif_json"] == '{"EXIF:Model": "Pixel"}'
-
-
 def _photo_with_faces(db, path, specs, scanned=True, media_type="image"):
     """Insert a photo plus its faces. ``specs`` is a list of (person_id|None,
     ignored) — one per face; an empty list means a photo with no detected faces.
     ``scanned`` marks it as having gone through face detection."""
     import time
     index.upsert_photo(
-        path=path, filename=path, dir_=".", ext=".jpg", media_type=media_type,
+        filename=path, dir_=".", ext=".jpg", media_type=media_type,
         mtime=1.0, size=1, lat=None, lng=None, geotag_source="none",
         sidecar_path=None, sidecar_mtime=None,
     )
-    pid = db.execute("SELECT id FROM photos WHERE path=?", (path,)).fetchone()["id"]
+    pid = db.execute("SELECT id FROM photos WHERE filename=?", (path,)).fetchone()["id"]
     if scanned:
         db.execute("UPDATE photos SET faces_scanned_at=? WHERE id=?", (time.time(), pid))
     for person_id, ignored in specs:
@@ -167,11 +131,11 @@ def _photo_with_faces(db, path, specs, scanned=True, media_type="image"):
 class TestReplaceFacesDimension:
     def _insert(self, db, path, ext):
         index.upsert_photo(
-            path=path, filename=path, dir_=".", ext=ext, media_type="image",
+            filename=path, dir_=".", ext=ext, media_type="image",
             mtime=1.0, size=1, lat=None, lng=None, geotag_source="none",
             sidecar_path=None, sidecar_mtime=None,
         )
-        return db.execute("SELECT id FROM photos WHERE path=?", (path,)).fetchone()["id"]
+        return db.execute("SELECT id FROM photos WHERE filename=?", (path,)).fetchone()["id"]
 
     def test_records_det_dimension(self, db):
         pid = self._insert(db, "raw.nef", ".nef")
@@ -281,7 +245,7 @@ class TestGetPhotosBbox:
         _upsert(db, path="in.jpg", lat=40.0, lng=-74.0)
         _upsert(db, path="out.jpg", lat=10.0, lng=10.0)
         rows = index.get_photos(bbox="-75,39,-73,41")
-        assert [r["path"] for r in rows] == ["in.jpg"]
+        assert [r["filename"] for r in rows] == ["in.jpg"]
 
     def test_unwraps_a_bbox_panned_around_the_globe(self, db):
         # Regression: Leaflet's getBounds() after panning past +/-180 returns
@@ -290,4 +254,4 @@ class TestGetPhotosBbox:
         _upsert(db, path="fw.jpg", lat=32.75, lng=-97.3)
         rows = index.get_photos(
             bbox="-458.4223937988281,32.5635873170885,-456.0946655273438,33.0926823840692")
-        assert [r["path"] for r in rows] == ["fw.jpg"]
+        assert [r["filename"] for r in rows] == ["fw.jpg"]

@@ -46,7 +46,6 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     _db.execute("""
         CREATE TABLE IF NOT EXISTS photos (
             id INTEGER PRIMARY KEY,
-            path TEXT UNIQUE NOT NULL,
             filename TEXT NOT NULL,
             dir TEXT NOT NULL,
             ext TEXT NOT NULL,
@@ -59,7 +58,8 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
             sidecar_path TEXT,
             sidecar_mtime REAL,
             camera TEXT,
-            scanned_at REAL NOT NULL
+            scanned_at REAL NOT NULL,
+            UNIQUE(dir, filename)
         )
     """)
     # Migrate existing DBs that predate added columns
@@ -112,29 +112,81 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     if "geocode_ignored" not in cols:
         _db.execute("ALTER TABLE photos ADD COLUMN geocode_ignored INTEGER NOT NULL DEFAULT 0")
 
-    # Full ExifTool metadata as a JSON blob, one row per photo, kept OUT of the
-    # photos table on purpose: a populated exif_json is large enough that SQLite
-    # spills the row to overflow pages, and every column *after* it in the photos
-    # row layout (checksum, faces_scanned_at, loc_*, geocode_ignored, ...) then
-    # has to be read through that same overflow chain too — so a plain photos
-    # scan that never touches EXIF still pays for it. photo_id is the primary key
-    # (no separate id / index needed for the 1:1 join). Missing row = "not yet
-    # read" (see get_photos_missing_exif); populated by the scanner
-    # (read_metadata full=True) for new/changed files, and by
-    # scripts/backfill_orientation.py for pre-existing rows.
-    _db.execute("""
-        CREATE TABLE IF NOT EXISTS photo_exif (
-            photo_id INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
-            exif_json TEXT NOT NULL
+    # One-time cleanup: sidecar_path used to store the sidecar's full path;
+    # it's now just the filename (the sidecar always sits next to the image,
+    # in `dir`, per sidecar.sidecar_path()). Only rows still holding a
+    # separator get rewritten, so this is a no-op after the first run.
+    stale_sidecars = _db.execute(
+        "SELECT id, sidecar_path FROM photos WHERE sidecar_path LIKE '%/%' OR sidecar_path LIKE '%\\%'"
+    ).fetchall()
+    if stale_sidecars:
+        import ntpath
+        _db.executemany(
+            "UPDATE photos SET sidecar_path=? WHERE id=?",
+            [(ntpath.basename(r["sidecar_path"]), r["id"]) for r in stale_sidecars],
         )
-    """)
-    # One-time migration off the old inline column, for DBs from before this table.
+
+    # Dropped: the full ExifTool JSON snapshot (photo_exif table, and before that
+    # an inline exif_json column) — never queried by anything, and was the single
+    # largest contributor to DB file size. One-time cleanup for DBs that still
+    # have it; a no-op after the first run.
+    _db.execute("DROP TABLE IF EXISTS photo_exif")
     if "exif_json" in cols:
-        _db.execute("""
-            INSERT OR IGNORE INTO photo_exif (photo_id, exif_json)
-            SELECT id, exif_json FROM photos WHERE exif_json IS NOT NULL
-        """)
         _db.execute("ALTER TABLE photos DROP COLUMN exif_json")
+
+    # One-time migration off `path`, which just duplicated `dir` + filename on
+    # every row (and every write). SQLite's ALTER TABLE DROP COLUMN refuses a
+    # UNIQUE column, so the table is rebuilt instead. Recomputed fresh here (not
+    # the `cols` above, which predates the ADD COLUMN guards and the exif_json
+    # drop) so the copy carries exactly the columns now on the table. Renaming
+    # photos also silently drops the indexes/triggers bound to it (verified:
+    # SQLite moves them to the new name, then discards them with the DROP TABLE
+    # below) — harmless, since every one of them is recreated with IF NOT EXISTS
+    # further down this function.
+    photos_cols = [r[1] for r in _db.execute("PRAGMA table_info(photos)").fetchall()]
+    if "path" in photos_cols:
+        keep_cols = [c for c in photos_cols if c != "path"]
+        col_list = ", ".join(keep_cols)
+        _db.execute("ALTER TABLE photos RENAME TO photos_old")
+        _db.execute("""
+            CREATE TABLE photos (
+                id INTEGER PRIMARY KEY,
+                filename TEXT NOT NULL,
+                dir TEXT NOT NULL,
+                ext TEXT NOT NULL,
+                media_type TEXT NOT NULL,
+                mtime REAL NOT NULL,
+                size INTEGER NOT NULL,
+                lat REAL,
+                lng REAL,
+                geotag_source TEXT NOT NULL DEFAULT 'none',
+                sidecar_path TEXT,
+                sidecar_mtime REAL,
+                camera TEXT,
+                scanned_at REAL NOT NULL,
+                photo_datetime INTEGER,
+                gps_accuracy REAL,
+                orientation INTEGER,
+                checksum TEXT,
+                face_count INTEGER,
+                faces_scanned_at REAL,
+                faces_processed_at REAL,
+                faces_det_dimension INTEGER,
+                loc_city TEXT,
+                loc_state TEXT,
+                loc_county TEXT,
+                loc_country TEXT,
+                loc_country_code TEXT,
+                loc_sublocation TEXT,
+                loc_landmark TEXT,
+                loc_landmark_type TEXT,
+                geocoded_at REAL,
+                geocode_ignored INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(dir, filename)
+            )
+        """)
+        _db.execute(f"INSERT INTO photos ({col_list}) SELECT {col_list} FROM photos_old")
+        _db.execute("DROP TABLE photos_old")
 
     _db.execute("""
         CREATE TABLE IF NOT EXISTS scans (
@@ -349,15 +401,9 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
         END
     """)
 
-    # photo_exif declares ON DELETE CASCADE, but FKs aren't enforced (no PRAGMA
-    # foreign_keys=ON — see delete_person for the same caveat), so a real trigger
-    # does the cleanup instead.
-    _db.execute("""
-        CREATE TRIGGER IF NOT EXISTS photo_exif_delete AFTER DELETE ON photos
-        BEGIN
-            DELETE FROM photo_exif WHERE photo_id = OLD.id;
-        END
-    """)
+    # Dropped along with the photo_exif table above — a leftover trigger
+    # referencing it would error on the next photo delete.
+    _db.execute("DROP TRIGGER IF EXISTS photo_exif_delete")
 
     # Populate spatial index for existing photos (migration)
     _db.execute("""
@@ -378,23 +424,71 @@ def get_db() -> sqlite3.Connection:
     return _db
 
 
+def vacuum_if_needed(min_free_ratio: float = 0.1, target_page_size: int = 0) -> dict:
+    """Reclaim free-list space (pages left behind by deletes/updates) via VACUUM,
+    called once at app startup (see lifespan.py). Also applies ``target_page_size``
+    (0 = leave as-is) if the DB isn't already on it — VACUUM is the only way
+    SQLite ever changes page size, so this rides the same rebuild.
+
+    VACUUM rewrites the entire file, so it's gated on the free-page ratio
+    (PRAGMA freelist_count / page_count) rather than running unconditionally —
+    a mostly-compact DB shouldn't pay a full rewrite on every launch. Needs
+    roughly one DB's worth of free disk space alongside it for the rewrite.
+    Must run before any other connection/transaction touches the DB.
+    """
+    db = get_db()
+    page_count = db.execute("PRAGMA page_count").fetchone()[0]
+    freelist_count = db.execute("PRAGMA freelist_count").fetchone()[0]
+    free_ratio = (freelist_count / page_count) if page_count else 0.0
+    current_page_size = db.execute("PRAGMA page_size").fetchone()[0]
+    resize = bool(target_page_size) and target_page_size != current_page_size
+    if free_ratio < min_free_ratio and not resize:
+        return {"vacuumed": False, "free_ratio": free_ratio, "page_count": page_count,
+                "freelist_count": freelist_count, "page_size": current_page_size}
+    t0 = time.time()
+    if resize:
+        # PRAGMA page_size only takes effect via the following VACUUM, and
+        # SQLite silently ignores it while journal_mode=WAL — drop to the
+        # rollback journal for the rebuild, then restore WAL below.
+        db.execute("PRAGMA journal_mode=DELETE")
+        db.execute(f"PRAGMA page_size={int(target_page_size)}")
+    db.execute("VACUUM")
+    if resize:
+        db.execute("PRAGMA journal_mode=WAL")
+    # VACUUM's rewrite is one big WAL transaction; left alone, the -wal file sits
+    # at roughly the DB's own size until some later write happens to trigger
+    # SQLite's normal auto-checkpoint. TRUNCATE folds it back into the main file
+    # and shrinks -wal to ~0 immediately instead of leaving that on disk.
+    db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    return {"vacuumed": True, "free_ratio": free_ratio, "page_count": page_count,
+            "freelist_count": freelist_count, "resized": resize,
+            "page_size": target_page_size if resize else current_page_size,
+            "seconds": time.time() - t0}
+
+
+def photo_path(row) -> str:
+    """Reconstruct a photo's on-disk path from its dir + filename (derived on
+    read, not stored — see upsert_photo)."""
+    return str(Path(row["dir"]) / row["filename"])
+
+
 def upsert_photo(
-    path: str, filename: str, dir_: str, ext: str, media_type: str,
+    filename: str, dir_: str, ext: str, media_type: str,
     mtime: float, size: int, lat, lng, geotag_source: str,
     sidecar_path: str | None, sidecar_mtime: float | None,
     camera: str | None = None, photo_datetime: int | None = None,
     gps_accuracy: float | None = None, orientation: int | None = None,
-    checksum: str | None = None, exif_json: str | None = None,
+    checksum: str | None = None,
 ):
     db = get_db()
-    cur = db.execute("""
+    db.execute("""
         INSERT INTO photos
-            (path, filename, dir, ext, media_type, mtime, size, lat, lng,
+            (filename, dir, ext, media_type, mtime, size, lat, lng,
              geotag_source, sidecar_path, sidecar_mtime, camera, photo_datetime,
              gps_accuracy, orientation, checksum, scanned_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(path) DO UPDATE SET
-            filename=excluded.filename, dir=excluded.dir, ext=excluded.ext,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(dir, filename) DO UPDATE SET
+            ext=excluded.ext,
             media_type=excluded.media_type, mtime=excluded.mtime, size=excluded.size,
             lat=excluded.lat, lng=excluded.lng, geotag_source=excluded.geotag_source,
             sidecar_path=excluded.sidecar_path, sidecar_mtime=excluded.sidecar_mtime,
@@ -402,16 +496,9 @@ def upsert_photo(
             gps_accuracy=excluded.gps_accuracy, orientation=excluded.orientation,
             checksum=excluded.checksum,
             scanned_at=excluded.scanned_at
-        RETURNING id
-    """, (path, filename, dir_, ext, media_type, mtime, size, lat, lng,
+    """, (filename, dir_, ext, media_type, mtime, size, lat, lng,
           geotag_source, sidecar_path, sidecar_mtime, camera, photo_datetime,
           gps_accuracy, orientation, checksum, time.time()))
-    photo_id = cur.fetchone()[0]
-    if exif_json is not None:
-        db.execute("""
-            INSERT INTO photo_exif (photo_id, exif_json) VALUES (?, ?)
-            ON CONFLICT(photo_id) DO UPDATE SET exif_json=excluded.exif_json
-        """, (photo_id, exif_json))
     db.commit()
 
 
@@ -503,7 +590,7 @@ def get_photo(photo_id: int) -> sqlite3.Row | None:
 def get_photos_missing_checksum(limit: int | None = None) -> list[sqlite3.Row]:
     """Rows whose file has not been hashed yet (checksum IS NULL) — the work list
     for scripts/backfill_checksums.py. Ordered by id for stable batching."""
-    sql = "SELECT id, path FROM photos WHERE checksum IS NULL ORDER BY id"
+    sql = "SELECT id, dir, filename FROM photos WHERE checksum IS NULL ORDER BY id"
     if limit:
         sql += f" LIMIT {int(limit)}"
     return get_db().execute(sql).fetchall()
@@ -532,7 +619,7 @@ def set_checksums(rows: list[tuple[str, int]]):
 
 def get_photos_missing_orientation(limit: int | None = None) -> list[sqlite3.Row]:
     """Rows whose EXIF orientation hasn't been read yet (orientation IS NULL)."""
-    sql = "SELECT id, path FROM photos WHERE orientation IS NULL ORDER BY id"
+    sql = "SELECT id, dir, filename FROM photos WHERE orientation IS NULL ORDER BY id"
     if limit:
         sql += f" LIMIT {int(limit)}"
     return get_db().execute(sql).fetchall()
@@ -551,46 +638,6 @@ def set_orientations(rows: list[tuple[int, int]]):
         return
     db = get_db()
     db.executemany("UPDATE photos SET orientation=? WHERE id=?", rows)
-    db.commit()
-
-
-# ── EXIF snapshot backfill ──
-# Full ExifTool metadata for each file, stored as JSON in the photo_exif table
-# (one row per photo, keyed by photo_id — see its CREATE TABLE for why it's
-# split out of photos). No row there means "not yet read"; the same one-time
-# pass also (re)derives orientation from the read, so a single call fills both.
-
-def get_photos_missing_exif(limit: int | None = None) -> list[sqlite3.Row]:
-    """Rows whose full EXIF snapshot hasn't been read yet (no photo_exif row)."""
-    sql = ("SELECT p.id, p.path FROM photos p "
-           "LEFT JOIN photo_exif e ON e.photo_id = p.id "
-           "WHERE e.photo_id IS NULL ORDER BY p.id")
-    if limit:
-        sql += f" LIMIT {int(limit)}"
-    return get_db().execute(sql).fetchall()
-
-
-def count_photos_missing_exif() -> int:
-    return get_db().execute(
-        "SELECT COUNT(*) FROM photos p "
-        "LEFT JOIN photo_exif e ON e.photo_id = p.id WHERE e.photo_id IS NULL"
-    ).fetchone()[0]
-
-
-def set_exif(rows: list[tuple[int | None, str | None, int]]):
-    """Batch-store the full-EXIF backfill in one transaction. Each triple is
-    (orientation, exif_json, photo_id), matching the caller's (scripts/
-    backfill_orientation.py) tuple order. Both are written together because one
-    metadata read produces both, but they land in different tables now."""
-    if not rows:
-        return
-    db = get_db()
-    db.executemany("UPDATE photos SET orientation=? WHERE id=?",
-                   [(o, pid) for o, _ej, pid in rows])
-    db.executemany("""
-        INSERT INTO photo_exif (photo_id, exif_json) VALUES (?, ?)
-        ON CONFLICT(photo_id) DO UPDATE SET exif_json=excluded.exif_json
-    """, [(pid, ej) for _o, ej, pid in rows])
     db.commit()
 
 
@@ -681,10 +728,11 @@ def save_last_scan_root(root: str):
     save_last_scan_roots([root])
 
 
-def is_fresh(path: str, mtime: float, sidecar_path: str | None, sidecar_mtime: float | None) -> bool:
+def is_fresh(dir_: str, filename: str, mtime: float, sidecar_path: str | None, sidecar_mtime: float | None) -> bool:
     """Return True if the indexed row is up-to-date (no re-scan needed)."""
     row = get_db().execute(
-        "SELECT mtime, sidecar_path, sidecar_mtime, camera, photo_datetime, gps_accuracy, orientation FROM photos WHERE path=?", (path,)
+        "SELECT mtime, sidecar_path, sidecar_mtime, camera, photo_datetime, gps_accuracy, orientation "
+        "FROM photos WHERE dir=? AND filename=?", (dir_, filename)
     ).fetchone()
     if not row:
         return False
@@ -953,7 +1001,7 @@ def count_geocoded_photos() -> int:
 def get_photos_with_location() -> list[sqlite3.Row]:
     """All photos that have resolved location names — used to export to sidecars."""
     return get_db().execute(
-        "SELECT id, path, loc_city, loc_sublocation, loc_state, loc_country, loc_country_code "
+        "SELECT id, dir, filename, loc_city, loc_sublocation, loc_state, loc_country, loc_country_code "
         "FROM photos WHERE loc_country_code IS NOT NULL"
     ).fetchall()
 
@@ -1231,7 +1279,7 @@ def count_faces(scope: str = "unlabeled", person_id: int | None = None,
 def get_face_with_photo(face_id: int) -> sqlite3.Row | None:
     """Face row joined with its photo's path/mtime/size (for cropping)."""
     return get_db().execute(
-        """SELECT f.id, f.bbox, f.photo_id, ph.path, ph.mtime, ph.size, ph.orientation
+        """SELECT f.id, f.bbox, f.photo_id, ph.dir, ph.filename, ph.mtime, ph.size, ph.orientation
            FROM faces f JOIN photos ph ON ph.id = f.photo_id
            WHERE f.id = ?""",
         (face_id,),
@@ -1391,7 +1439,7 @@ def get_crowd_photos(min_faces: int = 50, start_ts: int | None = None,
         params.append(_json.dumps(photo_ids))
     params.append(min_faces)
     return get_db().execute(
-        f"""SELECT ph.id, ph.filename, ph.path, ph.photo_datetime, ph.orientation,
+        f"""SELECT ph.id, ph.filename, ph.photo_datetime, ph.orientation,
                   COUNT(f.id)                                          AS total_faces,
                   COUNT(CASE WHEN f.person_id IS NOT NULL THEN 1 END) AS labeled_faces,
                   COUNT(CASE WHEN f.person_id IS NULL AND f.ignored=0 AND f.come_back=0 THEN 1 END) AS unlabeled_faces,

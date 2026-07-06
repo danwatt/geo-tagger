@@ -5,14 +5,14 @@ from geotagger import index
 
 def _add(path, lat=None, lng=None, dt=None, media="image", ignored=False):
     index.upsert_photo(
-        path=path, filename=path, dir_=".", ext=".jpg", media_type=media,
+        filename=path, dir_=".", ext=".jpg", media_type=media,
         mtime=1.0, size=1, lat=lat, lng=lng,
         geotag_source="sidecar" if lat is not None else "none",
         sidecar_path=None, sidecar_mtime=None, camera="c",
         photo_datetime=dt, gps_accuracy=None, orientation=1,
     )
     db = index.get_db()
-    pid = db.execute("SELECT id FROM photos WHERE path=?", (path,)).fetchone()[0]
+    pid = db.execute("SELECT id FROM photos WHERE filename=?", (path,)).fetchone()[0]
     if ignored:
         db.execute("UPDATE photos SET geocode_ignored=1 WHERE id=?", (pid,))
         db.commit()
