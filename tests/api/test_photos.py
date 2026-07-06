@@ -78,10 +78,14 @@ def test_fullsize_renders_jpeg_with_face_boxes(client, tmp_path):
         "SELECT id FROM photos WHERE dir=? AND filename=?", (str(tmp_path), "shot.jpg")
     ).fetchone()[0]
     # A detected face so the box-drawing branch runs.
-    index.get_db().execute(
-        "INSERT INTO faces (photo_id, person_id, bbox, det_score, embedding, source, "
-        "ignored, created_at) VALUES (?, NULL, '0.1,0.1,0.4,0.4', 0.9, X'00', 'detected', 0, 0)",
+    cur = index.get_db().execute(
+        "INSERT INTO faces (photo_id, person_id, bbox, det_score, source, "
+        "ignored, created_at) VALUES (?, NULL, '0.1,0.1,0.4,0.4', 0.9, 'detected', 0, 0)",
         (pid,),
+    )
+    index.get_db().execute(
+        "INSERT INTO face_embeddings (face_id, embedding) VALUES (?, X'00')",
+        (cur.lastrowid,),
     )
     index.get_db().commit()
 

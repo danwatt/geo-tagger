@@ -297,7 +297,6 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
             person_id INTEGER REFERENCES persons(id) ON DELETE SET NULL,
             bbox TEXT NOT NULL,
             det_score REAL NOT NULL,
-            embedding BLOB NOT NULL,
             source TEXT NOT NULL DEFAULT 'detected',
             ignored INTEGER NOT NULL DEFAULT 0,
             come_back INTEGER NOT NULL DEFAULT 0,
@@ -326,6 +325,26 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     # still returns every labeled face regardless of this flag.
     if "representative" not in face_cols:
         _db.execute("ALTER TABLE faces ADD COLUMN representative INTEGER NOT NULL DEFAULT 0")
+
+    # Embeddings live in their own table, keyed 1:1 on face_id (which doubles as
+    # its rowid, so a face->embedding lookup is a single B-tree point read) —
+    # same locality rationale as the old photo_exif split: faces is queried far
+    # more often (state/flags, queue scans) than the embedding blob itself is
+    # needed, so keeping it out of faces keeps those scans off the blob pages.
+    _db.execute("""
+        CREATE TABLE IF NOT EXISTS face_embeddings (
+            face_id INTEGER PRIMARY KEY REFERENCES faces(id) ON DELETE CASCADE,
+            embedding BLOB NOT NULL
+        )
+    """)
+    # One-time migration for DBs that predate the split: copy each face's
+    # embedding out, then drop the column. No-op after the first run.
+    if "embedding" in face_cols:
+        _db.execute(
+            "INSERT INTO face_embeddings (face_id, embedding) SELECT id, embedding FROM faces"
+        )
+        _db.execute("ALTER TABLE faces DROP COLUMN embedding")
+
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id)")
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id)")
     _db.execute("CREATE INDEX IF NOT EXISTS idx_faces_ignored ON faces(ignored)")
@@ -1052,17 +1071,24 @@ def replace_faces(photo_id: int, faces: list[dict], det_dimension: int | None = 
         # otherwise dangle (FKs aren't enforced — no cascade). Known, accepted
         # limitation: a rescan drops negatives, same as it already drops
         # assignments (see docstring above).
-        db.execute(
-            f"DELETE FROM face_negatives WHERE face_id IN ({','.join('?' * len(old_ids))})",
-            old_ids,
-        )
+        placeholders = ','.join('?' * len(old_ids))
+        db.execute(f"DELETE FROM face_negatives WHERE face_id IN ({placeholders})", old_ids)
+        db.execute(f"DELETE FROM face_embeddings WHERE face_id IN ({placeholders})", old_ids)
     db.execute("DELETE FROM faces WHERE photo_id=? AND source='detected'", (photo_id,))
     now = time.time()
-    db.executemany(
-        """INSERT INTO faces (photo_id, person_id, bbox, det_score, embedding, source, created_at)
-           VALUES (?, NULL, ?, ?, ?, 'detected', ?)""",
-        [(photo_id, f["bbox"], f["det_score"], f["embedding"], now) for f in faces],
-    )
+    new_ids = []
+    for f in faces:
+        cur = db.execute(
+            """INSERT INTO faces (photo_id, person_id, bbox, det_score, source, created_at)
+               VALUES (?, NULL, ?, ?, 'detected', ?)""",
+            (photo_id, f["bbox"], f["det_score"], now),
+        )
+        new_ids.append(cur.lastrowid)
+    if new_ids:
+        db.executemany(
+            "INSERT INTO face_embeddings (face_id, embedding) VALUES (?, ?)",
+            [(fid, f["embedding"]) for fid, f in zip(new_ids, faces)],
+        )
     db.execute("UPDATE photos SET faces_scanned_at=?, faces_det_dimension=? WHERE id=?",
                (now, det_dimension, photo_id))
     db.commit()
@@ -1088,10 +1114,11 @@ def delete_photo_faces(photo_ids: list[int]) -> int:
         f"SELECT id FROM faces WHERE photo_id IN ({placeholders})", photo_ids
     ).fetchall()]
     if old_ids:
-        # FKs aren't enforced (no cascade) — drop negatives explicitly, same as
-        # replace_faces does for a routine rescan.
+        # FKs aren't enforced (no cascade) — drop negatives and embeddings
+        # explicitly, same as replace_faces does for a routine rescan.
         fplaceholders = ",".join("?" * len(old_ids))
         db.execute(f"DELETE FROM face_negatives WHERE face_id IN ({fplaceholders})", old_ids)
+        db.execute(f"DELETE FROM face_embeddings WHERE face_id IN ({fplaceholders})", old_ids)
         db.execute(f"DELETE FROM faces WHERE id IN ({fplaceholders})", old_ids)
     db.executemany(
         "UPDATE photos SET faces_scanned_at=NULL, faces_det_dimension=NULL WHERE id=?",
@@ -1108,9 +1135,10 @@ def delete_photo_faces(photo_ids: list[int]) -> int:
 def get_faces_for_photo(photo_id: int) -> list[sqlite3.Row]:
     return get_db().execute(
         """SELECT f.id, f.photo_id, f.person_id, f.bbox, f.det_score, f.source,
-                  f.embedding, f.assigned_at, f.ignored, f.come_back, p.name AS person_name,
+                  fe.embedding, f.assigned_at, f.ignored, f.come_back, p.name AS person_name,
                   ph.orientation
            FROM faces f
+           JOIN face_embeddings fe ON fe.face_id = f.id
            LEFT JOIN persons p ON p.id = f.person_id
            JOIN photos ph ON ph.id = f.photo_id
            WHERE f.photo_id=? ORDER BY f.det_score DESC""",
@@ -1128,11 +1156,14 @@ def get_labeled_faces() -> list[sqlite3.Row]:
 
     INDEXED BY forces the labeled rows (a few % of the table) to be found through
     idx_faces_person; without the hint the planner full-scans the faces table —
-    reading every unlabeled face's embedding blob — which is ~6x slower here.
+    which, even with embeddings split out (see face_embeddings), still means a
+    face_embeddings point lookup for every unlabeled row instead of just the
+    labeled few — ~6x slower here.
     """
     return get_db().execute(
-        """SELECT f.person_id, f.embedding, f.bbox, ph.photo_datetime, p.birth_date
+        """SELECT f.person_id, fe.embedding, f.bbox, ph.photo_datetime, p.birth_date
            FROM faces f INDEXED BY idx_faces_person
+           JOIN face_embeddings fe ON fe.face_id = f.id
            JOIN photos ph ON ph.id = f.photo_id
            JOIN persons p ON p.id = f.person_id
            WHERE f.person_id IS NOT NULL"""
@@ -1156,7 +1187,10 @@ def get_labeled_faces_for_person(person_id: int) -> list[sqlite3.Row]:
     representative-cluster picking (faces.compute_representatives_for_person)
     and the group-review page (faces.get_representative_groups)."""
     return get_db().execute(
-        "SELECT id, embedding, representative FROM faces WHERE person_id=?", (person_id,)
+        """SELECT f.id, fe.embedding, f.representative FROM faces f
+           JOIN face_embeddings fe ON fe.face_id = f.id
+           WHERE f.person_id=?""",
+        (person_id,),
     ).fetchall()
 
 
@@ -1275,13 +1309,21 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
             # EXPLAIN QUERY PLAN confirms the switch; measured ~500ms -> <1ms on
             # a sparse window, ~50ms on a window with a full page of matches.
             order_by = "+f.det_score DESC"
+    # Only the unlabeled scope's caller decodes embeddings (to build/refresh the
+    # suggestion matrix) — every other scope just renders face_item dicts. Skip
+    # the face_embeddings join there so those scans (some up to LIMIT 200_000,
+    # e.g. the dedup-groups review) don't pay a point lookup per row for a blob
+    # nothing reads.
+    embed_join = "JOIN face_embeddings fe ON fe.face_id = f.id" if scope == "unlabeled" else ""
+    embed_col = "fe.embedding," if scope == "unlabeled" else ""
     return get_db().execute(
-        f"""SELECT f.id, f.photo_id, f.person_id, f.bbox, f.det_score, f.embedding,
+        f"""SELECT f.id, f.photo_id, f.person_id, f.bbox, f.det_score, {embed_col}
                    f.ignored, f.assigned_at, f.ignored_at, f.come_back, f.come_back_at,
                    p.name AS person_name, ph.filename,
                    ph.photo_datetime, ph.orientation, ph.dir,
                    ph.loc_city, ph.loc_sublocation, ph.loc_state, ph.loc_country
             FROM faces f
+            {embed_join}
             LEFT JOIN persons p ON p.id = f.person_id
             JOIN photos ph ON ph.id = f.photo_id
             {clause}
@@ -1543,7 +1585,9 @@ def ignore_unlabeled_in_photos(photo_ids: list[int]) -> int:
 
 def get_unlabeled_faces() -> list[sqlite3.Row]:
     return get_db().execute(
-        "SELECT id, photo_id, embedding FROM faces WHERE person_id IS NULL"
+        """SELECT f.id, f.photo_id, fe.embedding FROM faces f
+           JOIN face_embeddings fe ON fe.face_id = f.id
+           WHERE f.person_id IS NULL"""
     ).fetchall()
 
 

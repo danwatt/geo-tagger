@@ -118,11 +118,15 @@ def _photo_with_faces(db, path, specs, scanned=True, media_type="image"):
     if scanned:
         db.execute("UPDATE photos SET faces_scanned_at=? WHERE id=?", (time.time(), pid))
     for person_id, ignored in specs:
-        db.execute(
-            "INSERT INTO faces (photo_id, person_id, bbox, det_score, embedding, "
-            "source, ignored, created_at) VALUES (?, ?, '0,0,1,1', 0.9, X'00', "
+        cur = db.execute(
+            "INSERT INTO faces (photo_id, person_id, bbox, det_score, "
+            "source, ignored, created_at) VALUES (?, ?, '0,0,1,1', 0.9, "
             "'detected', ?, 0)",
             (pid, person_id, ignored),
+        )
+        db.execute(
+            "INSERT INTO face_embeddings (face_id, embedding) VALUES (?, X'00')",
+            (cur.lastrowid,),
         )
     db.commit()
     return pid

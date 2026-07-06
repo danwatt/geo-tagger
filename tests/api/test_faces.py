@@ -358,10 +358,13 @@ def test_crowds_groups_and_ignore(client):
     db.execute("UPDATE photos SET faces_scanned_at=1 WHERE id=?", (photo_id,))
     vec = faces_mod.encode_embedding(ff.unit_vectors(np.random.default_rng(7), 1)[0])
     for _ in range(3):
+        cur = db.execute(
+            "INSERT INTO faces (photo_id, person_id, bbox, det_score, "
+            "source, ignored, created_at) VALUES (?, NULL, '0,0,1,1', 0.9, 'detected', 0, 0)",
+            (photo_id,))
         db.execute(
-            "INSERT INTO faces (photo_id, person_id, bbox, det_score, embedding, "
-            "source, ignored, created_at) VALUES (?, NULL, '0,0,1,1', 0.9, ?, 'detected', 0, 0)",
-            (photo_id, vec))
+            "INSERT INTO face_embeddings (face_id, embedding) VALUES (?, ?)",
+            (cur.lastrowid, vec))
     db.commit()
     ff.reset_faces_caches()
 
@@ -396,10 +399,13 @@ def test_crowds_window_filters_photos(client):
         db.execute("UPDATE photos SET faces_scanned_at=1 WHERE id=?", (pid,))
         vec = faces_mod.encode_embedding(ff.unit_vectors(rng, 1)[0])
         for _ in range(3):
+            cur = db.execute(
+                "INSERT INTO faces (photo_id, person_id, bbox, det_score, "
+                "source, ignored, created_at) VALUES (?, NULL, '0,0,1,1', 0.9, 'detected', 0, 0)",
+                (pid,))
             db.execute(
-                "INSERT INTO faces (photo_id, person_id, bbox, det_score, embedding, "
-                "source, ignored, created_at) VALUES (?, NULL, '0,0,1,1', 0.9, ?, 'detected', 0, 0)",
-                (pid, vec))
+                "INSERT INTO face_embeddings (face_id, embedding) VALUES (?, ?)",
+                (cur.lastrowid, vec))
         db.commit()
 
     seed_crowd("crowd2015.jpg", ff.epoch(2015, 6, 1))

@@ -145,13 +145,18 @@ def _insert_faces(db, embeddings: np.ndarray, person_id: int | None,
             "SELECT id FROM photos WHERE dir=? AND filename=?", ("/test", f"face_{n}.jpg")
         ).fetchone()[0]
         cur = db.execute(
-            """INSERT INTO faces (photo_id, person_id, bbox, det_score, embedding,
+            """INSERT INTO faces (photo_id, person_id, bbox, det_score,
                                   source, ignored, created_at, assigned_at)
-               VALUES (?, ?, ?, ?, ?, 'detected', 0, ?, ?)""",
-            (photo_id, person_id, _BBOX, det_score, faces.encode_embedding(vec),
+               VALUES (?, ?, ?, ?, 'detected', 0, ?, ?)""",
+            (photo_id, person_id, _BBOX, det_score,
              now, now if person_id is not None else None),
         )
-        face_ids.append(cur.lastrowid)
+        face_id = cur.lastrowid
+        db.execute(
+            "INSERT INTO face_embeddings (face_id, embedding) VALUES (?, ?)",
+            (face_id, faces.encode_embedding(vec)),
+        )
+        face_ids.append(face_id)
     db.commit()
     return face_ids
 
