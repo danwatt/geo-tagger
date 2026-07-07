@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Search - Geo-Tagger</title>
+<link rel="stylesheet" href="style.css"/>
+<link rel="stylesheet" href="face-grid.css"/>
+<link rel="stylesheet" href="search.css"/>
+</head>
+<body>
+<div id="toolbar">
+  <div class="toolbar-group" id="app-nav" data-active="search"></div>
+</div>
+
+<div id="search-form">
+  <div class="search-field">
+    <label for="date-from">From</label>
+    <input type="date" id="date-from"/>
+  </div>
+  <div class="search-field">
+    <label for="date-to">To</label>
+    <input type="date" id="date-to"/>
+  </div>
+  <div class="search-field">
+    <label for="location-input">Location</label>
+    <input type="text" id="location-input" placeholder="City, state, country…"/>
+  </div>
+  <div class="search-field">
+    <label for="geotagged-select">Geotagged</label>
+    <select id="geotagged-select">
+      <option value="all">Any</option>
+      <option value="yes">Geotagged only</option>
+      <option value="no">Not geotagged</option>
+    </select>
+  </div>
+  <div class="search-field search-field-people">
+    <label for="person-picker-input">People</label>
+    <div id="person-chips"></div>
+    <input type="text" id="person-picker-input" placeholder="Add a person…" autocomplete="off"/>
+    <div id="person-suggest" style="display:none"></div>
+  </div>
+  <div class="search-field search-field-mode" id="person-mode-field" style="display:none">
+    <label for="person-mode-select">Match</label>
+    <select id="person-mode-select" title="'Together' requires every selected person to appear in the same photo">
+      <option value="all">Together (same photo)</option>
+      <option value="any">Any of them</option>
+    </select>
+  </div>
+  <div class="search-field search-field-actions">
+    <button id="search-btn" class="primary">🔎 Search</button>
+    <button id="clear-btn">Clear</button>
+  </div>
+</div>
+
+<div id="timeline" style="display:none">
+  <canvas id="hist-canvas"></canvas>
+  <input id="range-lo" class="hist-range" type="range" min="0" max="1000" value="0"/>
+  <input id="range-hi" class="hist-range" type="range" min="0" max="1000" value="1000"/>
+  <div id="hist-labels">
+    <span id="hist-label-lo"></span>
+    <span id="hist-label-hi"></span>
+  </div>
+</div>
+
+<div id="main">
+  <div id="grid-pane">
+    <div id="grid-nav">
+      <div class="toolbar-group">
+        <span id="search-summary"></span>
+      </div>
+      <div class="toolbar-spacer"></div>
+      <div class="toolbar-group" id="selection-group" style="display:none">
+        <span id="selection-count"></span>
+        <button id="download-selected-btn" class="primary">⬇ Download ZIP</button>
+        <button id="clear-selection-btn">Clear selection</button>
+      </div>
+    </div>
+    <div id="grid"></div>
+  </div>
+  <div id="detail-pane">
+    <div id="detail-placeholder">Select a photo to view details</div>
+    <div id="detail-content" style="display:none">
+      <img id="detail-img" src="" alt="Preview"/>
+      <div id="detail-actions" style="display:none">
+        <button id="view-fullsize-btn" title="Decode the RAW at full resolution and open it (with face boxes) in a new tab">🔍 View full size (RAW)</button>
+      </div>
+      <table id="detail-meta"></table>
+    </div>
+  </div>
+</div>
+
+<div id="status-bar"></div>
+
+<script src="face-grid.js"></script>
+<script src="photo-fullsize.js"></script>
+<script src="nav.js"></script>
+<script src="search.js"></script>
+</body>
+</html>

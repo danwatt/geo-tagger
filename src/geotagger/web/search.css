@@ -1,0 +1,117 @@
+/* Search page: filter form + two-column results (grid 66% / preview 33%,
+ * reusing #grid-pane / #detail-pane / .thumb-cell / .face-group-* from
+ * style.css and face-grid.css). */
+
+#search-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 14px;
+  padding: 10px 12px;
+  background: #202020;
+  border-bottom: 1px solid #333;
+  flex-shrink: 0;
+}
+
+.search-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  position: relative;
+}
+
+.search-field label {
+  font-size: 11px;
+  color: #999;
+}
+
+.search-field input[type="text"],
+.search-field input[type="date"],
+.search-field select {
+  padding: 5px 8px;
+  border: 1px solid #444;
+  border-radius: 4px;
+  background: #333;
+  color: #eee;
+  font-size: 12px;
+}
+
+#location-input { width: 180px; }
+
+.search-field-people { min-width: 220px; }
+
+#person-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+#person-chips:empty { display: none; }
+
+.person-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px 2px 9px;
+  border-radius: 12px;
+  background: #2a4a6e;
+  border: 1px solid #4a90d9;
+  color: #cfe6ff;
+  font-size: 11px;
+}
+.person-chip button {
+  border: none;
+  background: none;
+  color: #cfe6ff;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+  line-height: 1;
+}
+.person-chip button:hover { color: #fff; }
+
+#person-suggest {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 50;
+  margin-top: 2px;
+  width: 220px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: #2a2a2a;
+  border: 1px solid #4a90d9;
+  border-radius: 5px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.8);
+}
+.person-suggest-item {
+  padding: 6px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.person-suggest-item:hover,
+.person-suggest-item.hl { background: #2a4a6e; }
+.person-suggest-empty {
+  padding: 8px;
+  font-size: 11px;
+  color: #888;
+}
+
+.search-field-actions {
+  flex-direction: row;
+  gap: 6px;
+}
+
+/* ── Two-column results: 66% grid / 33% preview ── */
+#main {
+  grid-template-columns: 2fr 1fr;
+}
+
+#search-summary {
+  font-size: 12px;
+  color: #999;
+}
+
+#selection-count {
+  font-size: 12px;
+  color: #ccc;
+}

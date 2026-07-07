@@ -4,6 +4,7 @@ timestamp correction."""
 import asyncio
 import logging
 import time
+from io import BytesIO
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -359,3 +360,49 @@ async def api_update_times(req: UpdateTimesRequest):
     loop = asyncio.get_running_loop()
     updated = await loop.run_in_executor(get_executor(), photos_service.update_photo_times, req.updates)
     return {"updated": updated}
+
+
+class DownloadZipRequest(BaseModel):
+    photo_ids: list[int]
+
+
+def _build_zip(photo_ids: list[int]) -> bytes:
+    """Zip up the original (full-quality, potentially RAW) files for the given
+    photo ids. Runs in the executor — reads whole files off disk. Duplicate
+    filenames (e.g. same name in different directories) get a numeric suffix
+    so nothing is silently overwritten inside the archive."""
+    import zipfile
+
+    buf = BytesIO()
+    used_names: dict[str, int] = {}
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
+        for pid in photo_ids:
+            row = index.get_photo(pid)
+            if not row:
+                continue
+            src = Path(index.photo_path(row))
+            if not src.is_file():
+                continue
+            name = row["filename"]
+            if name in used_names:
+                used_names[name] += 1
+                stem, ext = Path(name).stem, Path(name).suffix
+                name = f"{stem} ({used_names[name]}){ext}"
+            else:
+                used_names[name] = 0
+            zf.write(src, arcname=name)
+    return buf.getvalue()
+
+
+@router.post("/api/photos/download-zip")
+async def api_download_zip(req: DownloadZipRequest):
+    """Bundle the selected photos' original files (full quality, RAW included
+    as-is) into a ZIP archive for download."""
+    if not req.photo_ids:
+        raise HTTPException(400, "photo_ids must not be empty")
+    loop = asyncio.get_running_loop()
+    data = await loop.run_in_executor(get_executor(), _build_zip, req.photo_ids)
+    return Response(
+        content=data, media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="photos-{len(req.photo_ids)}.zip"'},
+    )

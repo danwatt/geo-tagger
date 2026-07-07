@@ -102,3 +102,55 @@ def test_photo_detail(client):
     assert p["id"] == pid
     assert p["filename"] == "d.jpg"
     assert p["lat"] == 10 and p["lng"] == 20
+
+
+def _add_real_file(tmp_path, name, content=b"fake-photo-bytes"):
+    p = tmp_path / name
+    p.write_bytes(content)
+    index.upsert_photo(
+        filename=name, dir_=str(tmp_path), ext=p.suffix, media_type="image",
+        mtime=1.0, size=len(content), lat=None, lng=None,
+        geotag_source="none", sidecar_path=None, sidecar_mtime=None, orientation=1,
+    )
+    return index.get_db().execute(
+        "SELECT id FROM photos WHERE dir=? AND filename=?", (str(tmp_path), name)
+    ).fetchone()[0]
+
+
+def test_download_zip(client, tmp_path):
+    import zipfile
+    from io import BytesIO
+
+    id1 = _add_real_file(tmp_path, "a.jpg", b"AAAA")
+    id2 = _add_real_file(tmp_path, "b.raw", b"BBBB")
+
+    r = client.post("/api/photos/download-zip", json={"photo_ids": [id1, id2]})
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/zip"
+    zf = zipfile.ZipFile(BytesIO(r.content))
+    names = sorted(zf.namelist())
+    assert names == ["a.jpg", "b.raw"]
+    assert zf.read("a.jpg") == b"AAAA"
+    assert zf.read("b.raw") == b"BBBB"
+
+
+def test_download_zip_empty_400(client):
+    r = client.post("/api/photos/download-zip", json={"photo_ids": []})
+    assert r.status_code == 400
+
+
+def test_download_zip_dedupes_duplicate_filenames(client, tmp_path):
+    import zipfile
+    from io import BytesIO
+
+    dir1 = tmp_path / "d1"
+    dir2 = tmp_path / "d2"
+    dir1.mkdir()
+    dir2.mkdir()
+    id1 = _add_real_file(dir1, "same.jpg", b"ONE")
+    id2 = _add_real_file(dir2, "same.jpg", b"TWO")
+
+    r = client.post("/api/photos/download-zip", json={"photo_ids": [id1, id2]})
+    assert r.status_code == 200
+    zf = zipfile.ZipFile(BytesIO(r.content))
+    assert sorted(zf.namelist()) == ["same (1).jpg", "same.jpg"]

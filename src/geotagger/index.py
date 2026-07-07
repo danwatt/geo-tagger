@@ -616,6 +616,90 @@ def get_photo(photo_id: int) -> sqlite3.Row | None:
     return get_db().execute("SELECT * FROM photos WHERE id=?", (photo_id,)).fetchone()
 
 
+def search_photos(date_from: str | None = None, date_to: str | None = None,
+                  bbox: str | None = None, location: str | None = None,
+                  person_ids: list[int] | None = None, person_mode: str = "all",
+                  geotagged: str = "all", limit: int = 2000) -> list[sqlite3.Row]:
+    """Flexible multi-criteria photo search: date range, location (bbox and/or a
+    free-text match against the reverse-geocoded place columns), and people.
+
+    ``person_ids``/``person_mode`` answers "find photos with these people" —
+    person_mode='all' requires every listed person to have an (assigned,
+    non-ignored) face in the same photo (e.g. two people together);
+    person_mode='any' matches a photo containing at least one of them.
+    Every criterion is optional and they combine with AND.
+    """
+    db = get_db()
+    clauses: list[str] = []
+    params: list = []
+
+    if geotagged == "yes":
+        clauses.append("(lat IS NOT NULL OR geocode_ignored = 1)")
+    elif geotagged == "no":
+        clauses.append("lat IS NULL AND geocode_ignored = 0")
+
+    if date_from:
+        try:
+            from datetime import datetime
+            ts = int(datetime.strptime(date_from, "%Y-%m-%d").timestamp())
+            clauses.append("photo_datetime >= ?")
+            params.append(ts)
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            from datetime import datetime
+            # Add 24 hours to include the entire day
+            ts = int(datetime.strptime(date_to, "%Y-%m-%d").timestamp()) + 86400
+            clauses.append("photo_datetime < ?")
+            params.append(ts)
+        except ValueError:
+            pass
+
+    if bbox:
+        # bbox=minLng,minLat,maxLng,maxLat
+        try:
+            from geotagger.contexts import normalize_lng_bbox
+            min_lng, min_lat, max_lng, max_lat = map(float, bbox.split(","))
+            min_lng, max_lng = normalize_lng_bbox(min_lng, max_lng)
+            clauses.append("lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?")
+            params += [min_lat, max_lat, min_lng, max_lng]
+        except ValueError:
+            pass
+
+    if location and location.strip():
+        like = f"%{location.strip()}%"
+        clauses.append(
+            "(loc_city LIKE ? OR loc_sublocation LIKE ? OR loc_state LIKE ? "
+            "OR loc_county LIKE ? OR loc_country LIKE ?)"
+        )
+        params += [like, like, like, like, like]
+
+    if person_ids:
+        import json as _json
+        ids_json = _json.dumps(person_ids)
+        if person_mode == "any":
+            clauses.append(
+                "id IN (SELECT DISTINCT photo_id FROM faces "
+                "WHERE person_id IN (SELECT value FROM json_each(?)) AND ignored = 0)"
+            )
+            params.append(ids_json)
+        else:
+            # 'all': every requested person must appear (as a distinct assigned
+            # face) in the same photo — e.g. "photos with both Alice and Bob".
+            clauses.append(
+                "id IN (SELECT photo_id FROM faces "
+                "WHERE person_id IN (SELECT value FROM json_each(?)) AND ignored = 0 "
+                "GROUP BY photo_id HAVING COUNT(DISTINCT person_id) = ?)"
+            )
+            params += [ids_json, len(set(person_ids))]
+
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    sql = f"SELECT * FROM photos {where} ORDER BY photo_datetime, filename LIMIT ?"
+    params.append(limit)
+    return db.execute(sql, params).fetchall()
+
+
 # ── Checksums ──
 
 def get_photos_missing_checksum(limit: int | None = None) -> list[sqlite3.Row]:

@@ -2,6 +2,7 @@
 (function () {
   const ITEMS = [
     { key: "home", label: "🏠 Home", href: "/" },
+    { key: "search", label: "🔎 Search", href: "/search.html" },
     { key: "geocode", label: "📍 Geocode", href: "/geocode.html" },
     { key: "quick-geocode", label: "⚡ Quick Geocode", href: "/quick-geocode.html" },
     { key: "map", label: "🌍 Places DB", href: "/map.html" },
