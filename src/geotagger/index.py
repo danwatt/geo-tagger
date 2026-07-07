@@ -440,6 +440,10 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
 
     # Create index on photo_datetime for fast time-based queries
     _db.execute("CREATE INDEX IF NOT EXISTS idx_photos_datetime ON photos(photo_datetime)")
+    # Serves get_face_coverage / get_crowd_photos / faces-months, all filtering
+    # WHERE media_type='image' AND faces_scanned_at IS NOT NULL before joining
+    # faces — lets that filter use an index seek instead of a full photos scan.
+    _db.execute("CREATE INDEX IF NOT EXISTS idx_photos_facescan ON photos(media_type, faces_scanned_at)")
 
     _db.commit()
     return _db

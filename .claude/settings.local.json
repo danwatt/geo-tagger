@@ -31,7 +31,10 @@
       "Bash(cp \"C:/temp/geotagger/prod/index.db\" /tmp/geo_scratch/index_test.db)",
       "Bash(python3 -c ' *)",
       "Bash(rm -f /c/Users/danwa/AppData/Local/Temp/vactest*.db)",
-      "Bash(rm -f /tmp/vactest*.db)"
+      "Bash(rm -f /tmp/vactest*.db)",
+      "Bash(rtk ls *)",
+      "Bash(rtk read *)",
+      "Bash(git -C \"C:\\\\Users\\\\danwa\\\\PycharmProjects\\\\geo-tagger\" ls-files)"
     ]
   }
 }
