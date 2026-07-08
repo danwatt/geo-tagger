@@ -269,6 +269,10 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
 
     # People the user has named. Faces get linked to a person once confirmed.
     # birth_date (ISO YYYY-MM-DD, optional) powers age-aware suggestions.
+    # not_before/not_after (ISO YYYY-MM-DD, optional) further bound the window a
+    # person can appear in — e.g. a person known to only show up in photos from
+    # 2010 onward, or who stopped appearing after a given date — independent of
+    # (and in addition to) the birth-date exclusion.
     _db.execute("""
         CREATE TABLE IF NOT EXISTS persons (
             id INTEGER PRIMARY KEY,
@@ -282,6 +286,10 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
         _db.execute("ALTER TABLE persons ADD COLUMN birth_date TEXT")
     if "family_id" not in _person_cols:
         _db.execute("ALTER TABLE persons ADD COLUMN family_id INTEGER REFERENCES families(id) ON DELETE SET NULL")
+    if "not_before" not in _person_cols:
+        _db.execute("ALTER TABLE persons ADD COLUMN not_before TEXT")
+    if "not_after" not in _person_cols:
+        _db.execute("ALTER TABLE persons ADD COLUMN not_after TEXT")
 
     # One row per detected face. bbox is normalized (0..1) to the detection
     # image so it maps onto any rendition. embedding is a raw float32 vector.
@@ -1253,7 +1261,8 @@ def get_labeled_faces() -> list[sqlite3.Row]:
     labeled few — ~6x slower here.
     """
     return get_db().execute(
-        """SELECT f.person_id, fe.embedding, f.bbox, ph.photo_datetime, p.birth_date
+        """SELECT f.person_id, fe.embedding, f.bbox, ph.photo_datetime,
+                  p.birth_date, p.not_before, p.not_after
            FROM faces f INDEXED BY idx_faces_person
            JOIN face_embeddings fe ON fe.face_id = f.id
            JOIN photos ph ON ph.id = f.photo_id
@@ -1826,8 +1835,8 @@ def get_persons(start_ts: int | None = None, end_ts: int | None = None,
     """
     if start_ts is None and end_ts is None and photo_ids is None:
         return get_db().execute(
-            """SELECT p.id, p.name, p.birth_date, p.created_at, p.family_id,
-                      fam.name AS family_name
+            """SELECT p.id, p.name, p.birth_date, p.not_before, p.not_after,
+                      p.created_at, p.family_id, fam.name AS family_name
                FROM persons p
                LEFT JOIN families fam ON fam.id = p.family_id
                ORDER BY p.name"""
@@ -1848,8 +1857,8 @@ def get_persons(start_ts: int | None = None, end_ts: int | None = None,
     where = " AND ".join(conds)
     join = "JOIN photos ph ON ph.id = f.photo_id" if needs_photos else ""
     return get_db().execute(
-        f"""SELECT p.id, p.name, p.birth_date, p.created_at, p.family_id,
-                   fam.name AS family_name
+        f"""SELECT p.id, p.name, p.birth_date, p.not_before, p.not_after,
+                   p.created_at, p.family_id, fam.name AS family_name
             FROM persons p
             LEFT JOIN families fam ON fam.id = p.family_id
             WHERE p.id IN (SELECT f.person_id FROM faces f {join} WHERE {where})
@@ -1864,6 +1873,24 @@ def set_person_birth_date(person_id: int, birth_date: str | None):
     db.execute("UPDATE persons SET birth_date=? WHERE id=?", (birth_date, person_id))
     db.commit()
     bump_faces_generation()  # gallery birth_times feed suggestion scores
+
+
+def set_person_not_before(person_id: int, not_before: str | None):
+    """Set (or clear, with None) a person's ISO YYYY-MM-DD not-before date —
+    photos taken before this date never match this person."""
+    db = get_db()
+    db.execute("UPDATE persons SET not_before=? WHERE id=?", (not_before, person_id))
+    db.commit()
+    bump_faces_generation()  # gallery not_before_times feed suggestion scores
+
+
+def set_person_not_after(person_id: int, not_after: str | None):
+    """Set (or clear, with None) a person's ISO YYYY-MM-DD not-after date —
+    photos taken after this date never match this person."""
+    db = get_db()
+    db.execute("UPDATE persons SET not_after=? WHERE id=?", (not_after, person_id))
+    db.commit()
+    bump_faces_generation()  # gallery not_after_times feed suggestion scores
 
 
 def rename_person(person_id: int, name: str):

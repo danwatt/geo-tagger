@@ -232,6 +232,47 @@ function makePersonRow(p) {
   });
   birthTd.appendChild(birthInput);
 
+  // ── Not before / Not after ──
+  const notBeforeTd = document.createElement("td");
+  notBeforeTd.className = "col-not-before";
+  const notBeforeInput = document.createElement("input");
+  notBeforeInput.type = "date";
+  notBeforeInput.className = "edit-input";
+  notBeforeInput.value = p.not_before || "";
+  notBeforeInput.title = "No photos of this person before this date (YYYY-MM-DD)";
+  notBeforeInput.addEventListener("change", async () => {
+    const not_before = notBeforeInput.value || null;
+    try {
+      await api("PATCH", `/api/persons/${p.id}`, { not_before });
+      p.not_before = not_before;
+      toast(not_before ? `Not-before date set` : `Not-before date cleared`);
+    } catch (e) {
+      notBeforeInput.value = p.not_before || "";
+      toast("Save failed: " + e.message, true);
+    }
+  });
+  notBeforeTd.appendChild(notBeforeInput);
+
+  const notAfterTd = document.createElement("td");
+  notAfterTd.className = "col-not-after";
+  const notAfterInput = document.createElement("input");
+  notAfterInput.type = "date";
+  notAfterInput.className = "edit-input";
+  notAfterInput.value = p.not_after || "";
+  notAfterInput.title = "No photos of this person after this date (YYYY-MM-DD)";
+  notAfterInput.addEventListener("change", async () => {
+    const not_after = notAfterInput.value || null;
+    try {
+      await api("PATCH", `/api/persons/${p.id}`, { not_after });
+      p.not_after = not_after;
+      toast(not_after ? `Not-after date set` : `Not-after date cleared`);
+    } catch (e) {
+      notAfterInput.value = p.not_after || "";
+      toast("Save failed: " + e.message, true);
+    }
+  });
+  notAfterTd.appendChild(notAfterInput);
+
   // ── Family ──
   const familyTd = document.createElement("td");
   familyTd.className = "col-family";
@@ -277,7 +318,7 @@ function makePersonRow(p) {
   delBtn.addEventListener("click", () => deletePerson(p));
   actTd.appendChild(delBtn);
 
-  tr.append(nameTd, birthTd, familyTd, facesTd, actTd);
+  tr.append(nameTd, birthTd, notBeforeTd, notAfterTd, familyTd, facesTd, actTd);
   return tr;
 }
 

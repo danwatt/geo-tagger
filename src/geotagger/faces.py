@@ -157,7 +157,8 @@ def detect_and_store(photo_row) -> int:
 # ── Recognition (nearest-neighbour over labeled faces) ──
 
 def _birth_ts(birth_date: str | None) -> float:
-    """ISO YYYY-MM-DD → epoch seconds (UTC, matching photo_datetime), or NaN."""
+    """ISO YYYY-MM-DD → epoch seconds (UTC, matching photo_datetime), or NaN.
+    Also used for the not_before/not_after person date bounds — same format."""
     if not birth_date:
         return float("nan")
     try:
@@ -170,32 +171,41 @@ def _birth_ts(birth_date: str | None) -> float:
 
 class Gallery:
     """In-memory matrix of confirmed-face embeddings for fast cosine matching,
-    plus each example's photo time and its person's birth time for age math."""
+    plus each example's photo time and its person's birth/not-before/not-after
+    times for age math and date-window exclusion."""
 
     def __init__(self, embeddings: np.ndarray, person_ids: np.ndarray,
-                 face_times: np.ndarray, birth_times: np.ndarray):
+                 face_times: np.ndarray, birth_times: np.ndarray,
+                 not_before_times: np.ndarray, not_after_times: np.ndarray):
         self._n = len(person_ids)
 
         # Pre-sorted by person_id for vectorized reduceat reduction in the hot path.
         # Built once at gallery-build time; the sort is O(N log N) but amortised
         # across every suggestion call until the gallery generation changes.
-        # The originals (embeddings, person_ids, face_times, birth_times) are NOT
-        # stored — the sorted copies below replace them everywhere, saving ~44 MB of
-        # duplicate embedding storage per gallery.
+        # The originals (embeddings, person_ids, face_times, birth_times,
+        # not_before_times, not_after_times) are NOT stored — the sorted copies
+        # below replace them everywhere, saving ~44 MB of duplicate embedding
+        # storage per gallery.
         if self._n > 0:
-            # Sort so that all faces of birth-date-having persons form a contiguous
-            # prefix [0 .. _K_birth). Since birth dates are per-person (uniform
-            # across each person's faces), this keeps each person's group intact.
-            # Within each half the secondary sort is person_id ascending, so groups
-            # are still contiguous for reduceat.  Contiguous prefix → age-adjustment
-            # ops use scores[:_K_birth] (a view, no copy) instead of fancy indexing.
+            # Sort so that all faces of date-bounded persons (birth date and/or
+            # not_before and/or not_after) form a contiguous prefix [0 .. _K_bound).
+            # Since these are per-person (uniform across each person's faces), this
+            # keeps each person's group intact. Within each half the secondary sort
+            # is person_id ascending, so groups are still contiguous for reduceat.
+            # Contiguous prefix → date-adjustment ops use scores[:_K_bound] (a
+            # view, no copy) instead of fancy indexing.
             has_birth_f = ~np.isnan(birth_times)
-            not_birth_k = (~has_birth_f).astype(np.int8)        # 0=birth-dated, 1=not
-            order = np.lexsort((person_ids, not_birth_k))
+            has_nb_f    = ~np.isnan(not_before_times)
+            has_na_f    = ~np.isnan(not_after_times)
+            has_bound_f = has_birth_f | has_nb_f | has_na_f
+            not_bound_k = (~has_bound_f).astype(np.int8)        # 0=date-bounded, 1=not
+            order = np.lexsort((person_ids, not_bound_k))
 
             self._s_embs  = np.ascontiguousarray(embeddings[order], dtype=np.float32)
             self._s_ft_yr = (face_times[order]  / YEAR_SECONDS).astype(np.float32)
             self._s_bt_yr = (birth_times[order] / YEAR_SECONDS).astype(np.float32)
+            self._s_nb_yr = (not_before_times[order] / YEAR_SECONDS).astype(np.float32)
+            self._s_na_yr = (not_after_times[order]  / YEAR_SECONDS).astype(np.float32)
             sorted_pids = person_ids[order]
             # Group boundaries: detect person-id changes in the custom-sorted array.
             changes = np.concatenate(([True], sorted_pids[1:] != sorted_pids[:-1]))
@@ -213,25 +223,39 @@ class Gallery:
             self._gs_list: list[int] = self._group_starts.tolist()
             self._ge_list: list[int] = self._gs_list[1:] + [self._n]
 
-            # Birth-prefix metadata — views into the first _K_birth rows.
-            self._K_birth    = int(has_birth_f.sum())
-            self._bt_yr_birth = self._s_bt_yr[:self._K_birth]   # (K_b,) birth year view
+            # Date-bound-prefix metadata — views into the first _K_bound rows.
+            self._K_bound     = int(has_bound_f.sum())
+            self._bt_yr_birth = self._s_bt_yr[:self._K_bound]   # (K_b,) birth year view
+            self._nb_yr_bound = self._s_nb_yr[:self._K_bound]   # (K_b,) not_before year view
+            self._na_yr_bound = self._s_na_yr[:self._K_bound]   # (K_b,) not_after year view
+            self._has_birth_bound = ~np.isnan(self._bt_yr_birth)
+            self._has_nb_bound    = ~np.isnan(self._nb_yr_bound)
+            self._has_na_bound    = ~np.isnan(self._na_yr_bound)
             self._age_f_birth = (                                 # (K_b,) face-age-at-photo
-                self._s_ft_yr[:self._K_birth] - self._s_bt_yr[:self._K_birth]
+                self._s_ft_yr[:self._K_bound] - self._s_bt_yr[:self._K_bound]
             )
-            self._has_ft_birth = ~np.isnan(self._s_ft_yr[:self._K_birth])  # (K_b,) bool
+            # Can apply the birth age-gap penalty only where BOTH birth date and
+            # this example's photo date are known.
+            self._can_pen_birth = self._has_birth_bound & ~np.isnan(self._s_ft_yr[:self._K_bound])
         else:
             dim = embeddings.shape[1] if embeddings.ndim == 2 and len(embeddings) else EMBED_DIM
             self._s_embs       = np.empty((0, dim), np.float32)
             self._s_ft_yr      = np.empty(0, np.float32)
             self._s_bt_yr      = np.empty(0, np.float32)
+            self._s_nb_yr      = np.empty(0, np.float32)
+            self._s_na_yr      = np.empty(0, np.float32)
             self._group_starts = np.empty(0, np.intp)
             self._uniq_pids    = np.empty(0, np.int64)
             self._pid_to_group = {}
-            self._K_birth      = 0
+            self._K_bound      = 0
             self._bt_yr_birth  = np.empty(0, np.float32)
+            self._nb_yr_bound  = np.empty(0, np.float32)
+            self._na_yr_bound  = np.empty(0, np.float32)
+            self._has_birth_bound = np.empty(0, bool)
+            self._has_nb_bound    = np.empty(0, bool)
+            self._has_na_bound    = np.empty(0, bool)
             self._age_f_birth  = np.empty(0, np.float32)
-            self._has_ft_birth = np.empty(0, bool)
+            self._can_pen_birth = np.empty(0, bool)
             self._gs_list: list[int] = []
             self._ge_list: list[int] = []
 
@@ -325,14 +349,17 @@ def build_gallery() -> Gallery:
         labeled = [r for r in labeled if _bbox_area(r["bbox"]) >= min_area]
     if not labeled:
         z = np.zeros((0,), np.float64)
-        gallery = Gallery(np.zeros((0, EMBED_DIM), np.float32), np.zeros((0,), np.int64), z, z)
+        gallery = Gallery(np.zeros((0, EMBED_DIM), np.float32), np.zeros((0,), np.int64),
+                          z, z, z, z)
     else:
         embs = _embeddings_matrix(labeled)
         pids = np.array([r["person_id"] for r in labeled], dtype=np.int64)
         ftimes = np.array([float(r["photo_datetime"]) if r["photo_datetime"] else np.nan
                            for r in labeled], dtype=np.float64)
         births = np.array([_birth_ts(r["birth_date"]) for r in labeled], dtype=np.float64)
-        gallery = Gallery(embs, pids, ftimes, births)
+        not_befores = np.array([_birth_ts(r["not_before"]) for r in labeled], dtype=np.float64)
+        not_afters = np.array([_birth_ts(r["not_after"]) for r in labeled], dtype=np.float64)
+        gallery = Gallery(embs, pids, ftimes, births, not_befores, not_afters)
     _gallery_cache = (gen, gallery)
     return gallery
 
@@ -461,7 +488,10 @@ def match_embedding(vec: np.ndarray, photo_datetime, gallery: Gallery,
     unknown face is dated and a candidate has a birth date, two age rules apply:
     a photo predating the person's birth excludes them outright, and examples
     taken at a very different age than the unknown are penalized — so a baby
-    photo is matched against baby examples, not 5-year-old ones.
+    photo is matched against baby examples, not 5-year-old ones. A candidate
+    with a not_before/not_after window is likewise excluded outright if the
+    unknown's photo date falls outside that window (independent of birth date —
+    e.g. a person known to only appear in photos from a certain year onward).
     Each person is scored by their single best example after adjustment.
     ``exclude`` is a set of person_ids to drop from the ranking entirely (this
     single face's negatives — the caller looks them up by face_id, since this
@@ -475,12 +505,17 @@ def match_embedding(vec: np.ndarray, photo_datetime, gallery: Gallery,
 
     if photo_datetime:
         tu_yr     = np.float32(float(photo_datetime) / YEAR_SECONDS)
+        tol       = np.float32(config.FACE_BIRTH_TOLERANCE_YEARS)
         has_birth = ~np.isnan(gallery._s_bt_yr)
         has_ft    = ~np.isnan(gallery._s_ft_yr)
         can_pen   = has_birth & has_ft
         age_u     = tu_yr - gallery._s_bt_yr          # (N,) f32: unknown's age per example
         age_f     = gallery._s_ft_yr - gallery._s_bt_yr   # (N,) f32: example's age
-        excl      = has_birth & (age_u < np.float32(-config.FACE_BIRTH_TOLERANCE_YEARS))
+        excl      = has_birth & (age_u < -tol)
+        has_nb    = ~np.isnan(gallery._s_nb_yr)
+        has_na    = ~np.isnan(gallery._s_na_yr)
+        excl     |= has_nb & (tu_yr < gallery._s_nb_yr - tol)
+        excl     |= has_na & (tu_yr > gallery._s_na_yr + tol)
         gap       = np.abs(age_u - age_f)
         penalty   = np.minimum(gap, np.float32(config.FACE_AGE_PENALTY_CAP_YEARS))
         penalty  *= np.float32(config.FACE_AGE_PENALTY_PER_YEAR)
@@ -536,29 +571,43 @@ def _best_per_person_f32(gallery: Gallery,
     """(P, u) float32 best age-adjusted cosine per person per unknown.
 
     All float32 throughout and ``np.maximum.reduceat`` for the per-group max.
-    The gallery is sorted so birth-date-having persons occupy a contiguous
-    prefix [0 .. _K_birth).  Age-adjustment ops use ``scores[:_K_birth]`` —
-    a plain slice (a VIEW, not a copy), so in-place edits feed through to
-    ``scores`` with no scatter/gather overhead.
+    The gallery is sorted so date-bounded persons (birth date and/or
+    not_before/not_after) occupy a contiguous prefix [0 .. _K_bound).
+    Age-adjustment ops use ``scores[:_K_bound]`` — a plain slice (a VIEW, not a
+    copy), so in-place edits feed through to ``scores`` with no scatter/gather
+    overhead.
     """
     scores = gallery._s_embs @ unknowns.T   # (N, u) float32
 
-    K_b = gallery._K_birth
+    K_b = gallery._K_bound
     if K_b > 0:
         dated = ~np.isnan(times)
         if dated.any():
             times_yr  = (times / YEAR_SECONDS).astype(np.float32)               # (u,)
             scores_b  = scores[:K_b]                                             # VIEW, no copy
-            age_u     = times_yr[None, :] - gallery._bt_yr_birth[:, None]       # (K_b, u)
-            excl      = (age_u < np.float32(-config.FACE_BIRTH_TOLERANCE_YEARS)) & dated[None, :]
-            # Reuse age_u as the penalty array (saves K_b × u × 4 bytes).
-            age_u -= gallery._age_f_birth[:, None]
-            np.abs(age_u, out=age_u)
-            np.minimum(age_u, np.float32(config.FACE_AGE_PENALTY_CAP_YEARS), out=age_u)
-            age_u *= np.float32(config.FACE_AGE_PENALTY_PER_YEAR)
-            # Apply where face has BOTH birth date AND a known photo datetime.
-            can_b = gallery._has_ft_birth[:, None] & dated[None, :]
-            np.subtract(scores_b, age_u, where=can_b, out=scores_b)  # in-place on view
+            tol       = np.float32(config.FACE_BIRTH_TOLERANCE_YEARS)
+            excl      = np.zeros((K_b, times_yr.shape[0]), dtype=bool)
+
+            if gallery._has_birth_bound.any():
+                age_u = times_yr[None, :] - gallery._bt_yr_birth[:, None]       # (K_b, u)
+                excl |= (gallery._has_birth_bound[:, None] & dated[None, :]
+                          & (age_u < -tol))
+                # Reuse age_u as the penalty array (saves K_b × u × 4 bytes).
+                age_u -= gallery._age_f_birth[:, None]
+                np.abs(age_u, out=age_u)
+                np.minimum(age_u, np.float32(config.FACE_AGE_PENALTY_CAP_YEARS), out=age_u)
+                age_u *= np.float32(config.FACE_AGE_PENALTY_PER_YEAR)
+                # Apply where face has BOTH birth date AND a known photo datetime.
+                can_b = gallery._can_pen_birth[:, None] & dated[None, :]
+                np.subtract(scores_b, age_u, where=can_b, out=scores_b)  # in-place on view
+
+            if gallery._has_nb_bound.any():
+                excl |= (gallery._has_nb_bound[:, None] & dated[None, :]
+                          & (times_yr[None, :] < gallery._nb_yr_bound[:, None] - tol))
+            if gallery._has_na_bound.any():
+                excl |= (gallery._has_na_bound[:, None] & dated[None, :]
+                          & (times_yr[None, :] > gallery._na_yr_bound[:, None] + tol))
+
             scores_b[excl] = np.float32(-np.inf)
 
     gs = gallery._gs_list
@@ -712,6 +761,8 @@ def suggest_for_person(rows, gallery: Gallery, person_id: int,
     p_embs  = gallery._s_embs[p_start:p_end]    # (K, 512) contiguous slice
     p_ft_yr = gallery._s_ft_yr[p_start:p_end]   # (K,) f32
     p_bt_yr = gallery._s_bt_yr[p_start:p_end]   # (K,) f32
+    p_nb_yr = gallery._s_nb_yr[p_start:p_end]   # (K,) f32
+    p_na_yr = gallery._s_na_yr[p_start:p_end]   # (K,) f32
 
     # Cap examples used in the gate pass so a heavily-labeled person (e.g. 3000+
     # faces) doesn't make the gate as expensive as the full-gallery rank pass.
@@ -724,12 +775,17 @@ def suggest_for_person(rows, gallery: Gallery, person_id: int,
         p_embs  = np.ascontiguousarray(p_embs[idx])
         p_ft_yr = p_ft_yr[idx]
         p_bt_yr = p_bt_yr[idx]
+        p_nb_yr = p_nb_yr[idx]
+        p_na_yr = p_na_yr[idx]
 
     has_birth = ~np.isnan(p_bt_yr)
     has_ft    = ~np.isnan(p_ft_yr)
+    has_nb    = ~np.isnan(p_nb_yr)
+    has_na    = ~np.isnan(p_na_yr)
     can_pen   = has_birth & has_ft
     age_f     = p_ft_yr - p_bt_yr               # (K,) example age-at-photo
     times_yr  = (times / YEAR_SECONDS).astype(np.float32)   # (N,)
+    tol       = np.float32(config.FACE_BIRTH_TOLERANCE_YEARS)
 
     _tg0 = _time.perf_counter()
     best = np.full(len(rows), np.float32(-np.inf))
@@ -740,7 +796,9 @@ def suggest_for_person(rows, gallery: Gallery, person_id: int,
         dated_c  = ~np.isnan(times[c0:c1])
         if dated_c.any():
             age_u = t_chunk[None, :] - p_bt_yr[:, None]   # (K, chunk) f32
-            excl  = (has_birth[:, None] & dated_c[None, :]) & (age_u < np.float32(-config.FACE_BIRTH_TOLERANCE_YEARS))
+            excl  = (has_birth[:, None] & dated_c[None, :]) & (age_u < -tol)
+            excl |= (has_nb[:, None] & dated_c[None, :]) & (t_chunk[None, :] < p_nb_yr[:, None] - tol)
+            excl |= (has_na[:, None] & dated_c[None, :]) & (t_chunk[None, :] > p_na_yr[:, None] + tol)
             age_u -= age_f[:, None]
             np.abs(age_u, out=age_u)
             np.minimum(age_u, np.float32(config.FACE_AGE_PENALTY_CAP_YEARS), out=age_u)

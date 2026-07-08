@@ -43,6 +43,8 @@ class CreatePersonRequest(BaseModel):
 class UpdatePersonRequest(BaseModel):
     name: str | None = None
     birth_date: str | None = None  # ISO YYYY-MM-DD, or null to clear
+    not_before: str | None = None  # ISO YYYY-MM-DD, or null to clear
+    not_after: str | None = None   # ISO YYYY-MM-DD, or null to clear
     family_id: int | None = None   # family id, or null to clear
 
 class FamilyRequest(BaseModel):
@@ -91,17 +93,29 @@ async def api_get_persons(
     photo_ids = _spatial_photo_ids(spatial_context_id)
     return [
         {"id": p["id"], "name": p["name"],
-         "birth_date": p["birth_date"], "created_at": p["created_at"],
+         "birth_date": p["birth_date"], "not_before": p["not_before"],
+         "not_after": p["not_after"], "created_at": p["created_at"],
          "family_id": p["family_id"], "family_name": p["family_name"]}
         for p in index.get_persons(start_ts=start_ts, end_ts=end_ts, photo_ids=photo_ids)
     ]
 
 
+def _parse_optional_date(label: str, value: str | None) -> str | None:
+    from datetime import datetime as _dt
+    v = value.strip() if value else None
+    if v:
+        try:
+            _dt.strptime(v, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(400, f"{label} must be in YYYY-MM-DD format")
+    return v
+
+
 @router.patch("/api/persons/{person_id}")
 async def api_update_person(person_id: int, req: UpdatePersonRequest):
-    """Update a person's name, birth date, and/or family. Only fields present in
-    the request body are changed — send just the fields you want to update."""
-    from datetime import datetime as _dt
+    """Update a person's name, birth/not-before/not-after dates, and/or family.
+    Only fields present in the request body are changed — send just the fields
+    you want to update."""
     fields = req.model_fields_set
     if "name" in fields:
         name = (req.name or "").strip()
@@ -109,13 +123,11 @@ async def api_update_person(person_id: int, req: UpdatePersonRequest):
             raise HTTPException(400, "Name cannot be empty")
         index.rename_person(person_id, name)
     if "birth_date" in fields:
-        birth = req.birth_date.strip() if req.birth_date else None
-        if birth:
-            try:
-                _dt.strptime(birth, "%Y-%m-%d")
-            except ValueError:
-                raise HTTPException(400, "birth_date must be in YYYY-MM-DD format")
-        index.set_person_birth_date(person_id, birth)
+        index.set_person_birth_date(person_id, _parse_optional_date("birth_date", req.birth_date))
+    if "not_before" in fields:
+        index.set_person_not_before(person_id, _parse_optional_date("not_before", req.not_before))
+    if "not_after" in fields:
+        index.set_person_not_after(person_id, _parse_optional_date("not_after", req.not_after))
     if "family_id" in fields:
         index.set_person_family(person_id, req.family_id)
     return {"id": person_id}

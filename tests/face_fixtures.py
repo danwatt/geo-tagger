@@ -162,6 +162,7 @@ def _insert_faces(db, embeddings: np.ndarray, person_id: int | None,
 
 
 def seed_person(db, name: str, embeddings: np.ndarray, *, birth_date: str | None = None,
+                not_before: str | None = None, not_after: str | None = None,
                 photo_datetimes=None, det_score: float = 0.9, labeled: bool = True
                 ) -> tuple[int, list[int]]:
     """Create a person and insert ``embeddings`` ((k, 512)) as their faces.
@@ -172,12 +173,17 @@ def seed_person(db, name: str, embeddings: np.ndarray, *, birth_date: str | None
     queue) but still tied to a known ground-truth person via the return value.
 
     ``photo_datetimes`` is None, a scalar epoch (shared), or a per-face sequence.
-    ``birth_date`` is ISO ``YYYY-MM-DD`` and powers the age-aware matching paths.
+    ``birth_date``/``not_before``/``not_after`` are ISO ``YYYY-MM-DD`` and power
+    the age/date-window-aware matching paths.
     Returns ``(person_id, [face_id, ...])``.
     """
     person_id = index.create_person(name)
     if birth_date is not None:
         index.set_person_birth_date(person_id, birth_date)
+    if not_before is not None:
+        index.set_person_not_before(person_id, not_before)
+    if not_after is not None:
+        index.set_person_not_after(person_id, not_after)
     face_ids = _insert_faces(db, embeddings, person_id if labeled else None,
                              photo_datetimes, det_score)
     reset_faces_caches()

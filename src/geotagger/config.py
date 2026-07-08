@@ -230,9 +230,10 @@ FACE_CLUSTER_MIN_SIZE = int(os.environ.get("GEOTAGGER_FACE_CLUSTER_MIN_SIZE", "3
 # Cluster at most this many highest-detection-score unlabeled faces, to stay fast.
 FACE_CLUSTER_CAP = int(os.environ.get("GEOTAGGER_FACE_CLUSTER_CAP", "10000"))
 
-# ── Age-aware recognition (uses person birth dates + photo dates) ──
-# A dated photo taken more than this many years before a person's birth excludes
-# that person from suggestions (grace absorbs birth/clock imprecision).
+# ── Age-aware recognition (uses person birth/not_before/not_after dates + photo dates) ──
+# A dated photo taken more than this many years before a person's birth, or
+# outside their not_before/not_after window by more than this, excludes that
+# person from suggestions (grace absorbs date/clock imprecision).
 FACE_BIRTH_TOLERANCE_YEARS = float(os.environ.get("GEOTAGGER_FACE_BIRTH_TOLERANCE_YEARS", "0.5"))
 # Cosine penalty per year of age gap between an unknown face and a labeled
 # example (prefers same-age examples), capped to avoid dominating the score.
@@ -308,8 +309,8 @@ SETTINGS_SPEC = [
      "group": "Face clustering (Discover)", "label": "Cluster scan cap",
      "help": "Cluster at most this many highest-confidence unlabeled faces, to stay fast. 0 = no cap."},
     {"key": "FACE_BIRTH_TOLERANCE_YEARS", "type": "float", "min": 0.0, "max": 5.0, "step": 0.1,
-     "group": "Age-aware matching", "label": "Birth-date tolerance (years)",
-     "help": "A dated photo taken more than this many years before a person's birth excludes them from suggestions."},
+     "group": "Age-aware matching", "label": "Date-bound tolerance (years)",
+     "help": "A dated photo taken more than this many years before a person's birth, or outside their not-before/not-after window, excludes them from suggestions."},
     {"key": "FACE_AGE_PENALTY_PER_YEAR", "type": "float", "min": 0.0, "max": 0.2, "step": 0.005,
      "group": "Age-aware matching", "label": "Age penalty per year",
      "help": "Cosine penalty per year of age gap between an unknown face and a labeled example."},

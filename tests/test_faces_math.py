@@ -110,6 +110,20 @@ class TestAgeMath:
         # Same embedding, but dated 5 years before birth (> tolerance) → excluded.
         assert faces.suggest_person(g, ff.epoch(2005), gallery) is None
 
+    def test_not_before_and_not_after_exclude_outside_window(self, db):
+        """A person with a not_before/not_after window is excluded for photos
+        dated outside it, independent of (and in addition to) birth date."""
+        rng = np.random.default_rng(6)
+        g = ff.unit_vectors(rng, 1)[0]
+        ff.seed_person(db, "Windowed", g[None, :], not_before="2010-01-01",
+                       not_after="2012-01-01", photo_datetimes=ff.epoch(2011))
+        gallery = faces.build_gallery()
+
+        assert faces.suggest_person(g, None, gallery) is not None
+        assert faces.suggest_person(g, ff.epoch(2011), gallery) is not None
+        assert faces.suggest_person(g, ff.epoch(2005), gallery) is None
+        assert faces.suggest_person(g, ff.epoch(2015), gallery) is None
+
 
 def _fixed_vec(theta_deg: float) -> np.ndarray:
     """A unit vector at exactly ``theta_deg`` in the plane of the first two
@@ -137,6 +151,8 @@ class TestNegatives:
             person_ids=np.array([1, 2], dtype=np.int64),
             face_times=np.array([np.nan, np.nan]),
             birth_times=np.array([np.nan, np.nan]),
+            not_before_times=np.array([np.nan, np.nan]),
+            not_after_times=np.array([np.nan, np.nan]),
         )
 
     def test_batch_neg_map_flips_to_next_best(self):
@@ -182,6 +198,8 @@ class TestNegatives:
             person_ids=np.array([1], dtype=np.int64),
             face_times=np.array([np.nan]),
             birth_times=np.array([np.nan]),
+            not_before_times=np.array([np.nan]),
+            not_after_times=np.array([np.nan]),
         )
         query = _fixed_vec(10)   # cos(10°)=.98, clears threshold
         rows = [{"id": 300}]
