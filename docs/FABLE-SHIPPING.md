@@ -11,18 +11,6 @@ repo hygiene) have been removed from this doc — see git history for what chang
 
 ## 1. Blockers (cannot ship without these)
 
-### 1.1 First run with no arguments is still a functional dead end
-README now documents `--scan-dir` prominently and warns that a flag-less first run is a dead
-end — but the underlying behavior is unchanged: `uv run geotagger` with no flags and no prior
-run still starts a server where every API call fails, because `index.get_db()` is never
-initialized and there's still no way to pick a photo folder from the UI. Docs mitigate the
-surprise; they don't fix it. Remaining options, in increasing effort:
-1. Make the CLI require/prompt for a scan directory when no saved root exists, with a clear
-   error message instead of a silently-broken server.
-2. Best UX: a first-run onboarding page — server detects "no library configured" and the
-   home page shows a "set your photo folder" form that triggers a scan.
-
----
 
 ## 2. Major friction (ship-degrading, fix before or shortly after release)
 
@@ -84,23 +72,14 @@ missing (the lazy-import pattern already used in `faces.py` makes this cheap).
   (`backfill_checksums.py`, `rescan_raw_faces.py`, `reembed_faces.py`,
   `backfill_orientation.py`, `prime_previews.py`). Separate or document which are part of
   the product vs. developer archaeology.
-- **`get_exiftool.py` is now cross-platform** (Windows zip / Unix tar.gz, both checksum-
-  verified against exiftool.org's published SHA-256 sums) but SourceForge intermittently
-  serves a bot-check/mirror-selection HTML landing page instead of the file for scripted
-  downloads — confirmed happening as of this review, from both a sandboxed and a real host
-  network. The script detects this (prints a clear error + manual-download link) rather than
-  installing garbage, but doesn't work around it. A more robust fix would follow the page's
-  meta-refresh redirect and retry, or mirror the binaries somewhere scriptable (e.g. a GitHub
-  release asset).
 
 ---
 
 ## 5. Suggested launch checklist (condensed)
 
 1. ~~Add `LICENSE` + pyproject metadata.~~ Done.
-2. Fix bare-first-run for real: error clearly when no library is configured, or add
-   first-run folder setup UI (§1.1) — README documentation of `--scan-dir` is done, the
-   functional fix isn't.
+2. ~~Fix bare-first-run for real: error clearly when no library is configured.~~ Done
+   (§1.1). Still open, optional: first-run folder setup UI instead of CLI flag.
 3. ~~README overhaul.~~ Done.
 4. ~~Untrack `.idea/`, resolve `.python-version`, delete `nul`.~~ Done. Plan docs already
    live under `docs/`.

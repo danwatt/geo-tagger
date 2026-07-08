@@ -73,6 +73,16 @@ def main():
 
     # Import config after setting env vars
     from geotagger.config import HOST, PORT
+    from geotagger import index
+
+    # Require a scan directory on first run: refuse to boot a server with no
+    # library configured (bare `geotagger` used to start a server where every
+    # API call failed because no db was ever initialized).
+    if not args.scan_dirs and not index.get_last_scan_roots():
+        print("Error: no photo library configured yet.", file=sys.stderr)
+        print("Pass --scan-dir <path> to point Geo-Tagger at a photo folder on first run.", file=sys.stderr)
+        print("Example: uv run geotagger --scan-dir C:\\Photos", file=sys.stderr)
+        sys.exit(1)
 
     # Determine host to bind to
     if args.network:
