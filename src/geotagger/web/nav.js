@@ -10,6 +10,7 @@
     { key: "people", label: "🙂 People", href: "/people.html" },
     { key: "representatives", label: "⭐ Representatives", href: "/representatives.html" },
     { key: "contexts", label: "🗺️ Contexts", href: "/contexts.html" },
+    { key: "data", label: "📦 Data", href: "/data.html" },
     { key: "settings", label: "⚙ Settings", href: "/settings.html" },
   ];
 
