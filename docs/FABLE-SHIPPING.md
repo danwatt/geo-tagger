@@ -27,20 +27,24 @@ surprise; they don't fix it. Remaining options, in increasing effort:
 ## 2. Major friction (ship-degrading, fix before or shortly after release)
 
 ### 2.1 Project only works from a source checkout
-`config.py`, `index.py`, and both download scripts anchor paths at
-`Path(__file__).parent.parent.parent` (`_PROJECT_ROOT`). That resolves to the repo root in
-a `src/` checkout, but to `site-packages/` if anyone installs the wheel (`pip install
-geo-tagger`, `uvx geotagger`) — tools, GeoNames data, the OSM DB, and the legacy
-`.geotagger_last_root` sentinel would all try to live inside site-packages. Either:
+`config.py`, `index.py`, and both download scripts still anchor `tools/`, `data/geonames/`,
+and `data/osm/` at `_PROJECT_ROOT` (`Path(__file__).parent.parent.parent`). That resolves to
+the repo root in a `src/` checkout, but to `site-packages/` if anyone installs the wheel
+(`pip install geo-tagger`, `uvx geotagger`) — those directories would try to live inside
+site-packages. Either:
 - commit to "clone-and-run only" and remove the wheel-publishing implication (don't
   publish to PyPI) — README now states this explicitly, so just needs the code path
   decision, or
-- move defaults to a per-user data dir (e.g. `platformdirs`: `%LOCALAPPDATA%/geotagger`,
-  `~/.local/share/geotagger`) with env overrides kept as-is.
+- move these defaults to a per-user data dir too, the way the last-scan-root sentinel
+  now does (see below).
 
-Also note `save_last_scan_roots()` **writes state into the project root** when no cache
-dir is set — a program writing files into its own install directory is a packaging smell
-and fails on read-only installs.
+~~`save_last_scan_roots()` writes state into the project root when no cache dir is
+set.~~ Fixed: the legacy sentinel (`.geotagger_last_root`) now lives under
+`get_state_dir()` (`GEOTAGGER_STATE_DIR`, default `~/.geotagger`) instead of the project
+checkout. This also fixed a real bug surfaced while testing it: `--scan-dir` without
+`--cache-dir` called `index.init_db()`/`thumbnails.init_thumbs()`/`faces.init_faces()` with
+no root at all and raised `RuntimeError` — now that path passes the first scan directory as
+the root, matching the documented `<scan-dir>/.geotagger` default.
 
 ### 2.2 Heavy mandatory dependency set
 `insightface` + `onnxruntime` + `rawpy` + `av` + `osmium` are unconditional dependencies.
@@ -49,19 +53,10 @@ working compiler-toolchain-free wheel for every one of them on their platform. C
 extras: `geo-tagger[faces]`, `[video]`, `[osm]`, with graceful feature-off behavior when
 missing (the lazy-import pattern already used in `faces.py` makes this cheap).
 
-### 2.3 `--network` warning is documentation-only
-README now carries an explicit LAN-exposure warning, but the review's other suggestion — the
-`--network` flag itself printing a warning at startup — isn't implemented. `__main__.py`
-currently only prints bind-address info, not a no-auth warning, when `--network` is passed.
-
 ---
 
 ## 3. Repo hygiene (visible to every visitor on day one)
 
-- **`network_test.py`** manual probe script still sits at repo root alongside `CLAUDE.md`;
-  plan docs (`PLAN.md`, `IDEAS.md`, etc.) already live under `docs/`. Decide deliberately
-  whether agent-handoff docs (`CLAUDE.md`, `docs/*_PLAN.md`) are part of the public repo's
-  story, or move `network_test.py` into `scripts/`/`docs/` too.
 - **No CHANGELOG**, no tagged releases, version frozen at `0.1.0`.
 - Minor: project name is `geo-tagger` but the package and command are `geotagger` — pick
   one spelling for the public name and use it consistently.
@@ -81,10 +76,6 @@ currently only prints bind-address info, not a no-auth warning, when `--network`
   the legacy branch calls `get_last_scan_root()` (singular). Works, but it's the kind of
   dual-path code that generates confusing bug reports; worth consolidating before strangers
   run it.
-- **Startup failures are swallowed.** `lifespan.py` wraps both startup branches in
-  `except Exception as e: print(f"Auto-scan failed: {e}")` and the server keeps running
-  in a broken state. For end users, a hard failure with a clear message beats a
-  half-alive server.
 - **Non-nav pages** (`tag.html`, `crowd-review.html`, `people-manage.html`) are reachable
   only via in-page links; now documented in the README, but still worth confirming each is
   actually linked from somewhere (or pruning if not).
@@ -111,4 +102,4 @@ currently only prints bind-address info, not a no-auth warning, when `--network`
    a `v0.1.0` tag/release.
 6. Decide install story: clone-only (already stated in README) vs. installable (then fix
    `_PROJECT_ROOT`-relative data paths, §2.1) — and consider dependency extras (§2.2).
-7. Add a startup-time warning when `--network` is passed, not just a README note (§2.3).
+7. ~~Add a startup-time warning when `--network` is passed.~~ Done.

@@ -88,6 +88,10 @@ def main():
     # Print access information
     if bind_host == "0.0.0.0":
         import socket
+        print(f"\nWARNING: --network exposes Geo-Tagger to your entire local network with")
+        print(f"NO AUTHENTICATION. Anyone who can reach this port can browse every photo,")
+        print(f"rewrite geotags, edit sidecar files, and rename people. Only use this on a")
+        print(f"network you trust.")
         print(f"\nBinding to 0.0.0.0:{bind_port}")
         print(f"Server will be accessible at:")
         print(f"  - http://localhost:{bind_port} (this computer)")

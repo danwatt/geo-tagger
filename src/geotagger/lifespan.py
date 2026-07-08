@@ -3,6 +3,7 @@ the index/thumbnails/faces caches and (unless --no-scan) scan the configured or
 last-used directories."""
 
 import os
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -43,12 +44,14 @@ async def lifespan(app):
         if scan_dirs_env:
             scan_dirs = [Path(d.strip()) for d in scan_dirs_env.split("\n") if d.strip()]
             try:
-                # Initialize DB and thumbnails once (not tied to a specific root)
-                index.init_db()
+                # If GEOTAGGER_CACHE_DIR isn't set, the cache lives under the first
+                # scan directory (matching the single-root fallback below).
+                primary_root = scan_dirs[0]
+                index.init_db(primary_root)
                 config.apply_all_overrides(index.get_all_settings())
                 _auto_vacuum()
-                thumbnails.init_thumbs()
-                faces.init_faces()
+                thumbnails.init_thumbs(primary_root)
+                faces.init_faces(primary_root)
 
                 if no_scan:
                     print(f"Skipping scan (--no-scan), using existing database")
@@ -67,7 +70,8 @@ async def lifespan(app):
                     # Save the list of scanned directories
                     index.save_last_scan_roots([str(d) for d in scan_dirs])
             except Exception as e:
-                print(f"Auto-scan failed: {e}")
+                print(f"FATAL: startup scan failed: {e}", file=sys.stderr)
+                raise
         else:
             # Legacy: Auto-reconnect to the last scanned directory
             last_root = index.get_last_scan_root()
@@ -84,5 +88,6 @@ async def lifespan(app):
                     else:
                         print(f"Auto-loaded index from {root}")
                 except Exception as e:
-                    print(f"Auto-load failed: {e}")
+                    print(f"FATAL: failed to load previous scan directory {root}: {e}", file=sys.stderr)
+                    raise
         yield

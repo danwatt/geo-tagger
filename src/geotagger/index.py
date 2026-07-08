@@ -1,7 +1,7 @@
 import sqlite3
 import time
 from pathlib import Path
-from geotagger.config import CACHE_DIR_NAME, get_cache_dir
+from geotagger.config import CACHE_DIR_NAME, get_cache_dir, get_state_dir
 from geotagger.db_timing import TimedConnection
 
 _db: sqlite3.Connection | None = None
@@ -809,8 +809,8 @@ def get_last_scan_roots() -> list[str]:
             return [line.strip() for line in sentinel.read_text().splitlines() if line.strip()]
         return []
 
-    # Legacy support: check project-level sentinel
-    sentinel = Path(__file__).parent.parent.parent / ".geotagger_last_root"
+    # Legacy support: check the per-user sentinel
+    sentinel = get_state_dir() / ".geotagger_last_root"
     if sentinel.exists():
         root = sentinel.read_text().strip()
         db_path = Path(root) / CACHE_DIR_NAME / "index.db"
@@ -833,9 +833,10 @@ def save_last_scan_roots(roots: list[str]):
         sentinel.write_text("\n".join(roots))
     else:
         # Legacy: only save first root
-        sentinel = Path(__file__).parent.parent.parent / ".geotagger_last_root"
         if roots:
-            sentinel.write_text(roots[0])
+            state_dir = get_state_dir()
+            state_dir.mkdir(parents=True, exist_ok=True)
+            (state_dir / ".geotagger_last_root").write_text(roots[0])
 
 
 def save_last_scan_root(root: str):

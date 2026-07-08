@@ -25,6 +25,16 @@ def get_cache_dir() -> Path | None:
 
 CACHE_DIR_NAME = ".geotagger"  # Used when get_cache_dir() returns None
 
+# Where the "last scanned root(s)" sentinel lives when GEOTAGGER_CACHE_DIR isn't set —
+# needed to remember which root(s) to auto-load on a flag-less restart, before any
+# scan root is known. Deliberately outside the project checkout (a program writing
+# into its own install directory breaks on read-only installs and is a packaging
+# smell); defaults to a per-user home directory, override with GEOTAGGER_STATE_DIR.
+def get_state_dir() -> Path:
+    if env := os.environ.get("GEOTAGGER_STATE_DIR"):
+        return Path(env)
+    return Path.home() / ".geotagger"
+
 # Reclaim free-list space (deleted-row pages) at startup via VACUUM, gated on
 # the free-page ratio so a mostly-compact DB isn't fully rewritten every run.
 AUTO_VACUUM = os.environ.get("GEOTAGGER_AUTO_VACUUM", "1") == "1"
