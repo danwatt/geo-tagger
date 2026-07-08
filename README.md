@@ -32,6 +32,28 @@ UI needs internet, nothing else does).
 This project is clone-and-run only (not published as an installable package) — everything
 below assumes a source checkout.
 
+<details>
+<summary>Don't want to install uv? Use a plain venv + pip instead</summary>
+
+Every `uv run <cmd>` below is equivalent to activating a venv and running `<cmd>` directly.
+Requires Python 3.13+ already installed and on `PATH`.
+
+```bash
+python -m venv .venv
+# Windows
+.venv\Scripts\activate
+# macOS/Linux
+source .venv/bin/activate
+
+pip install -e .                          # runtime deps
+pip install httpx pytest pytest-cov       # only if you want to run the test suite (optional)
+```
+
+Then replace `uv run <cmd>` with just `<cmd>` (e.g. `uv run geotagger` → `geotagger`,
+`uv run python scripts/get_exiftool.py` → `python scripts/get_exiftool.py`) for every command
+in this doc.
+</details>
+
 ## Setup
 
 ### 1. Install Python dependencies
