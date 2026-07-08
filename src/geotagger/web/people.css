@@ -200,6 +200,20 @@
 /* Ambiguous faces get an amber ring so they stand out among confident guesses */
 .thumb-cell.ambiguous { box-shadow: inset 0 0 0 2px #d39a2e; }
 
+/* Unlabeled queue: each suggested-person run is its own wrapping flex row
+ * (built in renderGrid), so — like search.js's .photo-row:hover — the whole
+ * row gets a continuous hover background instead of per-thumbnail highlights. */
+.person-runs { display: flex; flex-direction: column; gap: 4px; padding-top: 4px; }
+.person-run {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 4px;
+}
+.person-run:hover { background: rgba(255,255,255,0.06); }
+.person-run .thumb-cell { flex: 0 0 120px; width: 120px; }
+
 /* Recently-tagged: the name doubles as a one-click un-tag */
 .thumb-cell .face-untag {
   position: absolute;
@@ -327,10 +341,6 @@
   gap: 4px;
   padding-top: 4px;
 }
-/* Unlabeled queue: force the first face of each new suggested-person run onto a
- * fresh grid row (auto-placement can't backfill, so the prior row's tail stays
- * empty — the visual break between people). Tagged by renderGrid. */
-.face-group-cells .thumb-cell.row-break { grid-column-start: 1; }
 
 /* 6 subtle tints that cycle across groups — low opacity to blend with dark bg */
 .group-tint-0 { background: rgba(60,  100, 170, 0.09); }

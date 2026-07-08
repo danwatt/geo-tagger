@@ -869,17 +869,21 @@ function renderGrid() {
         ignoreAll: true,
       }));
       const cells = document.createElement("div");
-      cells.className = "face-group-cells";
-      // Faces are already clustered by suggested person (sortBucketBySuggestion);
-      // break to a fresh grid row whenever the suggested person changes so each
-      // person reads as its own run. `.row-break` forces grid-column-start:1, which
-      // wraps the cell to a new line and leaves the prior row's tail empty.
-      let prevSug;   // undefined before the first cell; null = the "unknown" block
+      cells.className = "person-runs";
+      // Faces are already clustered by suggested person (sortBucketBySuggestion).
+      // Each run of same-suggestion faces gets its own wrapping flex row
+      // (.person-run) instead of being flattened into one grid, so the whole
+      // run can get a continuous hover background — same idea as search.js's
+      // .photo-row, just one row per suggested person instead of per photo.
+      let prevSug, run;   // prevSug undefined before the first cell; null = "unknown" block
       group.faces.forEach(face => {
         const sug = face.suggestion ? face.suggestion.person_id : null;
-        const cell = makeFaceCell(face, idx);
-        if (prevSug !== undefined && sug !== prevSug) cell.classList.add("row-break");
-        cells.appendChild(cell);
+        if (prevSug === undefined || sug !== prevSug) {
+          run = document.createElement("div");
+          run.className = "person-run";
+          cells.appendChild(run);
+        }
+        run.appendChild(makeFaceCell(face, idx));
         prevSug = sug;
         idx++;
       });
