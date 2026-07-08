@@ -1,5 +1,10 @@
 let geonamesPolling = false;
 let osmPolling = false;
+let faceModelPolling = false;
+let osmGroups = [];         // [{group, label, items: [{key, name}]}]
+let osmIngested = new Set();
+let osmSelectedRegions = new Set();
+let osmActiveGroup = "us";
 
 function fmtBytes(n) {
   if (!n) return "0 B";
@@ -16,9 +21,25 @@ async function loadStatus() {
     const data = await res.json();
     renderGeonames(data.geonames);
     renderOsm(data.osm);
+    renderFaceModel(data.face_model);
   } catch (e) {
     document.getElementById("geonames-error").textContent = e.message;
   }
+}
+
+function renderFaceModel(m) {
+  const el = document.getElementById("face-model-status");
+  el.innerHTML = `
+    <div class="data-file-row">
+      <span>${m.name}</span>
+      <span class="${m.available ? "present" : "missing"}">
+        ${m.available ? "installed" : "not downloaded"}
+      </span>
+    </div>
+  `;
+  const btn = document.getElementById("face-model-download-btn");
+  btn.disabled = m.available;
+  btn.textContent = m.available ? "Face model installed" : "Download face model";
 }
 
 function renderGeonames(g) {
@@ -39,21 +60,44 @@ function renderGeonames(g) {
 
 function renderOsm(o) {
   const el = document.getElementById("osm-status");
+  const categories = Object.entries(o.by_category || {});
   el.innerHTML = `
     <div class="data-file-row">
       <span>Places DB</span>
       <span class="${o.available ? "present" : "missing"}">
-        ${o.available ? `${o.places.toLocaleString()} places` : "not built yet"}
+        ${o.available ? `${o.places.toLocaleString()} total` : "not built yet"}
       </span>
     </div>
+    ${categories.map(([category, n]) => `
+      <div class="data-file-row data-file-subrow">
+        <span>${category}</span>
+        <span>${n.toLocaleString()}</span>
+      </div>
+    `).join("")}
   `;
 
+  osmGroups = o.groups || [];
+  osmIngested = new Set(o.ingested_keys || []);
+  if (!osmGroups.some((g) => g.group === osmActiveGroup)) {
+    osmActiveGroup = osmGroups[0]?.group;
+  }
+
+  const groupSelect = document.getElementById("osm-group-select");
+  groupSelect.innerHTML = osmGroups.map((g) =>
+    `<option value="${g.group}" ${g.group === osmActiveGroup ? "selected" : ""}>${g.label}</option>`
+  ).join("");
+
+  renderOsmCheckboxes();
+}
+
+function renderOsmCheckboxes() {
   const picker = document.getElementById("osm-state-picker");
-  const ingested = new Set(o.ingested_slugs || []);
-  picker.innerHTML = o.states.map(([slug, name]) => `
-    <label class="${ingested.has(slug) ? "state-loaded" : ""}" title="${ingested.has(slug) ? "Already merged" : ""}">
-      <input type="checkbox" value="${slug}">
-      ${name}${ingested.has(slug) ? " ✓" : ""}
+  const group = osmGroups.find((g) => g.group === osmActiveGroup);
+  if (!group) { picker.innerHTML = ""; return; }
+  picker.innerHTML = group.items.map(({ key, name }) => `
+    <label class="${osmIngested.has(key) ? "state-loaded" : ""}" title="${osmIngested.has(key) ? "Already merged" : ""}">
+      <input type="checkbox" value="${key}" ${osmSelectedRegions.has(key) ? "checked" : ""}>
+      ${name}${osmIngested.has(key) ? " ✓" : ""}
     </label>
   `).join("");
 }
@@ -139,11 +183,9 @@ async function startOsmDownload() {
   const btn = document.getElementById("osm-download-btn");
   const errorEl = document.getElementById("osm-error");
   errorEl.textContent = "";
-  const states = Array.from(
-    document.querySelectorAll("#osm-state-picker input[type=checkbox]:checked")
-  ).map((cb) => cb.value);
-  if (!states.length) {
-    errorEl.textContent = "Select at least one state.";
+  const regions = Array.from(osmSelectedRegions);
+  if (!regions.length) {
+    errorEl.textContent = "Select at least one region.";
     return;
   }
   btn.disabled = true;
@@ -151,7 +193,7 @@ async function startOsmDownload() {
     const res = await fetch("/api/data/osm/download", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ states }),
+      body: JSON.stringify({ regions }),
     });
     if (res.status === 409) { pollOsm(); return; }
     if (!res.ok) {
@@ -165,8 +207,66 @@ async function startOsmDownload() {
   }
 }
 
+async function pollFaceModel() {
+  if (faceModelPolling) return;
+  faceModelPolling = true;
+  const btn = document.getElementById("face-model-download-btn");
+  const progress = document.getElementById("face-model-progress");
+  const errorEl = document.getElementById("face-model-error");
+  try {
+    while (true) {
+      const res = await fetch("/api/data/face-model/download/status");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const job = await res.json();
+      progress.textContent = job.message || "";
+      if (job.error) {
+        errorEl.textContent = job.error;
+        break;
+      }
+      if (job.done) {
+        progress.textContent = job.message;
+        await loadStatus();
+        break;
+      }
+      if (!job.running) break;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  } finally {
+    faceModelPolling = false;
+    btn.disabled = false;
+    await loadStatus();
+  }
+}
+
+async function startFaceModelDownload() {
+  const btn = document.getElementById("face-model-download-btn");
+  const errorEl = document.getElementById("face-model-error");
+  errorEl.textContent = "";
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/data/face-model/download", { method: "POST" });
+    if (res.status === 409) { pollFaceModel(); return; }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    pollFaceModel();
+  } catch (e) {
+    errorEl.textContent = e.message;
+    btn.disabled = false;
+  }
+}
+
 document.getElementById("geonames-download-btn").addEventListener("click", startGeonamesDownload);
 document.getElementById("osm-download-btn").addEventListener("click", startOsmDownload);
+document.getElementById("face-model-download-btn").addEventListener("click", startFaceModelDownload);
+
+document.getElementById("osm-group-select").addEventListener("change", (e) => {
+  osmActiveGroup = e.target.value;
+  renderOsmCheckboxes();
+});
+document.getElementById("osm-state-picker").addEventListener("change", (e) => {
+  if (e.target.type !== "checkbox") return;
+  if (e.target.checked) osmSelectedRegions.add(e.target.value);
+  else osmSelectedRegions.delete(e.target.value);
+});
 
 loadStatus().then(() => {
   // Resume polling if a job was already running when the page loaded (e.g. reload mid-download).
@@ -175,5 +275,8 @@ loadStatus().then(() => {
   });
   fetch("/api/data/osm/download/status").then((r) => r.json()).then((j) => {
     if (j.running) { document.getElementById("osm-download-btn").disabled = true; pollOsm(); }
+  });
+  fetch("/api/data/face-model/download/status").then((r) => r.json()).then((j) => {
+    if (j.running) { document.getElementById("face-model-download-btn").disabled = true; pollFaceModel(); }
   });
 });

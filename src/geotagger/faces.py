@@ -87,6 +87,24 @@ def _get_app():
     return _app
 
 
+def model_status() -> dict:
+    """Whether the InsightFace model pack has been downloaded, for the Data
+    Management page. Doesn't load the model — just checks the on-disk files
+    FaceAnalysis's downloader would have written."""
+    if _model_dir is None:
+        return {"available": False, "model_dir": None, "name": FACE_MODEL_NAME}
+    model_path = _model_dir / "models" / FACE_MODEL_NAME
+    present = model_path.is_dir() and any(model_path.glob("*.onnx"))
+    return {"available": present, "model_dir": str(_model_dir), "name": FACE_MODEL_NAME}
+
+
+def ensure_model_downloaded():
+    """Force the lazy model load, triggering InsightFace's one-time download if
+    the pack isn't already on disk. Used by the Data Management page's pre-fetch
+    button — the same load that would otherwise happen on first detect call."""
+    _get_app()
+
+
 # ── Embedding (de)serialization ──
 
 def encode_embedding(vec: np.ndarray) -> bytes:

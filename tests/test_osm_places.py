@@ -40,7 +40,8 @@ class TestAvailability:
         osm_db([CITY, PARK])
         osm_places._ensure_loaded()
         s = osm_places.status()
-        assert s == {"available": True, "state": "ready", "error": None, "places": 2}
+        assert s == {"available": True, "state": "ready", "error": None, "places": 2,
+                     "by_category": {"city": 1, "park": 1}}
 
 
 class TestPointInMultipolygon:

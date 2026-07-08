@@ -47,11 +47,20 @@ def is_available() -> bool:
 
 
 def status() -> dict:
-    """Health/diagnostics for the status endpoints."""
-    st = {"available": is_available(), "state": _state, "error": _error, "places": 0}
+    """Health/diagnostics for the status endpoints. Triggers the lazy DB load (a
+    cheap open + COUNT) so callers get an accurate count/breakdown on the very
+    first call, not just after the first lookup()."""
+    _ensure_loaded()
+    st = {"available": is_available(), "state": _state, "error": _error,
+          "places": 0, "by_category": {}}
     if _state == "ready" and _conn is not None:
         try:
             st["places"] = _conn.execute("SELECT COUNT(*) FROM places").fetchone()[0]
+            st["by_category"] = {
+                r["category"]: r["n"] for r in _conn.execute(
+                    "SELECT category, COUNT(*) AS n FROM places GROUP BY category ORDER BY n DESC"
+                ).fetchall()
+            }
         except Exception:
             pass
     return st

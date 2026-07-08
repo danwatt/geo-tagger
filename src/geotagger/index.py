@@ -453,6 +453,22 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     # faces — lets that filter use an index seek instead of a full photos scan.
     _db.execute("CREATE INDEX IF NOT EXISTS idx_photos_facescan ON photos(media_type, faces_scanned_at)")
 
+    # History of offline reference-dataset downloads (GeoNames files, GeoFabrik
+    # OSM extracts, the InsightFace model pack) triggered from the Data
+    # Management page — lets a future "check for updates" feature compare
+    # downloaded_at/size against the source without re-downloading blind.
+    _db.execute("""
+        CREATE TABLE IF NOT EXISTS dataset_downloads (
+            id INTEGER PRIMARY KEY,
+            dataset TEXT NOT NULL,         -- 'geonames' | 'osm' | 'face_model'
+            region TEXT,                   -- e.g. 'texas', 'germany'; NULL for geonames/face_model
+            url TEXT,
+            downloaded_at REAL NOT NULL,
+            size_bytes INTEGER,
+            records_loaded INTEGER
+        )
+    """)
+
     _db.commit()
     return _db
 
@@ -1952,6 +1968,29 @@ def delete_person(person_id: int):
 
 
 # ── Settings (runtime overrides of config.py tuning knobs) ──
+
+def record_dataset_download(dataset: str, region: str | None, url: str | None,
+                             size_bytes: int | None, records_loaded: int | None):
+    """Log a completed reference-dataset download (see dataset_downloads table)."""
+    db = get_db()
+    db.execute(
+        "INSERT INTO dataset_downloads (dataset, region, url, downloaded_at, size_bytes, records_loaded) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (dataset, region, url, time.time(), size_bytes, records_loaded),
+    )
+    db.commit()
+
+
+def get_dataset_downloads(dataset: str | None = None) -> list[sqlite3.Row]:
+    """Download history, newest first — optionally filtered to one dataset."""
+    db = get_db()
+    if dataset:
+        return db.execute(
+            "SELECT * FROM dataset_downloads WHERE dataset = ? ORDER BY downloaded_at DESC",
+            (dataset,),
+        ).fetchall()
+    return db.execute("SELECT * FROM dataset_downloads ORDER BY downloaded_at DESC").fetchall()
+
 
 def get_all_settings() -> dict[str, str]:
     rows = get_db().execute("SELECT key, value FROM settings").fetchall()

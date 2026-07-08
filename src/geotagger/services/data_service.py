@@ -1,27 +1,33 @@
 """Data Management page: downloading the offline reference datasets (GeoNames,
-GeoFabrik/OSM) the app's reverse geocoding depends on. Framework-free (no
+GeoFabrik/OSM, InsightFace model pack) the app depends on. Framework-free (no
 FastAPI imports) — the api/data.py router calls in here and pushes the actual
 work to the shared executor, per CLAUDE.md's routes-stay-thin convention.
 
-Both downloads are one-shot, multi-minute admin actions kicked off from the UI,
-not per-request runtime calls — same network-access footprint as the existing
-scripts/get_geonames.py and scripts/build_osm_places.py, just wired to a button
-instead of a terminal. Each has its own module-singleton job state (`_job`
-dict + lock), following the get_/init_ singleton shape used elsewhere
-(index.get_db(), faces.py's model): `start_*_job()` populates it, `*_job_status()`
-reads it, guarded by a lock since the job itself runs on an executor thread
-while the event loop polls it concurrently.
+All three downloads are one-shot, potentially multi-minute admin actions kicked
+off from the UI, not per-request runtime calls — same network-access footprint
+as the existing scripts/get_geonames.py, scripts/build_osm_places.py, and the
+InsightFace pack's existing first-use auto-download, just wired to a button
+instead of a terminal (or an unpredictable first face scan). Each has its own
+module-singleton job state (`_job` dict + lock), following the get_/init_
+singleton shape used elsewhere (index.get_db(), faces.py's model):
+`start_*_job()` populates it, `*_job_status()` reads it, guarded by a lock
+since the job itself runs on an executor thread while the event loop polls it
+concurrently.
+
+Every completed download is logged to the main DB's dataset_downloads table
+(index.record_dataset_download) — url, size, record count, timestamp — so a
+future "check for updates" feature has something to compare against instead of
+re-downloading blind.
 """
 
 import io
 import logging
 import threading
-import time
 import zipfile
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from geotagger import config
+from geotagger import config, index
 from geotagger.osm_builder import build_or_append
 
 logger = logging.getLogger(__name__)
@@ -34,33 +40,104 @@ GEONAMES_FILES = [
     ("countryInfo.txt", f"{GEONAMES_BASE}/countryInfo.txt", False),
 ]
 
-GEOFABRIK_US_BASE = "https://download.geofabrik.de/north-america/us"
-# (slug, display name) — matches GeoFabrik's north-america/us extract naming.
-GEOFABRIK_US_STATES = [
-    ("alabama", "Alabama"), ("alaska", "Alaska"), ("arizona", "Arizona"),
-    ("arkansas", "Arkansas"), ("california", "California"), ("colorado", "Colorado"),
-    ("connecticut", "Connecticut"), ("delaware", "Delaware"),
-    ("district-of-columbia", "District of Columbia"), ("florida", "Florida"),
-    ("georgia", "Georgia"), ("hawaii", "Hawaii"), ("idaho", "Idaho"),
-    ("illinois", "Illinois"), ("indiana", "Indiana"), ("iowa", "Iowa"),
-    ("kansas", "Kansas"), ("kentucky", "Kentucky"), ("louisiana", "Louisiana"),
-    ("maine", "Maine"), ("maryland", "Maryland"), ("massachusetts", "Massachusetts"),
-    ("michigan", "Michigan"), ("minnesota", "Minnesota"), ("mississippi", "Mississippi"),
-    ("missouri", "Missouri"), ("montana", "Montana"), ("nebraska", "Nebraska"),
-    ("nevada", "Nevada"), ("new-hampshire", "New Hampshire"), ("new-jersey", "New Jersey"),
-    ("new-mexico", "New Mexico"), ("new-york", "New York"), ("north-carolina", "North Carolina"),
-    ("north-dakota", "North Dakota"), ("ohio", "Ohio"), ("oklahoma", "Oklahoma"),
-    ("oregon", "Oregon"), ("pennsylvania", "Pennsylvania"), ("rhode-island", "Rhode Island"),
-    ("south-carolina", "South Carolina"), ("south-dakota", "South Dakota"),
-    ("tennessee", "Tennessee"), ("texas", "Texas"), ("utah", "Utah"), ("vermont", "Vermont"),
-    ("virginia", "Virginia"), ("washington", "Washington"), ("west-virginia", "West Virginia"),
-    ("wisconsin", "Wisconsin"), ("wyoming", "Wyoming"),
-]
-_GEOFABRIK_SLUGS = {slug for slug, _ in GEOFABRIK_US_STATES}
+# GeoFabrik region groups: group key -> (label, base URL, [(slug, display name), ...]).
+# A region's composite key is "<group>_<slug>" (e.g. "us_texas", "europe_germany") —
+# used as the pbf cache filename prefix, the dataset_downloads.region value, and the
+# id sent from the UI's checkboxes. Slugs/paths verified against GeoFabrik's actual
+# download index (download.geofabrik.de/{north-america/us,north-america/canada,europe}.html).
+GEOFABRIK_GROUPS: dict[str, dict] = {
+    "us": {
+        "label": "United States",
+        "base": "https://download.geofabrik.de/north-america/us",
+        "items": [
+            ("alabama", "Alabama"), ("alaska", "Alaska"), ("arizona", "Arizona"),
+            ("arkansas", "Arkansas"), ("california", "California"), ("colorado", "Colorado"),
+            ("connecticut", "Connecticut"), ("delaware", "Delaware"),
+            ("district-of-columbia", "District of Columbia"), ("florida", "Florida"),
+            ("georgia", "Georgia"), ("hawaii", "Hawaii"), ("idaho", "Idaho"),
+            ("illinois", "Illinois"), ("indiana", "Indiana"), ("iowa", "Iowa"),
+            ("kansas", "Kansas"), ("kentucky", "Kentucky"), ("louisiana", "Louisiana"),
+            ("maine", "Maine"), ("maryland", "Maryland"), ("massachusetts", "Massachusetts"),
+            ("michigan", "Michigan"), ("minnesota", "Minnesota"), ("mississippi", "Mississippi"),
+            ("missouri", "Missouri"), ("montana", "Montana"), ("nebraska", "Nebraska"),
+            ("nevada", "Nevada"), ("new-hampshire", "New Hampshire"), ("new-jersey", "New Jersey"),
+            ("new-mexico", "New Mexico"), ("new-york", "New York"), ("north-carolina", "North Carolina"),
+            ("north-dakota", "North Dakota"), ("ohio", "Ohio"), ("oklahoma", "Oklahoma"),
+            ("oregon", "Oregon"), ("pennsylvania", "Pennsylvania"), ("rhode-island", "Rhode Island"),
+            ("south-carolina", "South Carolina"), ("south-dakota", "South Dakota"),
+            ("tennessee", "Tennessee"), ("texas", "Texas"), ("utah", "Utah"), ("vermont", "Vermont"),
+            ("virginia", "Virginia"), ("washington", "Washington"), ("west-virginia", "West Virginia"),
+            ("wisconsin", "Wisconsin"), ("wyoming", "Wyoming"),
+        ],
+    },
+    "canada": {
+        "label": "Canada",
+        "base": "https://download.geofabrik.de/north-america/canada",
+        "items": [
+            ("alberta", "Alberta"), ("british-columbia", "British Columbia"),
+            ("manitoba", "Manitoba"), ("new-brunswick", "New Brunswick"),
+            ("newfoundland-and-labrador", "Newfoundland and Labrador"),
+            ("northwest-territories", "Northwest Territories"), ("nova-scotia", "Nova Scotia"),
+            ("nunavut", "Nunavut"), ("ontario", "Ontario"),
+            ("prince-edward-island", "Prince Edward Island"), ("quebec", "Quebec"),
+            ("saskatchewan", "Saskatchewan"), ("yukon", "Yukon"),
+        ],
+    },
+    "europe": {
+        "label": "Europe",
+        "base": "https://download.geofabrik.de/europe",
+        "items": [
+            ("albania", "Albania"), ("andorra", "Andorra"), ("austria", "Austria"),
+            ("belarus", "Belarus"), ("belgium", "Belgium"), ("bosnia-herzegovina", "Bosnia-Herzegovina"),
+            ("bulgaria", "Bulgaria"), ("croatia", "Croatia"), ("cyprus", "Cyprus"),
+            ("czech-republic", "Czech Republic"), ("denmark", "Denmark"), ("estonia", "Estonia"),
+            ("finland", "Finland"), ("france", "France"), ("georgia", "Georgia"),
+            ("germany", "Germany"), ("greece", "Greece"), ("hungary", "Hungary"),
+            ("iceland", "Iceland"), ("ireland-and-northern-ireland", "Ireland and Northern Ireland"),
+            ("italy", "Italy"), ("kosovo", "Kosovo"), ("latvia", "Latvia"),
+            ("liechtenstein", "Liechtenstein"), ("lithuania", "Lithuania"), ("luxembourg", "Luxembourg"),
+            ("macedonia", "North Macedonia"), ("malta", "Malta"), ("moldova", "Moldova"),
+            ("monaco", "Monaco"), ("montenegro", "Montenegro"), ("netherlands", "Netherlands"),
+            ("norway", "Norway"), ("poland", "Poland"), ("portugal", "Portugal"),
+            ("romania", "Romania"), ("serbia", "Serbia"), ("slovakia", "Slovakia"),
+            ("slovenia", "Slovenia"), ("spain", "Spain"), ("sweden", "Sweden"),
+            ("switzerland", "Switzerland"), ("turkey", "Turkey"), ("ukraine", "Ukraine"),
+            ("united-kingdom", "United Kingdom"),
+        ],
+    },
+}
+
+# key -> (group, slug, display name, url), flattened for lookup by the composite
+# key the UI sends ("us_texas", "europe_germany", ...).
+_GEOFABRIK_REGIONS: dict[str, dict] = {
+    f"{group}_{slug}": {
+        "group": group, "slug": slug, "name": name,
+        "url": f"{spec['base']}/{slug}-latest.osm.pbf",
+    }
+    for group, spec in GEOFABRIK_GROUPS.items()
+    for slug, name in spec["items"]
+}
+
+
+def geofabrik_region_groups() -> list[dict]:
+    """Region groups for the Data Management page's checkbox picker."""
+    return [
+        {"group": group, "label": spec["label"],
+         "items": [{"key": f"{group}_{slug}", "name": name} for slug, name in spec["items"]]}
+        for group, spec in GEOFABRIK_GROUPS.items()
+    ]
 
 
 def _pbf_cache_dir() -> Path:
     return config.OSM_DB_PATH.parent / "pbf-cache"
+
+
+def _count_lines(path: Path) -> int | None:
+    try:
+        with path.open(encoding="utf-8") as f:
+            return sum(1 for _ in f)
+    except Exception:
+        return None
 
 
 # ── GeoNames download job ──
@@ -107,6 +184,10 @@ def _run_geonames_download():
                 dest.write_bytes(data)
             with _geonames_lock:
                 _geonames_job["message"] = f"Saved {name} ({len(data):,} bytes)"
+            index.record_dataset_download(
+                dataset="geonames", region=name, url=url,
+                size_bytes=dest.stat().st_size, records_loaded=_count_lines(dest),
+            )
         with _geonames_lock:
             _geonames_job["message"] = "GeoNames data ready."
             _geonames_job["done"] = True
@@ -134,8 +215,8 @@ _osm_lock = threading.Lock()
 _osm_job: dict = {"running": False, "done": False, "error": None, "message": "", "result": None}
 
 
-def _ingested_region_files() -> list[str]:
-    """Filenames (e.g. "texas-latest.osm.pbf") already merged into the OSM places
+def _ingested_region_keys() -> list[str]:
+    """Composite region keys (e.g. "us_texas") already merged into the OSM places
     DB, read straight from its meta table — a short-lived connection, since the
     long-lived one in osm_places.py doesn't expose this."""
     if not config.OSM_DB_PATH.exists():
@@ -146,7 +227,8 @@ def _ingested_region_files() -> list[str]:
         conn = sqlite3.connect(f"file:{config.OSM_DB_PATH.as_posix()}?mode=ro", uri=True)
         row = conn.execute("SELECT value FROM meta WHERE key='regions'").fetchone()
         conn.close()
-        return [r["file"] for r in json.loads(row[0])] if row else []
+        files = [r["file"] for r in json.loads(row[0])] if row else []
+        return [f.replace("-latest.osm.pbf", "") for f in files]
     except Exception:
         return []
 
@@ -155,9 +237,8 @@ def osm_status() -> dict:
     """OSM places DB presence + region list, for the Data Management page."""
     from geotagger import osm_places
     st = osm_places.status()
-    ingested = _ingested_region_files()
-    return {**st, "db_path": str(config.OSM_DB_PATH), "states": GEOFABRIK_US_STATES,
-            "ingested_slugs": [f.replace("-latest.osm.pbf", "") for f in ingested]}
+    return {**st, "db_path": str(config.OSM_DB_PATH), "groups": geofabrik_region_groups(),
+            "ingested_keys": _ingested_region_keys()}
 
 
 def osm_job_status() -> dict:
@@ -165,20 +246,19 @@ def osm_job_status() -> dict:
         return dict(_osm_job)
 
 
-def _download_pbf(slug: str, dest: Path, progress_cb) -> None:
-    url = f"{GEOFABRIK_US_BASE}/{slug}-latest.osm.pbf"
-    progress_cb(f"Downloading {slug}…")
+def _download_pbf(url: str, dest: Path, label: str, progress_cb) -> None:
+    progress_cb(f"Downloading {label}…")
     req = Request(url, headers={"User-Agent": "geo-tagger-data-mgmt/1.0"})
     with urlopen(req, timeout=600) as r, open(dest, "wb") as f:
         total = 0
         while chunk := r.read(1 << 20):
             f.write(chunk)
             total += len(chunk)
-            progress_cb(f"Downloading {slug}… {total / 1e6:.0f} MB")
-    progress_cb(f"Downloaded {slug} ({dest.stat().st_size / 1e6:.0f} MB)")
+            progress_cb(f"Downloading {label}… {total / 1e6:.0f} MB")
+    progress_cb(f"Downloaded {label} ({dest.stat().st_size / 1e6:.0f} MB)")
 
 
-def _run_osm_download_and_merge(slugs: list[str]):
+def _run_osm_download_and_merge(keys: list[str]):
     def progress(message: str):
         with _osm_lock:
             _osm_job["message"] = message
@@ -186,16 +266,23 @@ def _run_osm_download_and_merge(slugs: list[str]):
     try:
         cache_dir = _pbf_cache_dir()
         cache_dir.mkdir(parents=True, exist_ok=True)
+        regions = [_GEOFABRIK_REGIONS[key] for key in keys]
         pbf_paths = []
-        for slug in slugs:
-            dest = cache_dir / f"{slug}-latest.osm.pbf"
+        for region in regions:
+            dest = cache_dir / f"{region['group']}_{region['slug']}-latest.osm.pbf"
             if not dest.exists():
-                _download_pbf(slug, dest, progress)
+                _download_pbf(region["url"], dest, region["name"], progress)
             else:
-                progress(f"{slug}: using cached download ({dest.stat().st_size / 1e6:.0f} MB)")
+                progress(f"{region['name']}: using cached download ({dest.stat().st_size / 1e6:.0f} MB)")
             pbf_paths.append(dest)
 
         summary = build_or_append(config.OSM_DB_PATH, pbf_paths, append=True, progress_cb=progress)
+        by_file = {r["file"]: r["kept"] for r in summary["regions"]}
+        for region, dest in zip(regions, pbf_paths):
+            index.record_dataset_download(
+                dataset="osm", region=f"{region['group']}_{region['slug']}", url=region["url"],
+                size_bytes=dest.stat().st_size, records_loaded=by_file.get(dest.name),
+            )
         with _osm_lock:
             _osm_job["result"] = summary
             _osm_job["message"] = f"Done. {summary['total_places']:,} total places in the OSM places DB."
@@ -209,18 +296,73 @@ def _run_osm_download_and_merge(slugs: list[str]):
             _osm_job["running"] = False
 
 
-def start_osm_download(executor, slugs: list[str]) -> bool:
-    """Kick off download+merge of the given GeoFabrik US state slugs on the shared
-    executor. Returns False if a job is already running. Raises ValueError for an
-    unknown slug or empty selection."""
-    if not slugs:
-        raise ValueError("No states selected")
-    unknown = [s for s in slugs if s not in _GEOFABRIK_SLUGS]
+def start_osm_download(executor, keys: list[str]) -> bool:
+    """Kick off download+merge of the given GeoFabrik region keys (e.g. "us_texas",
+    "europe_germany") on the shared executor. Returns False if a job is already
+    running. Raises ValueError for an unknown key or empty selection."""
+    if not keys:
+        raise ValueError("No regions selected")
+    unknown = [k for k in keys if k not in _GEOFABRIK_REGIONS]
     if unknown:
-        raise ValueError(f"Unknown state(s): {', '.join(unknown)}")
+        raise ValueError(f"Unknown region(s): {', '.join(unknown)}")
     with _osm_lock:
         if _osm_job["running"]:
             return False
         _osm_job.update(running=True, done=False, error=None, message="Starting…", result=None)
-    executor.submit(_run_osm_download_and_merge, slugs)
+    executor.submit(_run_osm_download_and_merge, keys)
+    return True
+
+
+# ── Face matcher model download job ──
+_face_model_lock = threading.Lock()
+_face_model_job: dict = {"running": False, "done": False, "error": None, "message": ""}
+
+
+def face_model_status() -> dict:
+    from geotagger import faces
+    return faces.model_status()
+
+
+def face_model_job_status() -> dict:
+    with _face_model_lock:
+        return dict(_face_model_job)
+
+
+def _run_face_model_download():
+    from geotagger import faces
+    try:
+        with _face_model_lock:
+            _face_model_job["message"] = "Downloading face model pack (~275 MB)…"
+        faces.ensure_model_downloaded()
+        status = faces.model_status()
+        size_bytes = None
+        if status.get("model_dir"):
+            model_path = Path(status["model_dir"]) / "models" / status["name"]
+            if model_path.is_dir():
+                size_bytes = sum(p.stat().st_size for p in model_path.glob("*.onnx"))
+        index.record_dataset_download(
+            dataset="face_model", region=status.get("name"), url=None,
+            size_bytes=size_bytes, records_loaded=None,
+        )
+        with _face_model_lock:
+            _face_model_job["message"] = "Face model ready."
+            _face_model_job["done"] = True
+    except Exception as e:  # noqa: BLE001 — surfaced to the UI via job status
+        logger.exception("Face model download failed")
+        with _face_model_lock:
+            _face_model_job["error"] = str(e)
+    finally:
+        with _face_model_lock:
+            _face_model_job["running"] = False
+
+
+def start_face_model_download(executor) -> bool:
+    """Kick off the InsightFace model pack download on the shared executor
+    (idempotent — a no-op if it's already on disk). Returns False if already
+    running."""
+    with _face_model_lock:
+        if _face_model_job["running"]:
+            return False
+        _face_model_job.update(running=True, done=False, error=None, message="Starting…")
+    executor.submit(_run_face_model_download)
     return True

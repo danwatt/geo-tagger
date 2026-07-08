@@ -51,6 +51,11 @@
 .data-file-row:last-child { border-bottom: none; }
 .data-file-row .present { color: #5cb85c; }
 .data-file-row .missing { color: #d9822b; }
+.data-file-subrow {
+  padding-left: 14px;
+  color: #999;
+  font-size: 11px;
+}
 
 .data-progress {
   font-size: 11px;
@@ -63,6 +68,21 @@
   font-size: 11px;
   color: #f88;
   margin-top: 6px;
+}
+
+.osm-group-label {
+  font-size: 12px;
+  color: #ccc;
+  margin-right: 6px;
+}
+
+#osm-group-select {
+  margin-bottom: 10px;
+  padding: 4px 7px;
+  border: 1px solid #444;
+  border-radius: 4px;
+  background: #333;
+  color: #eee;
 }
 
 #osm-state-picker {

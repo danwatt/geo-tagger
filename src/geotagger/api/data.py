@@ -4,8 +4,10 @@ executor via services/data_service.py's background jobs; routes just start a
 job and report its polled state (no request stays open for the download)."""
 
 from fastapi import APIRouter, HTTPException
+
 from pydantic import BaseModel
 
+from geotagger import index
 from geotagger.executor import get_executor
 from geotagger.services import data_service
 
@@ -13,7 +15,7 @@ router = APIRouter()
 
 
 class OsmDownloadRequest(BaseModel):
-    states: list[str]  # GeoFabrik state slugs, e.g. ["texas", "california"]
+    regions: list[str]  # composite GeoFabrik region keys, e.g. ["us_texas", "europe_germany"]
 
 
 @router.get("/api/data/status")
@@ -21,7 +23,15 @@ async def api_data_status():
     return {
         "geonames": data_service.geonames_status(),
         "osm": data_service.osm_status(),
+        "face_model": data_service.face_model_status(),
     }
+
+
+@router.get("/api/data/downloads")
+async def api_data_downloads(dataset: str | None = None):
+    """Download history (dataset_downloads table) — a future update-check
+    feature's raw material: url, size, record count, and when, per download."""
+    return {"downloads": [dict(r) for r in index.get_dataset_downloads(dataset)]}
 
 
 @router.post("/api/data/geonames/download")
@@ -40,7 +50,7 @@ async def api_data_geonames_download_status():
 @router.post("/api/data/osm/download")
 async def api_data_osm_download(req: OsmDownloadRequest):
     try:
-        started = data_service.start_osm_download(get_executor(), req.states)
+        started = data_service.start_osm_download(get_executor(), req.regions)
     except ValueError as e:
         raise HTTPException(400, str(e))
     if not started:
@@ -51,3 +61,16 @@ async def api_data_osm_download(req: OsmDownloadRequest):
 @router.get("/api/data/osm/download/status")
 async def api_data_osm_download_status():
     return data_service.osm_job_status()
+
+
+@router.post("/api/data/face-model/download")
+async def api_data_face_model_download():
+    started = data_service.start_face_model_download(get_executor())
+    if not started:
+        raise HTTPException(409, "Face model download already in progress")
+    return {"started": True}
+
+
+@router.get("/api/data/face-model/download/status")
+async def api_data_face_model_download_status():
+    return data_service.face_model_job_status()
