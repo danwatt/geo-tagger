@@ -134,25 +134,34 @@ function renderFaceCoverage(cov) {
 
 /* ── Shared stacked-bar-by-month renderer ──
    `segments` is bottom-to-top-last stacking order: [{key, cls, label}, ...],
-   each `key` reading a count off the month object. Bar height per segment is
-   its share of that month's segment total (segments are expected to fully
-   partition the month, geo and faces both do). `linkPage` is the page
+   each `key` reading a count off the month object. In "pct" mode every bar
+   fills the full container height, split by each segment's share of that
+   month's total (segments are expected to fully partition the month, geo and
+   faces both do). In "abs" mode bar height instead reflects the month's
+   total relative to the tallest month, so spikes (e.g. a day with lots of
+   faces) are visible rather than normalized away. `linkPage` is the page
    ("geocode.html" / "people.html") a click on a bar navigates to, with a
    `?month=YYYY-MM` argument for that bar's month. */
-function renderMonthBars(containerId, months, segments, linkPage) {
+function renderMonthBars(containerId, months, segments, linkPage, mode) {
   const container = document.getElementById(containerId);
   container.innerHTML = "";
+  const totals = months.map((m) => segments.reduce((sum, s) => sum + m[s.key], 0));
+  const maxTotal = Math.max(0, ...totals);
   let lastYear = null;
-  months.forEach((m) => {
+  months.forEach((m, i) => {
     const wrap = document.createElement("div");
     wrap.className = "month-bar";
-    const total = segments.reduce((sum, s) => sum + m[s.key], 0);
+    const total = totals[i];
     wrap.title = `${MONTH_NAMES[m.month - 1]} ${m.year} — ` +
       segments.map((s) => `${m[s.key].toLocaleString()} ${s.label}`).join(", ");
     const monthKey = `${m.year}-${String(m.month).padStart(2, "0")}`;
     wrap.addEventListener("click", () => {
       window.location.href = `${linkPage}?month=${monthKey}`;
     });
+
+    if (mode === "abs") {
+      wrap.style.height = maxTotal > 0 ? `${(total / maxTotal) * 100}%` : "0%";
+    }
 
     segments.forEach((s) => {
       const pct = total > 0 ? (m[s.key] / total) * 100 : 0;
@@ -173,6 +182,21 @@ function renderMonthBars(containerId, months, segments, linkPage) {
   });
 }
 
+// Wires a card's %/Count toggle buttons; `onModeChange(mode)` re-renders
+// with the newly selected mode.
+function wireModeToggle(toggleId, onModeChange) {
+  const toggle = document.getElementById(toggleId);
+  toggle.querySelectorAll("button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (btn.classList.contains("active")) return;
+      toggle.querySelectorAll("button").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      toggle.dataset.mode = btn.dataset.mode;
+      onModeChange(btn.dataset.mode);
+    });
+  });
+}
+
 // Shows/hides the "N undated" link below a month-bar card, linking to
 // `linkPage?month=undated`. `total` is the undated photo/face count for that
 // page's queue; hidden entirely when there are none.
@@ -185,41 +209,65 @@ function renderUndatedLink(linkId, total, linkPage) {
 }
 
 /* ── Coverage-by-month card ── */
+const MONTHS_SEGMENTS = [
+  { key: "not_geotagged", cls: "bar-untagged", label: "untagged" },
+  { key: "geotagged", cls: "bar-tagged", label: "tagged" },
+];
+let monthsData = null;
+let monthsMode = "pct";
+
 async function loadMonths() {
   try {
     const res = await fetch("/api/stats/months");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     clearError("card-months");
-    renderMonthBars("months-bar-container", data.months.slice().reverse(), [
-      { key: "not_geotagged", cls: "bar-untagged", label: "untagged" },
-      { key: "geotagged", cls: "bar-tagged", label: "tagged" },
-    ], "geocode.html");
+    monthsData = data;
+    renderMonthBars("months-bar-container", data.months.slice().reverse(), MONTHS_SEGMENTS, "geocode.html", monthsMode);
     renderUndatedLink("months-undated-link", data.undated.total, "geocode.html");
   } catch (e) {
     showError("card-months", e.message);
   }
 }
 
+wireModeToggle("months-mode-toggle", (mode) => {
+  monthsMode = mode;
+  if (monthsData) {
+    renderMonthBars("months-bar-container", monthsData.months.slice().reverse(), MONTHS_SEGMENTS, "geocode.html", monthsMode);
+  }
+});
+
 /* ── Face-coverage-by-month card ── */
+const FACES_MONTHS_SEGMENTS = [
+  { key: "no_faces", cls: "cov-noface", label: "no faces" },
+  { key: "none", cls: "cov-none", label: "none labeled" },
+  { key: "partial", cls: "cov-partial", label: "partial" },
+  { key: "full", cls: "cov-full", label: "full" },
+];
+let facesMonthsData = null;
+let facesMonthsMode = "pct";
+
 async function loadFacesMonths() {
   try {
     const res = await fetch("/api/stats/faces-months");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     clearError("card-faces-months");
-    renderMonthBars("faces-months-bar-container", data.months.slice().reverse(), [
-      { key: "no_faces", cls: "cov-noface", label: "no faces" },
-      { key: "none", cls: "cov-none", label: "none labeled" },
-      { key: "partial", cls: "cov-partial", label: "partial" },
-      { key: "full", cls: "cov-full", label: "full" },
-    ], "people.html");
+    facesMonthsData = data;
+    renderMonthBars("faces-months-bar-container", data.months.slice().reverse(), FACES_MONTHS_SEGMENTS, "people.html", facesMonthsMode);
     const u = data.undated;
     renderUndatedLink("faces-months-undated-link", u.full + u.partial + u.none + u.no_faces, "people.html");
   } catch (e) {
     showError("card-faces-months", e.message);
   }
 }
+
+wireModeToggle("faces-months-mode-toggle", (mode) => {
+  facesMonthsMode = mode;
+  if (facesMonthsData) {
+    renderMonthBars("faces-months-bar-container", facesMonthsData.months.slice().reverse(), FACES_MONTHS_SEGMENTS, "people.html", facesMonthsMode);
+  }
+});
 
 /* ── Reverse-geocode backfill loop ── */
 let backfillRunning = false;

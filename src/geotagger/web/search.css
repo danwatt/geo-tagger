@@ -115,3 +115,102 @@
   font-size: 12px;
   color: #ccc;
 }
+
+/* ── Untagged-face search: one row per photo, grouped into .face-group-section
+ * (year/month, from style.css) exactly like the plain grid. Each row is the
+ * photo thumbnail (click -> the shared detail pane, like every other face
+ * page) followed by its tagged/proposed faces, wrapping to new lines. ── */
+.untagged-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+}
+
+.photo-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px;
+  border-radius: 4px;
+}
+.photo-row:hover { background: rgba(255,255,255,0.03); }
+
+.photo-row-thumb-wrap {
+  flex-shrink: 0;
+  width: 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.photo-row-thumb { width: 120px; }
+
+.photo-row-loc {
+  font-size: 9px;
+  color: #888;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.photo-row-faces {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.untagged-face-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 120px;
+}
+
+.search-face-cell { width: 120px; }
+
+/* Suggestion/name overlay chips on a face cell — ported from people.css so
+ * this page's face controls look and behave exactly like the People page. */
+.thumb-cell .face-label {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: rgba(0,0,0,.6);
+  color: #eee;
+  font-size: 10px;
+  padding: 2px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.thumb-cell .face-suggest {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: rgba(42, 74, 110, .85);
+  color: #cfe6ff;
+  font-size: 10px;
+  padding: 2px 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.thumb-cell .face-suggest:hover { background: rgba(42, 74, 110, 1); }
+.thumb-cell .face-suggest .sug-check { font-weight: bold; color: #7ed87e; }
+.thumb-cell .sug-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+.thumb-cell .sug-reject {
+  flex-shrink: 0;
+  font-weight: bold;
+  color: #f0a3a3;
+  padding: 0 2px;
+}
+.thumb-cell .sug-reject:hover { color: #ff6b6b; }

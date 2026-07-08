@@ -2,10 +2,14 @@
 unlabeled queue into display-ready groups. Framework-free; called from routes via
 run_in_executor."""
 
+import logging
+import time
 from collections import Counter
 from pathlib import Path
 
 from geotagger import index, faces, serializers, thumbnails, config
+
+logger = logging.getLogger(__name__)
 
 # Most groups worth reviewing are the larger ones; cap the response/DOM.
 CLUSTER_DISPLAY_LIMIT = 100
@@ -83,3 +87,194 @@ def compute_clusters(rows, unknowns, times, gallery, names, threshold, min_size,
             "suggestion": suggestion,
         })
     return out
+
+
+# ── Untagged-face search (Search page's "find untagged faces of these people") ──
+
+def max_bipartite_matching(left: list, right: list, adj: dict) -> dict:
+    """Kuhn's augmenting-path matcher. ``left``/``right`` are node lists,
+    ``adj[l]`` the eligible ``right`` nodes for ``l`` (ordered best-first by the
+    caller to favor strong edges when a tie could go either way). Returns
+    ``{left_node: right_node}`` for every ``left`` node that found a distinct
+    match. O(V*E) — fine for the single-digit person/face counts per photo here."""
+    match_right: dict = {}   # right node -> left node
+
+    def try_assign(l, seen: set) -> bool:
+        for r in adj.get(l, ()):
+            if r in seen:
+                continue
+            seen.add(r)
+            if r not in match_right or try_assign(match_right[r], seen):
+                match_right[r] = l
+                return True
+        return False
+
+    for l in left:
+        try_assign(l, set())
+    return {l: r for r, l in match_right.items()}
+
+
+def _bbox_for_row(row) -> list[float]:
+    return thumbnails.orient_bbox(row["bbox"].split(","), row["orientation"])
+
+
+def find_untagged_face_photos(pids: list[int], date_from: str | None, date_to: str | None,
+                              bbox: str | None, location: str | None, geotagged: str,
+                              threshold: float | None, limit: int) -> dict:
+    """Photos where the searched people appear but at least one is only an
+    untagged near-match, not yet confirmed. Single person -> exhaustive
+    "suggested for them" scan; two+ -> "together, some/none tagged" bipartite
+    cover. See FACE_SEARCH_PLAN.md for the full algorithm writeup."""
+    t0 = time.perf_counter()
+    threshold = config.FACE_MATCH_THRESHOLD if threshold is None else threshold
+    warnings: list[str] = []
+
+    allowed_rows = index.search_photos(
+        date_from=date_from, date_to=date_to, bbox=bbox, location=location,
+        person_ids=None, geotagged=geotagged, limit=10_000_000)
+    allowed_ids = {r["id"] for r in allowed_rows}
+    allowed_photo = {r["id"]: r for r in allowed_rows}
+
+    gallery = faces.build_gallery()
+    names = serializers.person_name_map()
+    for pid in pids:
+        if pid not in gallery._pid_to_group:
+            warnings.append(f"No examples for {names.get(pid, pid)}; can't match by face.")
+
+    rows, unknowns, times = faces.get_unlabeled_matrix()
+    neg_map = faces.get_negatives_map()
+
+    if len(pids) == 1:
+        result = _find_single(pids[0], allowed_ids, allowed_photo, gallery, names,
+                              rows, unknowns, times, threshold, limit)
+    else:
+        result = _find_together(pids, allowed_ids, allowed_photo, gallery, names,
+                                rows, unknowns, times, neg_map, threshold, limit)
+    result["warnings"] = warnings
+    logger.info("find_untagged_face_photos pids=%s mode=%s candidates=%d total=%d %.2fms",
+               pids, result["mode"], len(result["candidates"]), result["total"],
+               (time.perf_counter() - t0) * 1000)
+    return result
+
+
+def _find_single(pid: int, allowed_ids: set[int], allowed_photo: dict,
+                 gallery, names: dict, rows, unknowns, times,
+                 threshold: float, limit: int) -> dict:
+    if pid not in gallery._pid_to_group:
+        return {"mode": "single", "threshold": threshold, "total": 0, "candidates": []}
+
+    cand_rows, cand_embs, cand_times = faces.window_rows(rows, unknowns, times, None, None, allowed_ids)
+    scored = faces.suggest_for_person(cand_rows, gallery, pid, threshold=threshold,
+                                      unknowns=cand_embs, times=cand_times)
+
+    already_tagged = index.photo_ids_with_tagged_person([pid])
+    by_photo: dict[int, dict] = {}
+    for row, score, _alts in scored:
+        photo_id = row["photo_id"]
+        if photo_id in already_tagged:
+            continue
+        entry = by_photo.setdefault(photo_id, {
+            "photo": serializers.photo_to_dict(allowed_photo[photo_id]),
+            "tagged": [], "proposed": [], "_best": 0.0,
+        })
+        entry["proposed"].append({
+            "person_id": pid, "person_name": names.get(pid),
+            "face_id": row["id"], "score": round(score, 4),
+            "bbox": _bbox_for_row(row),
+        })
+        entry["_best"] = max(entry["_best"], score)
+
+    candidates = sorted(by_photo.values(), key=lambda c: -c["_best"])
+    total = len(candidates)
+    for c in candidates:
+        del c["_best"]
+    return {"mode": "single", "threshold": threshold, "total": total,
+            "candidates": candidates[:limit]}
+
+
+def _find_together(pids: list[int], allowed_ids: set[int], allowed_photo: dict,
+                   gallery, names: dict, rows, unknowns, times, neg_map,
+                   threshold: float, limit: int) -> dict:
+    u_rows, u_embs, u_times = faces.window_rows(rows, unknowns, times, None, None, allowed_ids)
+    per_person = faces._best_per_person_f32(gallery, u_embs, u_times) if len(u_rows) else None
+    p_row = {pp: gallery._pid_to_group[pp] for pp in pids if pp in gallery._pid_to_group}
+
+    def uscore(j: int, pp: int) -> float:
+        r = p_row.get(pp)
+        if r is None:
+            return float("-inf")
+        if pp in neg_map.get(u_rows[j]["id"], ()):
+            return float("-inf")
+        return float(per_person[r, j])
+
+    tagged_in = index.tagged_person_faces_in_photos(pids)
+
+    coverable: dict[int, set[int]] = {pp: set() for pp in pids}
+    for ph, tset in tagged_in.items():
+        if ph in allowed_ids:
+            for pp, _fid in tset:
+                coverable[pp].add(ph)
+    for j, r in enumerate(u_rows):
+        for pp in pids:
+            if uscore(j, pp) >= threshold:
+                coverable[pp].add(r["photo_id"])
+    candidate_photos = set.intersection(*coverable.values()) if pids else set()
+
+    untagged_by_photo: dict[int, list[int]] = {}
+    for j, r in enumerate(u_rows):
+        if r["photo_id"] in candidate_photos:
+            untagged_by_photo.setdefault(r["photo_id"], []).append(j)
+
+    candidates = []
+    for photo_id in candidate_photos:
+        tagged_here = [(pp, fid) for pp, fid in tagged_in.get(photo_id, ()) if pp in pids]
+        untagged_j = untagged_by_photo.get(photo_id, [])
+        faces_here = [("tagged", fid, pp) for pp, fid in tagged_here] + \
+                     [("untagged", u_rows[j]["id"], j) for j in untagged_j]
+        if len(faces_here) < len(pids):
+            continue
+
+        adj: dict[int, list] = {pp: [] for pp in pids}
+        for kind, fid, ref in faces_here:
+            node = (kind, fid)
+            if kind == "tagged":
+                adj[ref].append(node)
+            else:
+                j = ref
+                scored_pp = sorted((pp for pp in pids if uscore(j, pp) >= threshold),
+                                   key=lambda pp: -uscore(j, pp))
+                for pp in scored_pp:
+                    adj[pp].append(node)
+
+        matching = max_bipartite_matching(pids, [(k, f) for k, f, _ in faces_here], adj)
+        if len(matching) != len(pids):
+            continue
+        used_untagged = [pp for pp in pids if matching[pp][0] == "untagged"]
+        if not used_untagged:
+            continue
+
+        node_to_j = {("untagged", u_rows[j]["id"]): j for j in untagged_j}
+        tagged_out = [{"person_id": pp, "person_name": names.get(pp), "face_id": matching[pp][1]}
+                     for pp in pids if matching[pp][0] == "tagged"]
+        proposed_out = []
+        best = 0.0
+        for pp in used_untagged:
+            kind, fid = matching[pp]
+            j = node_to_j[(kind, fid)]
+            score = uscore(j, pp)
+            best = max(best, score)
+            proposed_out.append({
+                "person_id": pp, "person_name": names.get(pp), "face_id": fid,
+                "score": round(score, 4), "bbox": _bbox_for_row(u_rows[j]),
+            })
+        candidates.append({
+            "photo": serializers.photo_to_dict(allowed_photo[photo_id]),
+            "tagged": tagged_out, "proposed": proposed_out, "_best": best,
+        })
+
+    candidates.sort(key=lambda c: -c["_best"])
+    total = len(candidates)
+    for c in candidates:
+        del c["_best"]
+    return {"mode": "together", "threshold": threshold, "total": total,
+            "candidates": candidates[:limit]}

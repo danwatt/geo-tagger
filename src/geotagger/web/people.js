@@ -64,7 +64,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   await loadConfidentScore();  // before loadFaces, so the first render pre-selects correctly
   await loadFocusContexts();   // restores any saved Focus before the first load
   await loadPersons();
-  await loadFaces();
+
+  // Deep-link from the Search page's "find untagged faces" candidates:
+  // people.html?person=<id>&review=suggested opens straight to that person's
+  // suggestion queue instead of the default Unlabeled view.
+  const qp = new URLSearchParams(window.location.search);
+  const linkPersonId = qp.get("person") ? parseInt(qp.get("person")) : null;
+  if (linkPersonId && qp.get("review") === "suggested") {
+    await selectScope("suggested", linkPersonId);
+  } else {
+    await loadFaces();
+  }
   setStatus("Select a person on the left, or scan for faces to begin.");
 });
 

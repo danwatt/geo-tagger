@@ -18,6 +18,9 @@ let selectedIds = new Set();
 let lastClickedIndex = -1;
 let focusedPhotoId = null;
 
+let resultsMode = "photos";     // "photos" (plain grid) | "untagged" (candidate cards)
+let untaggedCandidates = [];    // last /api/search/untagged-faces candidates
+
 /* ── Timeline histogram state (mirrors the geocode page) ── */
 let dateRangeMin = 0;
 let dateRangeMax = 0;
@@ -65,6 +68,17 @@ function renderPersonChips() {
 function updatePersonModeVisibility() {
   document.getElementById("person-mode-field").style.display =
     selectedPersons.length >= 2 ? "" : "none";
+  const untaggedField = document.getElementById("untagged-field");
+  const untaggedBtn = document.getElementById("untagged-btn");
+  if (selectedPersons.length === 0) {
+    untaggedField.style.display = "none";
+  } else if (selectedPersons.length === 1) {
+    untaggedField.style.display = "";
+    untaggedBtn.textContent = `🔎 Find untagged faces of ${selectedPersons[0].name}`;
+  } else {
+    untaggedField.style.display = "";
+    untaggedBtn.textContent = "🔎 Find where they appear together (untagged)";
+  }
 }
 
 function escapeHtml(s) {
@@ -138,6 +152,7 @@ function buildQuery() {
 async function runSearch() {
   const grid = document.getElementById("grid");
   const summary = document.getElementById("search-summary");
+  resultsMode = "photos";
   setStatus("Searching…");
   summary.textContent = "";
   grid.innerHTML = "";
@@ -157,6 +172,355 @@ async function runSearch() {
     setStatus("");
   } catch (e) {
     setStatus(`Search failed: ${e.message}`, true);
+  }
+}
+
+/* ── Untagged-face search: candidates where the searched people appear via an
+ * untagged near-match face, not yet a plain-search hit. ── */
+
+async function runUntaggedSearch() {
+  const grid = document.getElementById("grid");
+  const summary = document.getElementById("search-summary");
+  resultsMode = "untagged";
+  setStatus("Scanning for untagged faces…");
+  summary.textContent = "";
+  grid.innerHTML = "";
+  document.getElementById("timeline").style.display = "none";
+  selectedIds.clear();
+  lastClickedIndex = -1;
+  refreshSelectionUI();
+  showPlaceholder();
+  try {
+    const params = buildQuery();
+    const res = await fetch(`/api/search/untagged-faces?${params.toString()}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    untaggedCandidates = data.candidates;
+    renderUntaggedGrid();
+    summary.textContent = `${data.total.toLocaleString()} photo${data.total === 1 ? "" : "s"} found`;
+    setStatus(data.warnings && data.warnings.length ? data.warnings.join(" ") : "", !!(data.warnings && data.warnings.length));
+  } catch (e) {
+    setStatus(`Search failed: ${e.message}`, true);
+  }
+}
+
+// A face cell in the "normal" People-page style: crop + an overlaid chip —
+// a green ✓ suggestion (click confirms, ✕ rejects) or a plain name label for
+// an already-tagged face. Mirrors people.js's makeFaceCell/makeSuggestChip,
+// trimmed to what this page needs (no multi-select, no ignored/come-back
+// faces — the search never surfaces those).
+function makeSearchFaceCell(face) {
+  const cell = document.createElement("div");
+  cell.className = "thumb-cell search-face-cell";
+  cell.appendChild(faceCropImg(face));
+
+  if (face.person_name) {
+    const label = document.createElement("div");
+    label.className = "face-label";
+    label.textContent = face.person_name;
+    cell.appendChild(label);
+  } else if (face.suggestion) {
+    cell.appendChild(makeSearchSuggestChip(face));
+  }
+
+  cell.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    openSearchFaceActions(cell, face);
+  });
+  return cell;
+}
+
+function makeSearchSuggestChip(face) {
+  const chip = document.createElement("div");
+  chip.className = "face-suggest";
+  chip.title = `Click to confirm: ${face.suggestion.person_name} (${face.suggestion.score.toFixed(2)})`;
+  chip.innerHTML =
+    `<span class="sug-check">✓</span>` +
+    `<span class="sug-name">${escapeHtml(face.suggestion.person_name)}?</span>` +
+    `<span class="sug-reject" title="Not ${escapeHtml(face.suggestion.person_name)}">✕</span>`;
+  chip.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (e.target.closest(".sug-reject")) {
+      rejectSearchSuggestion(face.id, face.suggestion.person_id, face.suggestion.person_name);
+      return;
+    }
+    assignSearchFace(face.id, face.suggestion.person_id);
+  });
+  return chip;
+}
+
+function makeSearchFaceWrap(face) {
+  const wrap = document.createElement("div");
+  wrap.className = "untagged-face-wrap";
+  wrap.appendChild(makeSearchFaceCell(face));
+  return wrap;
+}
+
+function makeUntaggedRow(candidate) {
+  const { photo, tagged, proposed } = candidate;
+  const row = document.createElement("div");
+  row.className = "photo-row";
+
+  const thumbWrap = document.createElement("div");
+  thumbWrap.className = "photo-row-thumb-wrap";
+
+  const thumbCell = document.createElement("div");
+  thumbCell.className = "thumb-cell photo-row-thumb" +
+    (photo.lat != null ? " tagged" : "") +
+    (photo.geocode_ignored ? " geo-ignored" : "");
+  thumbCell.title = photo.filename;
+  const img = document.createElement("img");
+  img.src = `/api/thumbnail/${photo.id}`;
+  img.loading = "lazy";
+  img.alt = photo.filename;
+  thumbCell.appendChild(img);
+  thumbCell.addEventListener("click", () => showDetail(photo.id));
+  thumbWrap.appendChild(thumbCell);
+
+  const loc = locationKey(photo);
+  if (loc) {
+    const locEl = document.createElement("div");
+    locEl.className = "photo-row-loc";
+    locEl.textContent = loc;
+    thumbWrap.appendChild(locEl);
+  }
+  row.appendChild(thumbWrap);
+
+  const facesWrap = document.createElement("div");
+  facesWrap.className = "photo-row-faces";
+  tagged.forEach((t) => facesWrap.appendChild(makeSearchFaceWrap({
+    id: t.face_id, photo_id: photo.id, person_name: t.person_name, suggestion: null,
+  })));
+  proposed.forEach((p) => facesWrap.appendChild(makeSearchFaceWrap({
+    id: p.face_id, photo_id: photo.id, person_name: null,
+    suggestion: { person_id: p.person_id, person_name: p.person_name, score: p.score },
+  })));
+  row.appendChild(facesWrap);
+
+  return row;
+}
+
+// Group candidates by calendar year/month (undated last), mirroring renderGrid.
+function groupCandidatesByMonth(candidates) {
+  const sorted = candidates.slice().sort((a, b) =>
+    (a.photo.photo_datetime || Infinity) - (b.photo.photo_datetime || Infinity));
+  const groups = [];
+  let cur = null;
+  sorted.forEach((c) => {
+    let year = null, month = null;
+    if (c.photo.photo_datetime) {
+      const d = new Date(c.photo.photo_datetime * 1000);
+      year = d.getFullYear();
+      month = d.getMonth();
+    }
+    if (!cur || cur.year !== year || cur.month !== month) {
+      cur = { year, month, candidates: [] };
+      groups.push(cur);
+    }
+    cur.candidates.push(c);
+  });
+  return groups;
+}
+
+function renderUntaggedGrid() {
+  const grid = document.getElementById("grid");
+  grid.innerHTML = "";
+  if (untaggedCandidates.length === 0) {
+    grid.innerHTML = `<div class="person-suggest-empty" style="grid-column:1/-1;padding:24px;text-align:center">No untagged-face candidates found.</div>`;
+    return;
+  }
+  const groups = groupCandidatesByMonth(untaggedCandidates);
+  groups.forEach((group, groupIdx) => {
+    const sec = document.createElement("div");
+    sec.className = `face-group-section group-tint-${groupIdx % 6}`;
+
+    const title = group.year != null
+      ? `${MONTH_NAMES[group.month]} ${group.year}`
+      : "Undated";
+    const count = group.candidates.length;
+    const proposedCount = group.candidates.reduce((n, c) => n + c.proposed.length, 0);
+    sec.appendChild(faceGroupHeader({
+      title,
+      meta: `· ${count} photo${count !== 1 ? "s" : ""}`,
+      buttons: proposedCount ? [
+        { icon: "✓", label: `Confirm all (${proposedCount})`, kind: "primary",
+          title: "Confirm every suggested face in this group",
+          onClick: () => confirmGroupSuggestions(group) },
+        { icon: "🚫", label: `Ignore all (${proposedCount})`, kind: "danger",
+          title: "Ignore every suggested (untagged) face in this group",
+          onClick: () => ignoreGroupSuggestions(group) },
+      ] : [],
+    }));
+
+    const rows = document.createElement("div");
+    rows.className = "untagged-rows";
+    group.candidates.forEach((c) => rows.appendChild(makeUntaggedRow(c)));
+    sec.appendChild(rows);
+    grid.appendChild(sec);
+  });
+}
+
+// Standard face quick-action menu (assign/reassign/ignore/come-back/reject),
+// same popup used on People/Crowd Review/Quick Tag (face-grid.js). Actions
+// patch `untaggedCandidates` locally and re-render (no re-fetch) so the
+// visible groups don't reshuffle mid-tagging — re-run the search explicitly
+// to pick up new candidates.
+function openSearchFaceActions(anchor, face) {
+  openQuickActions(anchor, face, {
+    persons: allPersons,
+    onAssign: (pid) => assignSearchFace(face.id, pid),
+    onAssignNew: async (name) => {
+      try {
+        const res = await fetch(`/api/faces/${face.id}/assign`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        await loadPersons();
+        markFaceAssigned(face.id, data.person_id, personNameById(data.person_id));
+        renderUntaggedGrid();
+      } catch (err) { setStatus("Assign failed: " + err.message, true); }
+    },
+    onIgnore: async (ignored) => {
+      try {
+        const res = await fetch("/api/faces/ignore", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ face_ids: [face.id], ignored }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (ignored) removeFaceFromCandidates(face.id);
+        renderUntaggedGrid();
+      } catch (err) { setStatus("Ignore failed: " + err.message, true); }
+    },
+    onComeBack: async (comeBack) => {
+      try {
+        const res = await fetch("/api/faces/come-back", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ face_ids: [face.id], come_back: comeBack }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (comeBack) removeFaceFromCandidates(face.id);
+        renderUntaggedGrid();
+      } catch (err) { setStatus("Come back failed: " + err.message, true); }
+    },
+    onNotPerson: (personId, personName) => rejectSearchSuggestion(face.id, personId, personName),
+    onOpenPhoto: () => window.open(`/api/preview/${face.photo_id}`, "_blank"),
+  });
+}
+
+function personNameById(personId) {
+  const p = allPersons.find((p) => p.id === personId);
+  return p ? p.name : null;
+}
+
+// Local-only edits to `untaggedCandidates` after a tagging action, so the
+// results list doesn't reshuffle/refetch mid-session — the user re-runs the
+// search explicitly when ready for the next batch. `renderUntaggedGrid()`
+// (no fetch) is called by the caller after these to reflect the change.
+
+function markFaceAssigned(faceId, personId, personName) {
+  for (const c of untaggedCandidates) {
+    const already = c.tagged.find((t) => t.face_id === faceId);
+    if (already) { already.person_name = personName; return; }
+    const idx = c.proposed.findIndex((p) => p.face_id === faceId);
+    if (idx !== -1) {
+      c.proposed.splice(idx, 1);
+      c.tagged.push({ face_id: faceId, person_name: personName, person_id: personId });
+      return;
+    }
+  }
+}
+
+function removeFaceFromCandidates(faceId) {
+  for (const c of untaggedCandidates) {
+    c.tagged = c.tagged.filter((t) => t.face_id !== faceId);
+    c.proposed = c.proposed.filter((p) => p.face_id !== faceId);
+  }
+}
+
+async function assignSearchFace(faceId, personId) {
+  try {
+    const res = await fetch(`/api/faces/${faceId}/assign`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ person_id: personId }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await loadPersons();
+    markFaceAssigned(faceId, personId, personNameById(personId));
+    renderUntaggedGrid();
+  } catch (err) {
+    setStatus("Assign failed: " + err.message, true);
+  }
+}
+
+// ── Group-level actions (the face-group-header buttons) ──
+// Same "confirm all / ignore all" pattern as the People page's batch headers:
+// act on every *proposed* (untagged) face across the group's photos, then
+// re-run the search since assign/ignore can change which candidates qualify.
+
+function groupSuggestionCount(group) {
+  return group.candidates.reduce((n, c) => n + c.proposed.length, 0);
+}
+
+async function confirmGroupSuggestions(group) {
+  const total = groupSuggestionCount(group);
+  if (total === 0) return;
+  if (total > 3 && !confirm(`Confirm ${total} suggested face(s) in this group?`)) return;
+  const byPerson = {};
+  group.candidates.forEach((c) => c.proposed.forEach((p) => {
+    (byPerson[p.person_id] ||= []).push(p.face_id);
+  }));
+  try {
+    for (const [pid, faceIds] of Object.entries(byPerson)) {
+      const res = await fetch("/api/faces/assign", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ face_ids: faceIds, person_id: parseInt(pid) }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const name = personNameById(parseInt(pid));
+      faceIds.forEach((fid) => markFaceAssigned(fid, parseInt(pid), name));
+    }
+    await loadPersons();
+    renderUntaggedGrid();
+  } catch (err) {
+    setStatus("Confirm all failed: " + err.message, true);
+  }
+}
+
+async function ignoreGroupSuggestions(group) {
+  const faceIds = group.candidates.flatMap((c) => c.proposed.map((p) => p.face_id));
+  if (faceIds.length === 0) return;
+  if (faceIds.length > 3 && !confirm(`Ignore ${faceIds.length} suggested face(s) in this group?`)) return;
+  try {
+    const res = await fetch("/api/faces/ignore", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ face_ids: faceIds, ignored: true }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    faceIds.forEach((fid) => removeFaceFromCandidates(fid));
+    renderUntaggedGrid();
+  } catch (err) {
+    setStatus("Ignore all failed: " + err.message, true);
+  }
+}
+
+// Mark a face as "definitely not this person" — same semantics as the People
+// page's rejectSuggestion (drops the person from that face's ranking so the
+// next-best guess surfaces instead of bouncing back to the same rejection).
+async function rejectSearchSuggestion(faceId, personId, personName) {
+  try {
+    const res = await fetch("/api/faces/negatives", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ face_ids: [faceId], person_id: personId, negative: true }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    setStatus(`Marked as not ${personName}.`);
+    removeFaceFromCandidates(faceId);
+    renderUntaggedGrid();
+  } catch (err) {
+    setStatus("Reject failed: " + err.message, true);
   }
 }
 
@@ -361,8 +725,10 @@ function clearForm() {
   selectedPersons = [];
   renderPersonChips();
   updatePersonModeVisibility();
+  resultsMode = "photos";
   resultPhotos = [];
   filteredPhotos = [];
+  untaggedCandidates = [];
   histBuckets = [];
   document.getElementById("timeline").style.display = "none";
   selectedIds.clear();
@@ -553,6 +919,7 @@ window.addEventListener("resize", () => {
 });
 
 document.getElementById("search-btn").addEventListener("click", runSearch);
+document.getElementById("untagged-btn").addEventListener("click", runUntaggedSearch);
 document.getElementById("clear-btn").addEventListener("click", clearForm);
 document.getElementById("download-selected-btn").addEventListener("click", downloadSelected);
 document.getElementById("clear-selection-btn").addEventListener("click", clearSelection);

@@ -1467,6 +1467,33 @@ def count_faces(scope: str = "unlabeled", person_id: int | None = None,
     return get_db().execute("SELECT COUNT(*) FROM faces").fetchone()[0]
 
 
+def photo_ids_with_tagged_person(person_ids: list[int]) -> set[int]:
+    """Photo ids that contain a tagged, non-ignored face of ANY of these persons.
+    Used by the untagged-face search (Scenario A) to drop photos where the
+    searched person is already tagged — those are plain-search hits."""
+    import json as _json
+    ids_json = _json.dumps(person_ids)
+    return {r[0] for r in get_db().execute(
+        "SELECT DISTINCT photo_id FROM faces "
+        "WHERE person_id IN (SELECT value FROM json_each(?)) AND ignored = 0",
+        (ids_json,)).fetchall()}
+
+
+def tagged_person_faces_in_photos(person_ids: list[int]) -> dict[int, list[tuple[int, int]]]:
+    """{photo_id: [(person_id, face_id), ...]} for tagged, non-ignored faces of
+    these persons. One row per (photo, person, face) — used by the untagged-face
+    search (Scenario B) as the "hard edges" half of the per-photo bipartite cover."""
+    import json as _json
+    ids_json = _json.dumps(person_ids)
+    out: dict[int, list[tuple[int, int]]] = {}
+    for r in get_db().execute(
+        "SELECT photo_id, person_id, id FROM faces "
+        "WHERE person_id IN (SELECT value FROM json_each(?)) AND ignored = 0",
+        (ids_json,)).fetchall():
+        out.setdefault(r["photo_id"], []).append((r["person_id"], r["id"]))
+    return out
+
+
 def get_face_with_photo(face_id: int) -> sqlite3.Row | None:
     """Face row joined with its photo's path/mtime/size (for cropping)."""
     return get_db().execute(

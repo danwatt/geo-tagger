@@ -114,6 +114,29 @@
 .coverage-legend .lg { display: inline-flex; align-items: center; gap: 5px; }
 .coverage-legend .sw { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
 
+.card-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.mode-toggle {
+  display: flex;
+  border: 1px solid #444;
+  border-radius: 5px;
+  overflow: hidden;
+}
+.mode-toggle button {
+  background: #232323;
+  color: #999;
+  border: none;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.mode-toggle button + button { border-left: 1px solid #444; }
+.mode-toggle button.active { background: #3a5f8a; color: #fff; }
+
 /* ── Coverage-by-month bars ── */
 .months-bar-container {
   display: flex;

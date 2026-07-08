@@ -34,7 +34,11 @@
       "Bash(rm -f /tmp/vactest*.db)",
       "Bash(rtk ls *)",
       "Bash(rtk read *)",
-      "Bash(git -C \"C:\\\\Users\\\\danwa\\\\PycharmProjects\\\\geo-tagger\" ls-files)"
+      "Bash(git -C \"C:\\\\Users\\\\danwa\\\\PycharmProjects\\\\geo-tagger\" ls-files)",
+      "Bash(rtk grep *)",
+      "Bash(node -c src/geotagger/web/search.js)",
+      "Skill(run)",
+      "Bash(pkill -f \"geotagger\")"
     ]
   }
 }
