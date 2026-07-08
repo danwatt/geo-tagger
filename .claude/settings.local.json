@@ -40,7 +40,9 @@
       "Skill(run)",
       "Bash(pkill -f \"geotagger\")",
       "Bash(rtk git *)",
-      "Bash(rtk uv *)"
+      "Bash(rtk uv *)",
+      "Bash(uv lock *)",
+      "Bash(python3 -c \"import yaml,sys; yaml.safe_load\\(open\\('.github/workflows/ci.yml'\\)\\)\")"
     ]
   }
 }

@@ -58,18 +58,13 @@ currently only prints bind-address info, not a no-auth warning, when `--network`
 
 ## 3. Repo hygiene (visible to every visitor on day one)
 
-- **Internal working docs committed at root**: `PLAN.md`, `FACE_TESTING_PLAN.MD`,
-  `LIFE_CONTEXTS_PLAN.md`, `IDEAS.md`, `PERFORMANCE.md`, `CLAUDE.md`, `network_test.py`.
-  These are fine to keep, but at root they crowd out README for a first-time visitor —
-  consider a `docs/` folder, and decide deliberately whether agent-handoff docs are part
-  of the public repo's story.
+- **`network_test.py`** manual probe script still sits at repo root alongside `CLAUDE.md`;
+  plan docs (`PLAN.md`, `IDEAS.md`, etc.) already live under `docs/`. Decide deliberately
+  whether agent-handoff docs (`CLAUDE.md`, `docs/*_PLAN.md`) are part of the public repo's
+  story, or move `network_test.py` into `scripts/`/`docs/` too.
 - **No CHANGELOG**, no tagged releases, version frozen at `0.1.0`.
 - Minor: project name is `geo-tagger` but the package and command are `geotagger` — pick
   one spelling for the public name and use it consistently.
-- **No CI.** A single GitHub Actions workflow running `uv sync && uv run pytest` on
-  push (Windows + Ubuntu matrix would also answer the cross-platform question for free) is
-  cheap and signals the project is alive and tested. 377 passing tests is a genuine asset —
-  advertise it.
 - **No CONTRIBUTING.md / issue templates** — optional for launch, but a 10-line "PRs
   welcome, run `uv run pytest`, code style notes live in CLAUDE.md" goes a long way.
 
@@ -110,9 +105,10 @@ currently only prints bind-address info, not a no-auth warning, when `--network`
    first-run folder setup UI (§1.1) — README documentation of `--scan-dir` is done, the
    functional fix isn't.
 3. ~~README overhaul.~~ Done.
-4. ~~Untrack `.idea/`, resolve `.python-version`, delete `nul`.~~ Done. Still open: move
-   plan docs to `docs/` (§3).
-5. Add CI (Windows + Ubuntu pytest) and cut a `v0.1.0` tag/release (§3).
+4. ~~Untrack `.idea/`, resolve `.python-version`, delete `nul`.~~ Done. Plan docs already
+   live under `docs/`.
+5. ~~Add CI (Windows + Ubuntu pytest).~~ Done (`.github/workflows/ci.yml`). Still open: cut
+   a `v0.1.0` tag/release.
 6. Decide install story: clone-only (already stated in README) vs. installable (then fix
    `_PROJECT_ROOT`-relative data paths, §2.1) — and consider dependency extras (§2.2).
 7. Add a startup-time warning when `--network` is passed, not just a README note (§2.3).
