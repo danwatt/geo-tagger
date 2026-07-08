@@ -1,7 +1,36 @@
 # Geo-Tagger
 
-Local web app for geotagging photo collections. All geolocation metadata is written to
-**XMP sidecar files** — original image files are never modified.
+Local web app for organizing a photo/video library: geotag photos on a map, reverse-geocode
+them offline, detect and tag faces, sync camera clocks, and search across it all. Backend +
+all data (SQLite DB, thumbnails, models) stay fully local; the only network dependencies are
+the Leaflet library and OpenStreetMap map tiles (loaded from CDNs in the page HTML — the map
+UI needs internet, nothing else does).
+
+**Original media files are never modified.** Geolocation and other metadata are written to
+**XMP sidecar files** next to each photo, as an explicit export step — see
+[Data model: DB vs. sidecars](#data-model-db-vs-sidecars).
+
+> Developed and tested on Windows. The dependency stack (Pillow, av, onnxruntime, osmium,
+> etc.) ships cross-platform wheels and *should* run on macOS/Linux via a source install
+> (see [Cross-platform notes](#cross-platform-notes)), but that path hasn't been verified —
+> reports welcome.
+
+## Prerequisites
+
+- **[uv](https://docs.astral.sh/uv/)** — install it first (`uv` manages Python itself, so you
+  don't need a matching Python already installed):
+  ```bash
+  # macOS/Linux
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  # Windows (PowerShell)
+  powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+  ```
+- **git**, to clone this repo.
+- Windows, for the automatic ExifTool download in setup step 2 (macOS/Linux: install ExifTool
+  yourself, see that step).
+
+This project is clone-and-run only (not published as an installable package) — everything
+below assumes a source checkout.
 
 ## Setup
 
@@ -13,13 +42,13 @@ uv sync
 
 ### 2. Install ExifTool (required)
 
-**Automatic (recommended):**
+**Windows (automatic, recommended):**
 ```bash
 uv run python scripts/get_exiftool.py
 ```
 This downloads ExifTool into `tools/exiftool.exe`.
 
-**Manual fallback:**
+**Windows (manual fallback):**
 1. Download the Windows zip from <https://exiftool.org>
 2. Unzip — you get `exiftool(-k).exe` and an `exiftool_files/` folder
 3. Rename `exiftool(-k).exe` → `exiftool.exe`
@@ -27,9 +56,13 @@ This downloads ExifTool into `tools/exiftool.exe`.
 
 > Both must sit together or ExifTool won't run.
 
+**macOS/Linux:** install ExifTool via your package manager (`brew install exiftool`,
+`apt install libimage-exiftool-perl`, etc.) — the app falls back to `exiftool` on `PATH` if
+`tools/exiftool.exe` isn't present.
+
 You can also point to an existing ExifTool install via:
 ```
-GEOTAGGER_EXIFTOOL=C:\path\to\exiftool.exe
+GEOTAGGER_EXIFTOOL=/path/to/exiftool
 ```
 
 ### 3. Install GeoNames data (optional — enables reverse geocoding)
@@ -63,18 +96,141 @@ supplies state/county/country. Skip it and geocoding falls back to GeoNames city
 OSM data © OpenStreetMap contributors (ODbL). View the boundaries on the **Places DB** map
 (`/map.html`) via the "OSM places" toggle.
 
-### 5. Run
+### 5. Point it at your photos and run
+
+The app needs at least one photo directory before any page will work — either pass it on
+the command line every run:
+
+```bash
+uv run geotagger --scan-dir "D:\Photos"
+# multiple libraries:
+uv run geotagger --scan-dir "D:\Photos" --scan-dir "D:\More Photos"
+```
+
+or run it once with `--scan-dir` and it remembers that directory for future runs with no
+flags:
 
 ```bash
 uv run geotagger
-# or
-uv run python -m geotagger
 ```
 
-Opens at <http://127.0.0.1:8000>, showing the home dashboard with library health and
-links into each tool. The map/grid geocode view lives at `/geocode.html`.
+> Multiple `--scan-dir` values are scanned every time you pass them, but only the *first*
+> one is remembered for a flag-less restart — pass `--scan-dir` again (all of them) if you
+> use more than one library and want them all picked up automatically.
 
-## Usage
+> Running `uv run geotagger` with **no** `--scan-dir` and no prior run is a dead end — every
+> page loads but every API call fails, since there's no library configured yet. Always pass
+> `--scan-dir` the first time.
+
+Opens at <http://127.0.0.1:8000>, showing the home dashboard with library health and links
+into each tool.
+
+**First scan expectations:** the first run walks every configured directory, generates a
+thumbnail for each new photo/video, and reverse-geocodes anything with coordinates (if
+GeoNames/OSM data is installed) — expect noticeable time on a large library, with
+console-only progress. Use `--workers N` to raise/lower thumbnail-generation parallelism
+(default 4), or `--no-scan` to boot straight from the existing database without rescanning.
+
+**Face detection first-use download:** the first time any face-related feature runs, it
+downloads InsightFace's `buffalo_l` model pack (~275 MB) from the internet into
+`~/.insightface`. This happens lazily, so a purely offline geotagging workflow never
+triggers it — but it means "fully local" doesn't mean "fully offline on first use" once you
+touch the People/Representatives/Discover features.
+
+**CLI flags:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--scan-dir DIR` | — | Directory to scan (repeatable for multiple libraries) |
+| `--cache-dir DIR` | `<scan-dir>/.geotagger` | Where the database + thumbnails live (see [Cache location](#cache-location)) |
+| `--host HOST` | `127.0.0.1` | Bind address |
+| `--port PORT` | `8000` | Port |
+| `--network` | off | Bind `0.0.0.0` — see [LAN exposure warning](#lan-exposure-warning) |
+| `--workers N` | `4` | Worker threads for thumbnail generation |
+| `--no-scan` | off | Skip the startup scan; use the existing database as-is |
+
+## Cache location
+
+By default, each scanned directory gets its own `.geotagger/` subfolder (database +
+thumbnails, potentially gigabytes for a large library) created **inside that photo root**.
+If your photo tree is treated as read-only, or synced by a NAS/Dropbox/backup tool that will
+churn on thumbnail writes, point the cache elsewhere instead:
+
+```bash
+uv run geotagger --scan-dir "D:\Photos" --cache-dir "D:\GeoTaggerCache"
+# or
+GEOTAGGER_CACHE_DIR=D:\GeoTaggerCache uv run geotagger --scan-dir "D:\Photos"
+```
+
+## Resetting / uninstalling
+
+All state lives in a small number of places, all safe to delete to start over:
+
+- `<cache-dir>/.geotagger/` (or `.geotagger/` inside each scan root, if `--cache-dir` was
+  never set) — the database and thumbnails.
+- `~/.insightface` — the downloaded face-recognition model pack.
+- `tools/exiftool.exe` (Windows) — the downloaded ExifTool binary.
+- `data/geonames/`, `data/osm/` — downloaded GeoNames/OSM data.
+
+Deleting the `.geotagger` cache loses tagged faces, life contexts, and any geotags/place
+names that were never exported to XMP sidecars (see below) — sidecars themselves and the
+original media are untouched either way.
+
+## LAN exposure warning
+
+`--network` binds `0.0.0.0` so other devices on your network can reach the app. **There is
+no authentication of any kind** — anyone who can reach the port can browse every photo,
+rewrite geotags, edit sidecar files, and rename people. This is an acceptable tradeoff for a
+personal tool on a trusted home network, but do not expose it beyond that (e.g. via port
+forwarding) without adding your own auth layer in front of it.
+
+## Supported file types
+
+- **Images:** `.jpg` `.jpeg` `.heic` `.heif` `.nef` `.dng` `.tif` `.tiff` `.png`
+- **Video:** `.mp4` `.mov` `.m4v` `.avi`
+- **Full RAW demosaic** (via rawpy/LibRaw, opt-in): `.nef` `.dng` — off by default, since the
+  embedded preview ExifTool extracts is much faster; toggle in Settings or via
+  `GEOTAGGER_RAW_FULL_DECODE=1`.
+
+## Data model: DB vs. sidecars
+
+The SQLite database (in the cache directory above) is the working store for everything —
+geotags, resolved place names, face detections/labels, life contexts, time-sync offsets.
+Sidecar files are the durable, portable output, brought in sync with the database on demand:
+
+- Geotags are DB-only by default; `POST /api/geocode/export-sidecars` (or the export button
+  in the UI) writes GPS + resolved place names into each photo's XMP sidecar. Set
+  `GEOTAGGER_WRITE_XMP_ON_GEOTAG=1` (or the equivalent Settings toggle) to write GPS to the
+  sidecar immediately on every drag/edit instead.
+- Face/person tags are **database-only** — there is no sidecar export for face data (yet).
+
+Because of this, the `.geotagger` cache is more than disposable scratch space: deleting it
+before exporting loses any geotagging/face work that hasn't been written out yet.
+
+## Features
+
+| Page | Purpose |
+|---|---|
+| **Home** (`/`) | Library health dashboard — scan status, counts, links into every tool |
+| **Search** (`/search.html`) | Multi-criteria photo search: date range, location text, geotag status, people (including "two+ people together") |
+| **Geocode** (`/geocode.html`) | Main map/grid view — drag photos onto the map to geotag them (see [Usage](#usage)) |
+| **Quick Geocode** (`/quick-geocode.html`) | Fast-path geotagging for a burst of nearby, time-clustered ungeotagged photos: set one location for the whole group |
+| **Places DB** (`/map.html`) | Visualize the imported OSM place-boundary polygons |
+| **Time Sync** (`/timesync.html`) | Correct a camera's clock drift/timezone by matching known-time photos, then batch-adjust that camera's timestamps |
+| **People** (`/people.html`) | Face tagging: label detected faces, review suggested matches, manage the unlabeled queue |
+| **Representatives** (`/representatives.html`) | Review the kept representative (medoid) faces for prolific people, after deduplication |
+| **Contexts** (`/contexts.html`) | Draw/manage "Life Context" time+place polygons used for guessing and filtering photos |
+| **Settings** (`/settings.html`) | Runtime-tunable knobs (face-matching thresholds, RAW decode, XMP-on-geotag, etc.) — see `config.py`'s `SETTINGS_SPEC` for the full list and semantics |
+
+Reachable but not in the top nav:
+
+| Page | Purpose |
+|---|---|
+| **Quick Tag** (`/tag.html`) | Mobile-friendly face triage: walks the face-clustering queue one group at a time |
+| **Crowd Review** (`/crowd-review.html`) | Review photos with many detected faces ("crowd photos") without labeling each one |
+| **People Manager** (`/people-manage.html`) | Edit names, birth dates, and family groupings for tagged people in one list |
+
+## Usage: geotagging photos
 
 1. Open the dashboard at `/` for an overview, or go straight to `/geocode.html`
 2. Geotagged photos show as pushpins on the map; thumbnails appear in the center grid
@@ -131,6 +287,48 @@ API:
 | `POST /api/geocode/backfill` | Reverse-geocode photos that have coords but no place yet (`{"limit": N}`; repeat until `remaining` is 0) |
 | `POST /api/geocode/export-sidecars` | Write resolved place names into the XMP sidecar of every geocoded photo |
 
+## Face detection and people tagging
+
+The **People** page is the largest subsystem in the app: InsightFace (`buffalo_l`) detects
+faces during scanning and stores per-face embeddings; you label faces with a person's name,
+and later scans/reviews use cosine-similarity matching against those labels to suggest
+identities on new unlabeled faces. Related pages:
+
+- **People** — the main labeling/review workflow, plus an unlabeled queue with pre-checked
+  high-confidence suggestions.
+- **Quick Tag** — a mobile-oriented version of the same triage flow, one clustered group at
+  a time.
+- **Discover** (face clustering, surfaced within People) — groups unlabeled faces by
+  similarity so you can label a whole cluster in one action.
+- **Representatives** — for people with many labeled faces, a deduplication pass clusters
+  near-duplicate labels and keeps one representative (medoid) per distinct look; this page
+  reviews/adjusts those picks.
+- **Crowd Review** — photos with a large number of detected faces (default ≥ 50) are treated
+  as "crowd photos" and reviewed separately rather than forcing per-face labeling.
+- **People Manager** — bulk-edit names, birth dates, and family groupings.
+- Age-aware matching uses a person's birth date plus each photo's date to penalize/exclude
+  implausible age gaps when suggesting identities.
+
+Face/person tags are **database-only** — see [Data model](#data-model-db-vs-sidecars).
+
+All of the thresholds and caps that drive this (match threshold, clustering thresholds,
+crowd size, age penalties, etc.) are listed with explanations in the **Settings** page and in
+`config.py`'s `SETTINGS_SPEC`; most can be changed live without a restart.
+
+## Time Sync
+
+If a camera's clock was wrong (wrong timezone, drifted, never set), match a few of its
+photos against another source of ground truth (e.g. a phone photo of the same moment, or a
+known event time), compute the offset, and batch-apply it to correct that camera's
+timestamps across the library — useful since accurate timestamps also drive Quick Geocode's
+time-clustering and age-aware face matching.
+
+## Life Contexts
+
+Draw named time+place polygons (e.g. "Home 2020–2023", "College") on the Contexts page.
+These are used elsewhere to guess a plausible location for undated/ungeotagged photos and to
+filter search results by context.
+
 ## Sidecar naming
 
 Default: `basename.xmp` (e.g. `IMG_1234.NEF` → `IMG_1234.xmp`) — Lightroom/Adobe convention.
@@ -144,13 +342,43 @@ GEOTAGGER_SIDECAR_MODE=fullname uv run geotagger
 
 ## Configuration
 
+Common environment variables — see `src/geotagger/config.py` for the full list (~35 knobs
+total, including every `GEOTAGGER_FACE_*` tuning parameter, most of which are also editable
+live from the Settings page):
+
 | Env var | Default | Description |
 |---|---|---|
 | `GEOTAGGER_EXIFTOOL` | `tools/exiftool.exe` | Path to ExifTool binary |
 | `GEOTAGGER_SIDECAR_MODE` | `basename` | `basename` or `fullname` |
 | `GEOTAGGER_HOST` | `127.0.0.1` | Bind address |
 | `GEOTAGGER_PORT` | `8000` | Port |
+| `GEOTAGGER_CACHE_DIR` | *(none — see [Cache location](#cache-location))* | Directory for the database + thumbnails |
+| `GEOTAGGER_WORKERS` | `4` | Thumbnail-generation worker threads |
+| `GEOTAGGER_NO_SCAN` | `0` | `1` = skip the startup scan |
 | `GEOTAGGER_GEONAMES_DIR` | `data/geonames` | Directory holding the downloaded GeoNames files |
 | `GEOTAGGER_GEOCODE_PRECISION` | `4` | Decimal degrees of coordinate quantization for the geocode cache (4 ≈ 11 m) |
 | `GEOTAGGER_OSM_DB` | `data/osm/places.sqlite` | OSM place-boundary database (built by `scripts/build_osm_places.py`) |
 | `GEOTAGGER_OSM_CITY_FALLBACK_GEONAMES` | `1` | `0` = strict OSM-only city (no fallback for coordinates outside every imported polygon) |
+| `GEOTAGGER_WRITE_XMP_ON_GEOTAG` | `0` | `1` = write GPS to the XMP sidecar immediately on every geotag edit |
+| `GEOTAGGER_RAW_FULL_DECODE` | `0` | `1` = fully demosaic RAW files via LibRaw instead of using the embedded preview |
+
+## Cross-platform notes
+
+The Windows-specific parts of setup are the automatic ExifTool download
+(`scripts/get_exiftool.py` fetches the Windows zip) and the Windows-flavored paths used in
+this README. Everything else — FastAPI/uvicorn, Pillow/pillow-heif/av, InsightFace/
+onnxruntime, rawpy, osmium — ships wheels for macOS and Linux too, and the app has no
+Windows-only code paths in normal operation. It just hasn't been run/tested there. On
+macOS/Linux: install ExifTool via your package manager (see setup step 2) and use forward-
+slash paths for `--scan-dir`/`--cache-dir`. Reports of success (or failure) are welcome.
+
+## Attribution / data licenses
+
+This project's code is MIT-licensed (see `LICENSE`). It optionally downloads and bundles two
+third-party geographic datasets under their own licenses, unrelated to the code license:
+
+- [GeoNames](https://www.geonames.org) data — [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+- [OpenStreetMap](https://www.openstreetmap.org/copyright) extracts — [ODbL](https://opendatacommons.org/licenses/odbl/)
+
+Map tiles are served live from `tile.openstreetmap.org`; see OSM's tile usage policy if you
+plan on heavy use.
