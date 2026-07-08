@@ -32,7 +32,11 @@ jobs:
 
       - name: Install ExifTool (Windows)
         if: runner.os == 'Windows'
-        run: uv run python scripts/get_exiftool.py
+        # scripts/get_exiftool.py downloads from SourceForge, which serves a
+        # bot-check page (or an outright 403) to CI/datacenter IPs. Chocolatey
+        # (preinstalled on windows-latest) is CI-reliable and puts exiftool on
+        # PATH, which config.get_exiftool_path() already falls back to.
+        run: choco install exiftool -y
 
       - name: Run tests
         run: uv run pytest -q

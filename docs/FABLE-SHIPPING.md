@@ -84,8 +84,14 @@ missing (the lazy-import pattern already used in `faces.py` makes this cheap).
   (`backfill_checksums.py`, `rescan_raw_faces.py`, `reembed_faces.py`,
   `backfill_orientation.py`, `prime_previews.py`). Separate or document which are part of
   the product vs. developer archaeology.
-- **ExifTool version pinned to 13.59** in `get_exiftool.py` with no checksum verification
-  of the download (`hashlib` is imported but unused). Pin + verify, or fetch latest.
+- **`get_exiftool.py` is now cross-platform** (Windows zip / Unix tar.gz, both checksum-
+  verified against exiftool.org's published SHA-256 sums) but SourceForge intermittently
+  serves a bot-check/mirror-selection HTML landing page instead of the file for scripted
+  downloads — confirmed happening as of this review, from both a sandboxed and a real host
+  network. The script detects this (prints a clear error + manual-download link) rather than
+  installing garbage, but doesn't work around it. A more robust fix would follow the page's
+  meta-refresh redirect and retry, or mirror the binaries somewhere scriptable (e.g. a GitHub
+  release asset).
 
 ---
 
@@ -103,3 +109,5 @@ missing (the lazy-import pattern already used in `faces.py` makes this cheap).
 6. Decide install story: clone-only (already stated in README) vs. installable (then fix
    `_PROJECT_ROOT`-relative data paths, §2.1) — and consider dependency extras (§2.2).
 7. ~~Add a startup-time warning when `--network` is passed.~~ Done.
+8. ~~Make ExifTool setup cross-platform + checksum-verified.~~ Done — still open:
+   SourceForge's bot-check landing page (§4) can make the automatic download unreliable.

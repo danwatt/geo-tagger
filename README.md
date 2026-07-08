@@ -42,13 +42,17 @@ uv sync
 
 ### 2. Install ExifTool (required)
 
-**Windows (automatic, recommended):**
+**Automatic, recommended (Windows, macOS, Linux):**
 ```bash
 uv run python scripts/get_exiftool.py
 ```
-This downloads ExifTool into `tools/exiftool.exe`.
+Downloads the platform-appropriate ExifTool distribution from SourceForge, verifies it
+against the SHA-256 checksums ExifTool publishes, and extracts it into `tools/` —
+`tools/exiftool.exe` on Windows, or `tools/exiftool` (+ `tools/lib/`) on macOS/Linux. The
+Unix distribution is a Perl script and needs `perl` on `PATH`, which macOS and most Linux
+distros already ship.
 
-**Windows (manual fallback):**
+**Windows manual fallback:**
 1. Download the Windows zip from <https://exiftool.org>
 2. Unzip — you get `exiftool(-k).exe` and an `exiftool_files/` folder
 3. Rename `exiftool(-k).exe` → `exiftool.exe`
@@ -56,9 +60,9 @@ This downloads ExifTool into `tools/exiftool.exe`.
 
 > Both must sit together or ExifTool won't run.
 
-**macOS/Linux:** install ExifTool via your package manager (`brew install exiftool`,
-`apt install libimage-exiftool-perl`, etc.) — the app falls back to `exiftool` on `PATH` if
-`tools/exiftool.exe` isn't present.
+**macOS/Linux manual fallback:** install ExifTool via your package manager
+(`brew install exiftool`, `apt install libimage-exiftool-perl`, etc.) — the app falls back
+to `exiftool` on `PATH` if nothing is bundled in `tools/`.
 
 You can also point to an existing ExifTool install via:
 ```

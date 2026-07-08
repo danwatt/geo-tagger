@@ -1,14 +1,20 @@
 import os
+import sys
 from pathlib import Path
 
 # Project root (two levels up from this file: src/geotagger/ -> src/ -> project/)
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 
-# ExifTool binary resolution: env var > tools/exiftool.exe > PATH
+# Name of the binary scripts/get_exiftool.py downloads into tools/: the Windows
+# distribution is a standalone .exe, the Unix/macOS distribution is a Perl
+# script (needs `perl` on PATH) named plain "exiftool".
+BUNDLED_EXIFTOOL_NAME = "exiftool.exe" if sys.platform == "win32" else "exiftool"
+
+# ExifTool binary resolution: env var > tools/exiftool(.exe) > PATH
 def get_exiftool_path() -> str:
     if env := os.environ.get("GEOTAGGER_EXIFTOOL"):
         return env
-    bundled = _PROJECT_ROOT / "tools" / "exiftool.exe"
+    bundled = _PROJECT_ROOT / "tools" / BUNDLED_EXIFTOOL_NAME
     if bundled.exists():
         return str(bundled)
     return "exiftool"
