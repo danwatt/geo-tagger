@@ -52,6 +52,11 @@
         <select id="suggest-filter-select" title="Show only unlabeled faces suggested to be this person">
           <option value="">All suggestions</option>
         </select>
+        <label for="unlabeled-hierarchy-select" title="Change how faces below are grouped">Group by:</label>
+        <select id="unlabeled-hierarchy-select" title="Change how faces below are grouped">
+          <option value="date" selected>Date, then person</option>
+          <option value="person">Person, then date</option>
+        </select>
       </div>
       <div id="grid-nav-person" style="display:none">
         <label>Review guesses for:</label>

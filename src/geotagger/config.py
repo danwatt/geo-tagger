@@ -200,6 +200,10 @@ FACE_MIN_GALLERY_BBOX_AREA = float(os.environ.get("GEOTAGGER_FACE_MIN_GALLERY_BB
 # FACE_MATCH_THRESHOLD, but this higher cutoff decides which of those visible
 # suggestions get pre-checked on page load vs. left for manual triage.
 FACE_PRESELECT_MIN_SCORE = float(os.environ.get("GEOTAGGER_FACE_PRESELECT_MIN_SCORE", "0.5"))
+# Max faces the People page's grid (any scope) fetches per load. Higher shows
+# more at once but is slower to render; the server independently caps this at
+# 20000 (see api_list_faces) regardless of what's set here.
+FACE_QUERY_LIMIT = int(os.environ.get("GEOTAGGER_FACE_QUERY_LIMIT", "5000"))
 
 # ── Representative-face picking (prolific people accumulate many near-duplicate
 # labels; cluster them and keep one medoid per look instead of every example) ──
@@ -281,6 +285,9 @@ SETTINGS_SPEC = [
     {"key": "FACE_PRESELECT_MIN_SCORE", "type": "float", "min": 0.1, "max": 0.95, "step": 0.01,
      "group": "Face recognition", "label": "Unlabeled queue pre-select score",
      "help": "On the Unlabeled queue, suggestions scoring at/above this are pre-checked for bulk-assign; weaker ones are shown but left unchecked for manual review."},
+    {"key": "FACE_QUERY_LIMIT", "type": "int", "min": 100, "max": 20000, "step": 100,
+     "group": "Face recognition", "label": "People page grid size",
+     "help": "Max faces fetched per load in the People page grid (any scope). Higher shows more at once but is slower to render."},
     {"key": "FACE_SUGGEST_SCAN_CAP", "type": "int", "min": 0, "max": 200000, "step": 100,
      "group": "Face recognition", "label": "Suggestion scan cap",
      "help": "Max unlabeled faces scanned when gathering guesses. 0 = exhaustive."},

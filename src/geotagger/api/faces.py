@@ -184,7 +184,7 @@ async def api_delete_person(person_id: int):
 async def api_list_faces(
     scope: str = Query("unlabeled", pattern="^(unlabeled|person|ignored|come_back|suggested|recent|all)$"),
     person_id: int | None = Query(None),
-    limit: int = Query(500, ge=1, le=2000),
+    limit: int = Query(500, ge=1, le=20000),
     suggested_only: bool = Query(False),
     start_ts: int | None = Query(None),
     end_ts: int | None = Query(None),

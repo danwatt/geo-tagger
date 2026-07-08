@@ -5,6 +5,11 @@ let navPersons = [];            // people shown in the left nav (windowed under 
 let selectedIds = new Set();    // selected face ids
 let lastClickedIndex = -1;
 let focusedFaceId = null;
+// Faces in the order the grid last rendered them — grouping (month/place,
+// person, batches) reorders relative to `faces` itself, so shift-click range
+// select and arrow-key navigation must index off this, not `faces`. Rebuilt
+// at the top of every renderGrid() call.
+let renderOrder = [];
 
 let scope = "unlabeled";        // "unlabeled" | "all" | "person"
 let scopePersonId = null;       // when scope === "person"
@@ -21,6 +26,13 @@ let crowdGroups = [];           // crowd photo groups (Crowds view)
 let hideCompletedCrowds = true; // hide crowd photos with no unlabeled faces
 
 let groupGapSeconds = 86400;    // event grouping gap in the guesses view (1 day)
+
+// Unlabeled queue: which level nests inside which. "date" = month → location →
+// person (computeMonthLocationGroups, default); "person" = suggested person →
+// date-range chunks within that person (computeUnlabeledPersonGroups). Persisted
+// so the choice survives a reload.
+const UNLABELED_HIERARCHY_LS_KEY = "geotagger.people.unlabeledHierarchy";
+let unlabeledHierarchy = localStorage.getItem(UNLABELED_HIERARCHY_LS_KEY) || "date";
 
 // Focus: narrows the tagging/discovery surfaces (people list, Unlabeled,
 // suggestions, Discover, Crowds) to one Context's time window. null = all time.
@@ -39,11 +51,14 @@ let jumpToUndated = false;      // one-shot: scroll to the Undated section once 
 const FOCUS_LS_KEY = "geotagger.people.focusContextId";
 const FOCUS_SPATIAL_LS_KEY = "geotagger.people.focusSpatial";
 
-const FACE_LIMIT = 1000;
+// Max faces fetched per grid load. Loaded from the server's FACE_QUERY_LIMIT
+// setting (see loadLiveSettings, which pulls both in one /api/settings
+// call); this default is only used if that fetch hasn't resolved yet.
+let FACE_LIMIT = 5000;
 // Auto-select bar for the Unlabeled queue: a suggestion only exists at all above
 // FACE_MATCH_THRESHOLD, so this higher cutoff pre-selects just the confident
 // guesses and leaves weaker ones for manual triage. Loaded from the server's
-// FACE_PRESELECT_MIN_SCORE setting (see loadConfidentScore); this default is
+// FACE_PRESELECT_MIN_SCORE setting (see loadLiveSettings); this default is
 // only used if that fetch hasn't resolved yet.
 let CONFIDENT_SCORE = 0.5;
 // Every top-toolbar bulk action (assign/unassign/accept/ignore) is one click and
@@ -61,7 +76,7 @@ const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
 document.addEventListener("DOMContentLoaded", async () => {
   bindToolbar();
   bindKeyboardShortcuts();
-  await loadConfidentScore();  // before loadFaces, so the first render pre-selects correctly
+  await loadLiveSettings();  // before loadFaces, so the first render pre-selects correctly
   await loadFocusContexts();   // restores any saved Focus before the first load
   await loadPersons();
 
@@ -78,17 +93,20 @@ document.addEventListener("DOMContentLoaded", async () => {
   setStatus("Select a person on the left, or scan for faces to begin.");
 });
 
-// Pulls the live FACE_PRESELECT_MIN_SCORE setting (tunable on the Settings page)
-// so the Unlabeled queue's pre-select cutoff stays in sync without a code change.
-async function loadConfidentScore() {
+// Pulls live settings tunable on the Settings page — FACE_PRESELECT_MIN_SCORE
+// (Unlabeled queue pre-select cutoff) and FACE_QUERY_LIMIT (grid page size) —
+// so both stay in sync without a code change.
+async function loadLiveSettings() {
   try {
     const res = await fetch("/api/settings");
     if (!res.ok) return;
     const data = await res.json();
-    const spec = data.settings.find(s => s.key === "FACE_PRESELECT_MIN_SCORE");
-    if (spec) CONFIDENT_SCORE = spec.value;
+    const scoreSpec = data.settings.find(s => s.key === "FACE_PRESELECT_MIN_SCORE");
+    if (scoreSpec) CONFIDENT_SCORE = scoreSpec.value;
+    const limitSpec = data.settings.find(s => s.key === "FACE_QUERY_LIMIT");
+    if (limitSpec) FACE_LIMIT = limitSpec.value;
   } catch (e) {
-    // Keep the built-in default if settings can't be reached.
+    // Keep the built-in defaults if settings can't be reached.
   }
 }
 
@@ -124,6 +142,13 @@ function bindToolbar() {
   document.getElementById("suggest-filter-select").addEventListener("change", (e) => {
     suggestFilterPersonId = e.target.value ? parseInt(e.target.value) : null;
     if (scope === "unlabeled") applyUnlabeledView();
+  });
+  const hierarchySel = document.getElementById("unlabeled-hierarchy-select");
+  hierarchySel.value = unlabeledHierarchy;
+  hierarchySel.addEventListener("change", (e) => {
+    unlabeledHierarchy = e.target.value;
+    localStorage.setItem(UNLABELED_HIERARCHY_LS_KEY, unlabeledHierarchy);
+    if (scope === "unlabeled") renderGrid();
   });
 
   document.getElementById("assign-btn").addEventListener("click", openAssignPickerForSelection);
@@ -614,9 +639,11 @@ async function loadFaces() {
       faces.sort((a, b) => (b.assigned_at || 0) - (a.assigned_at || 0));
     } else if (scope === "unlabeled") {
       // Oldest first so each month's location buckets land in first-seen
-      // (chronological) order, then flatten into that month → location order so
-      // the flat array matches the on-screen order — shift-range selection
-      // relies on index ↔ faces[index] correspondence. This is the master list;
+      // (chronological) order, then flatten into that month → location order.
+      // (Shift-range/arrow nav index off `renderOrder`, built fresh each
+      // render, so this doesn't need to match the on-screen order itself —
+      // but keeping it chronological is what makes the per-bucket ordering,
+      // e.g. sortBucketBySuggestion, well-defined.) This is the master list;
       // the suggested-person filter narrows it into `faces` in applyUnlabeledView.
       faces.sort((a, b) => (a.photo_datetime || 0) - (b.photo_datetime || 0));
       unlabeledAll = computeMonthLocationGroups(faces).flatMap(g => g.faces);
@@ -741,7 +768,8 @@ function applyUnlabeledView() {
     return;
   }
   const noun = suggestedOnly ? "suggested face(s)" : "unlabeled face(s)";
-  let msg = `${returned} of ${total} ${noun}, grouped by month then place`;
+  const groupedBy = unlabeledHierarchy === "person" ? "person then date" : "month then place";
+  let msg = `${returned} of ${total} ${noun}, grouped by ${groupedBy}`;
   if (total > returned) msg += ` (showing first ${returned})`;
   setStatus(msg + preselNote + focusStatusSuffix());
 }
@@ -769,11 +797,12 @@ function makeGroupSection(groupIdx) {
 function renderGrid() {
   const grid = document.getElementById("grid");
   grid.innerHTML = "";
+  renderOrder = [];
 
   // In the guesses view, lay faces out under event-group headers (date-range
   // title, location in the meta; the Ignore button acts on the selection).
   if (scope === "suggested") {
-    let idx = 0, groupIdx = 0;
+    let groupIdx = 0;
     computeTimeGroups(faces, groupGapSeconds).forEach(group => {
       const sec = makeGroupSection(groupIdx++);
       const place = locationLabel(group.faces);
@@ -783,7 +812,7 @@ function renderGrid() {
       }));
       const cells = document.createElement("div");
       cells.className = "face-group-cells";
-      group.faces.forEach(face => { cells.appendChild(makeFaceCell(face, idx)); idx++; });
+      group.faces.forEach(face => { cells.appendChild(makeFaceCell(face)); });
       sec.appendChild(cells);
       grid.appendChild(sec);
     });
@@ -793,13 +822,13 @@ function renderGrid() {
   // Ignored: group by ignore-batch (shared ignored_at), newest first,
   // each batch header offering a one-click "Restore all".
   if (scope === "ignored") {
-    let idx = 0, groupIdx = 0;
+    let groupIdx = 0;
     computeIgnoreBatches(faces).forEach(group => {
       const sec = makeGroupSection(groupIdx++);
       sec.appendChild(makeIgnoreBatchHeader(group));
       const cells = document.createElement("div");
       cells.className = "face-group-cells";
-      group.faces.forEach(face => { cells.appendChild(makeFaceCell(face, idx)); idx++; });
+      group.faces.forEach(face => { cells.appendChild(makeFaceCell(face)); });
       sec.appendChild(cells);
       grid.appendChild(sec);
     });
@@ -809,13 +838,13 @@ function renderGrid() {
   // Come Back: group by come-back batch (shared come_back_at), newest first,
   // each batch header offering a one-click "Restore all".
   if (scope === "come_back") {
-    let idx = 0, groupIdx = 0;
+    let groupIdx = 0;
     computeComeBackBatches(faces).forEach(group => {
       const sec = makeGroupSection(groupIdx++);
       sec.appendChild(makeComeBackBatchHeader(group));
       const cells = document.createElement("div");
       cells.className = "face-group-cells";
-      group.faces.forEach(face => { cells.appendChild(makeFaceCell(face, idx)); idx++; });
+      group.faces.forEach(face => { cells.appendChild(makeFaceCell(face)); });
       sec.appendChild(cells);
       grid.appendChild(sec);
     });
@@ -825,13 +854,13 @@ function renderGrid() {
   // Recently tagged: group by tag-batch (shared assigned_at), newest first,
   // each batch header offering a one-click "Untag all".
   if (scope === "recent") {
-    let idx = 0, groupIdx = 0;
+    let groupIdx = 0;
     computeTagBatches(faces).forEach(group => {
       const sec = makeGroupSection(groupIdx++);
       sec.appendChild(makeTagBatchHeader(group));
       const cells = document.createElement("div");
       cells.className = "face-group-cells";
-      group.faces.forEach(face => { cells.appendChild(makeFaceCell(face, idx)); idx++; });
+      group.faces.forEach(face => { cells.appendChild(makeFaceCell(face)); });
       sec.appendChild(cells);
       grid.appendChild(sec);
     });
@@ -842,8 +871,13 @@ function renderGrid() {
   // month then by location. Year/month dividers read top-to-bottom; each
   // location within a month is one group (location title, date range in the
   // meta) and its Ignore button acts on the whole group, not just the selection.
+  if (scope === "unlabeled" && unlabeledHierarchy === "person") {
+    renderUnlabeledPersonFirst(grid);
+    return;
+  }
+
   if (scope === "unlabeled") {
-    let idx = 0, groupIdx = 0, curYear, curMonth;
+    let groupIdx = 0, curYear, curMonth;
     computeMonthLocationGroups(faces).forEach(group => {
       if (group.year !== curYear) {
         curYear = group.year; curMonth = undefined;
@@ -883,9 +917,8 @@ function renderGrid() {
           run.className = "person-run";
           cells.appendChild(run);
         }
-        run.appendChild(makeFaceCell(face, idx));
+        run.appendChild(makeFaceCell(face));
         prevSug = sug;
-        idx++;
       });
       sec.appendChild(cells);
       grid.appendChild(sec);
@@ -898,7 +931,7 @@ function renderGrid() {
   if (scope === "person") {
     grid.appendChild(makePersonHeader());
     let curYear = null, curMonth = null;
-    faces.forEach((face, idx) => {
+    faces.forEach((face) => {
       if (face.photo_datetime) {
         const d = new Date(face.photo_datetime * 1000);
         const year = d.getFullYear();
@@ -917,12 +950,12 @@ function renderGrid() {
           grid.appendChild(div);
         }
       }
-      grid.appendChild(makeFaceCell(face, idx));
+      grid.appendChild(makeFaceCell(face));
     });
     return;
   }
 
-  faces.forEach((face, idx) => grid.appendChild(makeFaceCell(face, idx)));
+  faces.forEach((face) => grid.appendChild(makeFaceCell(face)));
 }
 
 // Action bar atop a person's photos: jump to recognition's untagged guesses for them.
@@ -1001,6 +1034,58 @@ function computeMonthLocationGroups(list) {
   return out;
 }
 
+// Person-first hierarchy for the Unlabeled queue: suggested person (or "No
+// suggestion") → date-range chunks within that person, chunks sorted
+// chronologically inside. Mirrors computeMonthLocationGroups's nesting, just
+// with the two outer levels swapped.
+const UNLABELED_PERSON_GAP_SECONDS = 86400;   // new date-range chunk after this big a gap
+
+function computeUnlabeledPersonGroups(list) {
+  const buckets = new Map();   // person_id ("none" for unsuggested) → { name, faces }
+  list.forEach(f => {
+    const pid = f.suggestion ? f.suggestion.person_id : "none";
+    let b = buckets.get(pid);
+    if (!b) {
+      b = { personId: pid, name: f.suggestion ? f.suggestion.person_name : null, faces: [] };
+      buckets.set(pid, b);
+    }
+    b.faces.push(f);
+  });
+  const named = [...buckets.values()].filter(b => b.personId !== "none")
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const none = buckets.get("none");
+  const personGroups = none ? [...named, none] : named;
+  personGroups.forEach(b => { b.chunks = computeTimeGroups(b.faces, UNLABELED_PERSON_GAP_SECONDS); });
+  return personGroups;
+}
+
+function renderUnlabeledPersonFirst(grid) {
+  let groupIdx = 0;
+  computeUnlabeledPersonGroups(faces).forEach(person => {
+    const pd = document.createElement("div");
+    pd.className = "grid-year-divider";
+    pd.textContent = person.name || `No suggestion (${person.faces.length})`;
+    grid.appendChild(pd);
+
+    person.chunks.forEach(chunk => {
+      const sec = makeGroupSection(groupIdx++);
+      const place = locationLabel(chunk.faces);
+      const personLabel = person.name || "unlabeled faces";
+      sec.appendChild(makeGroupHeader(chunk, {
+        title: formatGroupRange(chunk),
+        meta: place ? `· 📍 ${place}` : "",
+        label: `${personLabel} · ${formatGroupRange(chunk)}`,
+        ignoreAll: true,
+      }));
+      const cells = document.createElement("div");
+      cells.className = "face-group-cells";
+      chunk.faces.forEach(face => { cells.appendChild(makeFaceCell(face)); });
+      sec.appendChild(cells);
+      grid.appendChild(sec);
+    });
+  });
+}
+
 // Order the faces within one location bucket so the same suggested person is
 // adjacent (so you can rubber-band / confirm a person's faces as a run): guessed
 // faces first, grouped by suggested person and ordered by that person's earliest
@@ -1037,7 +1122,8 @@ function facesDateRange(faceList) {
   return formatDateRange(Math.min(...ts), Math.max(...ts));
 }
 
-function makeFaceCell(face, idx) {
+function makeFaceCell(face) {
+  const idx = renderOrder.push(face) - 1;
   const cell = document.createElement("div");
   cell.className = "thumb-cell" +
     (selectedIds.has(face.id) ? " selected" : "") +
@@ -1372,7 +1458,7 @@ function handleCellClick(e, face, idx) {
   } else if (e.shiftKey && lastClickedIndex >= 0) {
     const start = Math.min(lastClickedIndex, idx);
     const end = Math.max(lastClickedIndex, idx);
-    for (let i = start; i <= end; i++) selectedIds.add(faces[i].id);
+    for (let i = start; i <= end; i++) selectedIds.add(renderOrder[i].id);
   } else {
     selectedIds.clear();
     selectedIds.add(face.id);
@@ -1401,13 +1487,13 @@ function scrollFaceIntoView(faceId) {
 // Moves focus by `delta` faces and collapses the selection to just that face
 // (mirrors a plain click on the destination cell).
 function moveFocus(delta) {
-  if (!faces.length) return;
-  let idx = faces.findIndex(f => f.id === focusedFaceId);
+  if (!renderOrder.length) return;
+  let idx = renderOrder.findIndex(f => f.id === focusedFaceId);
   idx = idx === -1 ? (delta > 0 ? -1 : 0) : idx;
-  idx = Math.max(0, Math.min(faces.length - 1, idx + delta));
+  idx = Math.max(0, Math.min(renderOrder.length - 1, idx + delta));
   selectedIds.clear();
-  selectedIds.add(faces[idx].id);
-  focusedFaceId = faces[idx].id;
+  selectedIds.add(renderOrder[idx].id);
+  focusedFaceId = renderOrder[idx].id;
   lastClickedIndex = idx;
   renderGrid();
   updateDetail();
@@ -1417,16 +1503,16 @@ function moveFocus(delta) {
 // Extends the selection from the last click/nav anchor to `delta` faces past
 // the current focus (mirrors shift-click's range select).
 function extendFocus(delta) {
-  if (!faces.length) return;
+  if (!renderOrder.length) return;
   const anchor = lastClickedIndex >= 0 ? lastClickedIndex :
-    Math.max(0, faces.findIndex(f => f.id === focusedFaceId));
-  let idx = faces.findIndex(f => f.id === focusedFaceId);
+    Math.max(0, renderOrder.findIndex(f => f.id === focusedFaceId));
+  let idx = renderOrder.findIndex(f => f.id === focusedFaceId);
   idx = idx === -1 ? anchor : idx;
-  idx = Math.max(0, Math.min(faces.length - 1, idx + delta));
+  idx = Math.max(0, Math.min(renderOrder.length - 1, idx + delta));
   const start = Math.min(anchor, idx);
   const end = Math.max(anchor, idx);
-  for (let i = start; i <= end; i++) selectedIds.add(faces[i].id);
-  focusedFaceId = faces[idx].id;
+  for (let i = start; i <= end; i++) selectedIds.add(renderOrder[i].id);
+  focusedFaceId = renderOrder[idx].id;
   lastClickedIndex = idx;
   renderGrid();
   updateDetail();
