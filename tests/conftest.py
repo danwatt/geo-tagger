@@ -1,6 +1,32 @@
+import os
+import shutil
+from pathlib import Path
+
 import pytest
 
 from geotagger import index, exiftool_session, thumbnails, geocode, osm_places, config
+
+
+def _find_dev_exiftool() -> str | None:
+    """Best-effort locate a locally available ExifTool binary for the whole test
+    session. Tests isolate GEOTAGGER_CACHE_DIR per test (see the `client`
+    fixture), so config.get_exiftool_path()'s "alongside the cache dir" default
+    can't find a bundled binary downloaded there — set GEOTAGGER_EXIFTOOL (which
+    always takes priority) once so the session doesn't depend on which cache dir
+    a given test happens to use."""
+    if shutil.which("exiftool"):
+        return "exiftool"
+    legacy_repo_tools = Path(__file__).parent.parent / "tools" / config.BUNDLED_EXIFTOOL_NAME
+    for candidate in (config.get_state_dir() / "tools" / config.BUNDLED_EXIFTOOL_NAME, legacy_repo_tools):
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+if not os.environ.get("GEOTAGGER_EXIFTOOL"):
+    if _dev_exiftool := _find_dev_exiftool():
+        os.environ["GEOTAGGER_EXIFTOOL"] = _dev_exiftool
+        config.EXIFTOOL_PATH = _dev_exiftool
 
 
 @pytest.fixture

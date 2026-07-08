@@ -2,24 +2,10 @@ import os
 import sys
 from pathlib import Path
 
-# Project root (two levels up from this file: src/geotagger/ -> src/ -> project/)
-_PROJECT_ROOT = Path(__file__).parent.parent.parent
-
 # Name of the binary scripts/get_exiftool.py downloads into tools/: the Windows
 # distribution is a standalone .exe, the Unix/macOS distribution is a Perl
 # script (needs `perl` on PATH) named plain "exiftool".
 BUNDLED_EXIFTOOL_NAME = "exiftool.exe" if sys.platform == "win32" else "exiftool"
-
-# ExifTool binary resolution: env var > tools/exiftool(.exe) > PATH
-def get_exiftool_path() -> str:
-    if env := os.environ.get("GEOTAGGER_EXIFTOOL"):
-        return env
-    bundled = _PROJECT_ROOT / "tools" / BUNDLED_EXIFTOOL_NAME
-    if bundled.exists():
-        return str(bundled)
-    return "exiftool"
-
-EXIFTOOL_PATH: str = get_exiftool_path()
 
 # Cache directory: can be absolute path or relative to scanned root
 # If GEOTAGGER_CACHE_DIR is set, use that as an absolute path
@@ -40,6 +26,36 @@ def get_state_dir() -> Path:
     if env := os.environ.get("GEOTAGGER_STATE_DIR"):
         return Path(env)
     return Path.home() / ".geotagger"
+
+# Base dir for downloaded tools/ and data/ (ExifTool binary, GeoNames, OSM places):
+# same resolution as the DB's cache_dir, so they default to living alongside the
+# index rather than inside the repo checkout. GEOTAGGER_CACHE_DIR (if set) wins as
+# a single shared location; otherwise it's the app's primary scan root's cache dir,
+# or — before any root is known (fresh install, no scan configured yet) — the
+# global per-user state dir.
+def resolve_data_root(primary_root: Path | None = None) -> Path:
+    if env := os.environ.get("GEOTAGGER_CACHE_DIR"):
+        return Path(env)
+    if primary_root is not None:
+        return Path(primary_root) / CACHE_DIR_NAME
+    return get_state_dir()
+
+# Where scripts/get_exiftool.py installs the downloaded binary — always the
+# standard location, regardless of GEOTAGGER_EXIFTOOL (which points at a binary
+# you've supplied yourself; you wouldn't run the download script in that case).
+def get_tools_dir(data_root: Path | None = None) -> Path:
+    return resolve_data_root(data_root) / "tools"
+
+# ExifTool binary resolution: env var > <data_root>/tools/exiftool(.exe) > PATH
+def get_exiftool_path(data_root: Path | None = None) -> str:
+    if env := os.environ.get("GEOTAGGER_EXIFTOOL"):
+        return env
+    bundled = get_tools_dir(data_root) / BUNDLED_EXIFTOOL_NAME
+    if bundled.exists():
+        return str(bundled)
+    return "exiftool"
+
+EXIFTOOL_PATH: str = get_exiftool_path()
 
 # Reclaim free-list space (deleted-row pages) at startup via VACUUM, gated on
 # the free-page ratio so a mostly-compact DB isn't fully rewritten every run.
@@ -64,10 +80,10 @@ SIDECAR_MODE = os.environ.get("GEOTAGGER_SIDECAR_MODE", "basename")  # or "fulln
 # Directory holding the GeoNames data files (cities500.txt, admin1CodesASCII.txt,
 # admin2Codes.txt, countryInfo.txt). Download them with:
 #     uv run python scripts/get_geonames.py
-def get_geonames_dir() -> Path:
+def get_geonames_dir(data_root: Path | None = None) -> Path:
     if env := os.environ.get("GEOTAGGER_GEONAMES_DIR"):
         return Path(env)
-    return _PROJECT_ROOT / "data" / "geonames"
+    return resolve_data_root(data_root) / "data" / "geonames"
 
 GEONAMES_DIR: Path = get_geonames_dir()
 
@@ -82,12 +98,23 @@ GEOCODE_PRECISION = int(os.environ.get("GEOTAGGER_GEOCODE_PRECISION", "4"))
 #     uv run python scripts/build_osm_places.py <region>.osm.pbf
 # When present, polygon containment is the source of a photo's city + sub-location
 # (see osm_places.py); GeoNames then only supplies state/county/country.
-def get_osm_db() -> Path:
+def get_osm_db(data_root: Path | None = None) -> Path:
     if env := os.environ.get("GEOTAGGER_OSM_DB"):
         return Path(env)
-    return _PROJECT_ROOT / "data" / "osm" / "places.sqlite"
+    return resolve_data_root(data_root) / "data" / "osm" / "places.sqlite"
 
 OSM_DB_PATH: Path = get_osm_db()
+
+
+def resolve_data_paths(primary_root: Path | None):
+    """(Re)resolve EXIFTOOL_PATH/GEONAMES_DIR/OSM_DB_PATH once the app's primary
+    scan root is known, so they default alongside the DB's cache_dir instead of
+    the state-dir fallback used at import time (no root known yet). Call once
+    during startup, before ExifTool/geocoder/OSM places are touched."""
+    global EXIFTOOL_PATH, GEONAMES_DIR, OSM_DB_PATH
+    EXIFTOOL_PATH = get_exiftool_path(primary_root)
+    GEONAMES_DIR = get_geonames_dir(primary_root)
+    OSM_DB_PATH = get_osm_db(primary_root)
 
 # When True, fall back to the GeoNames nearest-city name for photos that fall
 # outside every OSM city polygon (e.g. rural areas, or a region not yet ingested).

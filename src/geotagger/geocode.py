@@ -21,7 +21,7 @@ import threading
 from pathlib import Path
 
 from geotagger import config
-from geotagger.config import GEONAMES_DIR, GEOCODE_PRECISION
+from geotagger.config import GEOCODE_PRECISION
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ _country_names: dict[str, str] = {}  # cc                -> country name
 
 
 def _cities_file() -> Path:
-    return GEONAMES_DIR / "cities500.txt"
+    return config.GEONAMES_DIR / "cities500.txt"
 
 
 def is_available() -> bool:
@@ -70,7 +70,7 @@ def _load():
         return
     if not is_available():
         _state = "unavailable"
-        _error = (f"GeoNames data not found in {GEONAMES_DIR}. "
+        _error = (f"GeoNames data not found in {config.GEONAMES_DIR}. "
                   "Run: uv run python scripts/get_geonames.py")
         logger.warning(_error)
         return
@@ -120,7 +120,7 @@ def _load():
                                np.sin(lat_r)))
         _tree = cKDTree(xyz)
         _state = "ready"
-        logger.info("Reverse geocoder ready: %d cities from %s", len(_names), GEONAMES_DIR)
+        logger.info("Reverse geocoder ready: %d cities from %s", len(_names), config.GEONAMES_DIR)
     except Exception as e:  # noqa: BLE001 — degrade gracefully, never crash startup
         _state = "unavailable"
         _error = f"Failed to load GeoNames data: {e}"
@@ -128,7 +128,7 @@ def _load():
 
 
 def _load_admin1():
-    path = GEONAMES_DIR / "admin1CodesASCII.txt"
+    path = config.GEONAMES_DIR / "admin1CodesASCII.txt"
     if not path.exists():
         return
     with path.open(encoding="utf-8") as f:
@@ -139,7 +139,7 @@ def _load_admin1():
 
 
 def _load_admin2():
-    path = GEONAMES_DIR / "admin2Codes.txt"
+    path = config.GEONAMES_DIR / "admin2Codes.txt"
     if not path.exists():
         return
     with path.open(encoding="utf-8") as f:
@@ -150,7 +150,7 @@ def _load_admin2():
 
 
 def _load_countries():
-    path = GEONAMES_DIR / "countryInfo.txt"
+    path = config.GEONAMES_DIR / "countryInfo.txt"
     if not path.exists():
         return
     with path.open(encoding="utf-8") as f:

@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 import threading
 import exiftool
-from geotagger.config import EXIFTOOL_PATH
+from geotagger import config
 
 _et: exiftool.ExifToolHelper | None = None
 _et_error: str | None = None
@@ -47,18 +47,18 @@ def start_et() -> bool:
         # on non-cp1252 file paths. "-G -n" are pyexiftool's defaults, which the
         # rest of the app relies on (group-prefixed keys, numeric GPS/orientation).
         _et = exiftool.ExifToolHelper(
-            executable=EXIFTOOL_PATH,
+            executable=config.EXIFTOOL_PATH,
             encoding="utf-8",
             common_args=["-charset", "filename=utf8", "-G", "-n"],
         )
         version = _et.execute("-ver").strip()
         _et_error = None
-        print(f"ExifTool {version} ready ({EXIFTOOL_PATH})")
+        print(f"ExifTool {version} ready ({config.EXIFTOOL_PATH})")
         return True
     except FileNotFoundError:
         _et = None
         _et_error = (
-            f"ExifTool binary not found at '{EXIFTOOL_PATH}'. "
+            f"ExifTool binary not found at '{config.EXIFTOOL_PATH}'. "
             "Run: uv run python scripts/get_exiftool.py"
         )
         print(f"WARNING: {_et_error}")

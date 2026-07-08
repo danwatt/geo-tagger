@@ -30,11 +30,30 @@ def _auto_vacuum():
         print(f"Auto-vacuum skipped: {e}")
 
 
+def _primary_root() -> Path | None:
+    """The scan root whose cache_dir doubles as the default location for
+    downloaded tools/ and data/ (see config.resolve_data_paths) — the first
+    --scan-dir this run, or the legacy last-scanned root, before any scan has
+    actually happened."""
+    scan_dirs_env = os.environ.get("GEOTAGGER_SCAN_DIRS")
+    if scan_dirs_env:
+        scan_dirs = [d.strip() for d in scan_dirs_env.split("\n") if d.strip()]
+        if scan_dirs:
+            return Path(scan_dirs[0])
+        return None
+    last_root = index.get_last_scan_root()
+    return Path(last_root) if last_root else None
+
+
 @asynccontextmanager
 async def lifespan(app):
     # Initialize thread pool
     max_workers = int(os.environ.get("GEOTAGGER_WORKERS", "4"))
     init_executor(max_workers)
+
+    # Resolve tools/data default location (alongside the primary root's cache_dir)
+    # before ExifTool starts, so it looks in the right place for the bundled binary.
+    config.resolve_data_paths(_primary_root())
 
     async with _et_lifespan(app):
         no_scan = os.environ.get("GEOTAGGER_NO_SCAN") == "1"

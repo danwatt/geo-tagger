@@ -1,6 +1,8 @@
 """
-Download the GeoNames data files used for offline reverse geocoding and place
-them in data/geonames/.
+Download the GeoNames data files used for offline reverse geocoding (see
+geotagger.config.get_geonames_dir — by default alongside the database, under
+the primary scan root's cache dir, or ~/.geotagger before any root is
+configured; override with GEOTAGGER_CACHE_DIR or GEOTAGGER_GEONAMES_DIR).
 
 Run:  uv run python scripts/get_geonames.py
 
@@ -13,14 +15,17 @@ We use:
   - countryInfo.txt      maps ISO country code         -> country name
 """
 
+import argparse
 import io
 import sys
 import zipfile
 from pathlib import Path
 from urllib.request import urlopen, Request
 
+from geotagger.config import get_geonames_dir
+
 BASE = "https://download.geonames.org/export/dump"
-DATA_DIR = Path(__file__).parent.parent / "data" / "geonames"
+DATA_DIR = get_geonames_dir()  # overridden by --root in main()
 
 # (filename to save, source url, is_zip)
 FILES = [
@@ -43,6 +48,16 @@ def download(url: str) -> bytes:
 
 
 def main():
+    global DATA_DIR
+    ap = argparse.ArgumentParser(description="Download GeoNames data for offline reverse geocoding.")
+    ap.add_argument("--root", type=Path,
+                    help="The directory you'll pass as --scan-dir. Installs into "
+                         "<root>/.geotagger/data/geonames instead of the global default, "
+                         "matching where the app looks once it's configured with this root.")
+    args = ap.parse_args()
+    if args.root:
+        DATA_DIR = get_geonames_dir(args.root)
+
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     for name, url, is_zip in FILES:

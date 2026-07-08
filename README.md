@@ -40,6 +40,23 @@ below assumes a source checkout.
 uv sync
 ```
 
+### Where downloaded tools/data end up
+
+Steps 2–4 below download a chunk of shared, one-time setup data: the ExifTool binary,
+GeoNames, and OSM place boundaries. By default they land next to the database — i.e.
+alongside whichever `--cache-dir`/`--scan-dir` you end up running the app with (see
+[Cache location](#cache-location)) — but that root isn't known yet if you're doing setup
+before your first run. Each script accepts `--root <dir>` (same value as the `--scan-dir`
+you're about to use) so setup data lands in the same place the app will look for it:
+
+```bash
+uv run python scripts/get_exiftool.py --root "D:\Photos"
+```
+
+Skip `--root` and they fall back to a global location (`GEOTAGGER_CACHE_DIR` if set,
+otherwise `~/.geotagger`) — fine if you only ever use one photo library, or if you set
+`GEOTAGGER_CACHE_DIR` for every run anyway.
+
 ### 2. Install ExifTool (required)
 
 **Automatic, recommended (Windows, macOS, Linux):**
@@ -47,16 +64,16 @@ uv sync
 uv run python scripts/get_exiftool.py
 ```
 Downloads the platform-appropriate ExifTool distribution from SourceForge, verifies it
-against the SHA-256 checksums ExifTool publishes, and extracts it into `tools/` —
-`tools/exiftool.exe` on Windows, or `tools/exiftool` (+ `tools/lib/`) on macOS/Linux. The
-Unix distribution is a Perl script and needs `perl` on `PATH`, which macOS and most Linux
-distros already ship.
+against the SHA-256 checksums ExifTool publishes, and extracts it into `tools/` under the
+resolved location above — `tools/exiftool.exe` on Windows, or `tools/exiftool` (+
+`tools/lib/`) on macOS/Linux. The Unix distribution is a Perl script and needs `perl` on
+`PATH`, which macOS and most Linux distros already ship.
 
 **Windows manual fallback:**
 1. Download the Windows zip from <https://exiftool.org>
 2. Unzip — you get `exiftool(-k).exe` and an `exiftool_files/` folder
 3. Rename `exiftool(-k).exe` → `exiftool.exe`
-4. Place both `exiftool.exe` **and** `exiftool_files/` inside the `tools/` directory
+4. Place both `exiftool.exe` **and** `exiftool_files/` inside the resolved `tools/` directory
 
 > Both must sit together or ExifTool won't run.
 
@@ -76,9 +93,9 @@ uv run python scripts/get_geonames.py
 ```
 
 This downloads ~48 MB of [GeoNames](https://www.geonames.org) data (CC BY 4.0) into
-`data/geonames/`, enabling fully-offline reverse geocoding (city / state / country from
-coordinates). If you skip this step, everything else still works — photos just won't get
-place names.
+`data/geonames/` under the resolved location above, enabling fully-offline reverse
+geocoding (city / state / country from coordinates). If you skip this step, everything
+else still works — photos just won't get place names.
 
 ### 4. Install OSM place boundaries (optional — polygon reverse geocoding)
 
@@ -89,15 +106,16 @@ Download the region(s) where your photos are from [GeoFabrik](https://download.g
 ~0.3–2 GB) — then:
 
 ```bash
-uv run python scripts/build_osm_places.py path/to/<state>-latest.osm.pbf
+uv run python scripts/build_osm_places.py path/to/<state>-latest.osm.pbf --root "D:\Photos"
 # add more regions later without rebuilding:
-uv run python scripts/build_osm_places.py path/to/<another>.osm.pbf --append
+uv run python scripts/build_osm_places.py path/to/<another>.osm.pbf --append --root "D:\Photos"
 ```
 
-This assembles named area polygons into `data/osm/places.sqlite`. When present, polygon
-containment becomes the source of a photo's **city + sub-location**; GeoNames then only
-supplies state/county/country. Skip it and geocoding falls back to GeoNames city names.
-OSM data © OpenStreetMap contributors (ODbL). View the boundaries on the **Places DB** map
+This assembles named area polygons into `data/osm/places.sqlite` under the resolved
+location above (or pass `--db` for an exact path). When present, polygon containment
+becomes the source of a photo's **city + sub-location**; GeoNames then only supplies
+state/county/country. Skip it and geocoding falls back to GeoNames city names. OSM data
+© OpenStreetMap contributors (ODbL). View the boundaries on the **Places DB** map
 (`/map.html`) via the "OSM places" toggle.
 
 ### 5. Point it at your photos and run
@@ -156,15 +174,21 @@ touch the People/Representatives/Discover features.
 ## Cache location
 
 By default, each scanned directory gets its own `.geotagger/` subfolder (database +
-thumbnails, potentially gigabytes for a large library) created **inside that photo root**.
-If your photo tree is treated as read-only, or synced by a NAS/Dropbox/backup tool that will
-churn on thumbnail writes, point the cache elsewhere instead:
+thumbnails, potentially gigabytes for a large library, plus the downloaded ExifTool
+binary and GeoNames/OSM data — see [setup](#where-downloaded-toolsdata-end-up)) created
+**inside that photo root**. If your photo tree is treated as read-only, or synced by a
+NAS/Dropbox/backup tool that will churn on thumbnail writes, point the cache elsewhere
+instead:
 
 ```bash
 uv run geotagger --scan-dir "D:\Photos" --cache-dir "D:\GeoTaggerCache"
 # or
 GEOTAGGER_CACHE_DIR=D:\GeoTaggerCache uv run geotagger --scan-dir "D:\Photos"
 ```
+
+`GEOTAGGER_CACHE_DIR` is a single shared location for the database, thumbnails, ExifTool,
+and GeoNames/OSM data alike — handy if you scan more than one photo library and don't want
+to duplicate the downloaded tools/data per library.
 
 ## Resetting / uninstalling
 
@@ -173,8 +197,9 @@ All state lives in a small number of places, all safe to delete to start over:
 - `<cache-dir>/.geotagger/` (or `.geotagger/` inside each scan root, if `--cache-dir` was
   never set) — the database and thumbnails.
 - `~/.insightface` — the downloaded face-recognition model pack.
-- `tools/exiftool.exe` (Windows) — the downloaded ExifTool binary.
-- `data/geonames/`, `data/osm/` — downloaded GeoNames/OSM data.
+- `<cache-dir>/tools/`, `<cache-dir>/data/` — the downloaded ExifTool binary and
+  GeoNames/OSM data, where `<cache-dir>` is the same location as above, or `~/.geotagger`
+  if neither `--cache-dir` nor `--root` was ever passed.
 
 Deleting the `.geotagger` cache loses tagged faces, life contexts, and any geotags/place
 names that were never exported to XMP sidecars (see below) — sidecars themselves and the
@@ -352,16 +377,16 @@ live from the Settings page):
 
 | Env var | Default | Description |
 |---|---|---|
-| `GEOTAGGER_EXIFTOOL` | `tools/exiftool.exe` | Path to ExifTool binary |
+| `GEOTAGGER_EXIFTOOL` | *(none — see [tools/data location](#where-downloaded-toolsdata-end-up))* | Path to ExifTool binary |
 | `GEOTAGGER_SIDECAR_MODE` | `basename` | `basename` or `fullname` |
 | `GEOTAGGER_HOST` | `127.0.0.1` | Bind address |
 | `GEOTAGGER_PORT` | `8000` | Port |
-| `GEOTAGGER_CACHE_DIR` | *(none — see [Cache location](#cache-location))* | Directory for the database + thumbnails |
+| `GEOTAGGER_CACHE_DIR` | *(none — see [Cache location](#cache-location))* | Directory for the database + thumbnails + tools/data |
 | `GEOTAGGER_WORKERS` | `4` | Thumbnail-generation worker threads |
 | `GEOTAGGER_NO_SCAN` | `0` | `1` = skip the startup scan |
-| `GEOTAGGER_GEONAMES_DIR` | `data/geonames` | Directory holding the downloaded GeoNames files |
+| `GEOTAGGER_GEONAMES_DIR` | *(none — see [tools/data location](#where-downloaded-toolsdata-end-up))* | Directory holding the downloaded GeoNames files |
 | `GEOTAGGER_GEOCODE_PRECISION` | `4` | Decimal degrees of coordinate quantization for the geocode cache (4 ≈ 11 m) |
-| `GEOTAGGER_OSM_DB` | `data/osm/places.sqlite` | OSM place-boundary database (built by `scripts/build_osm_places.py`) |
+| `GEOTAGGER_OSM_DB` | *(none — see [tools/data location](#where-downloaded-toolsdata-end-up))* | OSM place-boundary database (built by `scripts/build_osm_places.py`) |
 | `GEOTAGGER_OSM_CITY_FALLBACK_GEONAMES` | `1` | `0` = strict OSM-only city (no fallback for coordinates outside every imported polygon) |
 | `GEOTAGGER_WRITE_XMP_ON_GEOTAG` | `0` | `1` = write GPS to the XMP sidecar immediately on every geotag edit |
 | `GEOTAGGER_RAW_FULL_DECODE` | `0` | `1` = fully demosaic RAW files via LibRaw instead of using the embedded preview |
@@ -374,7 +399,8 @@ this README. Everything else — FastAPI/uvicorn, Pillow/pillow-heif/av, Insight
 onnxruntime, rawpy, osmium — ships wheels for macOS and Linux too, and the app has no
 Windows-only code paths in normal operation. It just hasn't been run/tested there. On
 macOS/Linux: install ExifTool via your package manager (see setup step 2) and use forward-
-slash paths for `--scan-dir`/`--cache-dir`. Reports of success (or failure) are welcome.
+slash paths for `--scan-dir`/`--cache-dir`/`--root`. Reports of success (or failure) are
+welcome.
 
 ## Attribution / data licenses
 

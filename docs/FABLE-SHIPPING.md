@@ -15,16 +15,16 @@ repo hygiene) have been removed from this doc — see git history for what chang
 ## 2. Major friction (ship-degrading, fix before or shortly after release)
 
 ### 2.1 Project only works from a source checkout
-`config.py`, `index.py`, and both download scripts still anchor `tools/`, `data/geonames/`,
-and `data/osm/` at `_PROJECT_ROOT` (`Path(__file__).parent.parent.parent`). That resolves to
-the repo root in a `src/` checkout, but to `site-packages/` if anyone installs the wheel
-(`pip install geo-tagger`, `uvx geotagger`) — those directories would try to live inside
-site-packages. Either:
-- commit to "clone-and-run only" and remove the wheel-publishing implication (don't
-  publish to PyPI) — README now states this explicitly, so just needs the code path
-  decision, or
-- move these defaults to a per-user data dir too, the way the last-scan-root sentinel
-  now does (see below).
+~~`config.py`, `index.py`, and both download scripts anchored `tools/`, `data/geonames/`,
+and `data/osm/` at `_PROJECT_ROOT`.~~ Fixed: not publishing to PyPI (README states this),
+so the fix was externalizing `tools/`/`data/` out of the repo checkout rather than making
+them wheel-safe. `config.resolve_data_root()` now mirrors the DB's `cache_dir` resolution
+(`GEOTAGGER_CACHE_DIR` if set, else the primary scan root's `.geotagger/`, else `~/.geotagger`
+before any root is known) — `EXIFTOOL_PATH`/`GEONAMES_DIR`/`OSM_DB_PATH` are resolved once at
+startup via `lifespan._primary_root()` + `config.resolve_data_paths()`, instead of frozen at
+import time. Setup scripts accept `--root` so they can target the same location the app will
+use once pointed at that scan root, for the chicken-and-egg case of running setup before the
+first `--scan-dir` run.
 
 ~~`save_last_scan_roots()` writes state into the project root when no cache dir is
 set.~~ Fixed: the legacy sentinel (`.geotagger_last_root`) now lives under
@@ -85,8 +85,8 @@ missing (the lazy-import pattern already used in `faces.py` makes this cheap).
    live under `docs/`.
 5. ~~Add CI (Windows + Ubuntu pytest).~~ Done (`.github/workflows/ci.yml`). Still open: cut
    a `v0.1.0` tag/release.
-6. Decide install story: clone-only (already stated in README) vs. installable (then fix
-   `_PROJECT_ROOT`-relative data paths, §2.1) — and consider dependency extras (§2.2).
+6. ~~Decide install story.~~ Done: clone-only (README states this); `tools/`/`data/` are
+   externalized per §2.1. Still open: consider dependency extras (§2.2).
 7. ~~Add a startup-time warning when `--network` is passed.~~ Done.
 8. ~~Make ExifTool setup cross-platform + checksum-verified.~~ Done — still open:
    SourceForge's bot-check landing page (§4) can make the automatic download unreliable.

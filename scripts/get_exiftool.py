@@ -1,5 +1,8 @@
 """
-Download ExifTool for the current platform and extract it into tools/.
+Download ExifTool for the current platform and extract it into the tools/
+directory (see geotagger.config.get_tools_dir — by default alongside the
+database, under the primary scan root's cache dir, or ~/.geotagger before any
+root is configured; override with GEOTAGGER_CACHE_DIR).
 
 Windows gets the standalone exiftool.exe distribution. macOS/Linux get the
 Perl library distribution (needs `perl` on PATH — preinstalled on macOS and
@@ -13,6 +16,7 @@ at https://exiftool.org/checksums-<version>.txt before anything is extracted.
 Run:  uv run python scripts/get_exiftool.py
 """
 
+import argparse
 import hashlib
 import io
 import shutil
@@ -24,8 +28,10 @@ import zipfile
 from pathlib import Path
 from urllib.request import Request, build_opener, HTTPCookieProcessor
 
+from geotagger.config import get_tools_dir
+
 EXIFTOOL_VERSION = "13.59"
-TOOLS_DIR = Path(__file__).parent.parent / "tools"
+TOOLS_DIR = get_tools_dir()  # overridden by --root in main()
 
 # From https://exiftool.org/checksums-13.59.txt — update alongside EXIFTOOL_VERSION.
 SHA256_SUMS = {
@@ -55,7 +61,7 @@ def verify(filename: str, data: bytes):
         print("SourceForge sometimes serves a bot-check/mirror-selection landing page")
         print("instead of the file for scripted downloads. Download it by hand instead:")
         print(f"  https://sourceforge.net/projects/exiftool/files/{filename}/download")
-        print(f"and place the result at tools/ (see README's manual fallback instructions).")
+        print(f"and place the result at {TOOLS_DIR} (see README's manual fallback instructions).")
         sys.exit(1)
     expected = SHA256_SUMS[filename]
     actual = hashlib.sha256(data).hexdigest()
@@ -151,7 +157,17 @@ def install_unix():
 
 
 def main():
-    TOOLS_DIR.mkdir(exist_ok=True)
+    global TOOLS_DIR
+    ap = argparse.ArgumentParser(description="Download ExifTool into tools/.")
+    ap.add_argument("--root", type=Path,
+                    help="The directory you'll pass as --scan-dir. Installs into "
+                         "<root>/.geotagger/tools instead of the global default, matching "
+                         "where the app looks once it's configured with this root.")
+    args = ap.parse_args()
+    if args.root:
+        TOOLS_DIR = get_tools_dir(args.root)
+
+    TOOLS_DIR.mkdir(parents=True, exist_ok=True)
     if sys.platform == "win32":
         install_windows()
     else:

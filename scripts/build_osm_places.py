@@ -15,10 +15,13 @@ is ~0.3-2 GB and builds in minutes; the whole North America extract is ~13 GB
 and takes hours (same pipeline — just pass that file instead).
 
 We assemble every named **area** (closed way or multipolygon relation) whose tags
-mark it as a place we care about, and store its polygon rings + bbox in
-data/osm/places.sqlite. Streets and other linear features are ignored (we only
-look at areas, and only allow-listed categories). The app's osm_places.py opens
-this DB read-only and does an R*Tree bbox prefilter + point-in-polygon test.
+mark it as a place we care about, and store its polygon rings + bbox in the OSM
+places DB (see geotagger.config.get_osm_db — by default alongside the database,
+under the primary scan root's cache dir, or ~/.geotagger before any root is
+configured; override with GEOTAGGER_CACHE_DIR or GEOTAGGER_OSM_DB). Streets and
+other linear features are ignored (we only look at areas, and only allow-listed
+categories). The app's osm_places.py opens this DB read-only and does an R*Tree
+bbox prefilter + point-in-polygon test.
 
 OSM data © OpenStreetMap contributors, ODbL.
 """
@@ -32,7 +35,9 @@ from pathlib import Path
 
 import osmium
 
-DEFAULT_DB = Path(__file__).parent.parent / "data" / "osm" / "places.sqlite"
+from geotagger.config import get_osm_db
+
+DEFAULT_DB = get_osm_db()  # overridden by --root/--db in main()
 
 # US admin_level for a city/town/municipality boundary (the "primary" place).
 # Configurable because admin_level meaning varies by country; 8 is the US city.
@@ -282,13 +287,21 @@ def _process_file(db: sqlite3.Connection, pbf: Path, index: str) -> dict:
 def main():
     ap = argparse.ArgumentParser(description="Build the offline OSM places DB from GeoFabrik .osm.pbf extract(s).")
     ap.add_argument("pbf", nargs="+", type=Path, help="One or more GeoFabrik .osm.pbf files")
-    ap.add_argument("--db", type=Path, default=DEFAULT_DB, help=f"Output SQLite DB (default: {DEFAULT_DB})")
+    ap.add_argument("--db", type=Path, default=None,
+                    help=f"Output SQLite DB (default: {DEFAULT_DB}, or <root>/.geotagger/data/osm/places.sqlite if --root is given)")
+    ap.add_argument("--root", type=Path,
+                    help="The directory you'll pass as --scan-dir. Builds into "
+                         "<root>/.geotagger/data/osm/places.sqlite instead of the global default, "
+                         "matching where the app looks once it's configured with this root. "
+                         "Ignored if --db is also given.")
     ap.add_argument("--append", action="store_true",
                     help="Add to an existing DB instead of rebuilding from scratch")
     ap.add_argument("--index", default="flex_mem",
                     help="osmium node-location storage. 'flex_mem' (default) is fine for a state; "
                          "use e.g. 'sparse_file_array,osm-nodes.cache' for the full North America extract.")
     args = ap.parse_args()
+    if args.db is None:
+        args.db = get_osm_db(args.root) if args.root else DEFAULT_DB
 
     for p in args.pbf:
         if not p.exists():
