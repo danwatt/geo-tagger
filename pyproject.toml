@@ -1,6 +1,22 @@
 [project]
 name = "geo-tagger"
 version = "0.1.0"
+description = "Local web app for geotagging photo/video libraries via a map UI, with face detection and offline reverse geocoding."
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "Dan Watt" },
+]
+keywords = ["geotagging", "exif", "xmp", "photos", "geocoding", "faces"]
+classifiers = [
+    "Environment :: Web Environment",
+    "Framework :: FastAPI",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Graphics",
+]
 requires-python = ">=3.13"
 dependencies = [
     "fastapi",
@@ -14,6 +30,9 @@ dependencies = [
     "rawpy>=0.27.0",
     "osmium>=4.3.1",
 ]
+
+[project.urls]
+Repository = "https://github.com/danwatt/geo-tagger"
 
 [project.scripts]
 geotagger = "geotagger.__main__:main"

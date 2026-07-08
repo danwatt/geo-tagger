@@ -38,7 +38,9 @@
       "Bash(rtk grep *)",
       "Bash(node -c src/geotagger/web/search.js)",
       "Skill(run)",
-      "Bash(pkill -f \"geotagger\")"
+      "Bash(pkill -f \"geotagger\")",
+      "Bash(rtk git *)",
+      "Bash(rtk uv *)"
     ]
   }
 }
