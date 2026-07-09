@@ -75,7 +75,7 @@ def _reset_geocode_state():
 def geonames_dir(tmp_path, monkeypatch):
     """Point the geocoder at an isolated (initially empty) GeoNames directory
     and reset its load-state singleton before and after the test."""
-    monkeypatch.setattr(geocode, "GEONAMES_DIR", tmp_path)
+    monkeypatch.setattr(config, "GEONAMES_DIR", tmp_path)
     _reset_geocode_state()
     yield tmp_path
     _reset_geocode_state()

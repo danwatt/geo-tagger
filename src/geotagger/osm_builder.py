@@ -18,8 +18,29 @@ import osmium
 
 # US admin_level for a city/town/municipality boundary (the "primary" place).
 # Configurable because admin_level meaning varies by country; 8 is the US city.
+# Not sufficient on its own, though — see CITY_PLACE_VALUES below.
 CITY_ADMIN_LEVELS = {8}
 NEIGHBOURHOOD_ADMIN_LEVEL = 10
+
+# admin_level alone misses some real cities: Ontario's single-tier "separated
+# cities" (e.g. London, Stratford) are tagged admin_level=6 — the same level as
+# the counties that don't contain them, since they sit outside the two-tier
+# county system entirely — while an admin_level=6 area lacking place=city/town
+# really is a county/region. place is the more reliable cross-country signal, so
+# it's accepted alongside admin_level rather than instead of it (still checked
+# first below, since CITY_ADMIN_LEVELS alone is right most of the time and this
+# only broadens the match).
+CITY_PLACE_VALUES = {"city", "town", "village"}
+
+# England/Wales unitary authorities are also admin_level=6 with no place tag at
+# all (e.g. "City of Bristol": boundary=administrative, admin_level=6,
+# council_style=city_and_county, no place tag) — council_style is the signal
+# there. Deliberately narrow: "city"/"city_and_county" (Bristol, Cardiff,
+# Swansea, Nottingham, Derby, York, Plymouth, Edinburgh, London, Newport) are
+# genuinely single named cities; "borough"/"county_borough"/"county" cover
+# larger multi-town regions (North Lincolnshire, Wrexham, Rutland, ...) that
+# would misrepresent a whole county as one "city", so those are left alone.
+CITY_COUNCIL_STYLES = {"city", "city_and_county"}
 
 # Category display/scale hint. Lower rank = broader (primary); higher = more
 # specific (preferred sub-location). Used only as a coarse tiebreak alongside the
@@ -60,13 +81,21 @@ def classify(tags) -> tuple[str, int | None] | None:
     building = tags.get("building")
 
     # City / town (primary location) — authoritative admin boundary.
-    if boundary == "administrative" and admin_level in CITY_ADMIN_LEVELS:
+    if boundary == "administrative" and (
+        admin_level in CITY_ADMIN_LEVELS
+        or place in CITY_PLACE_VALUES
+        or tags.get("council_style") in CITY_COUNCIL_STYLES
+    ):
         return "city", admin_level
 
     # Neighborhood / suburb (sub-location).
     if place in ("neighbourhood", "suburb", "quarter", "borough", "city_block"):
         return "neighbourhood", admin_level
     if boundary == "administrative" and admin_level == NEIGHBOURHOOD_ADMIN_LEVEL:
+        return "neighbourhood", admin_level
+    # Named residential subdivision — a landuse polygon, not an admin boundary,
+    # but still a useful sub-location, so it counts regardless of place tag.
+    if tags.get("landuse") == "residential":
         return "neighbourhood", admin_level
 
     # Parks & natural attractions.
@@ -80,7 +109,7 @@ def classify(tags) -> tuple[str, int | None] | None:
         return "venue", admin_level
 
     # Campuses & institutions.
-    if amenity in ("university", "college", "hospital"):
+    if amenity in ("university", "college", "hospital", "school"):
         return "campus", admin_level
 
     # Other tourist attractions.

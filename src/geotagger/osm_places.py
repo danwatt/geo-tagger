@@ -161,9 +161,15 @@ def lookup(lat: float | None, lng: float | None) -> dict | None:
 
 
 def places_in_bbox(min_lat: float, max_lat: float, min_lng: float, max_lng: float,
-                   limit: int = 4000) -> tuple[list[dict], int]:
+                   limit: int = 4000, include_buildings: bool = True) -> tuple[list[dict], int]:
     """OSM place polygons overlapping a viewport bbox — backs the Places DB map's
     OSM overlay so the user can see the real city/park/venue boundaries.
+
+    Buildings vastly outnumber every other category, so include_buildings=False
+    (the map only sets it True once zoomed in past its own building-level
+    threshold) excludes them at the SQL level rather than relying on the area-DESC
+    LIMIT to starve them out — cheaper, and keeps the limit's headroom for the
+    categories that matter at city/region zoom.
 
     Returns (places, total_matched). When total exceeds limit, the returned places
     are the largest by area, so the capped view still shows the most prominent
@@ -172,16 +178,19 @@ def places_in_bbox(min_lat: float, max_lat: float, min_lng: float, max_lng: floa
     _ensure_loaded()
     if _state != "ready" or _conn is None:
         return [], 0
+    category_filter = "" if include_buildings else "AND p.category != 'building'"
     with _lock:
         total = _conn.execute(
-            """SELECT COUNT(*) FROM places_spatial
-               WHERE min_lat <= ? AND max_lat >= ? AND min_lng <= ? AND max_lng >= ?""",
+            f"""SELECT COUNT(*) FROM places_spatial s JOIN places p ON p.id = s.id
+               WHERE s.min_lat <= ? AND s.max_lat >= ? AND s.min_lng <= ? AND s.max_lng >= ?
+               {category_filter}""",
             (max_lat, min_lat, max_lng, min_lng),
         ).fetchone()[0]
         rows = _conn.execute(
-            """SELECT p.id, p.name, p.category, p.admin_level, p.rank, p.area, p.rings
+            f"""SELECT p.id, p.name, p.category, p.admin_level, p.rank, p.area, p.rings
                FROM places_spatial s JOIN places p ON p.id = s.id
                WHERE s.min_lat <= ? AND s.max_lat >= ? AND s.min_lng <= ? AND s.max_lng >= ?
+               {category_filter}
                ORDER BY p.area DESC LIMIT ?""",
             (max_lat, min_lat, max_lng, min_lng, limit),
         ).fetchall()

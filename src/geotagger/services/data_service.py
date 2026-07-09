@@ -161,12 +161,12 @@ def geonames_job_status() -> dict:
         return dict(_geonames_job)
 
 
-def _run_geonames_download():
+def _run_geonames_download(force: bool = False):
     try:
         config.GEONAMES_DIR.mkdir(parents=True, exist_ok=True)
         for name, url, is_zip in GEONAMES_FILES:
             dest = config.GEONAMES_DIR / name
-            if dest.exists():
+            if dest.exists() and not force:
                 with _geonames_lock:
                     _geonames_job["message"] = f"{name} already present — skipping"
                 continue
@@ -200,13 +200,16 @@ def _run_geonames_download():
             _geonames_job["running"] = False
 
 
-def start_geonames_download(executor) -> bool:
-    """Kick off the download on the shared executor. Returns False if already running."""
+def start_geonames_download(executor, force: bool = False) -> bool:
+    """Kick off the download on the shared executor. Returns False if already
+    running. force=True re-downloads even files already on disk (otherwise a
+    per-file no-op, matching scripts/get_geonames.py's existing skip-if-present
+    behavior)."""
     with _geonames_lock:
         if _geonames_job["running"]:
             return False
         _geonames_job.update(running=True, done=False, error=None, message="Starting…")
-    executor.submit(_run_geonames_download)
+    executor.submit(_run_geonames_download, force)
     return True
 
 
@@ -258,7 +261,7 @@ def _download_pbf(url: str, dest: Path, label: str, progress_cb) -> None:
     progress_cb(f"Downloaded {label} ({dest.stat().st_size / 1e6:.0f} MB)")
 
 
-def _run_osm_download_and_merge(keys: list[str]):
+def _run_osm_download_and_merge(keys: list[str], force: bool = False):
     def progress(message: str):
         with _osm_lock:
             _osm_job["message"] = message
@@ -270,6 +273,9 @@ def _run_osm_download_and_merge(keys: list[str]):
         pbf_paths = []
         for region in regions:
             dest = cache_dir / f"{region['group']}_{region['slug']}-latest.osm.pbf"
+            if dest.exists() and force:
+                progress(f"{region['name']}: forcing re-download (discarding cached file)…")
+                dest.unlink()
             if not dest.exists():
                 _download_pbf(region["url"], dest, region["name"], progress)
             else:
@@ -296,10 +302,15 @@ def _run_osm_download_and_merge(keys: list[str]):
             _osm_job["running"] = False
 
 
-def start_osm_download(executor, keys: list[str]) -> bool:
+def start_osm_download(executor, keys: list[str], force: bool = False) -> bool:
     """Kick off download+merge of the given GeoFabrik region keys (e.g. "us_texas",
     "europe_germany") on the shared executor. Returns False if a job is already
-    running. Raises ValueError for an unknown key or empty selection."""
+    running. Raises ValueError for an unknown key or empty selection. force=True
+    discards any cached .osm.pbf for the selected regions first, so a fresh copy
+    is pulled from GeoFabrik instead of reusing what's on disk — the merge step
+    itself always re-scans and re-applies current classify() rules regardless of
+    force, so re-running without force still picks up rule changes (new
+    place/category matches), just without a fresh source file."""
     if not keys:
         raise ValueError("No regions selected")
     unknown = [k for k in keys if k not in _GEOFABRIK_REGIONS]
@@ -309,7 +320,7 @@ def start_osm_download(executor, keys: list[str]) -> bool:
         if _osm_job["running"]:
             return False
         _osm_job.update(running=True, done=False, error=None, message="Starting…", result=None)
-    executor.submit(_run_osm_download_and_merge, keys)
+    executor.submit(_run_osm_download_and_merge, keys, force)
     return True
 
 
@@ -328,9 +339,19 @@ def face_model_job_status() -> dict:
         return dict(_face_model_job)
 
 
-def _run_face_model_download():
+def _run_face_model_download(force: bool = False):
     from geotagger import faces
+    import shutil
     try:
+        if force:
+            existing = faces.model_status()
+            if existing.get("model_dir"):
+                model_path = Path(existing["model_dir"]) / "models" / existing["name"]
+                if model_path.is_dir():
+                    with _face_model_lock:
+                        _face_model_job["message"] = "Removing existing model pack…"
+                    shutil.rmtree(model_path)
+            faces.reset_model()
         with _face_model_lock:
             _face_model_job["message"] = "Downloading face model pack (~275 MB)…"
         faces.ensure_model_downloaded()
@@ -356,13 +377,13 @@ def _run_face_model_download():
             _face_model_job["running"] = False
 
 
-def start_face_model_download(executor) -> bool:
+def start_face_model_download(executor, force: bool = False) -> bool:
     """Kick off the InsightFace model pack download on the shared executor
-    (idempotent — a no-op if it's already on disk). Returns False if already
-    running."""
+    (idempotent — a no-op if it's already on disk, unless force=True deletes it
+    first). Returns False if already running."""
     with _face_model_lock:
         if _face_model_job["running"]:
             return False
         _face_model_job.update(running=True, done=False, error=None, message="Starting…")
-    executor.submit(_run_face_model_download)
+    executor.submit(_run_face_model_download, force)
     return True

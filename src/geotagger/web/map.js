@@ -19,11 +19,18 @@
  * OSM boundaries (cities, parks, stadiums, campuses, neighborhoods, named
  * buildings) as a GeoJSON FeatureCollection, rendered with Leaflet's built-in
  * L.geoJSON() layer (no extra plugin needed — GeoJSON support is core Leaflet).
+ *
+ * Named buildings vastly outnumber every other OSM category and are only
+ * meaningful once you can see individual rooftops, so they're held back
+ * behind their own, deeper MIN_ZOOM_FOR_BUILDINGS threshold — the osm-places
+ * request omits them (buildings=false) below that zoom, rather than fetching
+ * and then hiding them.
  */
 
 const MIN_ZOOM_FOR_MARKERS = 8;
 const MIN_ZOOM_FOR_VORONOI = 11;
 const MIN_ZOOM_FOR_OSM = 11;
+const MIN_ZOOM_FOR_BUILDINGS = 17;
 const REFRESH_DEBOUNCE_MS = 250;
 
 // Distinct color per OSM place category so a stadium vs. a park vs. a campus
@@ -256,9 +263,12 @@ async function refreshOsm() {
 
   const b = map.getBounds();
   const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
+  const buildings = zoom >= MIN_ZOOM_FOR_BUILDINGS;
   const seq = ++osmFetchSeq;
   try {
-    const res = await fetch(`/api/geocode/osm-places?bbox=${encodeURIComponent(bbox)}`);
+    const res = await fetch(
+      `/api/geocode/osm-places?bbox=${encodeURIComponent(bbox)}&buildings=${buildings}`
+    );
     if (res.status === 503) {
       osmLayer.clearLayers();
       setStatus("OSM places DB not built — run scripts/build_osm_places.py <region>.osm.pbf", true);

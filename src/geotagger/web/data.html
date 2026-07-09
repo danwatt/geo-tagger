@@ -28,6 +28,7 @@
       polygon below.
     </p>
     <div id="geonames-files" class="data-files"></div>
+    <label class="force-label"><input type="checkbox" id="geonames-force"> Force re-download (ignore local cache)</label>
     <button id="geonames-download-btn">Download GeoNames data</button>
     <div id="geonames-progress" class="data-progress"></div>
     <div id="geonames-error" class="data-error"></div>
@@ -41,6 +42,7 @@
       pre-fetch it here instead if you'd rather not wait mid-scan.
     </p>
     <div id="face-model-status" class="data-files"></div>
+    <label class="force-label"><input type="checkbox" id="face-model-force"> Force re-download (ignore local cache)</label>
     <button id="face-model-download-btn">Download face model</button>
     <div id="face-model-progress" class="data-progress"></div>
     <div id="face-model-error" class="data-error"></div>
@@ -58,6 +60,7 @@
     <label class="osm-group-label" for="osm-group-select">Region:</label>
     <select id="osm-group-select"></select>
     <div id="osm-state-picker"></div>
+    <label class="force-label"><input type="checkbox" id="osm-force"> Force re-download selected (ignore local cache)</label>
     <button id="osm-download-btn">Download &amp; merge selected</button>
     <div id="osm-progress" class="data-progress"></div>
     <div id="osm-error" class="data-error"></div>

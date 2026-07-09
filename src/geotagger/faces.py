@@ -105,6 +105,17 @@ def ensure_model_downloaded():
     _get_app()
 
 
+def reset_model():
+    """Drop the loaded FaceAnalysis pipeline so the next detect call (or
+    ensure_model_downloaded()) re-triggers _get_app()'s lazy load. Needed before
+    a forced model re-download — otherwise a pipeline already loaded in this
+    process would short-circuit past the on-disk check ensure_model_downloaded()
+    is supposed to redo."""
+    global _app
+    with _app_lock:
+        _app = None
+
+
 # ── Embedding (de)serialization ──
 
 def encode_embedding(vec: np.ndarray) -> bytes:

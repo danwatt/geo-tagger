@@ -70,10 +70,13 @@ async def api_geocode_voronoi(bbox: str = Query(...), limit: int = Query(4000, l
 
 
 @router.get("/api/geocode/osm-places")
-async def api_geocode_osm_places(bbox: str = Query(...), limit: int = Query(4000, le=8000)):
+async def api_geocode_osm_places(bbox: str = Query(...), limit: int = Query(4000, le=8000),
+                                  buildings: bool = Query(True)):
     """OSM place polygons overlapping a viewport bbox, as a GeoJSON FeatureCollection
     — backs the Places DB map's OSM boundary overlay (cities, parks, stadiums,
     campuses, neighborhoods, named buildings), rendered via Leaflet's L.geoJSON().
+    `buildings=false` excludes the building category (the map only asks for it
+    past its own building-level zoom threshold — see MIN_ZOOM_FOR_BUILDINGS).
     503 if the OSM places DB hasn't been built. `total`/`truncated` are extra
     top-level fields alongside the standard `type`/`features` — GeoJSON consumers
     that only look at `features` are unaffected."""
@@ -82,7 +85,7 @@ async def api_geocode_osm_places(bbox: str = Query(...), limit: int = Query(4000
         raise HTTPException(503, "OSM places DB not built — run scripts/build_osm_places.py <region>.osm.pbf")
     loop = asyncio.get_running_loop()
     places, total = await loop.run_in_executor(
-        get_executor(), osm_places.places_in_bbox, min_lat, max_lat, min_lng, max_lng, limit
+        get_executor(), osm_places.places_in_bbox, min_lat, max_lat, min_lng, max_lng, limit, buildings
     )
     return {
         "type": "FeatureCollection",

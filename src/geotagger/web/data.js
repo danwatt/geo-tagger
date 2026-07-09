@@ -38,8 +38,7 @@ function renderFaceModel(m) {
     </div>
   `;
   const btn = document.getElementById("face-model-download-btn");
-  btn.disabled = m.available;
-  btn.textContent = m.available ? "Face model installed" : "Download face model";
+  btn.textContent = m.available ? "Re-download face model" : "Download face model";
 }
 
 function renderGeonames(g) {
@@ -52,10 +51,8 @@ function renderGeonames(g) {
       </span>
     </div>
   `).join("");
-  document.getElementById("geonames-download-btn").disabled = g.available;
-  if (g.available) {
-    document.getElementById("geonames-download-btn").textContent = "GeoNames data installed";
-  }
+  document.getElementById("geonames-download-btn").textContent =
+    g.available ? "Re-download GeoNames data" : "Download GeoNames data";
 }
 
 function renderOsm(o) {
@@ -137,9 +134,14 @@ async function startGeonamesDownload() {
   const btn = document.getElementById("geonames-download-btn");
   const errorEl = document.getElementById("geonames-error");
   errorEl.textContent = "";
+  const force = document.getElementById("geonames-force").checked;
   btn.disabled = true;
   try {
-    const res = await fetch("/api/data/geonames/download", { method: "POST" });
+    const res = await fetch("/api/data/geonames/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force }),
+    });
     if (res.status === 409) { pollGeonames(); return; }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     pollGeonames();
@@ -188,12 +190,27 @@ async function startOsmDownload() {
     errorEl.textContent = "Select at least one region.";
     return;
   }
+  const force = document.getElementById("osm-force").checked;
+  if (force) {
+    const names = regions.map((key) => {
+      for (const g of osmGroups) {
+        const item = g.items.find((i) => i.key === key);
+        if (item) return item.name;
+      }
+      return key;
+    });
+    const ok = confirm(
+      `This discards the locally cached download for ${names.join(", ")} and ` +
+      `re-fetches it from GeoFabrik. Continue?`
+    );
+    if (!ok) return;
+  }
   btn.disabled = true;
   try {
     const res = await fetch("/api/data/osm/download", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ regions }),
+      body: JSON.stringify({ regions, force }),
     });
     if (res.status === 409) { pollOsm(); return; }
     if (!res.ok) {
@@ -242,9 +259,14 @@ async function startFaceModelDownload() {
   const btn = document.getElementById("face-model-download-btn");
   const errorEl = document.getElementById("face-model-error");
   errorEl.textContent = "";
+  const force = document.getElementById("face-model-force").checked;
   btn.disabled = true;
   try {
-    const res = await fetch("/api/data/face-model/download", { method: "POST" });
+    const res = await fetch("/api/data/face-model/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force }),
+    });
     if (res.status === 409) { pollFaceModel(); return; }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     pollFaceModel();
