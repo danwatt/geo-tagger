@@ -15,20 +15,13 @@
   line-height: 1.5;
 }
 
+/* Shared shell (background/border/radius) + h2 styling live in theme.css. */
 .data-group {
-  background: #232323;
-  border: 1px solid #333;
-  border-radius: 8px;
   padding: 16px;
   margin-bottom: 16px;
 }
 
-.data-group h2 {
-  font-size: 14px;
-  font-weight: 600;
-  color: #7ab8f5;
-  margin-bottom: 8px;
-}
+.data-group h2 { margin-bottom: 8px; }
 
 .data-help {
   font-size: 11px;

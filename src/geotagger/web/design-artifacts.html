@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Geo-Tagger — Design Artifacts</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════
+   Design tokens + component styles lifted from the app's stylesheets
+   (style.css, home.css, face-grid.css, people.css, search.css,
+   settings.css, data.css, tag.css). Thumbnails use picsum.photos.
+   ═══════════════════════════════════════════════════════════════════ */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: system-ui, sans-serif;
+  font-size: 13px;
+  background: #1a1a1a;
+  color: #ddd;
+  line-height: 1.4;
+}
+
+/* ── Showcase chrome (not part of the app) ── */
+.doc-header {
+  padding: 24px 28px;
+  background: #202020;
+  border-bottom: 1px solid #333;
+}
+.doc-header h1 { font-size: 22px; color: #7ab8f5; font-weight: 700; }
+.doc-header p { color: #999; font-size: 12px; margin-top: 6px; max-width: 720px; line-height: 1.5; }
+
+.doc-wrap { max-width: 1100px; margin: 0 auto; padding: 24px 28px 80px; }
+
+.doc-section { margin-bottom: 40px; }
+.doc-section > h2 {
+  font-size: 16px;
+  color: #7ab8f5;
+  font-weight: 600;
+  padding-bottom: 6px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid #333;
+}
+.doc-sub { font-size: 11px; color: #777; margin: 0 0 10px; text-transform: uppercase; letter-spacing: .06em; }
+
+.doc-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 16px; }
+.doc-panel {
+  background: #1e1e1e;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+/* ── Color swatches ── */
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.swatch { border: 1px solid #333; border-radius: 6px; overflow: hidden; }
+.swatch .chip { height: 52px; }
+.swatch .meta { padding: 6px 8px; background: #232323; }
+.swatch .meta b { display: block; font-size: 11px; color: #eee; }
+.swatch .meta span { font-size: 10px; color: #888; font-family: ui-monospace, monospace; }
+
+/* ═══ APP TOKENS BELOW ═══ */
+
+/* Buttons */
+button, a.button {
+  padding: 4px 10px; border: 1px solid #555; border-radius: 4px;
+  background: #383838; color: #ddd; cursor: pointer; font-size: 12px; text-decoration: none;
+}
+button:hover, a.button:hover { background: #4a4a4a; }
+button.active, a.button.active { background: #2a4a6e; border-color: #4a90d9; color: #7ab8f5; }
+button.danger { border-color: #a33; color: #f88; }
+button.danger:hover { background: #500; }
+button.primary { background: #2a4a6e; border-color: #4a90d9; color: #7ab8f5; }
+button.primary:hover { background: #1e3a5e; }
+button.icon-btn { padding: 2px 8px; font-size: 14px; line-height: 1.2; }
+
+/* Inputs */
+input[type="text"], input[type="date"] {
+  padding: 4px 7px; border: 1px solid #444; border-radius: 4px;
+  background: #333; color: #eee; outline: none;
+}
+input[type="text"]:focus, input[type="date"]:focus { border-color: #4a90d9; }
+input[type="number"] {
+  width: 110px; padding: 4px 7px; border: 1px solid #444; border-radius: 4px;
+  background: #333; color: #eee; outline: none;
+}
+input[type="number"]:focus { border-color: #4a90d9; }
+select { padding: 4px 6px; border: 1px solid #444; border-radius: 4px; background: #333; color: #eee; }
+input[type="checkbox"] { width: 18px; height: 18px; accent-color: #4a90d9; cursor: pointer; vertical-align: middle; }
+
+/* Toolbar */
+#toolbar {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  padding: 6px 10px; background: #252525; border: 1px solid #333; border-radius: 6px;
+}
+.toolbar-group { display: flex; align-items: center; gap: 4px; }
+.toolbar-spacer { flex: 1; }
+
+/* Nav */
+#app-nav { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ── Cards / dashboard ── */
+.card {
+  background: #232323; border: 1px solid #333; border-radius: 8px;
+  padding: 16px; display: flex; flex-direction: column; gap: 8px;
+}
+.card h2 { font-size: 14px; font-weight: 600; color: #7ab8f5; }
+.big-number { font-size: 36px; font-weight: 700; color: #eee; line-height: 1; }
+.sub-line { font-size: 12px; color: #999; }
+.stat-line { font-size: 12px; color: #ccc; }
+.stat-line strong { color: #eee; }
+.stat-line.highlight { color: #7ab8f5; }
+.hint { font-size: 11px; color: #d9534f; }
+.error-line { font-size: 11px; color: #f88; }
+.card-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
+.card-header-row { display: flex; align-items: center; justify-content: space-between; }
+
+/* Progress + coverage bars */
+.progress-bar { height: 10px; background: #333; border-radius: 5px; overflow: hidden; }
+.progress-fill { height: 100%; background: #4a90d9; transition: width 0.3s; }
+.progress-label { font-size: 11px; color: #aaa; }
+.coverage-bar { display: flex; height: 14px; border-radius: 5px; overflow: hidden; background: #333; }
+.coverage-bar > div { height: 100%; }
+.cov-full { background: #5cb85c; }
+.cov-partial { background: #d9a441; }
+.cov-none { background: #d9534f; }
+.cov-noface { background: #4a4a4a; }
+.coverage-legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: #ccc; }
+.coverage-legend .lg { display: inline-flex; align-items: center; gap: 5px; }
+.coverage-legend .sw { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+
+/* Mode toggle */
+.mode-toggle { display: flex; border: 1px solid #444; border-radius: 5px; overflow: hidden; }
+.mode-toggle button { background: #232323; color: #999; border: none; padding: 3px 10px; font-size: 12px; cursor: pointer; }
+.mode-toggle button + button { border-left: 1px solid #444; }
+.mode-toggle button.active { background: #3a5f8a; color: #fff; }
+
+/* ── Thumbnail grid ── */
+#grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 4px; }
+.thumb-cell {
+  position: relative; aspect-ratio: 1; overflow: hidden; border-radius: 3px;
+  cursor: pointer; border: 2px solid transparent; transition: border-color 0.1s;
+}
+.thumb-cell img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+.thumb-cell.selected { border-color: #4a90d9; }
+.thumb-cell.tagged::after {
+  content: "📍"; position: absolute; bottom: 2px; right: 3px;
+  font-size: 12px; line-height: 1; text-shadow: 0 0 3px #000;
+}
+.thumb-cell.geo-ignored img { opacity: 0.55; }
+.thumb-cell.geo-ignored::before {
+  content: "🚫"; position: absolute; top: 2px; left: 3px;
+  font-size: 11px; line-height: 1; text-shadow: 0 0 3px #000;
+}
+.thumb-cell .cam-strip { position: absolute; top: 0; left: 0; right: 0; height: 4px; }
+.thumb-cell .thumb-name {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: rgba(0,0,0,.55); color: #eee; font-size: 10px; padding: 2px 3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  opacity: 0; transition: opacity 0.15s;
+}
+.thumb-cell:hover .thumb-name { opacity: 1; }
+.thumb-cell.ambiguous { box-shadow: inset 0 0 0 2px #d39a2e; }
+.thumb-cell.ignored img { opacity: 0.4; filter: grayscale(0.6); }
+.thumb-cell.come-back img { opacity: 0.75; filter: sepia(0.35); }
+
+/* Face overlay chips */
+.thumb-cell .face-label {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: rgba(0,0,0,.6); color: #eee; font-size: 10px; padding: 2px 4px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.thumb-cell .face-label.ignored-label { background: rgba(80,80,80,.8); color: #ccc; font-style: italic; }
+.thumb-cell .face-label.come-back-label { background: rgba(130,95,15,.85); color: #ffd699; font-style: italic; }
+.thumb-cell .face-suggest {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: rgba(42,74,110,.85); color: #cfe6ff; font-size: 10px; padding: 2px 4px;
+  display: flex; align-items: center; gap: 4px; cursor: pointer;
+}
+.thumb-cell .face-suggest:hover { background: rgba(42,74,110,1); }
+.thumb-cell .face-suggest .sug-check { font-weight: bold; color: #7ed87e; }
+.thumb-cell .sug-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.thumb-cell .sug-reject { flex-shrink: 0; font-weight: bold; color: #f0a3a3; padding: 0 2px; }
+.thumb-cell .sug-reject:hover { color: #ff6b6b; }
+.thumb-cell .face-alt {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: rgba(140,92,20,.9); color: #ffe2b8; font-size: 10px; padding: 2px 4px;
+  display: flex; align-items: center; gap: 4px; cursor: pointer;
+}
+.thumb-cell .face-alt .alt-arrow { font-weight: bold; color: #ffd596; }
+.thumb-cell .face-score {
+  position: absolute; top: 2px; right: 3px; font-size: 9px; color: #ccc;
+  background: rgba(0,0,0,.5); border-radius: 3px; padding: 0 3px;
+}
+
+/* Grid dividers */
+.grid-year-divider {
+  grid-column: 1 / -1; padding: 4px 4px 2px; font-size: 13px; font-weight: 700;
+  color: #7ab8f5; border-bottom: 1px solid #3a5a7a; margin-top: 6px;
+}
+.grid-month-divider {
+  grid-column: 1 / -1; padding: 4px 4px 2px; font-size: 11px; font-weight: 500;
+  color: #888; border-bottom: 1px solid #2e2e2e; margin-top: 4px;
+}
+.grid-day-divider {
+  grid-column: 1 / -1; padding: 2px 4px 1px; font-size: 10px; font-weight: 500;
+  color: #555; border-bottom: 1px solid #252525; margin-top: 2px;
+}
+
+/* Camera legend */
+#cam-legend { display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px; }
+.cam-legend-item { display: flex; align-items: center; gap: 5px; cursor: pointer; transition: opacity 0.15s; }
+.cam-legend-item.dimmed { opacity: 0.35; }
+.cam-legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+/* ── Face group headers (tints) ── */
+.face-group-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 7px 10px; background: #1e2a3a; border-bottom: 1px solid #3a5a7a;
+  border-radius: 4px 4px 0 0; user-select: none; flex-wrap: wrap;
+}
+.face-group-label { font-size: 12px; font-weight: 600; color: #9ab8d8; }
+.face-group-meta { color: #567; font-weight: 400; }
+.face-group-btns { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; }
+.face-group-header button { padding: 3px 10px; font-size: 11px; }
+.face-group-header.green { background: #1c2d1c; border-bottom-color: #2a5a2a; }
+.face-group-header.green .face-group-label { color: #8ec88e; }
+.face-group-header.blue { background: #1a2a3a; border-bottom-color: #2a4a6a; }
+.face-group-header.blue .face-group-label { color: #7aaed8; }
+.face-group-header.grey { background: #1e1e1e; border-bottom-color: #383838; }
+.face-group-header.grey .face-group-label { color: #888; }
+.face-group-header.amber { background: #2a2218; border-bottom-color: #4a3a28; }
+.face-group-header.amber .face-group-label { color: #d8b88a; }
+
+.face-group-section { border-radius: 5px; border: 1px solid rgba(80,110,160,0.18); overflow: hidden; margin: 4px 0; }
+.face-group-section > .face-group-header { border-radius: 0; }
+.face-group-cells { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 4px; padding: 4px; }
+.group-tint-0 { background: rgba(60,100,170,0.09); }
+.group-tint-1 { background: rgba(170,80,60,0.09); }
+.group-tint-2 { background: rgba(60,160,80,0.09); }
+.group-tint-3 { background: rgba(170,140,50,0.09); }
+.group-tint-4 { background: rgba(130,60,170,0.09); }
+.group-tint-5 { background: rgba(40,150,160,0.09); }
+
+/* ── People list ── */
+.people-list { max-width: 260px; }
+.person-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 6px 8px; margin-bottom: 3px; border: 1px solid transparent; border-radius: 4px;
+  cursor: pointer; transition: background 0.1s, border-color 0.1s;
+}
+.person-item:hover { background: #2a2a2a; }
+.person-item.active { background: #2a4a6e; border-color: #4a90d9; color: #cfe6ff; }
+.person-item .person-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.person-item .person-count {
+  flex-shrink: 0; font-size: 11px; color: #aaa; background: #383838;
+  border-radius: 10px; padding: 1px 7px;
+}
+.person-item.active .person-count { background: #1e3a5e; color: #bcdcff; }
+.person-item .person-birth { color: #777; font-size: 10px; }
+.family-group-header {
+  padding: 10px 8px 2px; font-size: 10px; font-weight: 700; letter-spacing: 0.07em;
+  text-transform: uppercase; color: #555; user-select: none;
+}
+
+/* Person chips */
+.person-chip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px 2px 9px;
+  border-radius: 12px; background: #2a4a6e; border: 1px solid #4a90d9; color: #cfe6ff; font-size: 11px;
+}
+.person-chip button { border: none; background: none; color: #cfe6ff; cursor: pointer; font-size: 12px; padding: 0 2px; line-height: 1; }
+
+/* ── Detail meta table ── */
+#detail-meta { width: 100%; border-collapse: collapse; font-size: 12px; max-width: 340px; }
+#detail-meta td { padding: 3px 6px; border-bottom: 1px solid #2e2e2e; vertical-align: top; }
+#detail-meta td:first-child { color: #888; width: 40%; }
+
+/* ── Guess / assign bars ── */
+.guess-bar, .assign-bar {
+  display: flex; flex-direction: column; gap: 8px; padding: 8px; max-width: 340px;
+  background: #252525; border-radius: 5px; border: 1px solid #383838;
+}
+#guess-summary { font-size: 11px; color: #aaa; line-height: 1.4; }
+.guess-actions { display: flex; gap: 6px; }
+.face-suggestion-box {
+  font-size: 12px; color: #cfe6ff; background: #2a4a6e; border: 1px solid #4a90d9;
+  border-radius: 4px; padding: 6px 8px; max-width: 340px;
+}
+.face-negatives-box {
+  font-size: 12px; color: #ccc; background: #2a2222; border: 1px solid #5a3a3a;
+  border-radius: 4px; padding: 6px 8px; max-width: 340px;
+}
+.face-negatives-box .neg-title { color: #d99; font-size: 11px; }
+
+/* ── Count badges (month picker) ── */
+.count-badge { padding: 2px 8px; border-radius: 3px; background: #383838; font-size: 11px; }
+.count-geotagged { color: #5cb85c; }
+.count-not-geotagged { color: #d9534f; }
+.count-total { color: #aaa; font-weight: 600; }
+.month-item {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 12px; margin: 4px 0; background: #2a2a2a; border: 1px solid #383838;
+  border-radius: 4px; cursor: pointer; transition: background 0.15s, border-color 0.15s;
+}
+.month-item:hover { background: #333; border-color: #4a90d9; }
+.month-name { font-weight: 500; color: #ddd; }
+.month-counts { display: flex; gap: 12px; }
+
+/* ── Settings / data groups ── */
+.settings-group, .data-group {
+  background: #232323; border: 1px solid #333; border-radius: 8px; padding: 16px; max-width: 560px;
+}
+.settings-group h2, .data-group h2 { font-size: 14px; font-weight: 600; color: #7ab8f5; margin-bottom: 8px; }
+.setting-row { padding: 10px 0; border-bottom: 1px solid #2e2e2e; }
+.setting-row:last-child { border-bottom: none; }
+.setting-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.setting-label label { font-weight: 500; color: #ddd; }
+.setting-help { font-size: 11px; color: #999; margin: 3px 0 6px; line-height: 1.4; }
+.setting-control { display: flex; align-items: center; gap: 8px; }
+.setting-saved-flash { font-size: 11px; color: #5cb85c; }
+.data-file-row { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid #2e2e2e; font-size: 12px; }
+.data-file-row:last-child { border-bottom: none; }
+.data-file-row .present { color: #5cb85c; }
+.data-file-row .missing { color: #d9822b; }
+
+/* ── Modal ── */
+.modal-demo {
+  background: #252525; border: 1px solid #444; border-radius: 8px; padding: 20px;
+  max-width: 460px; box-shadow: 0 4px 20px rgba(0,0,0,0.8);
+}
+.modal-demo h2 { margin-bottom: 16px; color: #eee; font-size: 18px; }
+.modal-close { float: right; font-size: 28px; font-weight: bold; color: #aaa; cursor: pointer; line-height: 20px; }
+
+/* Person picker / popup */
+.pp-modal {
+  width: 260px; background: #2a2a2a; border: 1px solid #4a90d9; border-radius: 8px;
+  padding: 10px; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.8);
+}
+.pp-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 600; color: #cfe6ff; }
+.pp-close { background: none; border: none; color: #aaa; font-size: 13px; cursor: pointer; padding: 2px 4px; }
+.pp-search { width: 100%; font-size: 12px; padding: 6px 8px; border-radius: 5px; border: 1px solid #444; background: #1a1a1a; color: #eee; }
+.pp-list { display: flex; flex-direction: column; gap: 3px; }
+.pp-item {
+  display: flex; align-items: center; justify-content: space-between; width: 100%; text-align: left;
+  padding: 6px 8px; font-size: 12px; border: 1px solid #383838; border-radius: 5px;
+  background: #333; color: #eee; cursor: pointer;
+}
+.pp-item:hover { background: #3a3a3a; }
+.pp-item.pp-hl { background: #2a4a6e; border-color: #4a90d9; }
+.pp-item .pp-count { color: #9aa; font-size: 11px; }
+.pp-new { background: #2a4a6e; border-color: #4a90d9; color: #eaf4ff; }
+
+.face-expand {
+  width: 200px; background: #2a2a2a; border: 1px solid #4a90d9; border-radius: 5px; padding: 8px;
+  display: flex; flex-direction: column; gap: 5px; box-shadow: 0 6px 20px rgba(0,0,0,.8);
+}
+.expand-btn { font-size: 11px; padding: 3px 8px; white-space: nowrap; }
+
+/* ── kbd / shortcuts ── */
+.sh-table { border-collapse: collapse; font-size: 12px; }
+.sh-table td { padding: 4px 6px; border-bottom: 1px solid #383838; color: #ddd; }
+.sh-table td:first-child { white-space: nowrap; }
+kbd {
+  display: inline-block; padding: 1px 6px; border: 1px solid #555; border-radius: 4px;
+  background: #383838; color: #eee; font-family: inherit; font-size: 11px;
+}
+
+/* ── Toast ── */
+.toast { display: inline-block; background: #383838; color: #eee; padding: 9px 18px; border-radius: 20px; font-size: 14px; }
+.toast.err { background: #7a2a2a; }
+
+/* ── Mobile tag action buttons ── */
+.act-bar { display: flex; gap: 8px; max-width: 420px; }
+.act {
+  flex: 1; padding: 16px 8px; font-size: 15px; font-weight: 700;
+  border: 1px solid #444; border-radius: 12px; background: #333; color: #eee; cursor: pointer;
+}
+.act.primary { background: #2a6e3a; border-color: #3a9d52; color: #eaffea; }
+.act.danger { background: #6e2a2a; border-color: #9d3a3a; color: #ffeaea; }
+.link-btn {
+  background: #2a2a2a; border: 1px solid #444; color: #cfe6ff; padding: 8px 16px;
+  border-radius: 20px; font-size: 14px; cursor: pointer;
+}
+
+/* ── Status bar ── */
+.status-bar { padding: 4px 10px; font-size: 11px; background: #1d1d1d; border: 1px solid #333; border-radius: 4px; color: #888; }
+
+/* ── Basemap control ── */
+.basemap-control {
+  width: 130px; background: rgba(30,30,30,0.92); border: 1px solid #444; border-radius: 6px;
+  overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+}
+.basemap-btn {
+  display: block; width: 100%; padding: 5px 10px; font-size: 11px; color: #ccc;
+  background: transparent; border: none; border-bottom: 1px solid #333; cursor: pointer; text-align: left;
+}
+.basemap-btn:last-child { border-bottom: none; }
+.basemap-btn:hover { background: #333; color: #fff; }
+.basemap-btn.active { background: #2a4a6e; color: #7ab8f5; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="doc-header">
+  <h1>Geo-Tagger — Design Artifacts</h1>
+  <p>Living reference of the UI components, colors, and patterns used across the app's pages.
+     Dark theme, <code>system-ui</code> 13px base, blue accent. Thumbnails use
+     <code>picsum.photos</code> placeholders in place of real library media.</p>
+</div>
+
+<div class="doc-wrap">
+
+  <!-- ── Color palette ── -->
+  <section class="doc-section">
+    <h2>Color palette</h2>
+    <p class="doc-sub">Surfaces</p>
+    <div class="swatches">
+      <div class="swatch"><div class="chip" style="background:#1a1a1a"></div><div class="meta"><b>Page bg</b><span>#1a1a1a</span></div></div>
+      <div class="swatch"><div class="chip" style="background:#1e1e1e"></div><div class="meta"><b>Pane</b><span>#1e1e1e</span></div></div>
+      <div class="swatch"><div class="chip" style="background:#232323"></div><div class="meta"><b>Card</b><span>#232323</span></div></div>
+      <div class="swatch"><div class="chip" style="background:#252525"></div><div class="meta"><b>Toolbar</b><span>#252525</span></div></div>
+      <div class="swatch"><div class="chip" style="background:#333333"></div><div class="meta"><b>Input / track</b><span>#333</span></div></div>
+      <div class="swatch"><div class="chip" style="background:#383838"></div><div class="meta"><b>Button</b><span>#383838</span></div></div>
+    </div>
+    <p class="doc-sub" style="margin-top:16px">Accent &amp; state</p>
+    <div class="swatches">
+      <div class="swatch"><div class="chip" style="background:#4a90d9"></div><div class="meta"><b>Accent</b><span>#4a90d9</span></div></div>
+      <div class="swatch"><div class="chip" style="background:#7ab8f5"></div><div class="meta"><b>Accent text</b><span>#7ab8f5</span></div></div>
+      <div class="swatch"><div class="chip" style="background:#2a4a6e"></div><div class="meta"><b>Active bg</b><span>#2a4a6e</span></div></div>
+      <div class="swatch"><div class="chip" style="background:#cfe6ff"></div><div class="meta"><b>On-active</b><span>#cfe6ff</span></div></div>
+      <div class="swatch"><div class="chip" style="background:#5cb85c"></div><div class="meta"><b>Success</b><span>#5cb85c</span></div></div>
+      <div class="swatch"><div class="chip" style="background:#d9a441"></div><div class="meta"><b>Warn / amber</b><span>#d9a441</span></div></div>
+      <div class="swatch"><div class="chip" style="background:#d9534f"></div><div class="meta"><b>Danger</b><span>#d9534f</span></div></div>
+      <div class="swatch"><div class="chip" style="background:#f88888"></div><div class="meta"><b>Error text</b><span>#f88</span></div></div>
+    </div>
+    <p class="doc-sub" style="margin-top:16px">Text</p>
+    <div class="swatches">
+      <div class="swatch"><div class="chip" style="background:#eeeeee"></div><div class="meta"><b>Primary</b><span>#eee</span></div></div>
+      <div class="swatch"><div class="chip" style="background:#dddddd"></div><div class="meta"><b>Body</b><span>#ddd</span></div></div>
+      <div class="swatch"><div class="chip" style="background:#999999"></div><div class="meta"><b>Muted</b><span>#999</span></div></div>
+      <div class="swatch"><div class="chip" style="background:#777777"></div><div class="meta"><b>Faint</b><span>#777</span></div></div>
+      <div class="swatch"><div class="chip" style="background:#555555"></div><div class="meta"><b>Dim</b><span>#555</span></div></div>
+    </div>
+  </section>
+
+  <!-- ── Typography ── -->
+  <section class="doc-section">
+    <h2>Typography</h2>
+    <div class="doc-panel">
+      <div class="big-number">1,204</div>
+      <div style="font-size:18px;color:#eee;font-weight:600;margin-top:8px">Section heading — 18px 600</div>
+      <div style="font-size:14px;color:#7ab8f5;font-weight:600;margin-top:8px">Card heading — 14px 600 accent</div>
+      <div style="font-size:13px;color:#ddd;margin-top:8px">Body text — 13px, the base size. Font stack is <code>system-ui, sans-serif</code>.</div>
+      <div style="font-size:12px;color:#ccc;margin-top:8px">Stat line — 12px</div>
+      <div class="sub-line" style="margin-top:8px">Sub / muted line — 12px #999</div>
+      <div class="hint" style="margin-top:8px">Hint — 11px #d9534f</div>
+      <div class="family-group-header">Uppercase group label — 10px 700</div>
+    </div>
+  </section>
+
+  <!-- ── Buttons ── -->
+  <section class="doc-section">
+    <h2>Buttons</h2>
+    <div class="doc-panel">
+      <div class="doc-row">
+        <button>Default</button>
+        <button class="active">Active</button>
+        <button class="primary">Primary</button>
+        <button class="danger">Danger</button>
+        <button class="icon-btn">✓</button>
+        <button class="icon-btn">🚫</button>
+        <a class="button" href="#">Link button</a>
+      </div>
+      <p class="doc-sub">Mode toggle</p>
+      <div class="mode-toggle" style="width:max-content">
+        <button class="active">Photos</button>
+        <button>Faces</button>
+        <button>Places</button>
+      </div>
+      <p class="doc-sub" style="margin-top:14px">Pill / link buttons (mobile)</p>
+      <div class="doc-row">
+        <button class="link-btn">📍 Set location</button>
+        <div class="act-bar" style="flex:1">
+          <button class="act">Skip</button>
+          <button class="act primary">Confirm</button>
+          <button class="act danger">Reject</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Form controls ── -->
+  <section class="doc-section">
+    <h2>Form controls</h2>
+    <div class="doc-panel">
+      <div class="doc-row">
+        <input type="text" placeholder="Text input" value="C:\photos\2024">
+        <input type="date" value="2026-07-08">
+        <input type="number" value="120">
+        <select><option>Dropdown</option><option>Option 2</option></select>
+        <label style="display:inline-flex;align-items:center;gap:6px;color:#ddd"><input type="checkbox" checked> Checkbox</label>
+      </div>
+      <p class="doc-sub">Toolbar</p>
+      <div id="toolbar">
+        <div class="toolbar-group"><input type="text" placeholder="Directory…" style="width:220px"></div>
+        <div class="toolbar-group"><button>Scan</button><button class="active">Filter</button></div>
+        <div class="toolbar-spacer"></div>
+        <div class="toolbar-group"><button class="primary">Save</button></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Navigation ── -->
+  <section class="doc-section">
+    <h2>Top navigation</h2>
+    <div class="doc-panel">
+      <div id="app-nav">
+        <a class="button" href="#">🏠 Home</a>
+        <a class="button" href="#">🔎 Search</a>
+        <a class="button" href="#">📍 Geocode</a>
+        <a class="button" href="#">⚡ Quick Geocode</a>
+        <a class="button active" href="#">🌍 Places DB</a>
+        <a class="button" href="#">🕐 Time Sync</a>
+        <a class="button" href="#">🙂 People</a>
+        <a class="button" href="#">⭐ Representatives</a>
+        <a class="button" href="#">🗺️ Contexts</a>
+        <a class="button" href="#">📦 Data</a>
+        <a class="button" href="#">⚙ Settings</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Cards & stats ── -->
+  <section class="doc-section">
+    <h2>Dashboard cards</h2>
+    <div class="doc-row" style="align-items:stretch">
+      <div class="card" style="width:320px">
+        <h2>Library</h2>
+        <div class="big-number">1,204</div>
+        <div class="sub-line">photos indexed</div>
+        <div class="stat-line"><strong>842</strong> geotagged · <span class="stat-line highlight">362 remaining</span></div>
+        <div class="progress-bar"><div class="progress-fill" style="width:70%"></div></div>
+        <div class="progress-label">70% geotagged</div>
+        <div class="card-actions"><button class="primary">Backfill</button><button>Details</button></div>
+      </div>
+      <div class="card" style="width:320px">
+        <div class="card-header-row"><h2>Face coverage</h2>
+          <div class="mode-toggle"><button class="active">Count</button><button>%</button></div>
+        </div>
+        <div class="coverage-bar">
+          <div class="cov-full" style="width:52%"></div>
+          <div class="cov-partial" style="width:20%"></div>
+          <div class="cov-none" style="width:18%"></div>
+          <div class="cov-noface" style="width:10%"></div>
+        </div>
+        <div class="coverage-legend">
+          <span class="lg"><span class="sw cov-full"></span>Full</span>
+          <span class="lg"><span class="sw cov-partial"></span>Partial</span>
+          <span class="lg"><span class="sw cov-none"></span>None</span>
+          <span class="lg"><span class="sw cov-noface"></span>No faces</span>
+        </div>
+        <div class="hint">362 photos still need review</div>
+        <div class="error-line">Last scan failed: ExifTool timeout</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Thumbnail grid ── -->
+  <section class="doc-section">
+    <h2>Thumbnail grid</h2>
+    <p class="doc-sub">States: default · selected · tagged · geo-ignored · with camera strip &amp; hover name</p>
+    <div class="doc-panel">
+      <div id="grid">
+        <div class="grid-year-divider">2024</div>
+        <div class="grid-month-divider">March</div>
+        <div class="thumb-cell"><img src="https://picsum.photos/seed/a/160"><div class="thumb-name">DSC_0142.jpg</div></div>
+        <div class="thumb-cell selected"><img src="https://picsum.photos/seed/b/160"><div class="cam-strip" style="background:#4a90d9"></div></div>
+        <div class="thumb-cell tagged"><img src="https://picsum.photos/seed/c/160"><div class="cam-strip" style="background:#5cb85c"></div></div>
+        <div class="thumb-cell geo-ignored"><img src="https://picsum.photos/seed/d/160"></div>
+        <div class="thumb-cell"><img src="https://picsum.photos/seed/e/160"><div class="cam-strip" style="background:#d9a441"></div></div>
+        <div class="thumb-cell"><img src="https://picsum.photos/seed/f/160"><div class="cam-strip" style="background:#d9534f"></div></div>
+      </div>
+      <p class="doc-sub" style="margin-top:16px">Camera legend</p>
+      <div id="cam-legend">
+        <span class="cam-legend-item"><span class="cam-legend-dot" style="background:#4a90d9"></span>iPhone 15</span>
+        <span class="cam-legend-item"><span class="cam-legend-dot" style="background:#5cb85c"></span>Canon R6</span>
+        <span class="cam-legend-item dimmed"><span class="cam-legend-dot" style="background:#d9a441"></span>DJI Mini</span>
+        <span class="cam-legend-item"><span class="cam-legend-dot" style="background:#d9534f"></span>Unknown</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Face cells ── -->
+  <section class="doc-section">
+    <h2>Face cells &amp; overlay chips</h2>
+    <div class="doc-panel">
+      <div id="grid" style="grid-template-columns:repeat(auto-fill,120px)">
+        <div class="thumb-cell"><img src="https://picsum.photos/seed/p1/160"><div class="face-label">Alice</div></div>
+        <div class="thumb-cell ambiguous"><img src="https://picsum.photos/seed/p2/160"><div class="face-suggest"><span class="sug-check">✓</span><span class="sug-name">Bob?</span><span class="sug-reject">✕</span></div></div>
+        <div class="thumb-cell"><img src="https://picsum.photos/seed/p3/160"><div class="face-alt"><span class="alt-arrow">→</span><span class="sug-name">or Carol</span></div></div>
+        <div class="thumb-cell"><img src="https://picsum.photos/seed/p4/160"><div class="face-score">0.91</div><div class="face-label">Dave</div></div>
+        <div class="thumb-cell ignored"><img src="https://picsum.photos/seed/p5/160"><div class="face-label ignored-label">ignored</div></div>
+        <div class="thumb-cell come-back"><img src="https://picsum.photos/seed/p6/160"><div class="face-label come-back-label">come back</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Grouped sections ── -->
+  <section class="doc-section">
+    <h2>Grouped sections &amp; header tints</h2>
+    <div class="doc-panel">
+      <div class="face-group-section group-tint-0" style="margin-bottom:12px">
+        <div class="face-group-header">
+          <span class="face-group-label">Beach trip <span class="face-group-meta">· 12 photos</span></span>
+          <span class="face-group-btns"><button>Tag all</button><button class="icon-btn">🚫</button></span>
+        </div>
+        <div class="face-group-cells">
+          <div class="thumb-cell"><img src="https://picsum.photos/seed/g1/160"></div>
+          <div class="thumb-cell"><img src="https://picsum.photos/seed/g2/160"></div>
+          <div class="thumb-cell"><img src="https://picsum.photos/seed/g3/160"></div>
+        </div>
+      </div>
+      <div class="doc-row" style="flex-direction:column;align-items:stretch">
+        <div class="face-group-header green"><span class="face-group-label">Green — confirmed <span class="face-group-meta">· accepted</span></span></div>
+        <div class="face-group-header blue"><span class="face-group-label">Blue — default event</span></div>
+        <div class="face-group-header amber"><span class="face-group-label">Amber — crowd / needs review</span></div>
+        <div class="face-group-header grey"><span class="face-group-label">Grey — ignored</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── People list ── -->
+  <section class="doc-section">
+    <h2>People list &amp; chips</h2>
+    <div class="doc-row" style="align-items:flex-start">
+      <div class="doc-panel people-list" style="width:280px">
+        <div class="family-group-header">Immediate family</div>
+        <div class="person-item active"><span class="person-name">Alice Watt <span class="person-birth">b.1988</span></span><span class="person-count">312</span></div>
+        <div class="person-item"><span class="person-name">Bob Watt</span><span class="person-count">204</span></div>
+        <div class="family-group-header">Extended</div>
+        <div class="person-item"><span class="person-name">Carol Jones</span><span class="person-count">57</span></div>
+        <div class="person-item"><span class="person-name">Dave Smith</span><span class="person-count">9</span></div>
+      </div>
+      <div class="doc-panel" style="flex:1;min-width:240px">
+        <p class="doc-sub">Person filter chips</p>
+        <div class="doc-row">
+          <span class="person-chip">Alice <button>✕</button></span>
+          <span class="person-chip">Bob <button>✕</button></span>
+          <span class="person-chip">Carol <button>✕</button></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Detail pane bits ── -->
+  <section class="doc-section">
+    <h2>Detail pane</h2>
+    <div class="doc-row" style="align-items:flex-start">
+      <div class="doc-panel">
+        <p class="doc-sub">Metadata table</p>
+        <table id="detail-meta">
+          <tr><td>File</td><td>DSC_0142.jpg</td></tr>
+          <tr><td>Date</td><td>2024-03-14 15:22</td></tr>
+          <tr><td>Camera</td><td>Canon EOS R6</td></tr>
+          <tr><td>Location</td><td>Lisbon, Portugal</td></tr>
+          <tr><td>Coords</td><td>38.7223, -9.1393</td></tr>
+        </table>
+      </div>
+      <div class="doc-panel" style="display:flex;flex-direction:column;gap:10px">
+        <p class="doc-sub">Guess / suggestion bars</p>
+        <div class="guess-bar">
+          <div id="guess-summary">Nearest tagged photo is <strong style="color:#ddd">1.2 km</strong> away, 4 min earlier.</div>
+          <div class="guess-actions"><button class="primary">Apply guess</button><button>Skip</button></div>
+        </div>
+        <div class="face-suggestion-box">Looks like <b>Alice</b> — accept?</div>
+        <div class="face-negatives-box"><span class="neg-title">Marked not-this-person</span><div>Bob, Carol <button class="icon-btn" style="float:right">↺</button></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Modals & popups ── -->
+  <section class="doc-section">
+    <h2>Modals &amp; popups</h2>
+    <div class="doc-row" style="align-items:flex-start">
+      <div class="modal-demo">
+        <span class="modal-close">&times;</span>
+        <h2>Jump to month</h2>
+        <div class="month-item">
+          <span class="month-name">March 2024</span>
+          <span class="month-counts">
+            <span class="count-badge count-geotagged">42 ✓</span>
+            <span class="count-badge count-not-geotagged">8 ✕</span>
+            <span class="count-badge count-total">50</span>
+          </span>
+        </div>
+        <div class="month-item">
+          <span class="month-name">February 2024</span>
+          <span class="month-counts">
+            <span class="count-badge count-geotagged">30 ✓</span>
+            <span class="count-badge count-not-geotagged">12 ✕</span>
+            <span class="count-badge count-total">42</span>
+          </span>
+        </div>
+      </div>
+      <div class="pp-modal">
+        <div class="pp-head"><span>Assign to…</span><button class="pp-close">✕</button></div>
+        <input class="pp-search" placeholder="Search people…" value="al">
+        <div class="pp-list">
+          <button class="pp-item pp-hl">Alice Watt <span class="pp-count">312</span></button>
+          <button class="pp-item">Alan Cole <span class="pp-count">14</span></button>
+          <button class="pp-item pp-new">+ Create “al”</button>
+        </div>
+      </div>
+      <div class="face-expand">
+        <button class="expand-btn primary">✓ Confirm Alice</button>
+        <button class="expand-btn">Assign to…</button>
+        <button class="expand-btn">🚫 Ignore face</button>
+        <button class="expand-btn danger">✕ Not a face</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Settings & data ── -->
+  <section class="doc-section">
+    <h2>Settings &amp; data rows</h2>
+    <div class="doc-row" style="align-items:flex-start">
+      <div class="settings-group">
+        <h2>Face detection</h2>
+        <div class="setting-row">
+          <div class="setting-label"><label>Match threshold</label><span class="setting-saved-flash show">saved ✓</span></div>
+          <div class="setting-help">Higher = stricter matches, fewer false positives.</div>
+          <div class="setting-control"><input type="number" value="0.45"><button class="icon-btn">↺</button></div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-label"><label>Auto-suggest faces</label></div>
+          <div class="setting-control"><input type="checkbox" checked></div>
+        </div>
+      </div>
+      <div class="data-group">
+        <h2>Reference data</h2>
+        <div class="data-file-row"><span>GeoNames cities</span><span class="present">✓ loaded (2.1 MB)</span></div>
+        <div class="data-file-row"><span>OSM polygons — Portugal</span><span class="present">✓ loaded</span></div>
+        <div class="data-file-row"><span>OSM polygons — Spain</span><span class="missing">not downloaded</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Misc ── -->
+  <section class="doc-section">
+    <h2>Miscellaneous</h2>
+    <div class="doc-row" style="align-items:flex-start">
+      <div class="doc-panel">
+        <p class="doc-sub">Keyboard shortcuts</p>
+        <table class="sh-table">
+          <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Previous / next photo</td></tr>
+          <tr><td><kbd>Space</kbd></td><td>Confirm suggestion</td></tr>
+          <tr><td><kbd>X</kbd></td><td>Reject / not this person</td></tr>
+          <tr><td><kbd>?</kbd></td><td>Show this help</td></tr>
+        </table>
+      </div>
+      <div class="doc-panel">
+        <p class="doc-sub">Toasts</p>
+        <div class="doc-row"><span class="toast">Saved 12 tags</span></div>
+        <div class="doc-row"><span class="toast err">Failed to write sidecar</span></div>
+      </div>
+      <div class="doc-panel">
+        <p class="doc-sub">Status bar</p>
+        <div class="status-bar">1,204 photos · 842 geotagged · scanning… 63%</div>
+      </div>
+      <div class="doc-panel">
+        <p class="doc-sub">Basemap switcher (map overlay)</p>
+        <div class="basemap-control">
+          <button class="basemap-btn active">Streets</button>
+          <button class="basemap-btn">Satellite</button>
+          <button class="basemap-btn">Terrain</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+</body>
+</html>

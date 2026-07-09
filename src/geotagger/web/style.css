@@ -1,77 +1,7 @@
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-body {
-  font-family: system-ui, sans-serif;
-  font-size: 13px;
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  overflow: hidden;
-  background: #1a1a1a;
-  color: #ddd;
-}
-
-/* ── Toolbar ── */
-#toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  padding: 6px 10px;
-  background: #252525;
-  border-bottom: 1px solid #333;
-  flex-shrink: 0;
-}
-
-.toolbar-group {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.toolbar-spacer { flex: 1; }
-
-#toolbar input[type="text"] {
-  padding: 4px 7px;
-  border: 1px solid #444;
-  border-radius: 4px;
-  background: #333;
-  color: #eee;
-  outline: none;
-}
-#toolbar input[type="text"]:focus { border-color: #4a90d9; }
+/* Reset, base body, #toolbar, form controls, buttons and select now live in
+   theme.css. Only page-specific rules remain here. */
 
 #dir-input { width: 280px; }
-
-button, a.button {
-  padding: 4px 10px;
-  border: 1px solid #555;
-  border-radius: 4px;
-  background: #383838;
-  color: #ddd;
-  cursor: pointer;
-  font-size: 12px;
-  text-decoration: none;
-}
-button:hover, a.button:hover {
-  background: #4a4a4a;
-}
-button.active, a.button.active {
-  background: #2a4a6e;
-  border-color: #4a90d9;
-  color: #7ab8f5;
-}
-button.danger { border-color: #a33; color: #f88; }
-button.danger:hover { background: #500; }
-
-
-select {
-  padding: 4px 6px;
-  border: 1px solid #444;
-  border-radius: 4px;
-  background: #333;
-  color: #eee;
-}
 
 /* ── 3-pane main ── */
 #main {
@@ -315,12 +245,6 @@ select {
   display: flex;
   gap: 6px;
 }
-button.primary {
-  background: #2a4a6e;
-  border-color: #4a90d9;
-  color: #7ab8f5;
-}
-button.primary:hover { background: #1e3a5e; }
 
 /* ── Source photo popup (shown on guess markers) ── */
 .source-popup-wrap .leaflet-popup-content-wrapper {
@@ -362,45 +286,10 @@ button.primary:hover { background: #1e3a5e; }
   color: #aaa;
 }
 
-/* ── Status bar ── */
-#status-bar {
-  height: 22px;
-  line-height: 22px;
-  padding: 0 10px;
-  font-size: 11px;
-  background: #1d1d1d;
-  border-top: 1px solid #333;
-  color: #888;
-  flex-shrink: 0;
-}
+/* Status bar and basemap switcher now live in theme.css. */
 
 /* ── Drop highlight ── */
 #map-pane.drop-target #map { outline: 3px dashed #4a90d9; }
-
-/* ── Basemap switcher ── */
-.basemap-control {
-  background: rgba(30,30,30,0.92);
-  border: 1px solid #444;
-  border-radius: 6px;
-  overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.5);
-}
-.basemap-btn {
-  display: block;
-  width: 100%;
-  padding: 5px 10px;
-  font-size: 11px;
-  color: #ccc;
-  background: transparent;
-  border: none;
-  border-bottom: 1px solid #333;
-  cursor: pointer;
-  text-align: left;
-  white-space: nowrap;
-}
-.basemap-btn:last-child { border-bottom: none; }
-.basemap-btn:hover { background: #333; color: #fff; }
-.basemap-btn.active { background: #2a4a6e; color: #7ab8f5; font-weight: 600; }
 
 /* ── Timeline histogram ── */
 #timeline {
@@ -607,59 +496,8 @@ button.primary:hover { background: #1e3a5e; }
   font-weight: 600;
 }
 
-/* ── Day group sections (reuses face-grid.css .face-group-header for the title bar) ── */
-.face-group-section {
-  grid-column: 1 / -1;
-  border-radius: 5px;
-  border: 1px solid rgba(80, 110, 160, 0.18);
-  padding: 0;
-  margin: 2px 0;
-  overflow: hidden;
-}
-.face-group-section > .face-group-header {
-  border-radius: 0;
-}
-.face-group-cells {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: 4px;
-  padding: 4px;
-}
-.group-tint-0 { background: rgba(60,  100, 170, 0.09); }
-.group-tint-1 { background: rgba(170,  80,  60, 0.09); }
-.group-tint-2 { background: rgba(60,  160,  80, 0.09); }
-.group-tint-3 { background: rgba(170, 140,  50, 0.09); }
-.group-tint-4 { background: rgba(130,  60, 170, 0.09); }
-.group-tint-5 { background: rgba(40,  150, 160, 0.09); }
+/* Day group sections (.face-group-section / .face-group-cells / .group-tint-*)
+   now live in theme.css, shared with the faces pages. */
 
-/* Imprecise drop control */
-.imprecise-control-group {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: #333;
-  padding: 3px 8px;
-  border-radius: 4px;
-  border: 1px solid #444;
-}
-.imprecise-control-group label {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  user-select: none;
-  cursor: pointer;
-  color: #ddd;
-  font-weight: 500;
-}
-.imprecise-control-group input[type="checkbox"] {
-  cursor: pointer;
-  width: 13px;
-  height: 13px;
-}
-.imprecise-control-group select {
-  padding: 2px 4px;
-  background: #252525;
-  border: 1px solid #555;
-  color: #fff;
-  font-size: 11px;
-}
+/* .imprecise-control-group now lives in face-grid.css (shared with
+   quick-geocode, which does not load this file). */

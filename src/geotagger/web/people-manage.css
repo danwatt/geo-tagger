@@ -1,6 +1,5 @@
-/* people-manage.css — People Manager page */
-
-[hidden] { display: none !important; }
+/* people-manage.css — People Manager page.
+   Reset, base body, form controls and #toast come from theme.css. */
 
 body {
   overflow: auto; /* this page scrolls, unlike the split-pane people view */
@@ -142,11 +141,4 @@ input[type="date"].edit-input {
 
 #no-persons { color: #666; font-style: italic; padding: 20px 8px; font-size: 12px; }
 
-/* ── Toast ── */
-#toast {
-  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
-  background: #383838; color: #eee; padding: 8px 18px;
-  border-radius: 20px; font-size: 13px; z-index: 60;
-  max-width: 86vw; text-align: center; pointer-events: none;
-}
-#toast.err { background: #7a2a2a; }
+/* #toast comes from theme.css. */

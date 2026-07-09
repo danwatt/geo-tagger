@@ -1,6 +1,4 @@
-/* ── Overall layout ── */
-body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-
+/* ── Overall layout ── (base body comes from theme.css) */
 #cr-main {
   display: flex;
   flex: 1;
@@ -79,7 +77,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
 .face-bbox {
   position: absolute;
-  border: 2px solid #4a90d9;
+  border: 2px solid var(--accent);
   box-sizing: border-box;
   cursor: pointer;
   transition: border-color 0.1s, border-width 0.1s;
@@ -140,13 +138,10 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   transition: border-color 0.1s;
 }
 .face-card:hover { border-color: #555; }
+/* Base square-image styling is shared from theme.css; keep radius + bg. */
 .face-card img {
-  width: 100%;
-  aspect-ratio: 1;
-  object-fit: cover;
-  display: block;
   border-radius: 1px;
-  background: #111;
+  background: var(--surface-black);
 }
 
 .labeled-card { border-color: #2a5a2a !important; }

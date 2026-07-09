@@ -1,38 +1,11 @@
-/* Representative Faces review page layout */
-html, body { height: 100%; margin: 0; padding: 0; }
-
-body {
-  display: flex;
-  flex-direction: column;
-  font-family: sans-serif;
-  font-size: 14px;
-  background: #1a1a1a;
-  color: #e0e0e0;
-}
+/* Representative Faces review page layout.
+   Base body, #sidebar / #sidebar-header and #status-bar come from theme.css. */
 
 #main {
   display: flex;
   flex: 1;
   min-height: 0;
 }
-
-/* ── Sidebar: person picker ── */
-#sidebar {
-  width: 300px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  background: #252525;
-  border-right: 1px solid #444;
-  overflow: hidden;
-}
-
-#sidebar-header {
-  padding: 10px 12px;
-  border-bottom: 1px solid #444;
-  flex-shrink: 0;
-}
-#sidebar-header h2 { margin: 0; font-size: 15px; }
 
 #person-list {
   flex: 1;
@@ -41,28 +14,29 @@ body {
 }
 
 #no-persons-hint {
-  color: #888;
+  color: var(--text-muted);
   font-style: italic;
   padding: 16px 10px;
   line-height: 1.5;
 }
 
+/* Person cards in the sidebar (a card variant of the shared list item). */
 .person-item {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
   gap: 8px;
-  background: #2d2d2d;
-  border: 1px solid #444;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
   padding: 8px 12px;
   margin-bottom: 6px;
   cursor: pointer;
 }
-.person-item:hover { border-color: #4a90d9; }
-.person-item.selected { border-color: #4a90d9; background: #1e2f42; }
+.person-item:hover { border-color: var(--accent); }
+.person-item.selected { border-color: var(--accent); background: #1e2f42; }
 .person-item-name { font-weight: bold; font-size: 13px; }
-.person-item-count { color: #999; font-size: 11px; white-space: nowrap; }
+.person-item-count { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
 
 /* ── Groups pane ── */
 #groups-pane {
@@ -73,7 +47,7 @@ body {
 }
 
 #groups-empty {
-  color: #888;
+  color: var(--text-muted);
   font-style: italic;
   text-align: center;
   padding: 40px 16px;
@@ -94,47 +68,32 @@ body {
 
 .rep-group-faces {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(var(--face-size), 1fr));
   gap: 4px;
   padding: 8px 10px;
 }
+/* Base square-image styling is shared from theme.css; keep only radius + bg. */
 .rep-group-faces img {
-  width: 100%;
-  aspect-ratio: 1;
-  object-fit: cover;
-  border-radius: 3px;
-  background: #1a1a1a;
-  display: block;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
 }
 
 /* The representative itself: distinct border + badge so it reads as "the one
  * kept" at a glance among its near-duplicates. */
 .rep-face-wrap { position: relative; }
-.rep-face-wrap img { border: 2px solid #e0a020; }
+.rep-face-wrap img { border: 2px solid var(--gold); }
 .rep-face-badge {
   position: absolute;
   top: 2px;
   left: 2px;
-  background: #e0a020;
-  color: #1a1a1a;
+  background: var(--gold);
+  color: var(--bg);
   font-size: 10px;
   font-weight: bold;
   line-height: 1;
   padding: 2px 4px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   pointer-events: none;
 }
 
-.rep-group-more { color: #888; font-size: 11px; padding: 6px 4px; align-self: center; }
-
-/* ── Status bar ── */
-#status-bar {
-  padding: 4px 12px;
-  font-size: 12px;
-  color: #999;
-  background: #2d2d2d;
-  border-top: 1px solid #444;
-  flex-shrink: 0;
-  min-height: 22px;
-}
-#status-bar.error { color: #f88; }
+.rep-group-more { color: var(--text-muted); font-size: 11px; padding: 6px 4px; align-self: center; }

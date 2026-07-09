@@ -1,25 +1,5 @@
-/* Map page layout */
-html, body { height: 100%; margin: 0; padding: 0; }
-
-body {
-  display: flex;
-  flex-direction: column;
-  font-family: sans-serif;
-  font-size: 14px;
-  background: #1a1a1a;
-  color: #e0e0e0;
-}
-
-#toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  background: #2d2d2d;
-  border-bottom: 1px solid #444;
-  flex-shrink: 0;
-  flex-wrap: wrap;
-}
+/* Map page layout.
+   Base body, #toolbar, .basemap-* switcher and #status-bar come from theme.css. */
 
 #main {
   position: relative;
@@ -38,11 +18,11 @@ body {
   left: 50%;
   transform: translateX(-50%);
   background: rgba(30,30,30,0.92);
-  border: 1px solid #444;
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
   padding: 8px 16px;
   font-size: 13px;
-  color: #ddd;
+  color: var(--text);
   z-index: 1000;
   pointer-events: none;
   display: none;
@@ -55,26 +35,26 @@ body {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: #e0a040;
+  background: var(--gold);
   border: 1.5px solid rgba(0,0,0,0.6);
   box-shadow: 0 0 3px rgba(0,0,0,0.6);
 }
 
 /* ── Place popup ── */
 .map-popup-wrap .leaflet-popup-content-wrapper {
-  background: #252525;
-  color: #ddd;
-  border: 1px solid #444;
+  background: var(--surface-3);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
   box-shadow: 0 3px 12px rgba(0,0,0,0.6);
 }
-.map-popup-wrap .leaflet-popup-tip { background: #252525; }
+.map-popup-wrap .leaflet-popup-tip { background: var(--surface-3); }
 
 .map-popup { width: 170px; }
 .map-popup-name {
   font-size: 13px;
   font-weight: 600;
-  color: #eee;
+  color: var(--text-strong);
 }
 .map-popup-region {
   font-size: 11px;
@@ -83,7 +63,7 @@ body {
 }
 .map-popup-country {
   font-size: 11px;
-  color: #999;
+  color: var(--text-muted);
   margin-top: 1px;
 }
 .map-popup-meta {
@@ -91,40 +71,3 @@ body {
   color: #888;
   margin-top: 4px;
 }
-
-/* ── Basemap switcher (shared look with contexts/geocode pages) ── */
-.basemap-control {
-  background: rgba(30,30,30,0.92);
-  border: 1px solid #444;
-  border-radius: 6px;
-  overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.5);
-}
-.basemap-btn {
-  display: block;
-  width: 100%;
-  padding: 5px 10px;
-  font-size: 11px;
-  color: #ccc;
-  background: transparent;
-  border: none;
-  border-bottom: 1px solid #333;
-  cursor: pointer;
-  text-align: left;
-  white-space: nowrap;
-}
-.basemap-btn:last-child { border-bottom: none; }
-.basemap-btn:hover { background: #333; color: #fff; }
-.basemap-btn.active { background: #2a4a6e; color: #7ab8f5; font-weight: 600; }
-
-/* ── Status bar ── */
-#status-bar {
-  padding: 4px 12px;
-  font-size: 12px;
-  color: #999;
-  background: #2d2d2d;
-  border-top: 1px solid #444;
-  flex-shrink: 0;
-  min-height: 22px;
-}
-#status-bar.error { color: #f88; }

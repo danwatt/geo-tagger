@@ -1,0 +1,307 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   theme.css — shared design system for every geotagger page.
+   Loaded FIRST (before style.css and page CSS) so tokens are available and
+   shared components can be overridden per page. Holds:
+     · :root design tokens (the single source of truth for colors/shape/font)
+     · global reset + base body
+     · form controls (button / input / select / checkbox)
+     · cross-page chrome: #toolbar, #status-bar, #sidebar, .basemap-*, #toast
+     · shared face-grid bits: tints, .face-group-section, square face images
+   Page stylesheets should reference var(--token) rather than raw hex.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── Surfaces ── */
+  --bg:            #1a1a1a;  /* page background */
+  --surface-1:     #1e1e1e;  /* scrolling pane */
+  --surface-2:     #232323;  /* card / settings group */
+  --surface-3:     #252525;  /* toolbar / chrome / popups */
+  --surface-input: #333333;  /* input & track background */
+  --surface-btn:   #383838;  /* default button */
+  --surface-btn-hover: #4a4a4a;
+  --surface-black: #111111;  /* image placeholder backing */
+
+  /* ── Borders ── */
+  --border:        #333333;  /* default divider / chrome edge */
+  --border-2:      #2e2e2e;  /* faint table/row divider */
+  --border-strong: #444444;  /* input / heavier edge */
+  --border-btn:    #555555;  /* button edge */
+
+  /* ── Text ── */
+  --text:        #dddddd;  /* body */
+  --text-strong: #eeeeee;  /* emphasis / values */
+  --text-muted:  #999999;  /* secondary */
+  --text-faint:  #777777;  /* labels */
+  --text-dim:    #555555;  /* placeholders / disabled */
+
+  /* ── Accent (blue) ── */
+  --accent:        #4a90d9;  /* focus ring / active border */
+  --accent-text:   #7ab8f5;  /* headings / active label */
+  --accent-bg:     #2a4a6e;  /* active / primary background */
+  --accent-bg-2:   #1e3a5e;  /* primary hover / active pill */
+  --on-accent:     #cfe6ff;  /* text on accent surfaces */
+
+  /* ── Status ── */
+  --success:      #5cb85c;
+  --warn:         #d9a441;
+  --danger:       #d9534f;
+  --danger-text:  #f88888;
+  --gold:         #e0a040;  /* representative / time-shift highlight */
+
+  /* ── Shape ── */
+  --radius:    4px;
+  --radius-sm: 3px;
+  --radius-lg: 8px;
+  --radius-pill: 20px;
+  --shadow-popup: 0 6px 20px rgba(0, 0, 0, .8);
+  --shadow-panel: 0 4px 20px rgba(0, 0, 0, .5);
+  --shadow-map:   0 2px 8px rgba(0, 0, 0, .5);
+
+  /* ── Typography ── */
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-size: 13px;
+
+  /* ── Face grid ── */
+  --face-size: 120px;
+}
+
+/* ── Reset ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }
+
+/* ── Base body (photo-page shell: fixed viewport, panes scroll internally).
+   Pages that scroll the whole document (e.g. people-manage) override this. ── */
+body {
+  font-family: var(--font);
+  font-size: var(--font-size);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ── Buttons ── */
+button, a.button {
+  padding: 4px 10px;
+  border: 1px solid var(--border-btn);
+  border-radius: var(--radius);
+  background: var(--surface-btn);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  text-decoration: none;
+}
+button:hover, a.button:hover { background: var(--surface-btn-hover); }
+button.active, a.button.active {
+  background: var(--accent-bg);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+button.primary, a.button.primary {
+  background: var(--accent-bg);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+button.primary:hover { background: var(--accent-bg-2); }
+button.danger { border-color: #a33; color: var(--danger-text); }
+button.danger:hover { background: #500; }
+button.icon-btn { padding: 2px 8px; font-size: 14px; line-height: 1.2; }
+
+/* ── Inputs ── */
+input[type="text"], input[type="date"], input[type="number"] {
+  padding: 4px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-input);
+  color: var(--text-strong);
+  outline: none;
+}
+input[type="text"]:focus,
+input[type="date"]:focus,
+input[type="number"]:focus { border-color: var(--accent); }
+select {
+  padding: 4px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-input);
+  color: var(--text-strong);
+}
+input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
+
+/* ── Toolbar ── */
+#toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  background: var(--surface-3);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.toolbar-group { display: flex; align-items: center; gap: 4px; }
+.toolbar-spacer { flex: 1; }
+
+/* ── Status bar (shared across photo + map pages) ── */
+#status-bar {
+  height: 22px;
+  min-height: 22px;
+  line-height: 22px;
+  padding: 0 10px;
+  font-size: 11px;
+  background: #1d1d1d;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+#status-bar.error { color: var(--danger-text); }
+
+/* ── Sidebar (contexts / representatives split-pane pages) ── */
+#sidebar {
+  width: 300px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-3);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+#sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+#sidebar-header h2 { margin: 0; font-size: 15px; flex: 1; }
+
+/* ── Basemap switcher (Leaflet overlay control) ── */
+.basemap-control {
+  background: rgba(30, 30, 30, 0.92);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: var(--shadow-map);
+}
+.basemap-btn {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  font-size: 11px;
+  color: #ccc;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+.basemap-btn:last-child { border-bottom: none; }
+.basemap-btn:hover { background: var(--surface-input); color: #fff; }
+.basemap-btn.active { background: var(--accent-bg); color: var(--accent-text); font-weight: 600; }
+
+/* ── Toast (bottom-center pill) ── */
+#toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  background: var(--surface-btn);
+  color: var(--text-strong);
+  padding: 9px 18px;
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  z-index: 60;
+  max-width: 86vw;
+  text-align: center;
+  pointer-events: none;
+}
+#toast.err { background: #7a2a2a; }
+
+/* ── Face-group section wrapper + cycling tints (shared by every faces page) ── */
+.face-group-section {
+  grid-column: 1 / -1;
+  border-radius: 5px;
+  border: 1px solid rgba(80, 110, 160, 0.18);
+  padding: 0;
+  margin: 4px 0;
+  overflow: hidden;
+}
+.face-group-section > .face-group-header { margin-top: 0; border-radius: 0; }
+.face-group-cells {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--face-size), 1fr));
+  gap: 4px;
+  padding: 4px;
+}
+/* 6 subtle tints that cycle across groups — low opacity to blend with dark bg */
+.group-tint-0 { background: rgba(60,  100, 170, 0.09); }
+.group-tint-1 { background: rgba(170,  80,  60, 0.09); }
+.group-tint-2 { background: rgba(60,  160,  80, 0.09); }
+.group-tint-3 { background: rgba(170, 140,  50, 0.09); }
+.group-tint-4 { background: rgba(130,  60, 170, 0.09); }
+.group-tint-5 { background: rgba(40,  150, 160, 0.09); }
+
+/* ── Shared square face/photo image — the common look behind the many
+   aspect-ratio face grids. Per-page rules keep only their own radius/bg/border.
+   (.thumb-cell img is intentionally excluded: it fills its square cell via
+   height:100% and sets pointer-events:none, so it stays in style.css.) ── */
+.cluster-faces img,
+.rep-group-faces img,
+#faces img,
+.face-card img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  display: block;
+  cursor: pointer;
+}
+
+/* ── Panel card (dashboard cards + settings/data groups share this shell) ── */
+.card, .settings-group, .data-group {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.card h2, .settings-group h2, .data-group h2 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent-text);
+}
+
+/* ── Mobile flow chrome (shared by the tag + quick-geocode phone pages) ──
+   Top #bar, bottom #actions button row, and the big .act tap targets. */
+#app { display: flex; flex-direction: column; height: 100dvh; }
+#bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px; background: #222; border-bottom: 1px solid var(--border);
+}
+#back {
+  color: #9ab; text-decoration: none; font-size: 24px; line-height: 1;
+  width: 28px; text-align: center;
+}
+#title { font-weight: 700; flex: 1; }
+#progress { color: #9ab; font-size: 14px; }
+#settings-btn {
+  background: none; border: none; color: #9ab; font-size: 20px;
+  cursor: pointer; padding: 2px 4px; line-height: 1;
+}
+#actions {
+  display: flex; gap: 8px;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  background: #222; border-top: 1px solid var(--border);
+}
+.act {
+  flex: 1; padding: 16px 8px;
+  font-size: 15px; font-weight: 700;
+  border: 1px solid var(--border-strong); border-radius: 12px;
+  background: var(--surface-input); color: var(--text-strong); cursor: pointer;
+}
+#skip-btn { flex: 0 0 80px; font-weight: 500; color: #ccc; }
+.act.primary { background: #2a6e3a; border-color: #3a9d52; color: #eaffea; }
+.act.danger { background: #6e2a2a; border-color: #9d3a3a; color: #ffeaea; }
+.act:disabled { opacity: .5; }

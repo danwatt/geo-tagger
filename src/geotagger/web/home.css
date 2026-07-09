@@ -9,20 +9,12 @@
   align-content: start;
 }
 
+/* Shared shell (background/border/radius) + h2 styling live in theme.css. */
 .card {
-  background: #232323;
-  border: 1px solid #333;
-  border-radius: 8px;
   padding: 16px;
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-
-.card h2 {
-  font-size: 14px;
-  font-weight: 600;
-  color: #7ab8f5;
 }
 
 .card-full {

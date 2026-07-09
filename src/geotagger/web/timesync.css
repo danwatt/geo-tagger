@@ -1,15 +1,5 @@
-/* Time sync specific styles */
-
-html, body {
-  height: 100vh;
-  overflow: hidden;
-}
-
-button.active {
-  background: #2a4a6e;
-  border-color: #4a90d9;
-  color: #7ab8f5;
-}
+/* Time sync specific styles.
+   Base body and button.active come from theme.css. */
 
 #timeline-pane {
   position: relative;

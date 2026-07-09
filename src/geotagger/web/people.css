@@ -128,51 +128,9 @@
  * buttons (× unassign · ✓ accept suggestions · 🚫 ignore). */
 #grid-nav-selection button.icon-btn { padding: 2px 8px; font-size: 14px; line-height: 1.2; }
 
-.thumb-cell .face-label {
-  position: absolute;
-  bottom: 0; left: 0; right: 0;
-  background: rgba(0,0,0,.6);
-  color: #eee;
-  font-size: 10px;
-  padding: 2px 4px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-/* A clickable suggestion chip on unlabeled faces */
-.thumb-cell .face-suggest {
-  position: absolute;
-  bottom: 0; left: 0; right: 0;
-  background: rgba(42, 74, 110, .85);
-  color: #cfe6ff;
-  font-size: 10px;
-  padding: 2px 4px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
-}
-.thumb-cell .face-suggest:hover { background: rgba(42, 74, 110, 1); }
-.thumb-cell .face-suggest .sug-check {
-  font-weight: bold;
-  color: #7ed87e;
-}
-.thumb-cell .sug-name {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.thumb-cell .face-suggest .sug-name,
+/* .face-label / .face-suggest / .sug-check / .sug-name / .sug-reject are shared
+ * from face-grid.css. The .face-alt chip below is People-specific. */
 .thumb-cell .face-alt .sug-name { flex: 1; }
-
-/* Reject affordance on suggestion/alt chips: "this is NOT this person" */
-.thumb-cell .sug-reject {
-  flex-shrink: 0;
-  font-weight: bold;
-  color: #f0a3a3;
-  padding: 0 2px;
-}
-.thumb-cell .sug-reject:hover { color: #ff6b6b; }
 
 /* Stack of clickable chips (top suggestion + ambiguous alternatives) */
 .thumb-cell .face-chips {
@@ -322,37 +280,9 @@
   padding: 2px 4px;
 }
 
-/* ── Group section wrappers with subtle tinted backgrounds ── */
-.face-group-section {
-  grid-column: 1 / -1;
-  border-radius: 5px;
-  border: 1px solid rgba(80, 110, 160, 0.18);
-  padding: 0;
-  margin: 4px 0;
-  overflow: hidden;
-}
-.face-group-section > .face-group-header {
-  margin-top: 0;
-  border-radius: 0;
-}
-.face-group-cells {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: 4px;
-  padding-top: 4px;
-}
-
-/* 6 subtle tints that cycle across groups — low opacity to blend with dark bg */
-.group-tint-0 { background: rgba(60,  100, 170, 0.09); }
-.group-tint-1 { background: rgba(170,  80,  60, 0.09); }
-.group-tint-2 { background: rgba(60,  160,  80, 0.09); }
-.group-tint-3 { background: rgba(170, 140,  50, 0.09); }
-.group-tint-4 { background: rgba(130,  60, 170, 0.09); }
-.group-tint-5 { background: rgba(40,  150, 160, 0.09); }
-
-/* Event/ignore/tag group headers (.face-group-header) are styled in
-   face-grid.css and built by faceGroupHeader(); the section wrapper above
-   only needs to flatten the header's top margin/radius. */
+/* .face-group-section / .face-group-cells / .group-tint-* are shared from
+   theme.css. Note: theme's .face-group-cells pads all sides (4px); this page's
+   grid inherits that. */
 
 /* Per-person action bar: "Find more photos of <name>" */
 .person-scope-header {

@@ -154,3 +154,69 @@
 .pp-new { background: #2a4a6e; border-color: #4a90d9; color: #eaf4ff; }
 .pp-new:hover { background: #305686; }
 .pp-empty { color: #888; text-align: center; padding: 14px; font-size: 12px; }
+
+/* ── Face overlay chips (shared by People + Search, which both load this file) ──
+ * The name label, the blue "suggested person" chip, and the reject affordance.
+ * People adds its own extras (.face-alt / .face-chips / .face-untag / .face-score)
+ * on top of these in people.css. */
+.thumb-cell .face-label {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: rgba(0, 0, 0, .6);
+  color: var(--text-strong);
+  font-size: 10px;
+  padding: 2px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.thumb-cell .face-suggest {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: rgba(42, 74, 110, .85);
+  color: var(--on-accent);
+  font-size: 10px;
+  padding: 2px 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.thumb-cell .face-suggest:hover { background: rgba(42, 74, 110, 1); }
+.thumb-cell .face-suggest .sug-check { font-weight: bold; color: #7ed87e; }
+.thumb-cell .sug-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.thumb-cell .face-suggest .sug-name { flex: 1; }
+.thumb-cell .sug-reject { flex-shrink: 0; font-weight: bold; color: #f0a3a3; padding: 0 2px; }
+.thumb-cell .sug-reject:hover { color: #ff6b6b; }
+
+/* ── Imprecise-drop control (geocode + quick-geocode toolbars) ── */
+.imprecise-control-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface-input);
+  padding: 3px 8px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+}
+.imprecise-control-group label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  user-select: none;
+  cursor: pointer;
+  color: var(--text);
+  font-weight: 500;
+}
+.imprecise-control-group input[type="checkbox"] {
+  cursor: pointer;
+  width: 13px;
+  height: 13px;
+}
+.imprecise-control-group select {
+  padding: 2px 4px;
+  background: var(--surface-3);
+  border: 1px solid var(--border-btn);
+  color: #fff;
+  font-size: 11px;
+}

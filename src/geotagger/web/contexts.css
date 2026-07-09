@@ -1,28 +1,5 @@
-/* Contexts page layout */
-html, body { height: 100%; margin: 0; padding: 0; }
-
-body {
-  display: flex;
-  flex-direction: column;
-  font-family: sans-serif;
-  font-size: 14px;
-  background: #1a1a1a;
-  color: #e0e0e0;
-}
-
-/* ── Toolbar ── */
-#toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  background: #2d2d2d;
-  border-bottom: 1px solid #444;
-  flex-shrink: 0;
-  flex-wrap: wrap;
-}
-
-/* reuse toolbar styles from style.css via shared class */
+/* Contexts page layout.
+   Base body, #toolbar and #status-bar come from theme.css. */
 
 /* ── Main area ── */
 #main {
@@ -31,37 +8,14 @@ body {
   min-height: 0;
 }
 
-/* ── Sidebar ── */
-#sidebar {
-  width: 320px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  background: #252525;
-  border-right: 1px solid #444;
-  overflow: hidden;
-}
-
-#sidebar-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  border-bottom: 1px solid #444;
-  flex-shrink: 0;
-}
-
-#sidebar-header h2 {
-  margin: 0;
-  font-size: 15px;
-  flex: 1;
-}
+/* ── Sidebar (wider than the shared default) ── */
+#sidebar { width: 320px; }
 
 #add-context-btn {
   background: #4a8;
   color: #fff;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius);
   padding: 5px 10px;
   cursor: pointer;
   font-size: 13px;
@@ -75,16 +29,16 @@ body {
 }
 
 .context-item {
-  background: #2d2d2d;
-  border: 1px solid #444;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
   padding: 10px 12px;
   margin-bottom: 8px;
   cursor: pointer;
   transition: border-color 0.15s;
 }
-.context-item:hover { border-color: #4a8; }
-.context-item.selected { border-color: #4a8; background: #1e3a2e; }
+.context-item:hover { border-color: var(--accent); }
+.context-item.selected { border-color: var(--accent); background: #1e2f42; }
 
 .context-item-name {
   font-weight: bold;
@@ -93,7 +47,7 @@ body {
 }
 
 .context-item-meta {
-  color: #999;
+  color: var(--text-muted);
   font-size: 12px;
   line-height: 1.5;
 }
@@ -107,13 +61,13 @@ body {
 .context-item-actions button {
   font-size: 12px;
   padding: 3px 8px;
-  border-radius: 4px;
-  border: 1px solid #555;
-  background: #333;
-  color: #ddd;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-btn);
+  background: var(--surface-input);
+  color: var(--text);
   cursor: pointer;
 }
-.context-item-actions button:hover { background: #444; }
+.context-item-actions button:hover { background: var(--border-strong); }
 .context-item-actions .delete-btn { border-color: #833; color: #faa; }
 .context-item-actions .delete-btn:hover { background: #511; }
 
@@ -137,11 +91,11 @@ body {
   right: 16px;
   width: 300px;
   background: #2d2d2d;
-  border: 1px solid #555;
-  border-radius: 8px;
+  border: 1px solid var(--border-btn);
+  border-radius: var(--radius-lg);
   padding: 14px 16px;
   z-index: 1000;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  box-shadow: var(--shadow-panel);
   display: none;
 }
 
@@ -164,10 +118,10 @@ body {
 #context-form-panel input[type=date] {
   width: 100%;
   box-sizing: border-box;
-  background: #1a1a1a;
-  border: 1px solid #555;
-  color: #e0e0e0;
-  border-radius: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border-btn);
+  color: var(--text);
+  border-radius: var(--radius);
   padding: 5px 8px;
   margin-top: 3px;
   font-size: 13px;
@@ -175,7 +129,7 @@ body {
 
 #polygon-status {
   font-size: 12px;
-  color: #aaa;
+  color: var(--text-muted);
   margin-bottom: 10px;
   min-height: 18px;
 }
@@ -194,31 +148,31 @@ body {
   background: #4a8;
   color: #fff;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius);
   padding: 6px 0;
   cursor: pointer;
   font-size: 13px;
 }
 #form-save-btn:hover { background: #3a7; }
-#form-save-btn:disabled { background: #555; color: #888; cursor: default; }
+#form-save-btn:disabled { background: var(--border-btn); color: #888; cursor: default; }
 
 #form-cancel-btn {
-  background: #333;
+  background: var(--surface-input);
   color: #ccc;
-  border: 1px solid #555;
-  border-radius: 4px;
+  border: 1px solid var(--border-btn);
+  border-radius: var(--radius);
   padding: 6px 12px;
   cursor: pointer;
   font-size: 13px;
 }
-#form-cancel-btn:hover { background: #444; }
+#form-cancel-btn:hover { background: var(--border-strong); }
 
 #draw-btn {
   width: 100%;
   background: #2a5a8a;
   color: #fff;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius);
   padding: 6px 0;
   cursor: pointer;
   font-size: 13px;
@@ -226,15 +180,3 @@ body {
 }
 #draw-btn:hover { background: #3a7ab0; }
 #draw-btn.active { background: #e74; }
-
-/* ── Status bar ── */
-#status-bar {
-  padding: 4px 12px;
-  font-size: 12px;
-  color: #999;
-  background: #2d2d2d;
-  border-top: 1px solid #444;
-  flex-shrink: 0;
-  min-height: 22px;
-}
-#status-bar.error { color: #f88; }
