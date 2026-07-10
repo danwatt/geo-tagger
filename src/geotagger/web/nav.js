@@ -6,6 +6,7 @@
     { key: "geocode", label: "📍 Geocode", href: "/geocode.html" },
     { key: "quick-geocode", label: "⚡ Quick Geocode", href: "/quick-geocode.html" },
     { key: "map", label: "🌍 Places DB", href: "/map.html" },
+    { key: "custom-places", label: "✏️ Custom Places", href: "/custom-places.html" },
     { key: "timesync", label: "🕐 Time Sync", href: "/timesync.html" },
     { key: "people", label: "🙂 People", href: "/people.html" },
     { key: "representatives", label: "⭐ Representatives", href: "/representatives.html" },

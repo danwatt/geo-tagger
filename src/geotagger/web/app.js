@@ -19,7 +19,7 @@ let undatedMode = false;  // true when browsing the Undated queue instead of a m
 /* ── Places state ── */
 let places = [];
 let placeShapes = {};  // place_id -> L.Rectangle or L.Circle
-let drawingMode = null;  // null | "rectangle" | "circle" | "area-select"
+let drawingMode = null;  // null | "area-select"
 let drawingShape = null;  // temporary shape being drawn
 
 /* ── Area selection state ── */
@@ -326,10 +326,9 @@ function bindToolbar() {
   document.getElementById("mark-ignored-btn").addEventListener("click", () => doSetGeocodeIgnored(true));
   document.getElementById("unmark-ignored-btn").addEventListener("click", () => doSetGeocodeIgnored(false));
 
-  // Places
+  // Places — dropdown selects a saved place to jump to. Creating/editing places
+  // lives on the Custom Places page (custom-places.html).
   document.getElementById("places-select").addEventListener("change", onPlaceSelected);
-  document.getElementById("draw-rectangle-btn").addEventListener("click", () => startDrawing("rectangle"));
-  document.getElementById("draw-circle-btn").addEventListener("click", () => startDrawing("circle"));
 
   // Imprecise drop toggle
   const impreciseToggle = document.getElementById("imprecise-toggle");
@@ -550,93 +549,29 @@ function renderPlaces() {
     const bounds = JSON.parse(p.bounds);
     let shape;
 
+    // Read-only display. Creating/editing/deleting places is done on the
+    // Custom Places page (custom-places.html); here shapes are just jump targets.
     if (p.type === "rectangle") {
       shape = L.rectangle([[bounds.south, bounds.west], [bounds.north, bounds.east]], {
         color: "#4a90d9",
         weight: 2,
-        fillOpacity: 0.1,
-        draggable: true
+        fillOpacity: 0.1
       });
     } else if (p.type === "circle") {
       shape = L.circle([bounds.lat, bounds.lng], {
         radius: bounds.radius,
         color: "#4a90d9",
         weight: 2,
-        fillOpacity: 0.1,
-        draggable: true
+        fillOpacity: 0.1
       });
     }
 
     if (shape) {
       shape.bindTooltip(p.name, { permanent: false, direction: "top" });
-      shape.on("contextmenu", () => confirmDeletePlace(p));
-
-      // Enable editing on click
-      shape.on("click", () => enableShapeEditing(shape, p));
-
-      // Save new position when dragged
-      shape.on("dragend", () => updatePlaceBounds(p));
-
       shape.addTo(map);
       placeShapes[p.id] = shape;
     }
   });
-}
-
-let editingShape = null;
-
-function enableShapeEditing(shape, place) {
-  // For now, shapes can be dragged to reposition
-  // To resize, users should delete and redraw
-  setStatus(`Drag to reposition "${place.name}". Right-click to delete.`, false);
-}
-
-function disableShapeEditing() {
-  if (editingShape) {
-    editingShape.setStyle({ color: "#4a90d9", weight: 2 });
-    editingShape.off("dragend");
-    editingShape = null;
-  }
-}
-
-async function updatePlaceBounds(place) {
-  const shape = placeShapes[place.id];
-  if (!shape) return;
-
-  let boundsData;
-  if (place.type === "rectangle") {
-    const bounds = shape.getBounds();
-    boundsData = {
-      north: bounds.getNorth(),
-      south: bounds.getSouth(),
-      east: bounds.getEast(),
-      west: bounds.getWest()
-    };
-  } else if (place.type === "circle") {
-    boundsData = {
-      lat: shape.getLatLng().lat,
-      lng: shape.getLatLng().lng,
-      radius: shape.getRadius()
-    };
-  }
-
-  try {
-    // Update the place on the backend
-    await fetch(`/api/places/${place.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ bounds: JSON.stringify(boundsData) })
-    });
-
-    // Update local state
-    place.bounds = JSON.stringify(boundsData);
-    setStatus(`Updated ${place.name}`);
-
-    // Re-enable normal mode
-    disableShapeEditing();
-  } catch (err) {
-    setStatus("Failed to update place: " + err.message, true);
-  }
 }
 
 function onPlaceSelected(e) {
@@ -658,160 +593,9 @@ function onPlaceSelected(e) {
   setTimeout(() => { e.target.value = ""; }, 100);
 }
 
-function startDrawing(type) {
-  if (drawingMode) {
-    stopDrawing();
-  }
-
-  drawingMode = type;
-  setStatus(`Drawing ${type}... Click, hold, and drag to set size, then release`, false);
-  map.getContainer().style.cursor = "crosshair";
-
-  // Disable map dragging while drawing
-  map.dragging.disable();
-
-  // Set up drawing handlers
-  map.once("mousedown", onDrawStart);
-}
-
-function stopDrawing() {
-  drawingMode = null;
-  map.getContainer().style.cursor = "";
-  map.off("mousedown", onDrawStart);
-  map.off("mousemove", onDrawMove);
-  map.off("mouseup", onDrawEnd);
-
-  // Re-enable map dragging
-  map.dragging.enable();
-
-  if (drawingShape) {
-    map.removeLayer(drawingShape);
-    drawingShape = null;
-  }
-}
-
+// Shared by the Area Selection feature below (its onAreaSelectStart records the
+// drag origin here). Place drawing/creation moved to the Custom Places page.
 let drawStartLatLng = null;
-
-function onDrawStart(e) {
-  drawStartLatLng = e.latlng;
-
-  if (drawingMode === "rectangle") {
-    drawingShape = L.rectangle([e.latlng, e.latlng], {
-      color: "#e0a040",
-      weight: 2,
-      fillOpacity: 0.2
-    }).addTo(map);
-  } else if (drawingMode === "circle") {
-    drawingShape = L.circle(e.latlng, {
-      radius: 0,
-      color: "#e0a040",
-      weight: 2,
-      fillOpacity: 0.2
-    }).addTo(map);
-  }
-
-  map.on("mousemove", onDrawMove);
-  map.once("mouseup", onDrawEnd);
-}
-
-function onDrawMove(e) {
-  if (!drawingShape || !drawStartLatLng) return;
-
-  if (drawingMode === "rectangle") {
-    drawingShape.setBounds([drawStartLatLng, e.latlng]);
-  } else if (drawingMode === "circle") {
-    const radius = drawStartLatLng.distanceTo(e.latlng);
-    drawingShape.setRadius(radius);
-  }
-}
-
-async function onDrawEnd(e) {
-  map.off("mousemove", onDrawMove);
-
-  if (!drawingShape || !drawStartLatLng) {
-    stopDrawing();
-    return;
-  }
-
-  // Check minimum size (allow down to ~10 square meters)
-  let tooSmall = false;
-  if (drawingMode === "rectangle") {
-    const bounds = drawingShape.getBounds();
-    const width = Math.abs(bounds.getEast() - bounds.getWest());
-    const height = Math.abs(bounds.getNorth() - bounds.getSouth());
-    // 0.00003 degrees ≈ 3.3 meters at equator
-    tooSmall = width < 0.00003 || height < 0.00003;
-  } else if (drawingMode === "circle") {
-    tooSmall = drawingShape.getRadius() < 2;  // 2 meters minimum
-  }
-
-  if (tooSmall) {
-    alert("Shape is too small. Please drag to create a larger shape.");
-    stopDrawing();
-    return;
-  }
-
-  // Prompt for name
-  const name = prompt(`Name this ${drawingMode}:`);
-  if (!name) {
-    stopDrawing();
-    return;
-  }
-
-  // Calculate bounds
-  let boundsData;
-  if (drawingMode === "rectangle") {
-    const bounds = drawingShape.getBounds();
-    boundsData = {
-      north: bounds.getNorth(),
-      south: bounds.getSouth(),
-      east: bounds.getEast(),
-      west: bounds.getWest()
-    };
-  } else if (drawingMode === "circle") {
-    boundsData = {
-      lat: drawingShape.getLatLng().lat,
-      lng: drawingShape.getLatLng().lng,
-      radius: drawingShape.getRadius()
-    };
-  }
-
-  // Save to backend
-  try {
-    const res = await fetch("/api/places", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: name,
-        type: drawingMode,
-        bounds: JSON.stringify(boundsData)
-      })
-    });
-
-    if (!res.ok) throw new Error("Failed to save place");
-
-    setStatus(`Place "${name}" saved`, false);
-    await loadPlaces();  // Reload to get the new place
-  } catch (err) {
-    setStatus(`Error saving place: ${err.message}`, true);
-  }
-
-  stopDrawing();
-}
-
-async function confirmDeletePlace(place) {
-  if (!confirm(`Delete place "${place.name}"?`)) return;
-
-  try {
-    const res = await fetch(`/api/places/${place.id}`, { method: "DELETE" });
-    if (!res.ok) throw new Error("Failed to delete place");
-
-    setStatus(`Place "${place.name}" deleted`, false);
-    await loadPlaces();
-  } catch (err) {
-    setStatus(`Error deleting place: ${err.message}`, true);
-  }
-}
 
 /* ── Context Filter ── */
 
@@ -890,7 +674,7 @@ function clearContextFilter() {
 /* ── Area Selection ── */
 function startAreaSelection() {
   if (drawingMode) {
-    stopDrawing();
+    stopAreaSelection();
   }
 
   areaSelectMode = true;

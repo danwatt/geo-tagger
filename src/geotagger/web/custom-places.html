@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Custom Places - Geo-Tagger</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="theme.css"/>
+<link rel="stylesheet" href="style.css"/>
+<link rel="stylesheet" href="custom-places.css"/>
+</head>
+<body>
+<div id="toolbar">
+  <div class="toolbar-group" id="app-nav" data-active="custom-places"></div>
+  <div class="toolbar-spacer"></div>
+  <div class="toolbar-group">
+    <button id="draw-rectangle-btn" title="Draw Rectangle">📐 Rectangle</button>
+    <button id="draw-circle-btn" title="Draw Circle">⭕ Circle</button>
+  </div>
+</div>
+
+<div id="main">
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <h2>Custom Places</h2>
+    </div>
+    <div id="place-list">
+      <div id="no-places-hint">No places yet — draw a rectangle or circle on the map.</div>
+    </div>
+  </div>
+  <div id="map"></div>
+</div>
+
+<div id="status-bar"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="nav.js"></script>
+<script src="custom-places.js"></script>
+</body>
+</html>
