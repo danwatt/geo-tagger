@@ -71,3 +71,23 @@
   color: #888;
   margin-top: 4px;
 }
+
+/* Click-to-probe popup: place name header + the fields a photo here would save. */
+.map-popup-probe { width: 190px; }
+.map-popup-probe-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin: 6px 0 3px;
+}
+.map-popup-field {
+  font-size: 11px;
+  color: var(--text);
+  margin-top: 2px;
+}
+.map-popup-field-key {
+  display: inline-block;
+  min-width: 78px;
+  color: #888;
+}

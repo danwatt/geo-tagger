@@ -374,6 +374,18 @@ def test_crowds_groups_and_ignore(client):
     g = r["groups"][0]
     assert g["total_faces"] == 3 and g["unlabeled_faces"] == 3
     assert g["label"] == "January 1, 2021"
+    # Un-geocoded photo -> no place names (the People page sorts groups by these).
+    assert g["photos"][0]["location"] is None
+
+    # Once reverse-geocoded, each crowd photo carries its place names.
+    db.execute("UPDATE photos SET loc_city='Boise', loc_state='Idaho', "
+               "loc_country='United States' WHERE id=?", (photo_id,))
+    db.commit()
+    located = client.get("/api/crowds?min_faces=2").json()
+    assert located["groups"][0]["photos"][0]["location"] == {
+        "city": "Boise", "sublocation": None,
+        "state": "Idaho", "country": "United States",
+    }
 
     # Ignore all unlabeled faces in the crowd photo. They're still counted in
     # total_faces (so the photo remains a crowd), but unlabeled_faces drops to 0.

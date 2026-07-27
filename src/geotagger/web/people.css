@@ -114,6 +114,7 @@
 #grid-nav-person,
 #grid-nav-crowds,
 #grid-nav-unlabeled,
+#grid-nav-sort,
 #grid-nav-selection {
   display: flex;
   align-items: center;

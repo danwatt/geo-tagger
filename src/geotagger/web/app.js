@@ -27,6 +27,10 @@ let areaSelectMode = false;
 let areaSelectCircle = null;
 let areaSelectParams = null;  // { lat, lng, radius }
 
+/* ── Place filter state ── */
+let placeFilterParams = null;  // { placeId } — active saved-place bounds filter
+let placeFilterRect = null;    // L.Rectangle drawn for the (buffered) search bounds
+
 /* ── Context filter state ── */
 let contextFilterData = null;  // full context object from API when active
 let contextPolygonLayer = null;
@@ -311,6 +315,9 @@ function bindToolbar() {
       loadPhotos();
     } else if (areaSelectParams) {
       loadPhotosByArea(areaSelectParams.lat, areaSelectParams.lng, areaSelectParams.radius);
+    } else if (placeFilterParams) {
+      const place = places.find(p => p.id === placeFilterParams.placeId);
+      if (place) filterPhotosByPlace(place);
     }
   }
   document.getElementById("filter-select").addEventListener("change", reloadCurrentView);
@@ -329,6 +336,10 @@ function bindToolbar() {
   // Places — dropdown selects a saved place to jump to. Creating/editing places
   // lives on the Custom Places page (custom-places.html).
   document.getElementById("places-select").addEventListener("change", onPlaceSelected);
+  // Changing the buffer re-runs the active place filter with the new bounds.
+  document.getElementById("place-buffer-select").addEventListener("change", () => {
+    if (placeFilterParams) reloadCurrentView();
+  });
 
   // Imprecise drop toggle
   const impreciseToggle = document.getElementById("imprecise-toggle");
@@ -456,6 +467,7 @@ async function selectMonth(year, month) {
     areaSelectCircle = null;
   }
   document.getElementById("selected-area-label").textContent = "";
+  clearPlaceFilter();
   clearContextFilter();
 
   // Update label
@@ -483,6 +495,7 @@ async function selectYear(year) {
     areaSelectCircle = null;
   }
   document.getElementById("selected-area-label").textContent = "";
+  clearPlaceFilter();
   clearContextFilter();
 
   document.getElementById("selected-month-label").textContent = `${year} (all months)`;
@@ -507,6 +520,7 @@ async function selectUndated() {
     areaSelectCircle = null;
   }
   document.getElementById("selected-area-label").textContent = "";
+  clearPlaceFilter();
   clearContextFilter();
 
   document.getElementById("selected-month-label").textContent = "Undated photos";
@@ -576,21 +590,100 @@ function renderPlaces() {
 
 function onPlaceSelected(e) {
   const placeId = parseInt(e.target.value);
-  if (!placeId) return;
+  if (!placeId) { clearPlaceFilter(); return; }
 
   const place = places.find(p => p.id === placeId);
   if (!place) return;
 
-  const bounds = JSON.parse(place.bounds);
+  filterPhotosByPlace(place);
+}
 
+// Bounding box of a saved place, grown outward by `bufferMiles` on every side.
+// Circles collapse to their bounding box first — the user asked for a "bounds"
+// filter, and a box keeps rectangles and circles on the same code path (and the
+// same rectangular /api/photos/by-bounds query).
+function placeBboxWithBuffer(place, bufferMiles) {
+  const b = JSON.parse(place.bounds);
+  let south, north, west, east;
   if (place.type === "rectangle") {
-    map.fitBounds([[bounds.south, bounds.west], [bounds.north, bounds.east]], { padding: [50, 50] });
-  } else if (place.type === "circle") {
-    map.setView([bounds.lat, bounds.lng], 13);
+    ({ south, north, west, east } = b);
+  } else {  // circle
+    const latOff = b.radius / 111000;
+    const lngOff = b.radius / (111000 * Math.cos(b.lat * Math.PI / 180));
+    south = b.lat - latOff; north = b.lat + latOff;
+    west = b.lng - lngOff;  east = b.lng + lngOff;
   }
+  const meters = (bufferMiles || 0) * 1609.34;
+  const latBuf = meters / 111000;
+  const midLat = (south + north) / 2;
+  const lngBuf = meters / (111000 * Math.cos(midLat * Math.PI / 180));
+  return {
+    min_lat: south - latBuf, max_lat: north + latBuf,
+    min_lng: west - lngBuf,  max_lng: east + lngBuf,
+  };
+}
 
-  // Reset dropdown
-  setTimeout(() => { e.target.value = ""; }, 100);
+// Filter the grid/map to photos inside a saved place's (buffered) bounds. Takes
+// over as the active view, clearing month/area/context selections like the other
+// selectors do.
+async function filterPhotosByPlace(place) {
+  // Clear the other view modes
+  selectedYear = null;
+  selectedMonth = null;
+  undatedMode = false;
+  document.getElementById("selected-month-label").textContent = "No month selected";
+  areaSelectParams = null;
+  if (areaSelectCircle) { map.removeLayer(areaSelectCircle); areaSelectCircle = null; }
+  clearContextFilter();
+
+  const bufferMiles = parseFloat(document.getElementById("place-buffer-select").value) || 0;
+  const box = placeBboxWithBuffer(place, bufferMiles);
+  placeFilterParams = { placeId: place.id };
+
+  // Draw (and zoom to) the search bounds so the buffer is visible.
+  if (placeFilterRect) map.removeLayer(placeFilterRect);
+  placeFilterRect = L.rectangle([[box.min_lat, box.min_lng], [box.max_lat, box.max_lng]], {
+    color: "#4a90d9", weight: 2, dashArray: "5,5", fillOpacity: 0.05,
+  }).addTo(map);
+  map.fitBounds(placeFilterRect.getBounds().pad(0.1));
+
+  const label = bufferMiles > 0
+    ? `${place.name} (+${bufferMiles} mi)` : place.name;
+  document.getElementById("selected-area-label").textContent = label;
+
+  await loadPhotosByBounds(box, label);
+}
+
+async function loadPhotosByBounds(box, label) {
+  dayIsolation = null;
+  const filter = document.getElementById("filter-select").value;
+  const apiFilter = filter === "mixed" ? "all" : filter;
+  const window = document.getElementById("window-select").value;
+
+  try {
+    setStatus(`Loading photos in ${label}…`);
+    const url = `/api/photos/by-bounds?min_lat=${box.min_lat}&max_lat=${box.max_lat}`
+      + `&min_lng=${box.min_lng}&max_lng=${box.max_lng}&geotagged=${apiFilter}&window=${window}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    photos = await res.json();
+    photos.forEach(p => camColor(p.camera));
+    renderLegend();
+    buildHistogram();
+    applyFilters(false);  // don't re-fit — we already zoomed to the bounds
+
+    setStatus(`Loaded ${photos.length} photos in ${label}`);
+  } catch (err) {
+    setStatus("Load error: " + err.message, true);
+  }
+}
+
+function clearPlaceFilter() {
+  placeFilterParams = null;
+  if (placeFilterRect) { map.removeLayer(placeFilterRect); placeFilterRect = null; }
+  const sel = document.getElementById("places-select");
+  if (sel) sel.value = "";
 }
 
 // Shared by the Area Selection feature below (its onAreaSelectStart records the
@@ -628,6 +721,7 @@ async function loadContextsDropdown() {
 async function loadPhotosByContext(ctx) {
   contextFilterData = ctx;
   dayIsolation = null;
+  clearPlaceFilter();
 
   // Draw / update the polygon layer
   if (contextPolygonLayer) { map.removeLayer(contextPolygonLayer); contextPolygonLayer = null; }
@@ -751,10 +845,11 @@ async function onAreaSelectEnd(e) {
   document.getElementById("selected-area-label").textContent =
     `Area: ${(radius / 1000).toFixed(2)}km radius`;
 
-  // Clear month and context selections
+  // Clear month, place, and context selections
   selectedYear = null;
   selectedMonth = null;
   document.getElementById("selected-month-label").textContent = "No month selected";
+  clearPlaceFilter();
   clearContextFilter();
 }
 
@@ -1005,7 +1100,87 @@ function makeThumbCell(photo, idx) {
 
   cell.addEventListener("click", (e) => handleThumbClick(e, photo.id, idx));
   cell.addEventListener("dragstart", (e) => handleDragStart(e, photo.id));
+  cell.addEventListener("contextmenu", (e) => openPhotoContextMenu(e, photo));
   return cell;
+}
+
+/* ── Photo right-click menu: set a photo as a named place's representative ── */
+let photoCtxMenuEl = null;
+
+function closePhotoContextMenu() {
+  if (photoCtxMenuEl) { photoCtxMenuEl.remove(); photoCtxMenuEl = null; }
+  document.removeEventListener("click", onPhotoCtxOutside, true);
+  document.removeEventListener("keydown", onPhotoCtxKey, true);
+}
+function onPhotoCtxOutside(e) {
+  if (photoCtxMenuEl && !photoCtxMenuEl.contains(e.target)) closePhotoContextMenu();
+}
+function onPhotoCtxKey(e) { if (e.key === "Escape") closePhotoContextMenu(); }
+
+function openPhotoContextMenu(e, photo) {
+  e.preventDefault();
+  closePhotoContextMenu();
+
+  const menu = document.createElement("div");
+  menu.className = "photo-ctx-menu";
+
+  const header = document.createElement("div");
+  header.className = "photo-ctx-header";
+  header.textContent = "Representative photo for place…";
+  menu.appendChild(header);
+
+  if (!places.length) {
+    const empty = document.createElement("div");
+    empty.className = "photo-ctx-empty";
+    empty.textContent = "No saved places";
+    menu.appendChild(empty);
+  } else {
+    places.forEach(place => {
+      const item = document.createElement("div");
+      item.className = "photo-ctx-item";
+      const isRep = place.representative_photo_id === photo.id;
+      // ✓ marks the place this photo already represents — clicking it clears.
+      item.textContent = (isRep ? "✓ " : "") + place.name;
+      item.addEventListener("click", () => {
+        closePhotoContextMenu();
+        setPlaceRepresentative(place, isRep ? null : photo.id);
+      });
+      menu.appendChild(item);
+    });
+  }
+
+  document.body.appendChild(menu);
+  // Position at the cursor, clamped inside the viewport.
+  const rect = menu.getBoundingClientRect();
+  const x = Math.min(e.clientX, window.innerWidth - rect.width - 8);
+  const y = Math.min(e.clientY, window.innerHeight - rect.height - 8);
+  menu.style.left = `${Math.max(4, x)}px`;
+  menu.style.top = `${Math.max(4, y)}px`;
+  photoCtxMenuEl = menu;
+
+  // Defer wiring the dismiss handlers so this same right-click's follow-up
+  // events don't immediately close the menu.
+  setTimeout(() => {
+    document.addEventListener("click", onPhotoCtxOutside, true);
+    document.addEventListener("keydown", onPhotoCtxKey, true);
+  }, 0);
+}
+
+async function setPlaceRepresentative(place, photoId) {
+  try {
+    const res = await fetch(`/api/places/${place.id}/representative`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ photo_id: photoId }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    place.representative_photo_id = photoId;  // keep the local list in sync
+    setStatus(photoId
+      ? `Set representative photo for "${place.name}"`
+      : `Cleared representative photo for "${place.name}"`);
+  } catch (err) {
+    setStatus("Failed to set representative: " + err.message, true);
+  }
 }
 
 function renderGrid() {
@@ -1412,8 +1587,14 @@ async function showDetail(id) {
     // "View full size" — RAW only. Opens an on-the-fly full-resolution LibRaw
     // decode (with face boxes drawn) in a new tab (see photo-fullsize.js).
     const isRaw = isRawName(data.filename);
-    document.getElementById("detail-actions").style.display = isRaw ? "" : "none";
-    document.getElementById("view-fullsize-btn").onclick = () => openFullSize(id);
+    const fullBtn = document.getElementById("view-fullsize-btn");
+    fullBtn.style.display = isRaw ? "" : "none";
+    fullBtn.onclick = () => openFullSize(id);
+
+    document.getElementById("photo-faces-btn").onclick = () => {
+      window.location.href =
+        `/photo-faces.html?photo_id=${id}&back=${encodeURIComponent(location.pathname + location.search)}`;
+    };
 
     // Reverse-geocoded place name (city / state / country), when available.
     const loc = data.location;

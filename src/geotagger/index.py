@@ -204,6 +204,13 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
             created_at REAL NOT NULL
         )
     """)
+    # Optional "representative" photo for a named place — a logical FK to
+    # photos.id (nullable; not a hard constraint, so a pruned photo just leaves a
+    # dangling id that resolves to nothing). Set via the geo page's right-click
+    # menu. Additive migration for pre-existing DBs.
+    _place_cols = {r[1] for r in _db.execute("PRAGMA table_info(places)").fetchall()}
+    if "representative_photo_id" not in _place_cols:
+        _db.execute("ALTER TABLE places ADD COLUMN representative_photo_id INTEGER")
 
     # Runtime-tunable settings (see config.SETTINGS_SPEC) that override the
     # env-var default without a restart. Values are stored as text and coerced
@@ -612,22 +619,28 @@ def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str |
         except ValueError:
             pass
     if date_from:
-        # Convert YYYY-MM-DD to Unix timestamp (start of day)
+        # Convert YYYY-MM-DD to Unix timestamp (start of day). UTC via
+        # calendar.timegm — photo_datetime is stored as wall-clock-as-UTC and the
+        # timeline buckets with strftime(...'unixepoch') (UTC). Using local-time
+        # .timestamp() here would shift the month window by the local tz offset and
+        # drop boundary photos the timeline still counts.
         try:
+            import calendar
             from datetime import datetime
             dt = datetime.strptime(date_from, "%Y-%m-%d")
-            ts = int(dt.timestamp())
+            ts = calendar.timegm(dt.timetuple())
             clauses.append("photo_datetime >= ?")
             params.append(ts)
         except ValueError:
             pass
     if date_to:
-        # Convert YYYY-MM-DD to Unix timestamp (end of day)
+        # Convert YYYY-MM-DD to Unix timestamp (end of day), UTC — see date_from.
         try:
+            import calendar
             from datetime import datetime
             dt = datetime.strptime(date_to, "%Y-%m-%d")
             # Add 24 hours to include the entire day
-            ts = int(dt.timestamp()) + 86400
+            ts = calendar.timegm(dt.timetuple()) + 86400
             clauses.append("photo_datetime < ?")
             params.append(ts)
         except ValueError:
@@ -663,18 +676,23 @@ def search_photos(date_from: str | None = None, date_to: str | None = None,
         clauses.append("lat IS NULL AND geocode_ignored = 0")
 
     if date_from:
+        # UTC via calendar.timegm — photo_datetime is stored as wall-clock-as-UTC;
+        # local-time .timestamp() would shift the range by the local tz offset. See
+        # get_photos for the full rationale.
         try:
+            import calendar
             from datetime import datetime
-            ts = int(datetime.strptime(date_from, "%Y-%m-%d").timestamp())
+            ts = calendar.timegm(datetime.strptime(date_from, "%Y-%m-%d").timetuple())
             clauses.append("photo_datetime >= ?")
             params.append(ts)
         except ValueError:
             pass
     if date_to:
         try:
+            import calendar
             from datetime import datetime
             # Add 24 hours to include the entire day
-            ts = int(datetime.strptime(date_to, "%Y-%m-%d").timestamp()) + 86400
+            ts = calendar.timegm(datetime.strptime(date_to, "%Y-%m-%d").timetuple()) + 86400
             clauses.append("photo_datetime < ?")
             params.append(ts)
         except ValueError:
@@ -916,10 +934,28 @@ def delete_place(place_id: int):
     db.commit()
 
 
-def update_place(place_id: int, bounds: str):
-    """Update a place's bounds."""
+def update_place(place_id: int, bounds: str | None = None, name: str | None = None):
+    """Update a place's bounds and/or name (only fields that are not None)."""
+    sets = []
+    params: list = []
+    if bounds is not None:
+        sets.append("bounds=?")
+        params.append(bounds)
+    if name is not None:
+        sets.append("name=?")
+        params.append(name)
+    if not sets:
+        return
+    params.append(place_id)
     db = get_db()
-    db.execute("UPDATE places SET bounds=? WHERE id=?", (bounds, place_id))
+    db.execute(f"UPDATE places SET {', '.join(sets)} WHERE id=?", params)
+    db.commit()
+
+
+def set_place_representative(place_id: int, photo_id: int | None):
+    """Set (or clear, with photo_id=None) a place's representative photo."""
+    db = get_db()
+    db.execute("UPDATE places SET representative_photo_id=? WHERE id=?", (photo_id, place_id))
     db.commit()
 
 
@@ -1684,6 +1720,7 @@ def get_crowd_photos(min_faces: int = 50, start_ts: int | None = None,
     params.append(min_faces)
     return get_db().execute(
         f"""SELECT ph.id, ph.filename, ph.photo_datetime, ph.orientation,
+                  ph.loc_city, ph.loc_sublocation, ph.loc_state, ph.loc_country,
                   COUNT(f.id)                                          AS total_faces,
                   COUNT(CASE WHEN f.person_id IS NOT NULL THEN 1 END) AS labeled_faces,
                   COUNT(CASE WHEN f.person_id IS NULL AND f.ignored=0 AND f.come_back=0 THEN 1 END) AS unlabeled_faces,

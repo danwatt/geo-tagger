@@ -206,7 +206,9 @@
   display: block;
 }
 
-#detail-actions #view-fullsize-btn { width: 100%; }
+/* Row of per-photo actions under the preview; buttons share the width evenly. */
+#detail-actions { display: flex; gap: 6px; }
+#detail-actions button { flex: 1; }
 
 #detail-meta {
   width: 100%;
@@ -501,3 +503,36 @@
 
 /* .imprecise-control-group now lives in face-grid.css (shared with
    quick-geocode, which does not load this file). */
+
+/* Photo right-click menu (geo page) — set a photo as a named place's
+   representative. Positioned at the cursor in JS (see openPhotoContextMenu). */
+.photo-ctx-menu {
+  position: fixed;
+  z-index: 3000;
+  min-width: 180px;
+  max-height: 50vh;
+  overflow-y: auto;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-popup);
+  padding: 4px 0;
+  font-size: var(--font-size);
+}
+.photo-ctx-header {
+  padding: 4px 12px 6px;
+  color: var(--text-faint);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  border-bottom: 1px solid var(--border-2);
+  margin-bottom: 4px;
+}
+.photo-ctx-item {
+  padding: 6px 12px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.photo-ctx-item:hover { background: var(--accent-bg); color: var(--on-accent); }
+.photo-ctx-empty { padding: 6px 12px; color: var(--text-muted); }

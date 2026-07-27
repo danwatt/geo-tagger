@@ -1,6 +1,6 @@
 """Saved places (rectangles/circles) CRUD."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from geotagger import index
@@ -24,7 +24,8 @@ async def api_get_places():
             "name": p["name"],
             "type": p["type"],
             "bounds": p["bounds"],
-            "created_at": p["created_at"]
+            "created_at": p["created_at"],
+            "representative_photo_id": p["representative_photo_id"],
         }
         for p in places
     ]
@@ -45,12 +46,26 @@ async def api_delete_place(place_id: int):
 
 
 class UpdatePlaceRequest(BaseModel):
-    bounds: str
+    bounds: str | None = None
+    name: str | None = None
 
 
 @router.patch("/api/places/{place_id}")
 async def api_update_place(place_id: int, req: UpdatePlaceRequest):
-    """Update a place's bounds."""
-    index.update_place(place_id, req.bounds)
+    """Update a place's bounds and/or name."""
+    index.update_place(place_id, bounds=req.bounds, name=req.name)
     return {"success": True}
+
+
+class SetRepresentativeRequest(BaseModel):
+    photo_id: int | None = None  # None clears the representative
+
+
+@router.put("/api/places/{place_id}/representative")
+async def api_set_place_representative(place_id: int, req: SetRepresentativeRequest):
+    """Set (or clear) a place's representative photo — a plain FK to photos.id."""
+    if req.photo_id is not None and index.get_photo(req.photo_id) is None:
+        raise HTTPException(404, "Photo not found")
+    index.set_place_representative(place_id, req.photo_id)
+    return {"success": True, "representative_photo_id": req.photo_id}
 

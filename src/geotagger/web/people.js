@@ -27,6 +27,13 @@ let hideCompletedCrowds = true; // hide crowd photos with no unlabeled faces
 
 let groupGapSeconds = 86400;    // event grouping gap in the guesses view (1 day)
 
+// How the group-rendering grids (Discover / Crowds / Unlabeled / guesses) order
+// their groups: "date" | "count" | "location" — see sortGroups() in face-grid.js.
+// Purely a render-time concern (no refetch), and persisted across reloads.
+const GRID_SORT_LS_KEY = "geotagger.people.gridSort";
+let gridSort = localStorage.getItem(GRID_SORT_LS_KEY) || "date";
+if (!GROUP_SORT_MODES.includes(gridSort)) gridSort = "date";
+
 // Unlabeled queue: which level nests inside which. "date" = month → location →
 // person (computeMonthLocationGroups, default); "person" = suggested person →
 // date-range chunks within that person (computeUnlabeledPersonGroups). Persisted
@@ -148,7 +155,8 @@ function bindToolbar() {
   hierarchySel.addEventListener("change", (e) => {
     unlabeledHierarchy = e.target.value;
     localStorage.setItem(UNLABELED_HIERARCHY_LS_KEY, unlabeledHierarchy);
-    if (scope === "unlabeled") renderGrid();
+    // Person-first hierarchy has no sortable groups — refresh the nav bar too.
+    if (scope === "unlabeled") { updateGridNavVisibility(); renderGrid(); }
   });
 
   document.getElementById("assign-btn").addEventListener("click", openAssignPickerForSelection);
@@ -176,6 +184,17 @@ function bindToolbar() {
   document.getElementById("crowd-hide-done").addEventListener("change", e => {
     hideCompletedCrowds = e.target.checked;
     if (scope === "crowds") renderCrowds();
+  });
+
+  const sortSelect = document.getElementById("grid-sort-select");
+  sortSelect.value = gridSort;
+  sortSelect.addEventListener("change", e => {
+    gridSort = e.target.value;
+    localStorage.setItem(GRID_SORT_LS_KEY, gridSort);
+    // Sorting is render-only — no refetch, and the selection survives.
+    if (scope === "discover")    renderClusters();
+    else if (scope === "crowds") renderCrowds();
+    else                         renderGrid();
   });
 
   document.getElementById("add-person-btn").addEventListener("click", addPerson);
@@ -206,6 +225,11 @@ function bindToolbar() {
   document.getElementById("detail-open-photo-btn").addEventListener("click", () => {
     const f = findFace(focusedFaceId);
     if (f) window.open(`/api/preview/${f.photo_id}`, "_blank");
+  });
+  document.getElementById("detail-photo-faces-btn").addEventListener("click", () => {
+    const f = findFace(focusedFaceId);
+    if (!f) { setStatus("Select a face first.", true); return; }
+    window.location.href = `/photo-faces.html?photo_id=${f.photo_id}`;
   });
 
   document.getElementById("shortcuts-help-btn").addEventListener("click", openShortcutsHelp);
@@ -600,12 +624,17 @@ function updateGridNavVisibility() {
   // The selection-action bar applies to any grid of selectable faces — every scope
   // except Discover/Crowds, which render cluster/photo cards with their own buttons.
   const showSelection = scope !== "discover" && scope !== "crowds";
+  // Sort applies to the group-rendering grids only. The Unlabeled queue's
+  // person-first hierarchy orders its own groups by person name, so it opts out.
+  const showSort = scope === "discover" || scope === "crowds" || scope === "suggested" ||
+    (scope === "unlabeled" && unlabeledHierarchy === "date");
   document.getElementById("grid-nav-person").style.display = showPerson ? "" : "none";
   document.getElementById("grid-nav-crowds").style.display = showCrowds ? "" : "none";
   document.getElementById("grid-nav-unlabeled").style.display = showUnlabeled ? "" : "none";
   document.getElementById("grid-nav-selection").style.display = showSelection ? "" : "none";
+  document.getElementById("grid-nav-sort").style.display = showSort ? "" : "none";
   document.getElementById("grid-nav").style.display =
-    (showPerson || showCrowds || showUnlabeled || showSelection) ? "" : "none";
+    (showPerson || showCrowds || showUnlabeled || showSelection || showSort) ? "" : "none";
 }
 
 /* ── Faces grid ── */
@@ -783,6 +812,9 @@ function scrollToUndatedSection() {
     .find(el => el.textContent === "Undated");
   if (divider) {
     divider.scrollIntoView({ block: "start" });
+  } else if (gridSort !== "date") {
+    // The year/month dividers this jumps to only exist in the chronological sort.
+    setStatus('Switch Sort back to "Date" to jump to the undated section.');
   } else {
     setStatus("No undated faces — every face here has a timestamp.");
   }
@@ -794,6 +826,24 @@ function makeGroupSection(groupIdx) {
   return sec;
 }
 
+// Distinct photos behind a set of faces — what the "Number of photos" sort ranks
+// on, so the group headers spell it out (a group's face count says little about
+// how many photos it spans).
+function photoCountLabel(faceList) {
+  const n = new Set(faceList.map(f => f.photo_id)).size;
+  return `${n} photo${n === 1 ? "" : "s"}`;
+}
+
+// sortGroups() for a group whose faces live in `group.faces` — the shape both the
+// guesses event groups and the Unlabeled month→location buckets use.
+function sortFaceGroups(groups) {
+  return sortGroups(groups, gridSort, g => ({
+    date: Math.min(...g.faces.map(f => f.photo_datetime || Infinity)),
+    count: new Set(g.faces.map(f => f.photo_id)).size,
+    place: g.place ?? primaryLocationKey(g.faces),
+  }));
+}
+
 function renderGrid() {
   const grid = document.getElementById("grid");
   grid.innerHTML = "";
@@ -803,12 +853,12 @@ function renderGrid() {
   // title, location in the meta; the Ignore button acts on the selection).
   if (scope === "suggested") {
     let groupIdx = 0;
-    computeTimeGroups(faces, groupGapSeconds).forEach(group => {
+    sortFaceGroups(computeTimeGroups(faces, groupGapSeconds)).forEach(group => {
       const sec = makeGroupSection(groupIdx++);
       const place = locationLabel(group.faces);
       sec.appendChild(makeGroupHeader(group, {
         title: formatGroupRange(group),
-        meta: place ? `· 📍 ${place}` : "",
+        meta: `· ${photoCountLabel(group.faces)}` + (place ? ` · 📍 ${place}` : ""),
       }));
       const cells = document.createElement("div");
       cells.className = "face-group-cells";
@@ -878,28 +928,34 @@ function renderGrid() {
 
   if (scope === "unlabeled") {
     let groupIdx = 0, curYear, curMonth;
-    computeMonthLocationGroups(faces).forEach(group => {
-      if (group.year !== curYear) {
-        curYear = group.year; curMonth = undefined;
-        const yd = document.createElement("div");
-        yd.className = "grid-year-divider";
-        yd.textContent = group.year === null ? "Undated" : group.year;
-        grid.appendChild(yd);
-      }
-      if (group.month !== curMonth) {
-        curMonth = group.month;
-        if (group.month !== null) {
-          const md = document.createElement("div");
-          md.className = "grid-month-divider";
-          md.textContent = MONTH_NAMES[group.month];
-          grid.appendChild(md);
+    // Year/month dividers only read correctly while the buckets are chronological;
+    // the count/location sorts interleave months, so they drop the dividers (each
+    // bucket header still carries its own date range).
+    const showDividers = gridSort === "date";
+    sortFaceGroups(computeMonthLocationGroups(faces)).forEach(group => {
+      if (showDividers) {
+        if (group.year !== curYear) {
+          curYear = group.year; curMonth = undefined;
+          const yd = document.createElement("div");
+          yd.className = "grid-year-divider";
+          yd.textContent = group.year === null ? "Undated" : group.year;
+          grid.appendChild(yd);
+        }
+        if (group.month !== curMonth) {
+          curMonth = group.month;
+          if (group.month !== null) {
+            const md = document.createElement("div");
+            md.className = "grid-month-divider";
+            md.textContent = MONTH_NAMES[group.month];
+            grid.appendChild(md);
+          }
         }
       }
       const sec = makeGroupSection(groupIdx++);
       sec.appendChild(makeGroupHeader(group, {
         title: group.place ? `📍 ${group.place}` : group.dir ? `📁 ${group.dir}` : "No location",
         label: group.place || group.dir || "No location",
-        meta: `· ${facesDateRange(group.faces)}`,
+        meta: `· ${facesDateRange(group.faces)} · ${photoCountLabel(group.faces)}`,
         ignoreAll: true,
       }));
       const cells = document.createElement("div");
@@ -1647,7 +1703,14 @@ async function loadClusters() {
 function renderClusters() {
   const grid = document.getElementById("grid");
   grid.innerHTML = "";
-  clusters.forEach(cl => grid.appendChild(makeClusterCard(cl)));
+  // Photo count comes off the sample rather than cl.size: a cluster is one
+  // person, so it's normally one face per photo, but a sample capped at 24 would
+  // understate a big group — cl.size is the better count when it's truncated.
+  sortGroups(clusters, gridSort, cl => ({
+    date: Math.min(...cl.sample.map(f => f.photo_datetime || Infinity)),
+    count: Math.max(cl.size, new Set(cl.sample.map(f => f.photo_id)).size),
+    place: primaryLocationKey(cl.sample),
+  })).forEach(cl => grid.appendChild(makeClusterCard(cl)));
 }
 
 function makeClusterCard(cl) {
@@ -1801,7 +1864,11 @@ function renderCrowds() {
     return;
   }
 
-  visibleGroups.forEach(g => grid.appendChild(makeCrowdGroupCard(g)));
+  sortGroups(visibleGroups, gridSort, g => ({
+    date: Math.min(...g.photos.map(p => p.photo_datetime || Infinity)),
+    count: g.photos.length,
+    place: primaryLocationKey(g.photos),
+  })).forEach(g => grid.appendChild(makeCrowdGroupCard(g)));
 }
 
 function makeCrowdGroupCard(g) {
@@ -1811,6 +1878,9 @@ function makeCrowdGroupCard(g) {
   let ignoreBtn;   // captured from the header so per-photo actions can update it
   let meta = `· ${g.photos.length} photo(s) · ${g.total_faces} face(s)`;
   if (g.unlabeled_faces > 0) meta += ` · ${g.unlabeled_faces} unlabeled`;
+  // Place goes last so the "Location, then date" sort is readable here too.
+  const place = locationLabel(g.photos);
+  if (place) meta += ` · 📍 ${place}`;
 
   card.appendChild(faceGroupHeader({
     title: g.label,
@@ -1880,7 +1950,7 @@ function makeCrowdPhotoThumb(ph, group, groupIgnoreBtn) {
   const gap = parseInt(document.getElementById("crowd-gap-select").value) || 86400;
   reviewBtn.addEventListener("click", () => {
     window.location.href =
-      `/crowd-review.html?photo_id=${ph.id}&min_faces=${minFaces}&group_gap=${gap}`;
+      `/photo-faces.html?photo_id=${ph.id}&mode=crowd&min_faces=${minFaces}&group_gap=${gap}`;
   });
   actions.appendChild(reviewBtn);
 
@@ -2321,6 +2391,10 @@ async function confirmFace(faceId, personId) {
 // Mark (or undo marking) a face as "definitely not this person" — removes the
 // person from that face's recognition ranking so its next-best guess surfaces
 // instead of the face bouncing back to the same rejected suggestion on refetch.
+// Above this many loaded faces a full re-fetch is a noticeable stall (and resets
+// scroll + focus), so a lone rejection patches the one face client-side instead.
+const REJECT_LOCAL_THRESHOLD = 10;
+
 async function rejectSuggestion(faceId, personId, personName, negative = true) {
   try {
     const res = await fetch("/api/faces/negatives", {
@@ -2330,10 +2404,53 @@ async function rejectSuggestion(faceId, personId, personName, negative = true) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     setStatus(negative ? `Marked as not ${personName}.`
                        : `Undid: ${personName} can be suggested again.`);
-    await loadFaces();
+    // Big queue + a real rejection: patch in place (surface the next-best guess,
+    // drop the face if it only lived here as a guess for the rejected person)
+    // rather than round-tripping the whole list. Undo and small lists re-fetch
+    // for the exact server-side re-ranking.
+    if (negative && faces.length > REJECT_LOCAL_THRESHOLD) {
+      applyRejectionLocally(faceId, personId);
+    } else {
+      await loadFaces();
+    }
   } catch (err) {
     setStatus((negative ? "Reject" : "Undo") + " failed: " + err.message, true);
   }
+}
+
+// Patch a single face after a "not this person" rejection so its next-best guess
+// surfaces immediately, without re-fetching the (possibly large) queue. Mirrors
+// the server re-ranking: record the negative, drop the person, promote the next
+// alternative into the primary slot. In views scoped to one person's guesses,
+// a face rejected for that person no longer belongs, so it's removed.
+function applyRejectionLocally(faceId, personId) {
+  const face = faces.find(f => f.id === faceId);
+  if (!face) return;
+
+  face.negatives = [...(face.negatives || []), personId];
+  const alts = (face.alternatives || []).filter(a => a.person_id !== personId);
+  if (face.suggestion && face.suggestion.person_id === personId) {
+    const next = alts.shift();   // best remaining guess becomes the primary
+    face.suggestion = next
+      ? { person_id: next.person_id, person_name: next.person_name, score: next.score }
+      : null;
+  }
+  face.alternatives = alts;
+
+  // The person this view is narrowed to (if any): suggested = guesses for that
+  // person; unlabeled = the sticky "suggested person" filter.
+  const viewPid = scope === "suggested" ? scopePersonId
+                : scope === "unlabeled" ? suggestFilterPersonId : null;
+  if (viewPid != null && personId === viewPid) {
+    faces = faces.filter(f => f.id !== faceId);
+    if (scope === "unlabeled") unlabeledAll = unlabeledAll.filter(f => f.id !== faceId);
+    selectedIds.delete(faceId);
+    if (focusedFaceId === faceId) focusedFaceId = null;
+  }
+
+  updateActionButtons();
+  renderGrid();
+  updateDetail();
 }
 
 async function acceptSuggestionsForSelection() {

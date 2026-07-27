@@ -63,6 +63,16 @@
         <select id="places-select">
           <option value="">Select a place...</option>
         </select>
+        <select id="place-buffer-select" title="Grow the place's bounds outward before filtering photos">
+          <option value="0" selected>Within bounds</option>
+          <option value="0.1">+0.1 miles</option>
+          <option value="0.25">+0.25 miles</option>
+          <option value="0.5">+0.5 miles</option>
+          <option value="1">+1 mile</option>
+          <option value="2">+2 miles</option>
+          <option value="5">+5 miles</option>
+          <option value="10">+10 miles</option>
+        </select>
         <a class="button" href="/custom-places.html" title="Add or edit custom places">✏️ Edit places</a>
       </div>
       <div class="toolbar-group imprecise-control-group">
@@ -116,8 +126,9 @@
     <div id="detail-placeholder">Select a photo to view details</div>
     <div id="detail-content" style="display:none">
       <img id="detail-img" src="" alt="Preview"/>
-      <div id="detail-actions" style="display:none">
-        <button id="view-fullsize-btn" title="Decode the RAW at full resolution and open it (with face boxes) in a new tab">🔍 View full size (RAW)</button>
+      <div id="detail-actions">
+        <button id="photo-faces-btn" title="View and edit every detected face in this photo">👥 Faces</button>
+        <button id="view-fullsize-btn" title="Decode the RAW at full resolution and open it (with face boxes) in a new tab" style="display:none">🔍 View full size (RAW)</button>
       </div>
       <table id="detail-meta"></table>
       <div id="guess-bar" style="display:none">

@@ -53,7 +53,8 @@ let markerCluster = null;
 let voronoiLayer = null;
 let voronoiEnabled = true;
 let osmLayer = null;
-let osmEnabled = false;
+let osmEnabled = true;
+let probeSeq = 0;
 let refreshTimer = null;
 let fetchSeq = 0;
 let voronoiFetchSeq = 0;
@@ -104,12 +105,18 @@ function initMap() {
   // osmLayer is added after voronoiLayer so its outlines draw over the
   // translucent Voronoi fills; both stay under the marker pane.
   voronoiLayer = L.layerGroup().addTo(map);
-  osmLayer = L.geoJSON(null, { style: osmFeatureStyle, onEachFeature: bindOsmPopup }).addTo(map);
+  // interactive:false so clicks fall through to the map's own click handler
+  // (probePoint) everywhere — including inside an OSM polygon — instead of the
+  // polygon swallowing the click. The polygon's name still surfaces: probePoint
+  // reverse-geocodes the clicked point, and the containing city/feature come back
+  // as the geocode result.
+  osmLayer = L.geoJSON(null, { style: osmFeatureStyle, interactive: false }).addTo(map);
   markerCluster = L.markerClusterGroup({ maxClusterRadius: 60 });
   map.addLayer(markerCluster);
 
   map.on("moveend", correctWorldWrap);
   map.on("moveend zoomend", scheduleRefresh);
+  map.on("click", probePoint);
 }
 
 // Leaflet projects longitude linearly with no wraparound, so continuous
@@ -291,14 +298,59 @@ function osmFeatureStyle(feature) {
   return { color, weight: 2, opacity: 0.9, fillColor: color, fillOpacity: 0.12 };
 }
 
-function bindOsmPopup(feature, layer) {
-  layer.bindPopup(
-    `<div class="map-popup">
-      <div class="map-popup-name">${escHtml(feature.properties.name)}</div>
-      <div class="map-popup-region">${escHtml(feature.properties.category)}</div>
-    </div>`,
-    { className: "map-popup-wrap" }
-  );
+// Click anywhere on the map to reverse-geocode that exact point the way a photo
+// taken there would be, and show what would be persisted. Opens a popup with a
+// loading state, then fills it in once /api/geocode/lookup responds.
+async function probePoint(e) {
+  const { lat, lng } = e.latlng;
+  const popup = L.popup({ className: "map-popup-wrap" })
+    .setLatLng(e.latlng)
+    .setContent(`<div class="map-popup"><div class="map-popup-meta">Geocoding…</div></div>`)
+    .openOn(map);
+  const seq = ++probeSeq;
+  try {
+    const res = await fetch(`/api/geocode/lookup?lat=${lat}&lng=${lng}`);
+    if (res.status === 503) {
+      if (seq === probeSeq) popup.setContent(probeMessage("No geocode data installed"));
+      return;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (seq !== probeSeq) return; // superseded by a newer click
+    popup.setContent(renderProbe(data));
+  } catch (err) {
+    if (seq === probeSeq) popup.setContent(probeMessage("Error: " + err.message));
+  }
+}
+
+function probeMessage(msg) {
+  return `<div class="map-popup"><div class="map-popup-meta">${escHtml(msg)}</div></div>`;
+}
+
+// Header = the resolved place name; the labeled rows below are the exact fields
+// that would be written to a photo geotagged at this point (city + OSM
+// sub-location, plus GeoNames state/county/country).
+function renderProbe(data) {
+  const loc = data.location;
+  const coords = `${data.lat.toFixed(5)}, ${data.lng.toFixed(5)}`;
+  const name = loc && (loc.city || loc.sublocation) ? (loc.city || loc.sublocation) : "(no place resolves here)";
+  const fields = loc ? [
+    ["Sub-location", loc.sublocation],
+    ["City", loc.city],
+    ["County", loc.county],
+    ["State", loc.state],
+    ["Country", loc.country],
+    ["Country code", loc.country_code],
+  ].filter(([, v]) => v) : [];
+  const rows = fields.map(([k, v]) =>
+    `<div class="map-popup-field"><span class="map-popup-field-key">${k}</span>${escHtml(v)}</div>`
+  ).join("");
+  return `<div class="map-popup map-popup-probe">
+    <div class="map-popup-name">${escHtml(name)}</div>
+    <div class="map-popup-probe-label">Would be saved for a photo here:</div>
+    ${rows || `<div class="map-popup-meta">(nothing — no location)</div>`}
+    <div class="map-popup-meta">${coords}</div>
+  </div>`;
 }
 
 function renderVoronoi(cells) {

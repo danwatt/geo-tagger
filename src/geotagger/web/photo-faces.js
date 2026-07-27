@@ -1,11 +1,17 @@
-/* ── State ── */
-let crowdPhotos  = [];
+/* ── State ──
+ * Two modes share this page:
+ *   "crowd"  — walk the /api/crowds photo list with Prev/Next (entered from People ▸ Crowds).
+ *   "single" — review the faces of one photo, no playlist (entered from any photo preview).
+ * Everything below the toolbar is identical; only navigation differs. */
+let crowdPhotos  = [];   // the photo playlist; exactly one entry in single mode
 let currentIdx   = 0;
 let persons      = [];
 let photoFaces   = [];
 let minFaces     = 50;
 let groupGap     = 86400;
 let hideCompleted = true;
+let mode         = "crowd";
+let backHref     = "/people.html";
 
 /* ── Init ── */
 document.addEventListener("DOMContentLoaded", async () => {
@@ -13,12 +19,24 @@ document.addEventListener("DOMContentLoaded", async () => {
   minFaces      = parseInt(params.get("min_faces")  || "50");
   groupGap      = parseInt(params.get("group_gap")  || "86400");
   const startId = parseInt(params.get("photo_id")   || "0");
+  // Crowd mode is opt-in: any bare ?photo_id= link lands in single-photo mode.
+  mode          = params.get("mode") === "crowd" ? "crowd" : "single";
+  backHref      = params.get("back") || (mode === "crowd" ? "/people.html" : "");
 
+  applyMode();
   bindToolbar();
   setStatus("Loading…");
 
+  if (mode === "single" && !startId) {
+    setStatus("No photo_id given.", true);
+    return;
+  }
+
   try {
-    await Promise.all([loadCrowdPhotos(), loadPersons()]);
+    await Promise.all([
+      mode === "crowd" ? loadCrowdPhotos() : loadSinglePhoto(startId),
+      loadPersons(),
+    ]);
   } catch (err) {
     setStatus("Failed to load: " + err.message, true);
     return;
@@ -33,6 +51,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   await navigateTo(idx >= 0 ? idx : 0);
 });
 
+/* Hide the playlist-only controls when reviewing a single photo. */
+function applyMode() {
+  if (mode === "crowd") return;
+  document.getElementById("nav-group").style.display   = "none";
+  document.getElementById("skip-group").style.display  = "none";
+  document.getElementById("done-next-btn").style.display = "none";
+  document.getElementById("back-btn").textContent = backHref ? "← Back" : "✕ Close";
+}
+
 function setStatus(msg, isError = false) {
   const bar = document.getElementById("status-bar");
   bar.textContent = msg;
@@ -42,7 +69,10 @@ function setStatus(msg, isError = false) {
 /* ── Toolbar ── */
 function bindToolbar() {
   document.getElementById("back-btn").addEventListener("click", () => {
-    window.location.href = "/people.html";
+    // Prefer an explicit ?back= target, else return the way we came.
+    if (backHref) window.location.href = backHref;
+    else if (history.length > 1) history.back();
+    else window.location.href = "/";
   });
   document.getElementById("prev-btn").addEventListener("click", () => {
     const i = prevAvailableIdx();
@@ -70,6 +100,15 @@ async function loadCrowdPhotos() {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   crowdPhotos = data.groups.flatMap(g => g.photos);
+}
+
+/* Single-photo mode: build a one-entry playlist from /api/photo. unlabeled_faces
+ * is a placeholder — renderFaces() recomputes it from the real face list. */
+async function loadSinglePhoto(photoId) {
+  const res = await fetch(`/api/photo/${photoId}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const d = await res.json();
+  crowdPhotos = [{ id: photoId, filename: d.filename, unlabeled_faces: 0 }];
 }
 
 async function loadPersons() {
@@ -118,8 +157,10 @@ async function navigateTo(idx) {
   photoFull.src = `/api/preview/${photo.id}`;
   document.getElementById("bbox-overlay").innerHTML = "";
 
-  history.replaceState(null, "",
-    `?photo_id=${photo.id}&min_faces=${minFaces}&group_gap=${groupGap}`);
+  if (mode === "crowd") {
+    history.replaceState(null, "",
+      `?photo_id=${photo.id}&mode=crowd&min_faces=${minFaces}&group_gap=${groupGap}`);
+  }
 
   document.getElementById("photo-meta").innerHTML = "";
   setStatus("Loading faces…");
@@ -445,7 +486,7 @@ function makeSuggestedGroup(pid, group) {
 }
 
 /* ── Quick-action popup ──
- * Shared popup (face-grid.js); we supply crowd-review's data + callbacks.
+ * Shared popup (face-grid.js); we supply this page's data + callbacks.
  * Labeled/ignored cards don't open it (they highlight / restore directly), so
  * the popup only ever shows for suggested + unrecognized faces. */
 function openFaceActions(anchor, f) {

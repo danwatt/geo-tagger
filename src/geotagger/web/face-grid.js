@@ -83,6 +83,51 @@ function locationLabel(faces) {
   return `${sorted[0]} (and ${n} other${n > 1 ? "s" : ""})`;
 }
 
+// The single most common place among a group of faces (or crowd photos), or
+// null when none of them is geocoded. Unlike locationLabel() this returns a raw
+// key suitable for sorting/comparing rather than a display string.
+function primaryLocationKey(items) {
+  const counts = new Map();
+  for (const it of items) {
+    const k = locationKey(it);
+    if (k) counts.set(k, (counts.get(k) || 0) + 1);
+  }
+  if (!counts.size) return null;
+  return [...counts.keys()].sort((a, b) => counts.get(b) - counts.get(a))[0];
+}
+
+/* ── Group sorting ──
+ * Shared by every grid that renders *groups* of faces/photos (Discover clusters,
+ * Crowd groups, the Unlabeled month→location buckets, the guesses event groups).
+ * The caller supplies `keyFn(group)` returning { date, count, place }:
+ *   date  — epoch seconds, or null/0 when undated
+ *   count — number of photos in the group
+ *   place — location string, or null when the group has no geocoded photo
+ * Modes:
+ *   "date"     — chronological, undated last (every grid's original order)
+ *   "count"    — most photos first, ties chronological
+ *   "location" — place name A→Z with un-located groups last, ties chronological
+ * Returns a new array; the input is left alone. */
+const GROUP_SORT_MODES = ["date", "count", "location"];
+
+function sortGroups(groups, mode, keyFn) {
+  const keys = new Map(groups.map(g => [g, keyFn(g)]));
+  // Undated sorts after everything dated, in every mode.
+  const byDate = (a, b) =>
+    (keys.get(a).date || Infinity) - (keys.get(b).date || Infinity);
+  const cmp = {
+    date: byDate,
+    count: (a, b) => (keys.get(b).count - keys.get(a).count) || byDate(a, b),
+    location: (a, b) => {
+      const pa = keys.get(a).place, pb = keys.get(b).place;
+      if (pa && pb && pa !== pb) return pa.localeCompare(pb);
+      if (pa !== pb) return pa ? -1 : 1;   // un-located groups last
+      return byDate(a, b);                 // same place (or both unknown) → by date
+    },
+  }[mode] || byDate;
+  return [...groups].sort(cmp);
+}
+
 /* ── Group header ──
  * Canonical "title + meta + action buttons" header for a section of faces.
  *   title      — main label text

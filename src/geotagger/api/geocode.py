@@ -95,6 +95,21 @@ async def api_geocode_osm_places(bbox: str = Query(...), limit: int = Query(4000
     }
 
 
+@router.get("/api/geocode/lookup")
+async def api_geocode_lookup(lat: float = Query(...), lng: float = Query(...)):
+    """Reverse-geocode a single coordinate exactly as a photo taken there would be —
+    returns the {city, sublocation, state, county, country, country_code} that would
+    be persisted on that photo. Backs the Places DB map's click-to-probe: click a
+    point and see what location the geocoder would save. 503 only if neither the OSM
+    nor the GeoNames dataset is installed."""
+    if not geocode.is_available() and not osm_places.is_available():
+        raise HTTPException(503, "No geocode data installed — run scripts/get_geonames.py "
+                                 "and/or scripts/build_osm_places.py")
+    loop = asyncio.get_running_loop()
+    loc = await loop.run_in_executor(get_executor(), geocode.lookup, lat, lng)
+    return {"lat": lat, "lng": lng, "location": loc}
+
+
 @router.post("/api/geocode/backfill")
 async def api_geocode_backfill(req: GeocodeBackfillRequest):
     """Reverse-geocode up to `limit` photos that have coordinates but no location.

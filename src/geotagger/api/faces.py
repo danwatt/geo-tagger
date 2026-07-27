@@ -586,6 +586,8 @@ async def api_crowds(
             "filename": row["filename"],
             "photo_datetime": row["photo_datetime"],
             "orientation": row["orientation"],
+            # Place names let the client sort crowd groups by location.
+            "location": serializers.row_location(row),
             "total_faces": row["total_faces"],
             "labeled_faces": row["labeled_faces"],
             "unlabeled_faces": row["unlabeled_faces"],

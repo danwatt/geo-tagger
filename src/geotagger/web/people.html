@@ -59,6 +59,16 @@
           <option value="person">Person, then date</option>
         </select>
       </div>
+      <!-- Sort for the grids that render groups (Discover / Crowds / Unlabeled /
+           guesses). Reorders the groups only — faces keep their in-group order. -->
+      <div id="grid-nav-sort" style="display:none">
+        <label for="grid-sort-select" title="Reorder the groups below">Sort:</label>
+        <select id="grid-sort-select">
+          <option value="date" selected>Date</option>
+          <option value="count">Number of photos</option>
+          <option value="location">Location, then date</option>
+        </select>
+      </div>
       <div id="grid-nav-person" style="display:none">
         <label>Review guesses for:</label>
         <select id="guess-person-select">
@@ -121,6 +131,7 @@
           <button id="detail-ignore-btn" class="icon-btn" title="Ignore" aria-label="Ignore">🚫</button>
           <button id="detail-come-back-btn" class="icon-btn" title="Come back later" aria-label="Come back later">🕒</button>
           <button id="detail-open-photo-btn" class="icon-btn" title="Open photo" aria-label="Open photo">🖼</button>
+          <button id="detail-photo-faces-btn" class="icon-btn" title="Review every face in this photo" aria-label="All faces in this photo">👥</button>
           <button id="detail-fullsize-btn" class="icon-btn" title="View full size (RAW)" aria-label="View full size (RAW)" style="display:none">🔍</button>
         </div>
       </div>

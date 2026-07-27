@@ -278,7 +278,7 @@ Reachable but not in the top nav:
 | Page | Purpose |
 |---|---|
 | **Quick Tag** (`/tag.html`) | Mobile-friendly face triage: walks the face-clustering queue one group at a time |
-| **Crowd Review** (`/crowd-review.html`) | Review photos with many detected faces ("crowd photos") without labeling each one |
+| **Photo Faces** (`/photo-faces.html`) | View and edit every detected face in one photo; with `&mode=crowd` it walks the crowd-photo playlist |
 | **People Manager** (`/people-manage.html`) | Edit names, birth dates, and family groupings for tagged people in one list |
 
 ## Usage: geotagging photos

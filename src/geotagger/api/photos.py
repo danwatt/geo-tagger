@@ -113,6 +113,43 @@ async def api_photos(
     return [serializers.photo_to_dict(r) for r in rows]
 
 
+def _augment_and_filter(photos_in_area: list, geotagged: str, window: int) -> list:
+    """Given the geotagged photos already selected for a region, add non-geotagged
+    photos taken within `window` seconds of any of them, apply the geotagged
+    filter, and return the list sorted by time then filename.
+
+    Shared by the circular (by-area) and rectangular (by-bounds) region queries —
+    the only difference between them is how the initial in-region set is built.
+    """
+    import bisect
+
+    # Timestamps of the geotagged photos in the region, used to pull in
+    # temporally-adjacent untagged photos (candidates to inherit a location).
+    times_in_area = [r["photo_datetime"] for r in photos_in_area
+                     if r["photo_datetime"] and r["photo_datetime"] > 0]
+
+    if times_in_area and window > 0:
+        times_sorted = sorted(times_in_area)
+        # Broad time-range prefilter in SQL, then exact per-photo proximity check
+        # via binary search — O(n log m) instead of O(n*m).
+        nearby = index.get_photos_by_time_range(
+            times_sorted[0] - window, times_sorted[-1] + window, has_geotag=False)
+        for r in nearby:
+            pt = r["photo_datetime"]
+            idx = bisect.bisect_left(times_sorted, pt)
+            if (idx < len(times_sorted) and abs(times_sorted[idx] - pt) <= window) or \
+               (idx > 0 and abs(times_sorted[idx - 1] - pt) <= window):
+                photos_in_area.append(r)
+
+    if geotagged == "yes":
+        photos_in_area = [r for r in photos_in_area if r["lat"] is not None]
+    elif geotagged == "no":
+        photos_in_area = [r for r in photos_in_area if r["lat"] is None]
+
+    photos_in_area.sort(key=lambda r: (r["photo_datetime"] or 0, r["filename"]))
+    return photos_in_area
+
+
 @router.get("/api/photos/by-area")
 async def api_photos_by_area(
     lat: float = Query(...),
@@ -157,77 +194,39 @@ async def api_photos_by_area(
 
     # Filter to exact circle using Haversine
     t2 = time.time()
-    photos_in_area = []
-    times_in_area = []
-
-    for r in bbox_photos:
-        dist = haversine(lat, lng, r["lat"], r["lng"])
-        if dist <= radius:
-            photos_in_area.append(r)
-            if r["photo_datetime"] and r["photo_datetime"] > 0:
-                times_in_area.append(r["photo_datetime"])
+    photos_in_area = [r for r in bbox_photos if haversine(lat, lng, r["lat"], r["lng"]) <= radius]
     logger.info(f"  Haversine filtering: {(time.time() - t2)*1000:.2f}ms, {len(photos_in_area)} in circle")
 
-    # Add non-geotagged photos within 15 minutes of any photo in the area
-    if times_in_area:
-        import bisect
+    # Add temporally-adjacent untagged photos, apply the geotagged filter, and sort.
+    photos_in_area = _augment_and_filter(photos_in_area, geotagged, window)
 
-        t3 = time.time()
-        time_window = window
-
-        # Sort times for efficient binary search
-        times_sorted = sorted(times_in_area)
-
-        # Query a broader time range to get candidates
-        min_time = min(times_in_area) - time_window
-        max_time = max(times_in_area) + time_window
-
-        # Efficiently query only photos in the time window that aren't geotagged
-        nearby_photos = index.get_photos_by_time_range(min_time, max_time, has_geotag=False)
-        logger.info(f"  Time range query: {(time.time() - t3)*1000:.2f}ms, found {len(nearby_photos)} non-geotagged in time window")
-
-        # Check each photo to see if it's within 15min of ANY specific photo in area
-        # Use binary search for O(n log m) instead of O(n*m)
-        t4 = time.time()
-        added = 0
-        for r in nearby_photos:
-            photo_time = r["photo_datetime"]
-            # Find insertion point in sorted times
-            idx = bisect.bisect_left(times_sorted, photo_time)
-
-            # Check the time at idx and idx-1 (closest times on either side)
-            found = False
-            if idx < len(times_sorted) and abs(times_sorted[idx] - photo_time) <= time_window:
-                found = True
-            elif idx > 0 and abs(times_sorted[idx - 1] - photo_time) <= time_window:
-                found = True
-
-            if found:
-                photos_in_area.append(r)
-                added += 1
-
-        logger.info(f"  Time proximity check (binary search): {(time.time() - t4)*1000:.2f}ms, added {added} photos")
-
-    # Apply geotagged filter
-    t5 = time.time()
-    before_filter = len(photos_in_area)
-    if geotagged == "yes":
-        photos_in_area = [r for r in photos_in_area if r["lat"] is not None]
-    elif geotagged == "no":
-        photos_in_area = [r for r in photos_in_area if r["lat"] is None]
-    logger.info(f"  Geotagged filter: {(time.time() - t5)*1000:.2f}ms, {before_filter} -> {len(photos_in_area)}")
-
-    # Sort by time, then filename
-    t6 = time.time()
-    photos_in_area.sort(key=lambda r: (r["photo_datetime"] or 0, r["filename"]))
-    logger.info(f"  Sort: {(time.time() - t6)*1000:.2f}ms")
-
-    # Build response
-    t7 = time.time()
     result = [serializers.photo_to_dict(r) for r in photos_in_area]
-    logger.info(f"  Response build: {(time.time() - t7)*1000:.2f}ms")
     logger.info(f"TOTAL: {(time.time() - t_start)*1000:.2f}ms, returning {len(result)} photos")
+    return result
 
+
+@router.get("/api/photos/by-bounds")
+async def api_photos_by_bounds(
+    min_lat: float = Query(...),
+    max_lat: float = Query(...),
+    min_lng: float = Query(...),
+    max_lng: float = Query(...),
+    geotagged: str = Query("all", pattern="^(all|yes|no)$"),
+    window: int = Query(900, ge=0),
+):
+    """Get photos whose location falls inside a lat/lng bounding box — a saved
+    place's bounds, optionally grown by a buffer (the growing is done client-side,
+    so this only sees the final box). Like by-area but rectangular: R*Tree bbox
+    query for the geotagged photos, then non-geotagged photos taken within `window`
+    seconds of any of them are folded in as geotag candidates."""
+    t_start = time.time()
+    logger.info(f"Bounds query: lat=[{min_lat},{max_lat}], lng=[{min_lng},{max_lng}], filter={geotagged}")
+
+    bbox_photos = list(index.get_photos_in_bbox(min_lat, max_lat, min_lng, max_lng))
+    photos_in_area = _augment_and_filter(bbox_photos, geotagged, window)
+
+    result = [serializers.photo_to_dict(r) for r in photos_in_area]
+    logger.info(f"TOTAL: {(time.time() - t_start)*1000:.2f}ms, returning {len(result)} photos")
     return result
 
 

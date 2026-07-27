@@ -1,5 +1,5 @@
 /* Shared face-grid styling: canonical thumbnail size, group headers, and the
- * quick-action popup. Linked by people / crowd-review / tag. */
+ * quick-action popup. Linked by people / photo-faces / tag. */
 
 :root { --face-size: 120px; }
 

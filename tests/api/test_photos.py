@@ -53,6 +53,22 @@ def test_by_area_radius(client):
     assert [p["filename"] for p in r] == ["near.jpg"]
 
 
+def test_by_bounds_box(client):
+    _add("in.jpg", lat=10.0, lng=20.0, dt=1000)
+    _add("out.jpg", lat=15.0, lng=25.0, dt=1000)
+    r = client.get("/api/photos/by-bounds?min_lat=9&max_lat=11&min_lng=19&max_lng=21").json()
+    assert [p["filename"] for p in r] == ["in.jpg"]
+
+
+def test_by_bounds_folds_in_untagged_within_window(client):
+    _add("geo.jpg", lat=10.0, lng=20.0, dt=1000)
+    _add("untagged_near.jpg", dt=1300)   # 300s away, inside default 900s window
+    _add("untagged_far.jpg", dt=9999)    # outside window — excluded
+    names = {p["filename"] for p in
+             client.get("/api/photos/by-bounds?min_lat=9&max_lat=11&min_lng=19&max_lng=21").json()}
+    assert names == {"geo.jpg", "untagged_near.jpg"}
+
+
 def test_missing_ids_404(client):
     assert client.get("/api/thumbnail/999").status_code == 404
     assert client.get("/api/preview/999").status_code == 404

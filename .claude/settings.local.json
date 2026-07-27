@@ -42,7 +42,15 @@
       "Bash(rtk git *)",
       "Bash(rtk uv *)",
       "Bash(uv lock *)",
-      "Bash(python3 -c \"import yaml,sys; yaml.safe_load\\(open\\('.github/workflows/ci.yml'\\)\\)\")"
+      "Bash(python3 -c \"import yaml,sys; yaml.safe_load\\(open\\('.github/workflows/ci.yml'\\)\\)\")",
+      "Bash(mkdir -p C:/Users/danwa/AppData/Local/Temp/claude/C--Users-danwa-PycharmProjects-geo-tagger/0c60cc02-93b1-406f-9c3d-294466438901/scratchpad/lib)",
+      "Bash(GEOTAGGER_DB=C:/Users/danwa/AppData/Local/Temp/claude/C--Users-danwa-PycharmProjects-geo-tagger/0c60cc02-93b1-406f-9c3d-294466438901/scratchpad/t.db uv run geotagger --port 8137 --scan-dir C:/Users/danwa/AppData/Local/Temp/claude/C--Users-danwa-PycharmProjects-geo-tagger/0c60cc02-93b1-406f-9c3d-294466438901/scratchpad/lib)",
+      "Bash(curl -s -o /dev/null -w \"page=%{http_code} \" http://127.0.0.1:8137/photo-faces.html)",
+      "Bash(curl -s -o /dev/null -w \"js=%{http_code} css=%{http_code}\\\\n\" http://127.0.0.1:8137/photo-faces.js)",
+      "Bash(curl -s -o /dev/null -w \"css=%{http_code}\\\\n\" http://127.0.0.1:8137/photo-faces.css)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "pycharm"
+  ]
 }

@@ -129,11 +129,24 @@ function renderSidebar() {
     div.className = "place-item" + (p.id === selectedPlaceId ? " selected" : "");
     div.dataset.id = p.id;
 
+    // Representative photo (set from the Geo page's right-click menu) shown as a
+    // thumbnail, with a Clear action when present.
+    const repThumb = p.representative_photo_id
+      ? `<img class="place-rep-thumb" src="/api/thumbnail/${p.representative_photo_id}"
+             alt="Representative photo" title="Representative photo"/>`
+      : "";
+    const clearRepBtn = p.representative_photo_id
+      ? `<button class="clear-rep-btn" title="Remove representative photo">Clear photo</button>`
+      : "";
+
     div.innerHTML = `
       <div class="place-item-name">${escHtml(p.name)}</div>
       <div class="place-item-meta">${p.type}</div>
+      ${repThumb}
       <div class="place-item-actions">
         <button class="zoom-btn">Zoom</button>
+        <button class="rename-btn">Rename</button>
+        ${clearRepBtn}
         <button class="delete-btn">Delete</button>
       </div>`;
 
@@ -141,9 +154,18 @@ function renderSidebar() {
       e.stopPropagation();
       selectPlace(p.id);
     });
+    div.querySelector(".rename-btn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      renamePlace(p);
+    });
     div.querySelector(".delete-btn").addEventListener("click", (e) => {
       e.stopPropagation();
       confirmDeletePlace(p);
+    });
+    const clearBtn = div.querySelector(".clear-rep-btn");
+    if (clearBtn) clearBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      clearRepresentative(p);
     });
     div.addEventListener("click", () => selectPlace(p.id));
     list.appendChild(div);
@@ -215,6 +237,44 @@ async function updatePlaceBounds(place) {
   } catch (err) {
     setStatus("Failed to update place: " + err.message, true);
     await loadPlaces();  // snap shape back to saved bounds
+  }
+}
+
+async function renamePlace(place) {
+  const name = prompt(`Rename "${place.name}" to:`, place.name);
+  if (name === null) return;               // cancelled
+  const trimmed = name.trim();
+  if (!trimmed || trimmed === place.name) return;
+
+  try {
+    const res = await fetch(`/api/places/${place.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: trimmed }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    place.name = trimmed;
+    setStatus(`Renamed to "${trimmed}"`);
+    renderSidebar();
+    renderPlaces();
+  } catch (err) {
+    setStatus("Failed to rename place: " + err.message, true);
+  }
+}
+
+async function clearRepresentative(place) {
+  try {
+    const res = await fetch(`/api/places/${place.id}/representative`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ photo_id: null }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    place.representative_photo_id = null;
+    setStatus(`Cleared representative photo for "${place.name}"`);
+    renderSidebar();
+  } catch (err) {
+    setStatus("Failed to clear representative: " + err.message, true);
   }
 }
 
