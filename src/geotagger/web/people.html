@@ -112,6 +112,20 @@
       </div>
     </div>
     <div id="grid"></div>
+
+    <!-- Staging area: every non-destructive decision (assign / unassign /
+         ignore / come back / restore) lands here instead of hitting the server,
+         one group per destination, until it's committed or reverted. -->
+    <div id="pending-pane" style="display:none">
+      <div id="pending-groups"></div>
+      <div id="pending-bar">
+        <span id="pending-summary"></span>
+        <div id="pending-bar-btns">
+          <button id="commit-all-btn" class="primary" title="Save every staged change to the database">✔ Commit all</button>
+          <button id="revert-all-btn" class="danger" title="Throw away every staged change and put the faces back in the grid">↩ Revert all</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Right: detail -->

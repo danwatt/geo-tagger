@@ -25,6 +25,16 @@ let clusters = [];              // discovered groups (Discover view)
 let crowdGroups = [];           // crowd photo groups (Crowds view)
 let hideCompletedCrowds = true; // hide crowd photos with no unlabeled faces
 
+// Staged, not-yet-saved decisions: face id → { face, kind, personId, name }.
+// Every non-destructive action on a flat grid (assign / unassign / ignore /
+// come back / restore) parks the face here instead of POSTing, so a tagging
+// pass can be reviewed — and re-targeted or thrown away — before it touches the
+// database. See the "Staging area" section below. The nuclear option and the
+// "not this person" negatives stay immediate: the first is explicitly
+// destructive, the second is a recognition hint whose whole point is to
+// re-rank the remaining guesses right away.
+let pending = new Map();
+
 let groupGapSeconds = 86400;    // event grouping gap in the guesses view (1 day)
 
 // How the group-rendering grids (Discover / Crowds / Unlabeled / guesses) order
@@ -230,6 +240,17 @@ function bindToolbar() {
     const f = findFace(focusedFaceId);
     if (!f) { setStatus("Select a face first.", true); return; }
     window.location.href = `/photo-faces.html?photo_id=${f.photo_id}`;
+  });
+
+  document.getElementById("commit-all-btn").addEventListener("click",
+    () => commitPending(groupPendingEntries()));
+  document.getElementById("revert-all-btn").addEventListener("click",
+    () => revertPending(groupPendingEntries()));
+  // Staged changes live only in this tab — don't let a reload eat a tagging pass.
+  window.addEventListener("beforeunload", (e) => {
+    if (!pending.size) return;
+    e.preventDefault();
+    e.returnValue = "";
   });
 
   document.getElementById("shortcuts-help-btn").addEventListener("click", openShortcutsHelp);
@@ -661,8 +682,10 @@ async function loadFaces() {
       // Order chronologically (undated last) so event groups are contiguous,
       // then pre-select every guess (Accept suggestions confirms them in bulk).
       faces.sort((a, b) => (a.photo_datetime || Infinity) - (b.photo_datetime || Infinity));
-      selectedIds = new Set(faces.map(f => f.id));
-      focusedFaceId = faces.length ? faces[0].id : null;
+      // Staged faces aren't in the grid, so they're neither selected nor focused.
+      const visible = gridFaces();
+      selectedIds = new Set(visible.map(f => f.id));
+      focusedFaceId = visible.length ? visible[0].id : null;
     } else if (scope === "recent") {
       // Newest tag first (the server already orders this way; keep it explicit).
       faces.sort((a, b) => (b.assigned_at || 0) - (a.assigned_at || 0));
@@ -769,11 +792,13 @@ function applyUnlabeledView() {
 
   // Pre-select only the confident guesses among the visible faces — accept those
   // in bulk, then triage the weaker/unguessed ones by hand.
+  // Staged faces aren't in the grid, so they're neither selected nor focused.
+  const visible = gridFaces();
   selectedIds = new Set(
-    faces.filter(f => f.suggestion && f.suggestion.score >= CONFIDENT_SCORE
-                      && !f.person_name && !f.ignored)
-         .map(f => f.id));
-  focusedFaceId = faces.length ? faces[0].id : null;
+    visible.filter(f => f.suggestion && f.suggestion.score >= CONFIDENT_SCORE
+                        && !f.person_name && !f.ignored)
+           .map(f => f.id));
+  focusedFaceId = visible.length ? visible[0].id : null;
 
   updateActionButtons();
   renderGrid();
@@ -844,16 +869,26 @@ function sortFaceGroups(groups) {
   }));
 }
 
+// The grid and the staging area below it are two views of the same face list —
+// a staged face leaves one and appears in the other — so they always render
+// together. renderGridInner owns the grid itself.
 function renderGrid() {
+  renderGridInner();
+  renderPending();
+}
+
+function renderGridInner() {
   const grid = document.getElementById("grid");
   grid.innerHTML = "";
   renderOrder = [];
+  // Faces with a staged decision have moved to the staging area.
+  const list = gridFaces();
 
   // In the guesses view, lay faces out under event-group headers (date-range
   // title, location in the meta; the Ignore button acts on the selection).
   if (scope === "suggested") {
     let groupIdx = 0;
-    sortFaceGroups(computeTimeGroups(faces, groupGapSeconds)).forEach(group => {
+    sortFaceGroups(computeTimeGroups(list, groupGapSeconds)).forEach(group => {
       const sec = makeGroupSection(groupIdx++);
       const place = locationLabel(group.faces);
       sec.appendChild(makeGroupHeader(group, {
@@ -873,7 +908,7 @@ function renderGrid() {
   // each batch header offering a one-click "Restore all".
   if (scope === "ignored") {
     let groupIdx = 0;
-    computeIgnoreBatches(faces).forEach(group => {
+    computeIgnoreBatches(list).forEach(group => {
       const sec = makeGroupSection(groupIdx++);
       sec.appendChild(makeIgnoreBatchHeader(group));
       const cells = document.createElement("div");
@@ -889,7 +924,7 @@ function renderGrid() {
   // each batch header offering a one-click "Restore all".
   if (scope === "come_back") {
     let groupIdx = 0;
-    computeComeBackBatches(faces).forEach(group => {
+    computeComeBackBatches(list).forEach(group => {
       const sec = makeGroupSection(groupIdx++);
       sec.appendChild(makeComeBackBatchHeader(group));
       const cells = document.createElement("div");
@@ -905,7 +940,7 @@ function renderGrid() {
   // each batch header offering a one-click "Untag all".
   if (scope === "recent") {
     let groupIdx = 0;
-    computeTagBatches(faces).forEach(group => {
+    computeTagBatches(list).forEach(group => {
       const sec = makeGroupSection(groupIdx++);
       sec.appendChild(makeTagBatchHeader(group));
       const cells = document.createElement("div");
@@ -922,7 +957,7 @@ function renderGrid() {
   // location within a month is one group (location title, date range in the
   // meta) and its Ignore button acts on the whole group, not just the selection.
   if (scope === "unlabeled" && unlabeledHierarchy === "person") {
-    renderUnlabeledPersonFirst(grid);
+    renderUnlabeledPersonFirst(grid, list);
     return;
   }
 
@@ -932,7 +967,7 @@ function renderGrid() {
     // the count/location sorts interleave months, so they drop the dividers (each
     // bucket header still carries its own date range).
     const showDividers = gridSort === "date";
-    sortFaceGroups(computeMonthLocationGroups(faces)).forEach(group => {
+    sortFaceGroups(computeMonthLocationGroups(list)).forEach(group => {
       if (showDividers) {
         if (group.year !== curYear) {
           curYear = group.year; curMonth = undefined;
@@ -985,9 +1020,9 @@ function renderGrid() {
   // Per-person view: an action bar to hunt for more of this person, then
   // geocode-style year/month dividers (no per-month actions).
   if (scope === "person") {
-    grid.appendChild(makePersonHeader());
+    grid.appendChild(makePersonHeader(list.length));
     let curYear = null, curMonth = null;
-    faces.forEach((face) => {
+    list.forEach((face) => {
       if (face.photo_datetime) {
         const d = new Date(face.photo_datetime * 1000);
         const year = d.getFullYear();
@@ -1011,18 +1046,18 @@ function renderGrid() {
     return;
   }
 
-  faces.forEach((face) => grid.appendChild(makeFaceCell(face)));
+  list.forEach((face) => grid.appendChild(makeFaceCell(face)));
 }
 
 // Action bar atop a person's photos: jump to recognition's untagged guesses for them.
-function makePersonHeader() {
+function makePersonHeader(count) {
   const name = persons.find(p => p.id === scopePersonId)?.name || "this person";
   const bar = document.createElement("div");
   bar.className = "person-scope-header";
 
   const label = document.createElement("span");
   label.className = "person-scope-label";
-  label.textContent = `${faces.length} tagged photo(s) of ${name}`;
+  label.textContent = `${count} tagged photo(s) of ${name}`;
 
   const btn = document.createElement("button");
   btn.className = "primary";
@@ -1115,9 +1150,9 @@ function computeUnlabeledPersonGroups(list) {
   return personGroups;
 }
 
-function renderUnlabeledPersonFirst(grid) {
+function renderUnlabeledPersonFirst(grid, list) {
   let groupIdx = 0;
-  computeUnlabeledPersonGroups(faces).forEach(person => {
+  computeUnlabeledPersonGroups(list).forEach(person => {
     const pd = document.createElement("div");
     pd.className = "grid-year-divider";
     pd.textContent = person.name || `No suggestion (${person.faces.length})`;
@@ -1389,6 +1424,7 @@ function makeTagBatchHeader(group) {
 // Clear the person assignment on faces, returning them to the unlabeled queue.
 async function untagFaces(ids, who) {
   if (!ids.length) return;
+  if (stagingEnabled()) { stageFaces(ids, { kind: "unassign" }, "Unassign"); return; }
   if (ids.length > 1 && !confirm(`Un-tag ${ids.length} face(s)${who ? ` (${who})` : ""}?`)) return;
   try {
     const res = await fetch("/api/faces/assign", {
@@ -1444,7 +1480,8 @@ function makeGroupHeader(group, { title, meta = "", label = title, ignoreAll = f
     ? { icon: "🚫", label: "Ignore all", kind: "danger",
         title: "Ignore every face in this group, regardless of selection",
         onClick: () => {
-          if (!confirm(`Ignore all ${group.faces.length} face(s) in ${label}?`)) return;
+          if (!stagingEnabled() &&
+              !confirm(`Ignore all ${group.faces.length} face(s) in ${label}?`)) return;
           ignoreSelected_ids(group.faces.map(f => f.id), true);
         } }
     : { icon: "🚫", label: "Ignore selected", kind: "danger",
@@ -1583,11 +1620,12 @@ function toggleFocusedSelection() {
 }
 
 function selectAllFaces() {
-  if (!faces.length) return;
-  selectedIds = new Set(faces.map(f => f.id));
+  const visible = gridFaces();
+  if (!visible.length) return;
+  selectedIds = new Set(visible.map(f => f.id));
   renderGrid();
   updateDetail();
-  setStatus(`Selected all ${faces.length} face(s).`);
+  setStatus(`Selected all ${visible.length} face(s).`);
 }
 
 function openShortcutsHelp() {
@@ -2003,6 +2041,9 @@ async function crowdIgnorePhotos(photoIds, btn) {
 function findFace(id) {
   const f = faces.find(x => x.id === id);
   if (f) return f;
+  // Staged faces have left the grid but are still previewable / re-targetable.
+  const staged = pending.get(id);
+  if (staged) return staged.face;
   for (const cl of clusters) {
     const s = cl.sample.find(x => x.id === id);
     if (s) return s;
@@ -2040,11 +2081,13 @@ function updateDetail() {
   const placeStr = loc
     ? [loc.city, loc.state, loc.country].filter(Boolean).join(", ")
     : null;
+  const staged = pending.get(face.id);
   document.getElementById("detail-meta").innerHTML = `
     <tr><td>Photo</td><td>${face.filename}</td></tr>
     <tr><td>Taken</td><td>${when}</td></tr>
     ${placeStr ? `<tr><td>Location</td><td>${placeStr}</td></tr>` : ""}
     <tr><td>Person</td><td>${personCell}</td></tr>
+    ${staged ? `<tr><td>Staged</td><td><b style='color:var(--warn)'>→ ${pendingCellLabel(staged)}</b> (not saved)</td></tr>` : ""}
     <tr><td>Detection</td><td>${face.det_score.toFixed(3)}</td></tr>
   `;
   const detailIgnoreBtn = document.getElementById("detail-ignore-btn");
@@ -2151,6 +2194,11 @@ function selectionOrFocused() {
 async function assignSelected(personId, clear = false) {
   const ids = selectionOrFocused();
   if (ids.length === 0) { setStatus("Select one or more faces first.", true); return; }
+  if (stagingEnabled()) {
+    stageFaces(ids, clear ? { kind: "unassign" } : { kind: "assign", personId },
+               clear ? "Unassign" : "a person");
+    return;
+  }
   if (!confirmSelection(ids.length, `Unassign ${ids.length} face(s)?`)) return;
   try {
     const res = await fetch("/api/faces/assign", {
@@ -2174,6 +2222,12 @@ async function assignSelected(personId, clear = false) {
 async function assignFocusedFace({ personId = null, name = null, clear = false } = {}) {
   const f = findFace(focusedFaceId);
   if (!f) { setStatus("Select a face first.", true); return; }
+  if (stagingEnabled()) {
+    const label = clear ? "Unassign"
+                        : (name || persons.find(p => p.id === personId)?.name || "a person");
+    stageFaces([f.id], clear ? { kind: "unassign" } : { kind: "assign", personId, name }, label);
+    return;
+  }
   const body = clear ? { person_id: null } : name ? { name } : { person_id: personId };
   try {
     const res = await fetch(`/api/faces/${f.id}/assign`, {
@@ -2198,11 +2252,17 @@ async function ignoreSelected(ignored) {
   const ids = selectionOrFocused();
   if (ids.length === 0) { setStatus("Select one or more faces first.", true); return; }
   const verb = ignored ? "Ignore" : "Restore";
-  if (!confirmSelection(ids.length, `${verb} ${ids.length} face(s)?`)) return;
+  // Staged decisions are reversible, so they skip the bulk-action confirm.
+  if (!stagingEnabled() && !confirmSelection(ids.length, `${verb} ${ids.length} face(s)?`)) return;
   await ignoreSelected_ids(ids, ignored);
 }
 
 async function ignoreSelected_ids(ids, ignored) {
+  if (stagingEnabled()) {
+    stageFaces(ids, { kind: ignored ? "ignore" : "unignore" },
+               ignored ? "Ignore" : "Un-ignore");
+    return;
+  }
   try {
     const res = await fetch("/api/faces/ignore", {
       method: "POST",
@@ -2223,11 +2283,16 @@ async function comeBackSelected(comeBack) {
   const ids = selectionOrFocused();
   if (ids.length === 0) { setStatus("Select one or more faces first.", true); return; }
   const verb = comeBack ? "Move to Come Back" : "Restore";
-  if (!confirmSelection(ids.length, `${verb} ${ids.length} face(s)?`)) return;
+  if (!stagingEnabled() && !confirmSelection(ids.length, `${verb} ${ids.length} face(s)?`)) return;
   await comeBackSelected_ids(ids, comeBack);
 }
 
 async function comeBackSelected_ids(ids, comeBack) {
+  if (stagingEnabled()) {
+    stageFaces(ids, { kind: comeBack ? "come_back" : "uncome_back" },
+               comeBack ? "Come Back" : "Back to Unlabeled");
+    return;
+  }
   try {
     const res = await fetch("/api/faces/come-back", {
       method: "POST",
@@ -2269,6 +2334,9 @@ async function nukeSelectedPhotos() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     setStatus(`Nuked ${data.faces_deleted} face(s) across ${data.photos} ${plural}. Rescan to re-detect.`);
+    // Those faces no longer exist — drop any staged decisions pointing at them.
+    const gone = new Set(photoIds);
+    [...pending].forEach(([id, e]) => { if (gone.has(e.face.photo_id)) pending.delete(id); });
     selectedIds.clear();
     focusedFaceId = null;
     await loadPersons();
@@ -2312,6 +2380,11 @@ function updateActionButtons() {
 async function assignSelectedTo(who, label) {
   const ids = selectionOrFocused();
   if (ids.length === 0) { setStatus("Select one or more faces first.", true); return; }
+  if (stagingEnabled()) {
+    stageFaces(ids, { kind: "assign", personId: who.person_id ?? null, name: who.name ?? label },
+               label);
+    return;
+  }
   if (!confirmSelection(ids.length, `Assign ${ids.length} face(s) to ${label}?`)) return;
   try {
     const res = await fetch("/api/faces/assign", {
@@ -2337,6 +2410,10 @@ function openFaceActions(anchor, face) {
     persons,
     onAssign: (pid) => confirmFace(face.id, pid),   // pid null ⇒ unassign
     onAssignNew: async (name) => {
+      if (stagingEnabled()) {
+        stageFaces([face.id], { kind: "assign", personId: null, name }, `${name} (new person)`);
+        return;
+      }
       try {
         const res = await fetch(`/api/faces/${face.id}/assign`, {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -2347,6 +2424,7 @@ function openFaceActions(anchor, face) {
       } catch (err) { setStatus("Assign failed: " + err.message, true); }
     },
     onIgnore: async (ignored) => {
+      if (stagingEnabled()) { ignoreSelected_ids([face.id], ignored); return; }
       try {
         const res = await fetch("/api/faces/ignore", {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -2357,6 +2435,7 @@ function openFaceActions(anchor, face) {
       } catch (err) { setStatus("Ignore failed: " + err.message, true); }
     },
     onComeBack: async (comeBack) => {
+      if (stagingEnabled()) { comeBackSelected_ids([face.id], comeBack); return; }
       try {
         const res = await fetch("/api/faces/come-back", {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -2372,6 +2451,13 @@ function openFaceActions(anchor, face) {
 }
 
 async function confirmFace(faceId, personId) {
+  if (stagingEnabled()) {
+    const label = personId == null
+      ? "Unassign" : (persons.find(p => p.id === personId)?.name || "a person");
+    stageFaces([faceId], personId == null ? { kind: "unassign" } : { kind: "assign", personId },
+               label);
+    return;
+  }
   try {
     const res = await fetch(`/api/faces/${faceId}/assign`, {
       method: "POST",
@@ -2460,7 +2546,8 @@ async function acceptSuggestionsForSelection() {
   // or ignored) — the same predicate acceptSuggestionsFor uses — and confirm past
   // the threshold so a large accidental batch isn't approved in one click.
   const targets = faceList.filter(f => f.suggestion && !f.person_name && !f.ignored);
-  if (!confirmSelection(targets.length, `Accept the suggested name for ${targets.length} face(s)?`)) {
+  if (!stagingEnabled() &&
+      !confirmSelection(targets.length, `Accept the suggested name for ${targets.length} face(s)?`)) {
     return;
   }
   await acceptSuggestionsFor(faceList);
@@ -2479,6 +2566,19 @@ async function acceptSuggestionsFor(faceList, label) {
   targets.forEach(f => {
     (byPerson[f.suggestion.person_id] ||= []).push(f.id);
   });
+  if (stagingEnabled()) {
+    // One stage call per suggested person, so each lands in its own group; the
+    // last call's status line covers the batch.
+    Object.entries(byPerson).forEach(([pid, faceIds]) => {
+      const personId = parseInt(pid);
+      stageFaces(faceIds, { kind: "assign", personId },
+                 persons.find(p => p.id === personId)?.name || "a person");
+    });
+    setStatus(`Staged ${targets.length} suggested face(s)${where} across ` +
+              `${Object.keys(byPerson).length} person(s). Nothing saved yet — ` +
+              `review at the bottom of the grid, then Commit.`);
+    return;
+  }
   try {
     for (const [pid, faceIds] of Object.entries(byPerson)) {
       await fetch("/api/faces/assign", {
@@ -2494,6 +2594,250 @@ async function acceptSuggestionsFor(faceList, label) {
   } catch (err) {
     setStatus("Accept failed: " + err.message, true);
   }
+}
+
+/* ── Staging area ──
+ * Non-destructive decisions don't hit the server as you make them: the face is
+ * pulled out of the main grid and parked in `pending` under the destination it
+ * was sent to (a person, Ignored, Come Back, …). The staging area at the bottom
+ * of the grid pane renders one section per destination, each with its own
+ * Commit / Revert, plus a sticky bar that commits or reverts everything. Only
+ * a Commit writes to the database — so a whole tagging pass can be re-targeted
+ * or thrown away first.
+ *
+ * Entry shape: { face, kind, personId?, name? }, where kind is one of
+ * assign | unassign | ignore | unignore | come_back | uncome_back. */
+
+// Staging covers the flat face grids only. Discover's clusters and Crowds'
+// photo cards act on face-id lists whose full face objects we don't hold (the
+// samples are capped), so their group buttons still commit straight through.
+function stagingEnabled() {
+  return isFlatGridScope();
+}
+
+// What the main grid should still show: everything without a staged decision.
+function gridFaces() {
+  return pending.size ? faces.filter(f => !pending.has(f.id)) : faces;
+}
+
+// Park `ids` under one destination. Re-staging a face overwrites its previous
+// decision, so "move it to a different group" is just another stage call.
+function stageFaces(ids, change, dest) {
+  let staged = 0;
+  ids.forEach(id => {
+    const face = findFace(id);
+    if (!face) return;
+    pending.set(id, { face, ...change });
+    selectedIds.delete(id);
+    if (focusedFaceId === id) focusedFaceId = null;
+    staged++;
+  });
+  if (!staged) { setStatus("Nothing to stage.", true); return; }
+  lastClickedIndex = -1;   // renderOrder shifts under the cells we just removed
+  updateActionButtons();
+  renderGrid();            // renders the staging area too
+  updateDetail();
+  setStatus(`Staged ${staged} face(s) → ${dest}. Nothing saved yet — ` +
+            `review at the bottom of the grid, then Commit.`);
+}
+
+// Drop staged decisions, returning those faces to the grid unchanged.
+function unstageFaces(ids, quiet = false) {
+  let removed = 0;
+  ids.forEach(id => { if (pending.delete(id)) removed++; });
+  if (!removed) return;
+  renderGrid();
+  updateDetail();
+  if (!quiet) setStatus(`Reverted ${removed} staged change(s).`);
+}
+
+const PENDING_KIND_ORDER =
+  ["assign", "come_back", "unassign", "ignore", "unignore", "uncome_back"];
+
+function pendingGroupKey(e) {
+  if (e.kind !== "assign") return e.kind;
+  return e.personId != null ? `person:${e.personId}` : `name:${e.name}`;
+}
+
+function pendingGroupLabel(e) {
+  switch (e.kind) {
+    case "assign":
+      return e.personId != null
+        ? (persons.find(p => p.id === e.personId)?.name || e.name || "Unknown person")
+        : `${e.name} (new person)`;
+    case "unassign":    return "Unassign";
+    case "ignore":      return "Ignore";
+    case "unignore":    return "Un-ignore";
+    case "come_back":   return "Come Back";
+    case "uncome_back": return "Back to Unlabeled";
+    default:            return e.kind;
+  }
+}
+
+// Short label for the chip on a staged face cell.
+function pendingCellLabel(e) {
+  return e.kind === "assign"
+    ? (e.personId != null
+        ? (persons.find(p => p.id === e.personId)?.name || e.name || "Unknown")
+        : `＋ ${e.name}`)
+    : pendingGroupLabel(e);
+}
+
+function groupPendingEntries() {
+  const groups = new Map();
+  pending.forEach(e => {
+    const key = pendingGroupKey(e);
+    let g = groups.get(key);
+    if (!g) {
+      g = { key, kind: e.kind, personId: e.personId ?? null, name: e.name ?? null,
+            label: pendingGroupLabel(e), entries: [] };
+      groups.set(key, g);
+    }
+    g.entries.push(e);
+  });
+  return [...groups.values()].sort((a, b) => {
+    const ka = PENDING_KIND_ORDER.indexOf(a.kind);
+    const kb = PENDING_KIND_ORDER.indexOf(b.kind);
+    if (ka !== kb) return ka - kb;
+    return a.label.localeCompare(b.label);   // people alphabetically within assigns
+  });
+}
+
+function renderPending() {
+  const pane = document.getElementById("pending-pane");
+  const wrap = document.getElementById("pending-groups");
+  wrap.innerHTML = "";
+  if (!pending.size) { pane.style.display = "none"; return; }
+  pane.style.display = "";
+
+  const groups = groupPendingEntries();
+  groups.forEach((g, i) => wrap.appendChild(makePendingGroupSection(g, i)));
+  document.getElementById("pending-summary").textContent =
+    `${pending.size} staged change(s) in ${groups.length} group(s) — not saved yet`;
+}
+
+function makePendingGroupSection(g, groupIdx) {
+  const sec = document.createElement("div");
+  sec.className = `face-group-section pending-group group-tint-${groupIdx % 6}`;
+  sec.appendChild(faceGroupHeader({
+    title: g.label,
+    meta: `· ${g.entries.length} face(s) · ${photoCountLabel(g.entries.map(e => e.face))}`,
+    extraClass: "amber",
+    buttons: [
+      { label: `✔ Commit (${g.entries.length})`, kind: "primary",
+        title: `Save just this group's ${g.entries.length} change(s) to the database`,
+        onClick: () => commitPending([g], g.label) },
+      { label: "↩ Revert", kind: "danger",
+        title: "Discard this group's staged changes and put the faces back in the grid",
+        onClick: () => revertPending([g], g.label) },
+    ],
+  }));
+
+  const cells = document.createElement("div");
+  cells.className = "face-group-cells";
+  g.entries.forEach(e => cells.appendChild(makePendingCell(e)));
+  sec.appendChild(cells);
+  return sec;
+}
+
+function makePendingCell(e) {
+  const face = e.face;
+  const cell = document.createElement("div");
+  cell.className = "thumb-cell pending-cell" +
+    (face.id === focusedFaceId ? " focused" : "");
+  cell.dataset.id = face.id;
+  cell.appendChild(faceCropImg(face));
+
+  const chip = document.createElement("div");
+  chip.className = "face-label pending-label";
+  chip.textContent = pendingCellLabel(e);
+  cell.appendChild(chip);
+
+  // Per-face revert — the fine-grained counterpart to the group/global buttons.
+  const undo = document.createElement("button");
+  undo.className = "pending-undo";
+  undo.textContent = "✕";
+  undo.title = "Revert this face (back to the grid, unchanged)";
+  undo.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    unstageFaces([face.id]);
+  });
+  cell.appendChild(undo);
+
+  // Left-click previews in the detail pane; right-click re-targets (which just
+  // re-stages the face into another group).
+  cell.addEventListener("click", () => { focusedFaceId = face.id; renderGrid(); updateDetail(); });
+  cell.addEventListener("contextmenu", (ev) => {
+    ev.preventDefault();
+    focusedFaceId = face.id;
+    updateDetail();
+    openFaceActions(cell, face);
+  });
+  return cell;
+}
+
+// Endpoint + body for one staged group. One request per group, so a person's
+// whole batch lands in a single assign call (and one ignored_at/come_back_at
+// batch stamp, which is what the Ignored/Come Back batch headers group on).
+function pendingRequest(g, ids) {
+  switch (g.kind) {
+    case "assign":
+      return ["/api/faces/assign", g.personId != null
+        ? { face_ids: ids, person_id: g.personId }
+        : { face_ids: ids, name: g.name }];
+    case "unassign":    return ["/api/faces/assign",    { face_ids: ids, clear: true }];
+    case "ignore":      return ["/api/faces/ignore",    { face_ids: ids, ignored: true }];
+    case "unignore":    return ["/api/faces/ignore",    { face_ids: ids, ignored: false }];
+    case "come_back":   return ["/api/faces/come-back", { face_ids: ids, come_back: true }];
+    case "uncome_back": return ["/api/faces/come-back", { face_ids: ids, come_back: false }];
+    default: throw new Error(`unknown staged action "${g.kind}"`);
+  }
+}
+
+async function commitPending(groups, what) {
+  const total = groups.reduce((n, g) => n + g.entries.length, 0);
+  if (!total) { setStatus("Nothing staged to commit.", true); return; }
+  if (!confirm(`Commit ${total} staged change(s)${what ? ` — ${what}` : ""}? ` +
+               `This writes them to the database.`)) return;
+  setStatus(`Committing ${total} change(s)…`);
+
+  let saved = 0;
+  const failures = [];
+  for (const g of groups) {
+    const ids = g.entries.map(e => e.face.id);
+    try {
+      const [url, body] = pendingRequest(g, ids);
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // Only clear what actually landed — a failed group stays staged so it can
+      // be retried rather than silently lost.
+      ids.forEach(id => pending.delete(id));
+      saved += ids.length;
+    } catch (err) {
+      failures.push(`${g.label} (${err.message})`);
+    }
+  }
+
+  await loadPersons();
+  await loadFaces();
+  if (failures.length) {
+    setStatus(`Committed ${saved} of ${total} change(s). Still staged after failing: ` +
+              failures.join(", ") + ".", true);
+  } else {
+    setStatus(`Committed ${saved} change(s).`);
+  }
+}
+
+function revertPending(groups, what) {
+  const ids = groups.flatMap(g => g.entries.map(e => e.face.id));
+  if (!ids.length) { setStatus("Nothing staged to revert.", true); return; }
+  if (ids.length > SELECTION_CONFIRM_THRESHOLD &&
+      !confirm(`Discard ${ids.length} staged change(s)${what ? ` — ${what}` : ""}?`)) return;
+  unstageFaces(ids);
 }
 
 /* ── Person CRUD ── */
