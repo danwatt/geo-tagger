@@ -10,6 +10,7 @@ binary isn't available; face detection (scan_faces_batch's happy path) needs the
 from pathlib import Path
 
 import numpy as np
+import pytest
 from PIL import Image
 
 from geotagger import index, serializers, faces
@@ -115,6 +116,126 @@ class TestGetPhotoMetadata:
 
     def test_bad_path_degrades_to_dict(self, et_session):
         assert isinstance(photos_service.get_photo_metadata("/no/such/file.jpg"), dict)
+
+
+def _make_jpg_oriented(path, orientation: int) -> str:
+    """A JPEG carrying a real EXIF Orientation tag (274)."""
+    img = Image.new("RGB", (8, 8), color="green")
+    exif = img.getexif()
+    exif[274] = orientation
+    img.save(path, "JPEG", exif=exif.tobytes())
+    return str(path)
+
+
+class TestAddManualFace:
+    """faces_service.add_manual_face — a hand-drawn box for a face detection missed."""
+
+    def _no_model(self, monkeypatch):
+        """Stand in for an absent InsightFace model: embedding fails, box survives."""
+        def boom(*a, **k):
+            raise RuntimeError("no model")
+        monkeypatch.setattr(faces, "embed_bbox", boom)
+
+    def test_stores_box_and_person(self, db, monkeypatch):
+        monkeypatch.setattr(faces, "embed_bbox",
+                            lambda *a, **k: (faces.encode_embedding(np.zeros(512)), 0.6))
+        pid = _add_photo(db)
+        person_id = index.get_or_create_person("Ada")
+
+        res = faces_service.add_manual_face(pid, [0.1, 0.2, 0.3, 0.5], person_id)
+        assert res["embedded"] is True
+        assert res["det_score"] == 0.6
+
+        rows = index.get_faces_for_photo(pid)
+        assert len(rows) == 1
+        assert rows[0]["source"] == "manual"
+        assert rows[0]["person_id"] == person_id
+        assert rows[0]["det_score"] == 1.0          # the user's assertion, not the model's
+        assert [float(v) for v in rows[0]["bbox"].split(",")] == [0.1, 0.2, 0.3, 0.5]
+
+    def test_maps_display_box_to_sensor_space(self, db, monkeypatch):
+        self._no_model(monkeypatch)
+        pid = _add_photo(db)
+        db.execute("UPDATE photos SET orientation=6 WHERE id=?", (pid,))
+        db.commit()
+
+        drawn = [0.1, 0.2, 0.3, 0.5]
+        faces_service.add_manual_face(pid, drawn)
+        stored = [float(v) for v in index.get_faces_for_photo(pid)[0]["bbox"].split(",")]
+        # Stored sensor-space, and orienting it back for display recovers what was drawn.
+        assert stored != drawn
+        assert serializers.thumbnails.orient_bbox(stored, 6) == pytest.approx(drawn, abs=1e-4)
+
+    def test_survives_a_missing_model(self, db, monkeypatch):
+        self._no_model(monkeypatch)
+        pid = _add_photo(db)
+        res = faces_service.add_manual_face(pid, [0.1, 0.1, 0.4, 0.4])
+        assert res["embedded"] is False
+        # Still listed for the photo (the join is a LEFT JOIN for exactly this).
+        rows = index.get_faces_for_photo(pid)
+        assert len(rows) == 1
+        assert rows[0]["embedding"] is None
+        # ...but stays out of the recognition gallery / unlabeled matrix.
+        assert index.get_unlabeled_faces() == []
+
+    def test_rejects_a_degenerate_box(self, db, monkeypatch):
+        self._no_model(monkeypatch)
+        pid = _add_photo(db)
+        with pytest.raises(ValueError):
+            faces_service.add_manual_face(pid, [0.5, 0.5, 0.5005, 0.9])
+
+    def test_rejects_unknown_photo(self, db):
+        with pytest.raises(ValueError):
+            faces_service.add_manual_face(999999, [0.1, 0.1, 0.4, 0.4])
+
+    def test_survives_a_routine_rescan_but_not_a_nuke(self, db, monkeypatch):
+        """source='manual' is the whole point: replace_faces only drops detected rows."""
+        self._no_model(monkeypatch)
+        pid = _add_photo(db)
+        faces_service.add_manual_face(pid, [0.1, 0.1, 0.4, 0.4])
+
+        index.replace_faces(pid, [])                  # a detection pass that found nothing
+        assert len(index.get_faces_for_photo(pid)) == 1
+
+        index.delete_photo_faces([pid])               # the nuclear option
+        assert index.get_faces_for_photo(pid) == []
+
+    def test_delete_manual_face_only_deletes_manual(self, db, monkeypatch):
+        self._no_model(monkeypatch)
+        pid = _add_photo(db)
+        index.replace_faces(pid, [{"bbox": "0.6,0.6,0.7,0.7", "det_score": 0.5,
+                                   "embedding": faces.encode_embedding(np.zeros(512))}])
+        detected_id = index.get_faces_for_photo(pid)[0]["id"]
+        manual_id = index.add_manual_face(pid, "0.1,0.1,0.2,0.2")
+
+        assert index.delete_manual_face(detected_id) is False
+        assert index.delete_manual_face(manual_id) is True
+        assert [r["id"] for r in index.get_faces_for_photo(pid)] == [detected_id]
+
+
+class TestRefreshOrientations:
+    def test_corrects_stale_stored_orientation(self, db, tmp_path, et_session):
+        img = _make_jpg_oriented(tmp_path / "rot.jpg", 6)
+        pid = _add_photo(db, path=img)          # _add_photo stores orientation=1
+        assert faces_service.refresh_orientations([pid]) == 1
+        assert index.get_photo(pid)["orientation"] == 6
+
+    def test_noop_when_already_correct(self, db, tmp_path, et_session):
+        img = _make_jpg_oriented(tmp_path / "ok.jpg", 1)
+        pid = _add_photo(db, path=img)
+        assert faces_service.refresh_orientations([pid]) == 0
+        assert index.get_photo(pid)["orientation"] == 1
+
+    def test_fills_in_null_orientation(self, db, tmp_path, et_session):
+        img = _make_jpg_oriented(tmp_path / "null.jpg", 8)
+        pid = _add_photo(db, path=img)
+        db.execute("UPDATE photos SET orientation=NULL WHERE id=?", (pid,))
+        db.commit()
+        assert faces_service.refresh_orientations([pid]) == 1
+        assert index.get_photo(pid)["orientation"] == 8
+
+    def test_unknown_ids_are_skipped(self, db):
+        assert faces_service.refresh_orientations([999999]) == 0
 
 
 class TestUpdatePhotoTimes:

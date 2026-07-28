@@ -291,6 +291,16 @@ function openQuickActions(anchor, face, opts) {
     panel.appendChild(b);
   }
 
+  // Only offered for hand-drawn faces (source 'manual'); a detected face would
+  // just come back on the next scan, so those get Ignore instead.
+  if (opts.onDelete && face.source === "manual") {
+    const b = document.createElement("button");
+    b.className = "danger expand-btn";
+    b.textContent = "🗑 Delete box";
+    b.addEventListener("click", run(() => opts.onDelete()));
+    panel.appendChild(b);
+  }
+
   if (opts.onOpenPhoto) {
     const b = document.createElement("button");
     b.className = "expand-btn";
@@ -329,8 +339,10 @@ function openQuickActions(anchor, face, opts) {
  *   title,        // header text, e.g. "Assign 3 face(s) to…"
  *   allowCreate,  // default true — offer "Create “name”" for unmatched text
  *   onPick,       // ({person_id} | {name}, label) => void            REQUIRED
+ *   onClose,      // () => void — DISMISSED without picking (Esc, ✕, backdrop)
  * }) */
 let _ppBackdrop = null;
+let _ppOnClose = null;
 
 function isPersonPickerOpen() {
   return _ppBackdrop !== null;
@@ -340,6 +352,10 @@ function closePersonPicker() {
   document.removeEventListener("keydown", _ppEscape);
   if (_ppBackdrop) _ppBackdrop.remove();
   _ppBackdrop = null;
+  // Cleared before firing so an onClose that reopens a picker isn't re-entered.
+  const cb = _ppOnClose;
+  _ppOnClose = null;
+  if (cb) cb();
 }
 
 function _ppEscape(e) {
@@ -348,6 +364,7 @@ function _ppEscape(e) {
 
 function openPersonPicker(persons, opts) {
   closePersonPicker();
+  _ppOnClose = opts.onClose || null;
 
   const backdrop = document.createElement("div");
   backdrop.className = "pp-backdrop";
@@ -383,6 +400,7 @@ function openPersonPicker(persons, opts) {
   const allowCreate = opts.allowCreate ?? true;
 
   function pick(who, label) {
+    _ppOnClose = null;   // a pick is not a dismissal
     closePersonPicker();
     opts.onPick(who, label);
   }

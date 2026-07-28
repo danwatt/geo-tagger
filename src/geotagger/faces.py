@@ -174,6 +174,92 @@ def detect_faces(path: Path, mtime: float, size: int,
     return results, det_dimension
 
 
+def _iou(a, b) -> float:
+    ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+    ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+    if inter <= 0:
+        return 0.0
+    area_a = max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
+    area_b = max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+    return inter / (area_a + area_b - inter)
+
+
+# A hand-drawn box only has to overlap the model's own box this much to be treated
+# as "the same face" — loose on purpose, since people draw generously around a head
+# while SCRFD boxes the face tightly.
+_MANUAL_MATCH_IOU = 0.3
+# Padding added around the drawn box before the fallback re-detect, as a fraction of
+# the box. SCRFD needs some context around a face; a tight crop often detects nothing.
+_MANUAL_CROP_MARGIN = 0.6
+
+
+def embed_bbox(path: Path, mtime: float, size: int, disp_bbox: list[float],
+               orientation: int | None = None) -> tuple[bytes | None, float | None]:
+    """Embed the face inside a hand-drawn box; return ``(embedding, det_score)``.
+
+    ``disp_bbox`` is normalized 0..1 in DISPLAY space (what the user drew over the
+    oriented preview), matching the detection image's own space.
+
+    Two passes, because a manual box is usually drawn exactly where detection came
+    up short:
+      1. Detect over the whole (upright) image and take the box that overlaps the
+         drawn one — cheap when the face WAS found and just mis-assigned or
+         mis-labeled, and it reuses the model's proper landmark alignment.
+      2. Otherwise crop the drawn region with margin, upscale it, and detect again.
+         Blowing up a small/soft face is often enough to get SCRFD over its
+         threshold on the second look.
+
+    Returns ``(None, None)`` when neither pass finds a face — the caller still
+    stores the box, just without recognition data (see index.add_manual_face)."""
+    import cv2
+
+    preview, _ = thumbnails.get_detection_preview(path, mtime, size, orientation)
+    arr = cv2.imdecode(np.frombuffer(preview, np.uint8), cv2.IMREAD_COLOR)
+    if arr is None:
+        raise RuntimeError(f"Could not decode preview for {path}")
+    h, w = arr.shape[:2]
+
+    app = _get_app()
+    with _app_lock:
+        found = app.get(arr)
+
+    best, best_iou = None, 0.0
+    for f in found:
+        x1, y1, x2, y2 = f.bbox
+        norm = [x1 / w, y1 / h, x2 / w, y2 / h]
+        score = _iou(norm, disp_bbox)
+        if score > best_iou:
+            best, best_iou = f, score
+    if best is not None and best_iou >= _MANUAL_MATCH_IOU:
+        return encode_embedding(best.normed_embedding), float(best.det_score)
+
+    # Pass 2: re-detect inside the drawn region alone, padded and upscaled.
+    bw, bh = disp_bbox[2] - disp_bbox[0], disp_bbox[3] - disp_bbox[1]
+    px, py = bw * _MANUAL_CROP_MARGIN, bh * _MANUAL_CROP_MARGIN
+    cx1 = max(0, int((disp_bbox[0] - px) * w))
+    cy1 = max(0, int((disp_bbox[1] - py) * h))
+    cx2 = min(w, int((disp_bbox[2] + px) * w))
+    cy2 = min(h, int((disp_bbox[3] + py) * h))
+    if cx2 - cx1 < 8 or cy2 - cy1 < 8:
+        return None, None
+    crop = arr[cy1:cy2, cx1:cx2]
+    ch, cw = crop.shape[:2]
+    # SCRFD's smallest reliable face is ~40px; scale the crop so the drawn box
+    # comfortably clears that, but don't blow tiny selections up without limit.
+    scale = min(4.0, max(1.0, config.FACE_MANUAL_CROP_DIM / max(ch, cw)))
+    if scale > 1.0:
+        crop = cv2.resize(crop, (int(cw * scale), int(ch * scale)),
+                          interpolation=cv2.INTER_CUBIC)
+    with _app_lock:
+        found = app.get(crop)
+    if not found:
+        return None, None
+    # Largest face in the crop — the one the user was pointing at.
+    f = max(found, key=lambda x: (x.bbox[2] - x.bbox[0]) * (x.bbox[3] - x.bbox[1]))
+    return encode_embedding(f.normed_embedding), float(f.det_score)
+
+
 def detect_and_store(photo_row) -> int:
     """Detect faces for one indexed photo and persist them. Returns face count."""
     faces, det_dimension = detect_faces(

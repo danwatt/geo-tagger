@@ -12,6 +12,7 @@ let groupGap     = 86400;
 let hideCompleted = true;
 let mode         = "crowd";
 let backHref     = "/people.html";
+let drawMode     = false;   // "Add face": drag a box over the photo (see setDrawMode)
 
 /* ── Init ── */
 document.addEventListener("DOMContentLoaded", async () => {
@@ -25,6 +26,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   applyMode();
   bindToolbar();
+  bindDrawHandlers();
   setStatus("Loading…");
 
   if (mode === "single" && !startId) {
@@ -82,6 +84,8 @@ function bindToolbar() {
     const i = nextAvailableIdx();
     if (i >= 0) navigateTo(i);
   });
+  document.getElementById("add-face-btn").addEventListener("click", () => setDrawMode(!drawMode));
+  document.getElementById("rescan-faces-btn").addEventListener("click", rescanFaces);
   document.getElementById("ignore-unlabeled-btn").addEventListener("click", ignoreAllUnlabeled);
   document.getElementById("done-next-btn").addEventListener("click", async () => {
     await ignoreAllUnlabeled(true);
@@ -147,6 +151,7 @@ function updateNavButtons() {
 async function navigateTo(idx) {
   currentIdx = idx;
   const photo = crowdPhotos[idx];
+  if (drawMode) setDrawMode(false);   // a half-drawn box doesn't survive the photo
 
   document.getElementById("photo-filename").textContent = photo.filename;
   wireFullSizeButton(document.getElementById("view-fullsize-btn"), photo.filename, photo.id);
@@ -250,6 +255,115 @@ function highlightCard(faceId) {
   if (!card) return;
   card.classList.add("card-highlighted");
   card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+/* ── Add face: draw a box ──
+ * For faces detection missed entirely. Drag a rectangle over the photo, then pick
+ * a person (or skip, leaving it unlabeled). Coordinates go to the server as
+ * fractions of the displayed image — i.e. DISPLAY space, matching what the stored
+ * boxes are converted to for rendering; the server maps back to sensor space. */
+function setDrawMode(on) {
+  drawMode = on;
+  const btn = document.getElementById("add-face-btn");
+  btn.classList.toggle("primary", on);
+  btn.textContent = on ? "✕ Cancel add" : "➕ Add face";
+  document.getElementById("photo-container").classList.toggle("draw-mode", on);
+  if (!on) removeDraftBox();
+  setStatus(on ? "Drag a box around the face, then pick who it is (Esc to cancel)." : "");
+}
+
+function removeDraftBox() {
+  document.querySelectorAll("#bbox-overlay .draft-bbox").forEach(b => b.remove());
+}
+
+/* Fractions of the overlay (== the displayed image) for a pointer event. */
+function overlayPoint(e, rect) {
+  return [
+    Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)),
+    Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height)),
+  ];
+}
+
+function bindDrawHandlers() {
+  const overlay = document.getElementById("bbox-overlay");
+
+  overlay.addEventListener("mousedown", (e) => {
+    if (!drawMode || e.button !== 0) return;
+    e.preventDefault();
+    removeDraftBox();
+    const rect = overlay.getBoundingClientRect();
+    const [sx, sy] = overlayPoint(e, rect);
+    const draft = document.createElement("div");
+    draft.className = "face-bbox draft-bbox";
+    overlay.appendChild(draft);
+
+    const onMove = (ev) => {
+      const [cx, cy] = overlayPoint(ev, rect);
+      applyBbox(draft, [Math.min(sx, cx), Math.min(sy, cy),
+                        Math.max(sx, cx), Math.max(sy, cy)]);
+    };
+    const onUp = async (ev) => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      const [cx, cy] = overlayPoint(ev, rect);
+      const bbox = [Math.min(sx, cx), Math.min(sy, cy),
+                    Math.max(sx, cx), Math.max(sy, cy)];
+      // A click rather than a drag — treat as "never mind", not a 1px face.
+      if (bbox[2] - bbox[0] < 0.01 || bbox[3] - bbox[1] < 0.01) {
+        removeDraftBox();
+        return;
+      }
+      applyBbox(draft, bbox);
+      openPersonPicker(persons, {
+        title: "Who is this?",
+        allowCreate: true,
+        onPick: (who) => submitManualFace(bbox, who.person_id || null, who.name || null),
+        onClose: () => { removeDraftBox(); setDrawMode(false); },
+      });
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && drawMode) setDrawMode(false);
+  });
+}
+
+async function submitManualFace(bbox, personId, name) {
+  const photo = crowdPhotos[currentIdx];
+  setStatus("Adding face…");
+  try {
+    const res = await fetch(`/api/photos/${photo.id}/faces`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bbox, person_id: personId, name }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    setDrawMode(false);
+    await Promise.all([loadPersons(), loadPhotoFaces(photo.id)]);
+    // Without an embedding the box is still a valid tag, but it can't take part in
+    // recognition — worth saying out loud, since that's the usual reason to add one.
+    setStatus(data.embedded
+      ? "Face added."
+      : "Face added, but no face was recognizable inside the box — it won't be used for matching.");
+  } catch (err) {
+    setDrawMode(false);
+    setStatus("Add face failed: " + err.message, true);
+  }
+}
+
+async function deleteManualFace(faceId) {
+  if (!confirm("Delete this hand-drawn face box?")) return;
+  try {
+    const res = await fetch(`/api/faces/${faceId}`, { method: "DELETE" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await loadPhotoFaces(crowdPhotos[currentIdx].id);
+    setStatus("Face box deleted.");
+  } catch (err) {
+    setStatus("Delete failed: " + err.message, true);
+  }
 }
 
 /* ── Face rendering ── */
@@ -496,6 +610,7 @@ function openFaceActions(anchor, f) {
     onAssignNew: (name) => doAssignByName(f.id, name),
     onIgnore: (ignored) => ignored ? ignoreFaces([f.id]) : restoreFace(f.id),
     onComeBack: (comeBack) => comeBackFace(f.id, comeBack),
+    onDelete: () => deleteManualFace(f.id),   // shown only for source === "manual"
     onOpenPhoto: () => window.open(`/api/preview/${crowdPhotos[currentIdx].id}`, "_blank"),
   });
 }
@@ -583,6 +698,48 @@ async function comeBackFace(faceId, comeBack) {
     await loadPhotoFaces(crowdPhotos[currentIdx].id);
   } catch (err) {
     setStatus("Come back failed: " + err.message, true);
+  }
+}
+
+/* Nuclear rescan for the photo on screen: wipe every face (detected, assigned,
+ * ignored) plus the cached thumbnail/preview/crops, re-run detection server-side,
+ * then re-render from the fresh faces. Same wipe as the People page's nuclear
+ * option, but immediately followed by detection so the user sees the new result. */
+async function rescanFaces() {
+  const photo = crowdPhotos[currentIdx];
+  if (!photo) return;
+  if (!confirm(
+    `Rescan faces for ${photo.filename}: permanently delete ALL existing faces ` +
+    `(tagged, unlabeled, and ignored) and their cached crops, then re-run face ` +
+    `detection from scratch. This cannot be undone. Continue?`
+  )) return;
+  const btn = document.getElementById("rescan-faces-btn");
+  btn.disabled = true;
+  const oldLabel = btn.textContent;
+  btn.textContent = "Rescanning…";
+  setStatus("Rescanning faces…");
+  try {
+    const res = await fetch("/api/faces/rescan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ photo_ids: [photo.id] }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    // The preview rendition was deleted and regenerated — bust the browser cache
+    // so the overlay lines up with a freshly decoded image.
+    document.getElementById("photo-full").src = `/api/preview/${photo.id}?t=${Date.now()}`;
+    await loadPhotoFaces(photo.id);   // this resets the status line
+    const errs = (data.errors || []).length ? ` (${data.errors.length} error(s))` : "";
+    const rot  = data.orientations_updated ? " · orientation corrected" : "";
+    setStatus(`Rescanned: ${data.faces_deleted} face(s) removed, ` +
+              `${data.faces_found} re-detected${rot}${errs}.`,
+              (data.errors || []).length > 0);
+  } catch (err) {
+    setStatus("Rescan failed: " + err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = oldLabel;
   }
 }
 

@@ -47,6 +47,88 @@ def nuke_photo_faces(photo_ids: list[int]) -> dict:
             "files_deleted": files_deleted}
 
 
+def add_manual_face(photo_id: int, disp_bbox: list[float],
+                    person_id: int | None = None) -> dict:
+    """Store a hand-drawn face box for one photo (blocking; called in executor).
+
+    ``disp_bbox`` is normalized 0..1 in DISPLAY space — what the user dragged over
+    the oriented preview — and is mapped to the sensor-space storage convention
+    here, the same trip detection makes (see faces.detect_faces).
+
+    Embedding the box needs the InsightFace model, which may be absent or may find
+    nothing inside the drawn region; either way the face is still stored, just
+    without recognition data. ``embedded`` in the result says which happened.
+    """
+    row = index.get_photo(photo_id)
+    if not row:
+        raise ValueError(f"No such photo: {photo_id}")
+
+    x1, y1, x2, y2 = (max(0.0, min(1.0, float(v))) for v in disp_bbox)
+    if x2 - x1 < 0.005 or y2 - y1 < 0.005:
+        raise ValueError("Box is too small")
+
+    embedding, det_score = None, None
+    try:
+        embedding, det_score = faces.embed_bbox(
+            Path(index.photo_path(row)), row["mtime"], row["size"],
+            [x1, y1, x2, y2], row["orientation"])
+    except Exception as e:
+        # No model installed, unreadable file, decode failure — the box itself is
+        # still worth keeping, so log and fall through unembedded.
+        logger.warning(f"Manual face embedding failed for photo {photo_id}: {e}")
+
+    bbox = thumbnails.unorient_bbox([x1, y1, x2, y2], row["orientation"])
+    face_id = index.add_manual_face(
+        photo_id, ",".join(f"{v:.5f}" for v in bbox), person_id,
+        # A user-drawn box is an assertion, not a guess: 1.0 keeps it at the top of
+        # the det_score DESC orderings. The model's own score (when we got one) is
+        # reported back for the UI, not stored.
+        det_score=1.0, embedding=embedding)
+    return {"face_id": face_id, "photo_id": photo_id, "person_id": person_id,
+            "embedded": embedding is not None,
+            "det_score": round(det_score, 4) if det_score is not None else None}
+
+
+def refresh_orientations(photo_ids: list[int]) -> int:
+    """Re-read EXIF orientation from disk for these photos and store any that
+    changed. Returns the number of rows updated.
+
+    photos.orientation is normally written once at scan time, so a row indexed
+    before orientation was read (NULL), or one whose tag was fixed in the file
+    afterwards, keeps rendering sideways forever — every consumer (previews, grid
+    thumbs, face crops, bbox mapping) rotates from the DB value, not the file.
+    Cheap enough to re-read on the rescan path: one batched ExifTool call."""
+    from geotagger import sidecar
+
+    rows = [r for r in (index.get_photo(pid) for pid in photo_ids) if r]
+    if not rows:
+        return 0
+    paths = [Path(index.photo_path(r)) for r in rows]
+    by_path = sidecar.read_orientations(paths)
+    updates = [(by_path[p], r["id"]) for r, p in zip(rows, paths)
+               if by_path.get(p) is not None and by_path[p] != r["orientation"]]
+    if updates:
+        index.set_orientations(updates)
+    return len(updates)
+
+
+def rescan_photo_faces(photo_ids: list[int]) -> dict:
+    """Nuke then immediately re-detect: the single-photo "start over" action. Same
+    wipe as nuke_photo_faces (faces + cached renditions), followed by a detection
+    pass over the same photos in this one executor trip so the caller can render
+    the fresh faces straight away.
+
+    Orientation is re-read from the file between the two halves: a wrong stored
+    orientation is one of the reasons a photo's faces come out wrong in the first
+    place, and detection reads photos.orientation. Order matters — the wipe must
+    come first so no cached rendition (whose filename carries the *old*
+    orientation suffix) survives the change."""
+    nuked = nuke_photo_faces(photo_ids)
+    reoriented = refresh_orientations(photo_ids)
+    scanned = scan_faces_batch(photo_ids)
+    return {**nuked, **scanned, "orientations_updated": reoriented}
+
+
 def recompute_all_representatives() -> dict:
     """Recluster every person with enough labeled faces (config.FACE_DEDUP_MIN_FACES)
     and flag one representative per look-alike cluster. Pure read + numpy

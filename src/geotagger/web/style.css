@@ -75,6 +75,7 @@
   color: var(--text-muted);
 }
 #palette-footer label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.palette-hint { display: block; margin-top: 2px; color: var(--warn); font-size: 11px; }
 
 .palette-empty { padding: 12px 8px; color: var(--text-faint); line-height: 1.5; }
 
@@ -85,11 +86,15 @@
   padding: 4px;
   margin-bottom: 3px;
   border: 2px solid transparent;
+  /* Left edge is tinted per entry (set inline) to match its circle on the map. */
+  border-left-width: 4px;
   border-radius: var(--radius);
   background: var(--surface-1);
   cursor: pointer;
 }
-.palette-row:hover { background: var(--surface-input); }
+/* .hovered is the map circle's half of the two-way hover link. */
+.palette-row:hover,
+.palette-row.hovered { background: var(--surface-input); }
 /* Drag-hover and snap-target share one highlight: both mean "this drop lands here". */
 .palette-row.drop-target,
 .palette-row.snap-target { border-color: var(--gold); background: var(--accent-bg-2); }

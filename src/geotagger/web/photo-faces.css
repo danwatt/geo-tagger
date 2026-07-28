@@ -84,6 +84,17 @@
 }
 .face-bbox:hover { filter: brightness(1.4); }
 
+/* "Add face" draw mode: crosshair over the photo, and existing boxes stop
+   swallowing the mousedown that starts a new one. */
+#photo-container.draw-mode { cursor: crosshair; }
+#photo-container.draw-mode .face-bbox { pointer-events: none; }
+
+/* The rectangle being dragged out, before a person is picked. */
+.draft-bbox {
+  border: 2px dashed #ffdd00 !important;
+  background: rgba(255, 221, 0, 0.12);
+}
+
 /* Name label inside green (labeled) boxes */
 .bbox-label {
   position: absolute;

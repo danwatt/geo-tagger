@@ -132,6 +132,31 @@ def test_faces_and_geocode_status(client):
     assert {"geocoded", "pending"} <= set(res.json())
 
 
+def test_faces_rescan(client):
+    # No photo_ids is a client error, not a silent no-op.
+    assert client.post("/api/faces/rescan", json={"photo_ids": []}).status_code == 400
+
+    # Unknown photo ids are skipped by both halves (wipe + detect), not fatal.
+    res = client.post("/api/faces/rescan", json={"photo_ids": [999999]})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["faces_deleted"] == 0
+    assert body["processed"] == 0
+    assert body["faces_found"] == 0
+    assert body["errors"] == []
+    assert body["orientations_updated"] == 0
+
+
+def test_add_manual_face_validation(client):
+    res = client.post("/api/photos/999999/faces", json={"bbox": [0.1, 0.1]})
+    assert res.status_code == 400            # malformed bbox, before any DB work
+
+    res = client.post("/api/photos/999999/faces", json={"bbox": [0.1, 0.1, 0.4, 0.4]})
+    assert res.status_code == 400            # unknown photo → ValueError → 400
+
+    assert client.delete("/api/faces/999999").status_code == 404
+
+
 def test_geotag_hotspots_and_propose_empty(client):
     res = client.get("/api/geotag/hotspots")
     assert res.status_code == 200
@@ -139,6 +164,12 @@ def test_geotag_hotspots_and_propose_empty(client):
 
     res = client.get("/api/geotag/hotspots?sort=nonsense")
     assert res.status_code == 422
+
+    # Relative sorts need the thing they're relative to.
+    assert client.get("/api/geotag/hotspots?sort=near").status_code == 400
+    assert client.get("/api/geotag/hotspots?sort=time").status_code == 400
+    assert client.get("/api/geotag/hotspots?sort=near&lat=40&lng=-75").status_code == 200
+    assert client.get("/api/geotag/hotspots?sort=time&from_ts=0&to_ts=9").status_code == 200
 
     res = client.post("/api/geotag/propose", json={"ids": []})
     assert res.status_code == 200

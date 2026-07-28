@@ -156,6 +156,11 @@ RAW_FULL_DECODE = os.environ.get("GEOTAGGER_RAW_FULL_DECODE", "0").lower() in ("
 # detection itself still resizes to FACE_DET_SIZE internally, so this mainly helps
 # small faces and future-proofs raising FACE_DET_SIZE.
 FACE_DECODE_MAX_DIM = int(os.environ.get("GEOTAGGER_FACE_DECODE_MAX_DIM", "3000"))
+# Long edge (px) a hand-drawn face box is upscaled to before the fallback re-detect
+# that embeds it (faces.embed_bbox). The whole point of a manual box is that normal
+# detection missed the face, usually because it was small/soft — enlarging the crop
+# gives SCRFD a second, easier look.
+FACE_MANUAL_CROP_DIM = int(os.environ.get("GEOTAGGER_FACE_MANUAL_CROP_DIM", "640"))
 
 # Server
 HOST = os.environ.get("GEOTAGGER_HOST", "127.0.0.1")

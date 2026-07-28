@@ -1292,13 +1292,68 @@ def delete_photo_faces(photo_ids: list[int]) -> int:
     return len(old_ids)
 
 
+def add_manual_face(photo_id: int, bbox: str, person_id: int | None = None,
+                    det_score: float = 1.0, embedding: bytes | None = None) -> int:
+    """Insert one hand-drawn face (source='manual') and return its id.
+
+    ``bbox`` is sensor-space normalized "x1,y1,x2,y2" like every stored box.
+    det_score defaults to 1.0 — the user asserted this face, so it outranks the
+    detector's own scores in the det_score DESC orderings.
+
+    source='manual' is what keeps it alive across a routine rescan: replace_faces
+    only deletes source='detected' rows. (delete_photo_faces / the photo page's
+    Rescan still wipe it — that action is explicitly "start over".)
+
+    ``embedding`` may be None when no face could be embedded inside the drawn box
+    (see faces.embed_bbox): the row is still a valid tag, it just sits out of the
+    recognition gallery and the unlabeled suggestion queue, both of which inner-join
+    face_embeddings.
+    """
+    db = get_db()
+    now = time.time()
+    cur = db.execute(
+        """INSERT INTO faces (photo_id, person_id, bbox, det_score, source,
+                              created_at, assigned_at)
+           VALUES (?, ?, ?, ?, 'manual', ?, ?)""",
+        (photo_id, person_id, bbox, det_score, now, now if person_id else None),
+    )
+    face_id = cur.lastrowid
+    if embedding is not None:
+        db.execute("INSERT INTO face_embeddings (face_id, embedding) VALUES (?, ?)",
+                   (face_id, embedding))
+    db.commit()
+    bump_faces_generation()
+    return face_id
+
+
+def delete_manual_face(face_id: int) -> bool:
+    """Hard-delete one hand-drawn face — the undo for a badly drawn box. Returns
+    False (deleting nothing) for a detected face: those are removed by rescanning
+    or hidden with ignore, never deleted piecemeal, since the next scan would just
+    re-detect them."""
+    db = get_db()
+    row = db.execute("SELECT source FROM faces WHERE id=?", (face_id,)).fetchone()
+    if not row or row["source"] != "manual":
+        return False
+    # FKs aren't enforced (no cascade) — clear the satellites explicitly, same as
+    # replace_faces / delete_photo_faces do.
+    db.execute("DELETE FROM face_negatives WHERE face_id=?", (face_id,))
+    db.execute("DELETE FROM face_embeddings WHERE face_id=?", (face_id,))
+    db.execute("DELETE FROM faces WHERE id=?", (face_id,))
+    db.commit()
+    bump_faces_generation()
+    from geotagger import faces as _faces
+    _faces.drop_from_unlabeled_cache([face_id])
+    return True
+
+
 def get_faces_for_photo(photo_id: int) -> list[sqlite3.Row]:
     return get_db().execute(
         """SELECT f.id, f.photo_id, f.person_id, f.bbox, f.det_score, f.source,
                   fe.embedding, f.assigned_at, f.ignored, f.come_back, p.name AS person_name,
                   ph.orientation
            FROM faces f
-           JOIN face_embeddings fe ON fe.face_id = f.id
+           LEFT JOIN face_embeddings fe ON fe.face_id = f.id
            LEFT JOIN persons p ON p.id = f.person_id
            JOIN photos ph ON ph.id = f.photo_id
            WHERE f.photo_id=? ORDER BY f.det_score DESC""",

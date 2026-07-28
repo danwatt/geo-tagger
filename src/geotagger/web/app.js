@@ -166,6 +166,8 @@ function initMap() {
   setBasemap("street");
   addBasemapControl();
   map.on("moveend", correctWorldWrap);
+  map.on("moveend", () => reloadHotspotsIfRelative("near"));
+  map.on("zoomend", onZoomChanged);
 
   const mapPane = document.getElementById("map-pane");
   let dragAccuracyCircle = null;
@@ -335,7 +337,8 @@ function bindToolbar() {
       if (place) filterPhotosByPlace(place);
     }
   }
-  document.getElementById("filter-select").addEventListener("change", reloadCurrentView);
+  // Show is a pure client-side view of the already-loaded scope — no reload.
+  document.getElementById("filter-select").addEventListener("change", () => applyFilters());
   document.getElementById("include-screenshots-chk").addEventListener("change", () => applyFilters());
   document.getElementById("window-select").addEventListener("change", reloadCurrentView);
   document.getElementById("place-search-btn").addEventListener("click", doPlaceSearch);
@@ -513,10 +516,7 @@ async function selectMonth(year, month) {
   document.getElementById("selected-month-label").textContent =
     `${MONTH_NAMES[month - 1]} ${year}`;
 
-  // Load daily histogram for this month
-  await loadMonthHistogram(year, month);
-
-  // Load photos for this month
+  // Load photos for this month (loadPhotos builds the timeline from them)
   await loadPhotos(true);
 }
 
@@ -695,14 +695,12 @@ async function filterPhotosByPlace(place) {
 
 async function loadPhotosByBounds(box, label) {
   dayIsolation = null;
-  const filter = document.getElementById("filter-select").value;
-  const apiFilter = filter === "mixed" ? "all" : filter;
   const window = document.getElementById("window-select").value;
 
   try {
     setStatus(`Loading photos in ${label}…`);
     const url = `/api/photos/by-bounds?min_lat=${box.min_lat}&max_lat=${box.max_lat}`
-      + `&min_lng=${box.min_lng}&max_lng=${box.max_lng}&geotagged=${apiFilter}&window=${window}`;
+      + `&min_lng=${box.min_lng}&max_lng=${box.max_lng}&geotagged=all&window=${window}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
@@ -774,9 +772,7 @@ async function loadPhotosByContext(ctx) {
   // Update label
   document.getElementById("selected-context-label").textContent = ctx.name;
 
-  const filter = document.getElementById("filter-select").value;
-  const apiFilter = filter === "mixed" ? "all" : filter;
-  const url = `/api/photos?geotagged=${apiFilter}&context_id=${ctx.id}`;
+  const url = `/api/photos?geotagged=all&context_id=${ctx.id}`;
 
   try {
     setStatus(`Loading photos in context "${ctx.name}"…`);
@@ -909,13 +905,11 @@ function stopAreaSelection() {
 
 async function loadPhotosByArea(lat, lng, radius) {
   dayIsolation = null;
-  const filter = document.getElementById("filter-select").value;
-  const apiFilter = filter === "mixed" ? "all" : filter;
   const window = document.getElementById("window-select").value;
 
   try {
     setStatus("Loading photos in area...");
-    const res = await fetch(`/api/photos/by-area?lat=${lat}&lng=${lng}&radius=${radius}&geotagged=${apiFilter}&window=${window}`);
+    const res = await fetch(`/api/photos/by-area?lat=${lat}&lng=${lng}&radius=${radius}&geotagged=all&window=${window}`);
 
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
@@ -933,69 +927,6 @@ async function loadPhotosByArea(lat, lng, radius) {
   }
 }
 
-/* ── Load month histogram ── */
-async function loadMonthHistogram(year, month) {
-  try {
-    const res = await fetch(`/api/stats/dates?year=${year}&month=${month}`);
-    const data = await res.json();
-
-    if (data.dates && data.dates.length > 0) {
-      buildHistogramFromDateStats(data.dates);
-    } else {
-      document.getElementById("timeline").style.display = "none";
-    }
-  } catch (e) {
-    console.error("Failed to load month histogram:", e);
-  }
-}
-
-/* ── Build histogram from date statistics ── */
-function buildHistogramFromDateStats(dateStats) {
-  if (dateStats.length === 0) {
-    document.getElementById("timeline").style.display = "none";
-    return;
-  }
-  document.getElementById("timeline").style.display = "";
-
-  // Convert date strings to timestamps
-  const dataWithTs = dateStats.map(d => ({
-    date: d.date,
-    count: d.count,
-    ts: new Date(d.date + "T00:00:00").getTime() / 1000
-  }));
-
-  dateRangeMin = Math.min(...dataWithTs.map(d => d.ts));
-  dateRangeMax = Math.max(...dataWithTs.map(d => d.ts));
-  dateFilterLo = dateRangeMin;
-  dateFilterHi = dateRangeMax;
-
-  // Reset sliders
-  document.getElementById("range-lo").value = 0;
-  document.getElementById("range-hi").value = 1000;
-
-  // For a single month, always use daily buckets
-  const bucketSecs = 86400;  // daily
-  histBucketSecs = bucketSecs;
-  const bucketCount = Math.ceil((dateRangeMax - dateRangeMin) / bucketSecs) + 1;
-  const counts = new Array(bucketCount).fill(0);
-
-  // Aggregate counts into buckets
-  dataWithTs.forEach(d => {
-    const idx = Math.floor((d.ts - dateRangeMin) / bucketSecs);
-    if (idx >= 0 && idx < bucketCount) {
-      counts[idx] += d.count;
-    }
-  });
-
-  histBuckets = counts.map((count, i) => ({
-    ts: dateRangeMin + i * bucketSecs,
-    count
-  }));
-
-  renderHistogram();
-  updateHistogramLabels();
-}
-
 /* ── Load photos ── */
 async function loadPhotos(fitMap = false) {
   if (!selectedYear && !undatedMode) {
@@ -1003,12 +934,11 @@ async function loadPhotos(fitMap = false) {
     return;
   }
 
-  const filter = document.getElementById("filter-select").value;
-  const apiFilter = filter === "mixed" ? "all" : filter;
-
+  // Always the whole scope — the Show filter is applied in applyFilters, so the
+  // histogram counts every photo in the month and not just the visible ones.
   let url;
   if (undatedMode) {
-    url = `/api/photos?geotagged=${apiFilter}&undated=true`;
+    url = `/api/photos?geotagged=all&undated=true`;
   } else {
     let dateFrom, dateTo;
     if (selectedMonth) {
@@ -1019,7 +949,7 @@ async function loadPhotos(fitMap = false) {
       dateFrom = `${selectedYear}-01-01`;
       dateTo = `${selectedYear}-12-31`;
     }
-    url = `/api/photos?geotagged=${apiFilter}&date_from=${dateFrom}&date_to=${dateTo}`;
+    url = `/api/photos?geotagged=all&date_from=${dateFrom}&date_to=${dateTo}`;
   }
 
   try {
@@ -1053,19 +983,32 @@ function filterMixedDays(photoList) {
   return photoList.filter(p => mixedKeys.has(dayKey(p) || "__undated__"));
 }
 
-/* ── Apply all active filters → filteredPhotos ── */
+// "Geotagged" for the Show filter means it needs no location: either it has one,
+// or it's been marked as not needing one. Mirrors index.get_photos' SQL so the
+// client-side filter and the server's agree.
+function isGeotagged(photo) {
+  return photo.lat != null || !!photo.geocode_ignored;
+}
+
+/* ── Apply all active filters → filteredPhotos ──
+ * Every view loads its whole scope (geotagged=all) and filters here, so the
+ * timeline histogram can describe the whole scope while the grid shows a subset,
+ * and so flipping Show is instant instead of a round trip. */
 function applyFilters(fitMap = false) {
   const includeScreenshots = document.getElementById("include-screenshots-chk").checked;
+  const showFilter = document.getElementById("filter-select").value;
   filteredPhotos = photos.filter(p => {
     if (hiddenCameras.has(p.camera || "Unknown")) return false;
     if (!includeScreenshots && /\.png$/i.test(p.filename)) return false;
+    if (showFilter === "yes" && !isGeotagged(p)) return false;
+    if (showFilter === "no" && isGeotagged(p)) return false;
     if (dateRangeMin !== dateRangeMax) {
       const ts = p.photo_datetime || 0;
       if (ts > 0 && (ts < dateFilterLo || ts > dateFilterHi)) return false;
     }
     return true;
   });
-  if (document.getElementById("filter-select").value === "mixed") {
+  if (showFilter === "mixed") {
     filteredPhotos = filterMixedDays(filteredPhotos);
   }
   renderGrid();
@@ -1942,6 +1885,7 @@ function buildHistogram() {
     dateRangeMin = dateRangeMax = 0;
     dateFilterLo = dateFilterHi = 0;
     histBuckets = [];
+    reloadHotspotsIfRelative("time");   // nothing dated on screen to rank against
     return;
   }
   document.getElementById("timeline").style.display = "";
@@ -1977,6 +1921,8 @@ function buildHistogram() {
 
   updateDateLabels();
   drawHistogram();
+  // The date span just moved, which is what "Nearby (time)" ranks against.
+  reloadHotspotsIfRelative("time");
 }
 
 function updateDateFilter() {
@@ -2021,39 +1967,46 @@ function drawHistogram() {
   const barW = cssW / n;
   const span = dateRangeMax - dateRangeMin;
 
+  // Bucket the visible photos by camera in one pass. Doing this per bar meant a
+  // full scan of filteredPhotos for every bucket, on every slider tick.
+  const camCountsByBucket = histBuckets.map(() => new Map());
+  filteredPhotos.forEach(p => {
+    const ts = p.photo_datetime;
+    if (!ts || ts <= 0) return;
+    // histBucketSecs, not span/n — buildHistogram sizes the array as
+    // ceil(span / histBucketSecs) + 1, so span/n is a different (wrong) width
+    // and slid every photo into the neighbouring column.
+    const i = Math.floor((ts - dateRangeMin) / histBucketSecs);
+    if (i < 0 || i >= n) return;
+    const cam = p.camera || "Unknown";
+    const m = camCountsByBucket[i];
+    m.set(cam, (m.get(cam) || 0) + 1);
+  });
+
   histBuckets.forEach((bucket, i) => {
-    const h = (bucket.count / maxCount) * cssH * 0.92;
     const x = i * barW;
     const inRange = bucket.ts >= dateFilterLo && bucket.ts <= dateFilterHi;
+    const camCounts = camCountsByBucket[i];
 
-    // Count photos in this bucket by camera for color stacking
-    const camCounts = {};
-    filteredPhotos
-      .filter(p => {
-        if (!p.photo_datetime || p.photo_datetime <= 0) return false;
-        const bucketSecs = span / n;
-        const bIdx = Math.floor((p.photo_datetime - dateRangeMin) / bucketSecs);
-        return bIdx === i;
-      })
-      .forEach(p => {
-        const c = p.camera || "Unknown";
-        camCounts[c] = (camCounts[c] || 0) + 1;
-      });
+    // Every bar is scaled against the scope's busiest day, and the scope is the
+    // whole month regardless of the Show filter — so the shape of the month holds
+    // still while you flip between Geotagged and Not geotagged.
+    if (bucket.count > 0) {
+      const barH = (bucket.count / maxCount) * cssH * 0.92;
+      ctx.fillStyle = inRange ? "#333" : "#262626";
+      ctx.fillRect(x + 0.5, cssH - barH, barW - 1, barH);
+    }
 
-    if (inRange && Object.keys(camCounts).length > 0) {
-      // Stacked color bars
+    // Visible photos stack on top of that backing bar in camera colours, so the
+    // unfilled remainder is exactly what the current filter is hiding.
+    if (inRange && camCounts.size) {
       let yOffset = cssH;
-      Object.entries(camCounts).forEach(([cam, cnt]) => {
+      camCounts.forEach((cnt, cam) => {
         const segH = (cnt / maxCount) * cssH * 0.92;
         yOffset -= segH;
         ctx.fillStyle = camColor(cam);
         ctx.fillRect(x + 0.5, yOffset, barW - 1, segH);
       });
-    } else {
-      // Out-of-range or undated: dim gray bar
-      const barH = (bucket.count / maxCount) * cssH * 0.92;
-      ctx.fillStyle = inRange ? "#444" : "#2a2a2a";
-      ctx.fillRect(x + 0.5, cssH - barH, barW - 1, barH);
     }
   });
 
@@ -2361,8 +2314,7 @@ let snapEnabled = true;
 // this to a known place is the same place, just aimed by hand.
 const SNAP_METERS = 300;
 
-let snapGhost = null;          // L.circleMarker showing where a snapped drop lands
-let snapRowIndex = -1;         // palette row highlighted as the current snap target
+let snapRowIndex = -1;         // palette entry currently flagged as the snap target
 
 const METERS_PER_DEG_LAT = 111320;
 
@@ -2384,10 +2336,41 @@ function nearestHotspot(lat, lng, maxMeters = SNAP_METERS) {
   return best;
 }
 
+// Widen the on-screen time span by a month either side for the "Nearby (time)"
+// ranking — the trip that explains an untagged June photo often starts in May.
+const TIME_SORT_SLACK_SECS = 31 * 86400;
+
+// Query string for the current ranking. "near" and "time" are relative to what's
+// on screen, so they carry the map centre / the loaded photos' date span.
+function hotspotQuery() {
+  const params = new URLSearchParams({ limit: "40", sort: hotspotSort });
+  if (hotspotSort === "near") {
+    if (!map) return null;
+    const c = map.getCenter();
+    params.set("lat", c.lat);
+    params.set("lng", c.lng);
+  } else if (hotspotSort === "time") {
+    // dateRangeMin/Max come from the loaded photos, so this follows whichever
+    // view is active — a month, an area, a context — not just the month picker.
+    if (!dateRangeMin || !dateRangeMax) return null;
+    params.set("from_ts", Math.round(dateRangeMin - TIME_SORT_SLACK_SECS));
+    params.set("to_ts", Math.round(dateRangeMax + TIME_SORT_SLACK_SECS));
+  }
+  return params;
+}
+
 async function loadHotspots() {
   const list = document.getElementById("palette-list");
+  const params = hotspotQuery();
+  if (!params) {
+    // "Nearby (time)" before any photos are loaded — nothing to be near to.
+    hotspots = [];
+    list.innerHTML = `<div class="palette-empty">Pick a month to see the places
+      you tagged around then.</div>`;
+    return;
+  }
   try {
-    const res = await fetch(`/api/geotag/hotspots?limit=40&sort=${hotspotSort}`);
+    const res = await fetch(`/api/geotag/hotspots?${params}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     hotspots = data.hotspots;
@@ -2399,21 +2382,170 @@ async function loadHotspots() {
   renderPalette();
 }
 
+// "Nearby (map)" has to follow the map, and "Nearby (time)" the loaded photos.
+// Both changes arrive in bursts (a pan is many moveends, a view switch reloads
+// photos), so the reload is debounced.
+let hotspotReloadTimer = null;
+function reloadHotspotsIfRelative(mode) {
+  if (hotspotSort !== mode) return;
+  clearTimeout(hotspotReloadTimer);
+  hotspotReloadTimer = setTimeout(loadHotspots, 350);
+}
+
+const PALETTE_EMPTY_TEXT = {
+  near: "Nothing tagged near this part of the map yet.",
+  time: "Nothing tagged in the months on screen yet.",
+};
+
 function renderPalette() {
   const list = document.getElementById("palette-list");
   list.innerHTML = "";
+  renderHotspotMarkers();   // the list and its map circles are one view
   if (!hotspots.length) {
-    list.innerHTML = `<div class="palette-empty">No places yet — tag some photos and
-      the spots you use most will collect here.</div>`;
+    list.innerHTML = `<div class="palette-empty">${PALETTE_EMPTY_TEXT[hotspotSort] ||
+      "No places yet — tag some photos and the spots you use most will collect here."}</div>`;
     return;
   }
   hotspots.forEach((h, i) => list.appendChild(makePaletteRow(h, i)));
+}
+
+/* ── Hotspot circles ──
+ * Every palette entry is also a permanent circle on the map, in the colour of
+ * its row, so the list and the map read as one thing: press 3, watch the third
+ * colour light up. The keyed top nine get distinct colours; past that there are
+ * no more colours worth telling apart, so the tail goes uniform grey.
+ *
+ * Deliberately unlike both the camera-coloured photo pins (teardrops) and the
+ * amber staged pins — these are flat rings that sit under everything else. */
+
+const HOTSPOT_COLORS = [
+  "#4ad9c8", // teal
+  "#f2a33c", // amber
+  "#7c9ef5", // periwinkle
+  "#e56ab3", // magenta
+  "#8ed44f", // lime
+  "#f26a5c", // coral
+  "#b98cf0", // violet
+  "#3fc4f0", // cyan
+  "#d9c341", // gold
+];
+const HOTSPOT_TAIL_COLOR = "#8a8a8a";
+
+let hotspotMarkers = [];
+
+function hotspotColor(i) {
+  return i < HOTSPOT_COLORS.length ? HOTSPOT_COLORS[i] : HOTSPOT_TAIL_COLOR;
+}
+
+/* The ring *is* the snap catchment, drawn at its true ground size (L.circle takes
+ * metres, so it rescales with the map for free). Nothing about it is fudged for
+ * legibility, because the moment the drawn radius stops equalling SNAP_METERS the
+ * ring starts lying: a drop that looks safely outside it gets captured anyway.
+ * Inside the ring snaps, outside it doesn't, and you can see which is which.
+ *
+ * That honesty is only affordable while 300 m is big enough to aim inside. Zoomed
+ * out past HOTSPOT_MIN_ZOOM the circle is a few pixels wide — too small to hit or
+ * avoid deliberately — so the whole mechanism switches off rather than quietly
+ * hijacking drops aimed kilometres away. */
+const HOTSPOT_MIN_ZOOM = 13;   // 300 m is ~20 px here, and halves with each step out
+
+function hotspotsActiveOnMap() {
+  return !!map && map.getZoom() >= HOTSPOT_MIN_ZOOM;
+}
+
+// Photo count rides on stroke weight rather than size, since size is spoken for.
+function hotspotWeight(count, maxCount) {
+  return 1.5 + 2.5 * Math.sqrt(Math.min(count, maxCount) / Math.max(maxCount, 1));
+}
+
+// Rings live above the photo pins in their own pane. Underneath them they were
+// invisible in exactly the case that matters — a well-used place has a stack of
+// pins standing on its centroid, hiding anything drawn there. Unfilled, so
+// sitting on top costs nothing: only the stroke is ever over a pin.
+function ensureHotspotPane() {
+  if (map.getPane("hotspotPane")) return;
+  const pane = map.createPane("hotspotPane");
+  pane.style.zIndex = 610;   // markerPane is 600, tooltipPane 650
+}
+
+function renderHotspotMarkers() {
+  hotspotMarkers.forEach(m => m.remove());
+  hotspotMarkers = [];
+  updateSnapHint();
+  if (!map || !hotspots.length || !hotspotsActiveOnMap()) return;
+  ensureHotspotPane();
+
+  const maxCount = Math.max(...hotspots.map(h => h.count), 1);
+  hotspots.forEach((h, i) => {
+    const color = hotspotColor(i);
+    // L.circle, not L.circleMarker — metres on the ground, not pixels on screen.
+    const marker = L.circle([h.lat, h.lng], {
+      radius: SNAP_METERS,
+      color,
+      weight: hotspotWeight(h.count, maxCount),
+      fill: false,
+      opacity: 0.95,
+      pane: "hotspotPane",
+    }).addTo(map);
+    marker._baseWeight = marker.options.weight;   // restored when un-highlighted
+
+    const key = i < 9 ? ` · press ${i + 1}` : "";
+    marker.bindTooltip(`${h.label} — ${h.count} photo${h.count !== 1 ? "s" : ""}${key}`);
+    // Clicking a circle does what clicking its row does.
+    marker.on("click", () => {
+      if (selectedIds.size) stageAtHotspot(i);
+      else map.panTo([h.lat, h.lng]);
+    });
+    // Hovering either the circle or the row highlights both.
+    marker.on("mouseover", () => setHotspotHighlight(i, true));
+    marker.on("mouseout", () => setHotspotHighlight(i, false));
+    hotspotMarkers.push(marker);
+  });
+}
+
+// L.circle rescales itself, so a zoom only decides whether the rings exist at all.
+function onZoomChanged() {
+  const active = hotspotsActiveOnMap();
+  if (active === !!hotspotMarkers.length) return;   // nothing to do
+  clearSnapPreview();
+  renderHotspotMarkers();
+}
+
+// Tell the user why snapping isn't happening, rather than letting it look broken.
+function updateSnapHint() {
+  const hint = document.getElementById("snap-hint");
+  if (!hint) return;
+  const off = map && !hotspotsActiveOnMap();
+  hint.textContent = off ? `zoom in to ${HOTSPOT_MIN_ZOOM}+ to use` : "";
+  hint.style.display = off ? "" : "none";
+}
+
+// Two-way hover link between a palette row and its circle.
+function setHotspotHighlight(i, on) {
+  const row = document.querySelector(`.palette-row[data-index="${i}"]`);
+  if (row) row.classList.toggle("hovered", on);
+  const marker = hotspotMarkers[i];
+  if (marker) {
+    // Hover fills the ring in — the only time it's allowed to cover the pins.
+    marker.setStyle(on
+      ? { weight: marker._baseWeight + 3, fill: true, fillOpacity: 0.35 }
+      : { weight: marker._baseWeight, fill: false });
+    if (on) marker.bringToFront();
+  }
+}
+
+function formatMiles(meters) {
+  const miles = meters / 1609.34;
+  if (miles < 0.1) return `${Math.round(meters)} m`;
+  return `${miles < 10 ? miles.toFixed(1) : Math.round(miles)} mi`;
 }
 
 function makePaletteRow(h, i) {
   const row = document.createElement("div");
   row.className = "palette-row";
   row.dataset.index = i;
+  // Same colour as this entry's map circle — the only thing tying the two together.
+  row.style.borderLeftColor = hotspotColor(i);
 
   if (h.sample_photo_id) {
     const img = document.createElement("img");
@@ -2429,19 +2561,29 @@ function makePaletteRow(h, i) {
   const label = document.createElement("div");
   label.className = "palette-label";
   label.textContent = h.label;
+  // Lead the meta line with whatever the active ranking sorted on, so the order
+  // on screen is always explained by the number next to it.
   const meta = document.createElement("div");
   meta.className = "palette-meta";
-  meta.textContent = `${h.count} photo${h.count !== 1 ? "s" : ""}` +
-    (h.last_ts ? ` · ${new Date(h.last_ts * 1000).toLocaleDateString()}` : "");
+  const bits = [];
+  if (h.meters !== undefined) bits.push(formatMiles(h.meters));
+  if (h.window_count !== undefined) bits.push(`${h.window_count} then`);
+  bits.push(`${h.count} photo${h.count !== 1 ? "s" : ""}`);
+  if (h.last_ts) bits.push(new Date(h.last_ts * 1000).toLocaleDateString());
+  meta.textContent = bits.join(" · ");
   body.appendChild(label);
   body.appendChild(meta);
   row.appendChild(body);
 
-  // Only the first nine get a key; past that the label would be a lie.
+  // Only the first nine get a key; past that the label would be a lie. The key
+  // chip wears the entry's colour, so the number on the keyboard, the chip, and
+  // the circle on the map are all the same thing.
   if (i < 9) {
     const key = document.createElement("span");
     key.className = "palette-key";
     key.textContent = String(i + 1);
+    key.style.borderColor = hotspotColor(i);
+    key.style.color = hotspotColor(i);
     row.appendChild(key);
   }
 
@@ -2465,15 +2607,23 @@ function makePaletteRow(h, i) {
     else map.flyTo([h.lat, h.lng], Math.max(map.getZoom(), 15), { duration: 0.6 });
   });
 
+  row.addEventListener("mouseenter", () => setHotspotHighlight(i, true));
+  row.addEventListener("mouseleave", () => setHotspotHighlight(i, false));
+
   row.addEventListener("dragover", (e) => {
     e.preventDefault();
     row.classList.add("drop-target");
+    setHotspotHighlight(i, true);   // show on the map where this drop would land
   });
-  row.addEventListener("dragleave", () => row.classList.remove("drop-target"));
+  row.addEventListener("dragleave", () => {
+    row.classList.remove("drop-target");
+    setHotspotHighlight(i, false);
+  });
   row.addEventListener("drop", async (e) => {
     e.preventDefault();
     e.stopPropagation();
     row.classList.remove("drop-target");
+    setHotspotHighlight(i, false);
     const ids = JSON.parse(e.dataTransfer.getData("application/json") || "[]");
     if (ids.length) await stageDrop(ids, h.lat, h.lng, currentDropAccuracy());
   });
@@ -2500,46 +2650,40 @@ async function stageAtHotspot(i) {
  * apart every time, which fragments the staging groups and smears the palette.
  * Snapping folds a near-miss onto the exact point already in use. */
 
-// Resolve a raw drop point to where it will actually land.
+// Resolve a raw drop point to where it will actually land. Only a drop *inside* a
+// drawn ring moves — nearestHotspot' cutoff is SNAP_METERS, the same number the
+// ring is drawn at — so aiming anywhere else on the map still lands exactly where
+// you let go, which is the whole point of being able to see the rings.
 function snapPoint(lat, lng) {
-  if (!snapEnabled) return { lat, lng, snapped: null };
+  if (!snapEnabled || !hotspotsActiveOnMap()) return { lat, lng, snapped: null };
   const near = nearestHotspot(lat, lng);
   if (!near) return { lat, lng, snapped: null };
   return { lat: near.hotspot.lat, lng: near.hotspot.lng, snapped: near };
 }
 
-// Live feedback while a drag is over the map: a ring on the point the drop will
-// snap to, plus the matching palette row highlighted.
+// Live feedback while a drag is over the map. The hotspot circles are already on
+// the map, so the target just gets swollen and its palette row flagged — no
+// separate ghost ring to explain.
 function showSnapPreview(lat, lng) {
-  const near = snapEnabled ? nearestHotspot(lat, lng) : null;
+  const near = (snapEnabled && hotspotsActiveOnMap()) ? nearestHotspot(lat, lng) : null;
+  const index = near ? near.index : -1;
+  if (index === snapRowIndex) return;
 
-  if (snapRowIndex !== (near ? near.index : -1)) {
-    document.querySelectorAll(".palette-row.snap-target")
-      .forEach(el => el.classList.remove("snap-target"));
-    snapRowIndex = near ? near.index : -1;
-    if (near) {
-      const row = document.querySelector(`.palette-row[data-index="${near.index}"]`);
-      if (row) row.classList.add("snap-target");
-    }
-  }
+  clearSnapPreview();
+  snapRowIndex = index;
+  if (index < 0) return;
 
-  if (!near) { clearSnapPreview(true); return; }
-  const ll = [near.hotspot.lat, near.hotspot.lng];
-  if (!snapGhost) {
-    snapGhost = L.circleMarker(ll, {
-      radius: 11, color: "#e0a040", weight: 2, dashArray: "4,3",
-      fillColor: "#e0a040", fillOpacity: 0.2, interactive: false,
-    }).addTo(map);
-  } else {
-    snapGhost.setLatLng(ll);
-  }
+  const row = document.querySelector(`.palette-row[data-index="${index}"]`);
+  if (row) row.classList.add("snap-target");
+  setHotspotHighlight(index, true);
 }
 
-function clearSnapPreview(keepRow = false) {
-  if (snapGhost) { snapGhost.remove(); snapGhost = null; }
-  if (keepRow) return;
-  document.querySelectorAll(".palette-row.snap-target")
-    .forEach(el => el.classList.remove("snap-target"));
+function clearSnapPreview() {
+  if (snapRowIndex >= 0) {
+    const row = document.querySelector(`.palette-row[data-index="${snapRowIndex}"]`);
+    if (row) row.classList.remove("snap-target");
+    setHotspotHighlight(snapRowIndex, false);
+  }
   snapRowIndex = -1;
 }
 

@@ -79,6 +79,11 @@ class ScanFacesRequest(BaseModel):
 class NukePhotoFacesRequest(BaseModel):
     photo_ids: list[int]  # hard-wipe every face + cached rendition for these photos
 
+class AddManualFaceRequest(BaseModel):
+    bbox: list[float]             # [x1, y1, x2, y2], normalized 0..1, DISPLAY space
+    person_id: int | None = None  # or name, to create/find a person; both optional
+    name: str | None = None
+
 
 @router.get("/api/persons")
 async def api_get_persons(
@@ -363,6 +368,56 @@ async def api_nuke_photo_faces(req: NukePhotoFacesRequest):
     return result
 
 
+@router.post("/api/photos/{photo_id}/faces")
+async def api_add_manual_face(photo_id: int, req: AddManualFaceRequest):
+    """Add a hand-drawn face box to a photo, optionally already assigned to a
+    person. For faces detection missed entirely. ``bbox`` is normalized 0..1 in
+    display space (as drawn over the oriented preview); the server maps it to
+    sensor space and tries to embed it so the face still joins recognition."""
+    if len(req.bbox) != 4:
+        raise HTTPException(400, "bbox must be [x1, y1, x2, y2]")
+    person_id = req.person_id
+    if person_id is None and req.name and req.name.strip():
+        person_id = index.get_or_create_person(req.name.strip())
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(
+            get_executor(), faces_service.add_manual_face,
+            photo_id, req.bbox, person_id)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@router.delete("/api/faces/{face_id}")
+async def api_delete_manual_face(face_id: int):
+    """Delete a hand-drawn face (undo for a mis-drawn box). Detected faces are not
+    deletable — 400 — because the next scan would re-detect them; use ignore."""
+    if not index.get_face(face_id):
+        raise HTTPException(404)
+    if not index.delete_manual_face(face_id):
+        raise HTTPException(400, "Only manually added faces can be deleted; "
+                                 "use ignore for detected faces")
+    return {"success": True, "face_id": face_id}
+
+
+@router.post("/api/faces/rescan")
+async def api_rescan_photo_faces(req: NukePhotoFacesRequest):
+    """Nuke + re-detect in one call: wipe every face and cached rendition for the
+    given photos, then run detection over them again. Manual assignments for these
+    photos are lost (same as /nuke) — this is the "detection went wrong, start
+    over" action, not a routine incremental scan."""
+    if not req.photo_ids:
+        raise HTTPException(400, "photo_ids required")
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        get_executor(), faces_service.rescan_photo_faces, req.photo_ids)
+    return result
+
+
 @router.post("/api/faces/dedup/recompute")
 async def api_dedup_recompute():
     """Recompute representative-face flags for every person with enough
@@ -439,6 +494,7 @@ async def api_photo_faces(photo_id: int):
             "id": r["id"],
             "bbox": thumbnails.orient_bbox(r["bbox"].split(","), r["orientation"]),
             "det_score": r["det_score"],
+            "source": r["source"],   # 'manual' boxes are deletable; detected ones aren't
             "person_id": r["person_id"],
             "person_name": r["person_name"],
             "assigned_at": r["assigned_at"],
@@ -447,8 +503,11 @@ async def api_photo_faces(photo_id: int):
             "suggestion": None,
             "negatives": negatives,
         }
-        # Only suggest for unassigned, non-ignored faces.
-        if r["person_id"] is None and not r["ignored"] and len(gallery) > 0:
+        # Only suggest for unassigned, non-ignored faces that carry an embedding
+        # (a hand-drawn box with no face found inside it has none — see
+        # faces_service.add_manual_face).
+        if (r["person_id"] is None and not r["ignored"] and len(gallery) > 0
+                and r["embedding"] is not None):
             vec = faces.decode_embedding(r["embedding"])
             match = faces.suggest_person(vec, photo_dt, gallery, exclude=set(negatives))
             if match:
