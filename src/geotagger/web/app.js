@@ -130,6 +130,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindTimeline();
   await checkStatus();
   await loadPlaces();
+  await loadHotspots();
   await loadContextsDropdown();
   await fitMapToAllLocations();
 
@@ -169,17 +170,22 @@ function initMap() {
   const mapPane = document.getElementById("map-pane");
   let dragAccuracyCircle = null;
 
+  // Where a drag currently sits on the map, in map coordinates.
+  const dragLatLng = (e) => {
+    const rect = document.getElementById("map").getBoundingClientRect();
+    return map.containerPointToLatLng(L.point(e.clientX - rect.left, e.clientY - rect.top));
+  };
+
   mapPane.addEventListener("dragover", (e) => {
     e.preventDefault();
     mapPane.classList.add("drop-target");
+    const latlng = dragLatLng(e);
+    showSnapPreview(latlng.lat, latlng.lng);
 
     const toggle = document.getElementById("imprecise-toggle");
     if (toggle && toggle.checked) {
       const radiusSelect = document.getElementById("imprecise-radius-select");
       const radius = parseFloat(radiusSelect.value);
-      const rect = document.getElementById("map").getBoundingClientRect();
-      const point = L.point(e.clientX - rect.left, e.clientY - rect.top);
-      const latlng = map.containerPointToLatLng(point);
 
       if (!dragAccuracyCircle) {
         dragAccuracyCircle = L.circle(latlng, {
@@ -212,25 +218,25 @@ function initMap() {
   mapPane.addEventListener("dragleave", () => {
     mapPane.classList.remove("drop-target");
     cleanupDragCircle();
+    clearSnapPreview();
   });
 
   mapPane.addEventListener("drop", async (e) => {
     e.preventDefault();
     mapPane.classList.remove("drop-target");
     cleanupDragCircle();
+    clearSnapPreview();
     const ids = JSON.parse(e.dataTransfer.getData("application/json") || "[]");
     if (!ids.length) return;
-    const rect = document.getElementById("map").getBoundingClientRect();
-    const point = L.point(e.clientX - rect.left, e.clientY - rect.top);
-    const latlng = map.containerPointToLatLng(point);
+    const latlng = dragLatLng(e);
 
-    let accuracy = null;
-    const toggle = document.getElementById("imprecise-toggle");
-    if (toggle && toggle.checked) {
-      const radiusSelect = document.getElementById("imprecise-radius-select");
-      accuracy = parseFloat(radiusSelect.value);
-    }
-    await stageDrop(ids, latlng.lat, latlng.lng, accuracy);
+    // A near-miss on a place already in the palette lands on that place exactly,
+    // so repeat visits stop drifting a few hundred feet apart.
+    const point = snapPoint(latlng.lat, latlng.lng);
+    const note = point.snapped
+      ? ` Snapped ${Math.round(point.snapped.meters)} m to a place you already use.`
+      : "";
+    await stageDrop(ids, point.lat, point.lng, currentDropAccuracy(), note);
   });
 }
 
@@ -369,6 +375,19 @@ function bindToolbar() {
       impreciseRadiusSelect.style.display = impreciseToggle.checked ? "inline-block" : "none";
     });
   }
+
+  // Location palette
+  document.getElementById("palette-sort").addEventListener("change", (e) => {
+    hotspotSort = e.target.value;
+    loadHotspots();
+  });
+  document.getElementById("palette-refresh").addEventListener("click", loadHotspots);
+  document.getElementById("snap-toggle").addEventListener("change", (e) => {
+    snapEnabled = e.target.checked;
+    if (!snapEnabled) clearSnapPreview();
+  });
+  bindHotspotKeys();
+  bindProposeBar();
 
   // Modal close handlers
   document.querySelector(".modal-close").addEventListener("click", hideMonthPicker);
@@ -1371,6 +1390,9 @@ function refreshSelectionUI() {
     const id = Number(cell.dataset.id);
     cell.classList.toggle("selected", selectedIds.has(id));
   });
+  // Every selection change is a chance to answer "where was this?" up front —
+  // this is the single funnel every selection path goes through.
+  scheduleProposal();
 }
 
 /* ── Drag ── */
@@ -2086,8 +2108,10 @@ async function lookupLocation(lat, lng) {
 }
 
 // Park `ids` at one dropped point. Re-dropping a staged photo overwrites its
-// pending location, so moving it between groups is just another drop.
-async function stageDrop(ids, lat, lng, accuracy = null) {
+// pending location, so moving it between groups is just another drop. `note` is
+// appended to the status line by callers that did something to the point the
+// user should know about (currently only snapping).
+async function stageDrop(ids, lat, lng, accuracy = null, note = "") {
   if (!ids.length) return;
   setStatus(`Looking up ${ids.length} photo(s)…`);
   const { loc, label } = await lookupLocation(lat, lng);
@@ -2101,9 +2125,10 @@ async function stageDrop(ids, lat, lng, accuracy = null) {
   });
   if (!staged) { setStatus("Nothing to stage.", true); return; }
   lastClickedIndex = -1;   // the grid's index run shifts under the removed cells
+  hideProposal();          // the photos it was about have left the grid
   renderGrid();            // also renders the staging area + provisional pins
   const accNote = accuracy ? ` (±${accuracy}m)` : "";
-  setStatus(`Staged ${staged} photo(s) → ${label}${accNote}. Nothing saved yet — ` +
+  setStatus(`Staged ${staged} photo(s) → ${label}${accNote}.${note} Nothing saved yet — ` +
             `review at the bottom of the grid, then Commit.`);
 }
 
@@ -2301,6 +2326,7 @@ async function commitPendingGeo(groups, what) {
   }
 
   renderGrid();
+  if (saved) loadHotspots();   // committed points are palette entries now
   if (failures.length) {
     setStatus(`Committed ${saved} of ${total} location(s). Still staged after failing: ` +
               failures.join(", ") + ".", true);
@@ -2315,6 +2341,305 @@ function revertPendingGeo(groups, what) {
   if (ids.length > 3 &&
       !confirm(`Discard ${ids.length} staged location(s)${what ? ` — ${what}` : ""}?`)) return;
   unstageGeo(ids);
+}
+
+/* ── Location palette (hotspots) ──
+ * The same handful of places come up month after month, so the fastest drop
+ * target isn't a spot on the map you have to pan and zoom to find — it's a row
+ * in a list. /api/geotag/hotspots mines those places from the coordinates
+ * already on the photos and clusters them, so drops a few hundred feet apart at
+ * one real place count as a single entry.
+ *
+ * A palette row is three things at once: a drag-and-drop target, a click target
+ * that stages the current selection, and (for the first nine) a number key. */
+
+let hotspots = [];
+let hotspotSort = "count";
+let snapEnabled = true;
+
+// Snap radius, matched to the server's cluster merge radius — a drop closer than
+// this to a known place is the same place, just aimed by hand.
+const SNAP_METERS = 300;
+
+let snapGhost = null;          // L.circleMarker showing where a snapped drop lands
+let snapRowIndex = -1;         // palette row highlighted as the current snap target
+
+const METERS_PER_DEG_LAT = 111320;
+
+// Equirectangular approximation. Exact enough at the few-hundred-metre scale we
+// snap at, and it runs on every dragover frame.
+function metersBetween(lat1, lng1, lat2, lng2) {
+  const dy = (lat2 - lat1) * METERS_PER_DEG_LAT;
+  const dx = (lng2 - lng1) * METERS_PER_DEG_LAT * Math.cos(lat1 * Math.PI / 180);
+  return Math.hypot(dx, dy);
+}
+
+// Nearest palette entry within `maxMeters`, as { hotspot, index, meters }, or null.
+function nearestHotspot(lat, lng, maxMeters = SNAP_METERS) {
+  let best = null;
+  hotspots.forEach((h, i) => {
+    const m = metersBetween(lat, lng, h.lat, h.lng);
+    if (m <= maxMeters && (!best || m < best.meters)) best = { hotspot: h, index: i, meters: m };
+  });
+  return best;
+}
+
+async function loadHotspots() {
+  const list = document.getElementById("palette-list");
+  try {
+    const res = await fetch(`/api/geotag/hotspots?limit=40&sort=${hotspotSort}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    hotspots = data.hotspots;
+  } catch (err) {
+    hotspots = [];
+    list.innerHTML = `<div class="palette-empty">Couldn't load places: ${err.message}</div>`;
+    return;
+  }
+  renderPalette();
+}
+
+function renderPalette() {
+  const list = document.getElementById("palette-list");
+  list.innerHTML = "";
+  if (!hotspots.length) {
+    list.innerHTML = `<div class="palette-empty">No places yet — tag some photos and
+      the spots you use most will collect here.</div>`;
+    return;
+  }
+  hotspots.forEach((h, i) => list.appendChild(makePaletteRow(h, i)));
+}
+
+function makePaletteRow(h, i) {
+  const row = document.createElement("div");
+  row.className = "palette-row";
+  row.dataset.index = i;
+
+  if (h.sample_photo_id) {
+    const img = document.createElement("img");
+    img.className = "palette-thumb";
+    img.src = `/api/thumbnail/${h.sample_photo_id}`;
+    img.loading = "lazy";
+    img.alt = "";
+    row.appendChild(img);
+  }
+
+  const body = document.createElement("div");
+  body.className = "palette-body";
+  const label = document.createElement("div");
+  label.className = "palette-label";
+  label.textContent = h.label;
+  const meta = document.createElement("div");
+  meta.className = "palette-meta";
+  meta.textContent = `${h.count} photo${h.count !== 1 ? "s" : ""}` +
+    (h.last_ts ? ` · ${new Date(h.last_ts * 1000).toLocaleDateString()}` : "");
+  body.appendChild(label);
+  body.appendChild(meta);
+  row.appendChild(body);
+
+  // Only the first nine get a key; past that the label would be a lie.
+  if (i < 9) {
+    const key = document.createElement("span");
+    key.className = "palette-key";
+    key.textContent = String(i + 1);
+    row.appendChild(key);
+  }
+
+  const zoom = document.createElement("button");
+  zoom.className = "palette-zoom";
+  zoom.textContent = "⛶";
+  zoom.title = "Move the map here";
+  zoom.addEventListener("click", (e) => {
+    e.stopPropagation();   // don't also stage the selection
+    map.flyTo([h.lat, h.lng], Math.max(map.getZoom(), 15), { duration: 0.6 });
+  });
+  row.appendChild(zoom);
+
+  row.title = `${h.label}\n${h.lat.toFixed(5)}, ${h.lng.toFixed(5)}\n` +
+    (i < 9 ? `Drop photos here, click to stage the selection, or press ${i + 1}`
+           : "Drop photos here, or click to stage the selection");
+
+  // Clicking with nothing selected is a navigation request, not a tagging one.
+  row.addEventListener("click", () => {
+    if (selectedIds.size) stageAtHotspot(i);
+    else map.flyTo([h.lat, h.lng], Math.max(map.getZoom(), 15), { duration: 0.6 });
+  });
+
+  row.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    row.classList.add("drop-target");
+  });
+  row.addEventListener("dragleave", () => row.classList.remove("drop-target"));
+  row.addEventListener("drop", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    row.classList.remove("drop-target");
+    const ids = JSON.parse(e.dataTransfer.getData("application/json") || "[]");
+    if (ids.length) await stageDrop(ids, h.lat, h.lng, currentDropAccuracy());
+  });
+
+  return row;
+}
+
+// The imprecise-drop toggle applies wherever a drop happens — map or palette.
+function currentDropAccuracy() {
+  const toggle = document.getElementById("imprecise-toggle");
+  if (!toggle || !toggle.checked) return null;
+  return parseFloat(document.getElementById("imprecise-radius-select").value);
+}
+
+async function stageAtHotspot(i) {
+  const h = hotspots[i];
+  if (!h) return;
+  if (!selectedIds.size) { setStatus("Select some photos first.", true); return; }
+  await stageDrop([...selectedIds], h.lat, h.lng, currentDropAccuracy());
+}
+
+/* ── Snapping ──
+ * Aiming by hand at the same place on different days lands a few hundred feet
+ * apart every time, which fragments the staging groups and smears the palette.
+ * Snapping folds a near-miss onto the exact point already in use. */
+
+// Resolve a raw drop point to where it will actually land.
+function snapPoint(lat, lng) {
+  if (!snapEnabled) return { lat, lng, snapped: null };
+  const near = nearestHotspot(lat, lng);
+  if (!near) return { lat, lng, snapped: null };
+  return { lat: near.hotspot.lat, lng: near.hotspot.lng, snapped: near };
+}
+
+// Live feedback while a drag is over the map: a ring on the point the drop will
+// snap to, plus the matching palette row highlighted.
+function showSnapPreview(lat, lng) {
+  const near = snapEnabled ? nearestHotspot(lat, lng) : null;
+
+  if (snapRowIndex !== (near ? near.index : -1)) {
+    document.querySelectorAll(".palette-row.snap-target")
+      .forEach(el => el.classList.remove("snap-target"));
+    snapRowIndex = near ? near.index : -1;
+    if (near) {
+      const row = document.querySelector(`.palette-row[data-index="${near.index}"]`);
+      if (row) row.classList.add("snap-target");
+    }
+  }
+
+  if (!near) { clearSnapPreview(true); return; }
+  const ll = [near.hotspot.lat, near.hotspot.lng];
+  if (!snapGhost) {
+    snapGhost = L.circleMarker(ll, {
+      radius: 11, color: "#e0a040", weight: 2, dashArray: "4,3",
+      fillColor: "#e0a040", fillOpacity: 0.2, interactive: false,
+    }).addTo(map);
+  } else {
+    snapGhost.setLatLng(ll);
+  }
+}
+
+function clearSnapPreview(keepRow = false) {
+  if (snapGhost) { snapGhost.remove(); snapGhost = null; }
+  if (keepRow) return;
+  document.querySelectorAll(".palette-row.snap-target")
+    .forEach(el => el.classList.remove("snap-target"));
+  snapRowIndex = -1;
+}
+
+/* ── Number-key shortcuts ── */
+function bindHotspotKeys() {
+  document.addEventListener("keydown", (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // Never steal a digit the user is typing into a field.
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA" ||
+              t.isContentEditable)) return;
+    if (document.getElementById("month-picker-modal").style.display !== "none") return;
+    if (!/^[1-9]$/.test(e.key)) return;
+    if (!selectedIds.size) return;    // leave the key alone when it would do nothing
+    e.preventDefault();
+    stageAtHotspot(parseInt(e.key, 10) - 1);
+  });
+}
+
+/* ── Proposal banner ──
+ * Most selections are a run of photos from one outing, and the outing next to it
+ * in time is usually already tagged. Asking the server where the selection's
+ * time-neighbours are geotagged answers "where was this?" before the user has
+ * touched the map at all. */
+
+let proposeTimer = null;
+let proposeAbort = null;
+let proposeDismissedFor = "";   // selection signature the user waved off
+
+function selectionSignature() {
+  return [...selectedIds].sort((a, b) => a - b).join(",");
+}
+
+function hideProposal() {
+  document.getElementById("propose-bar").style.display = "none";
+}
+
+// Debounced: a shift-range drag fires a selection change per cell.
+function scheduleProposal() {
+  clearTimeout(proposeTimer);
+  if (!selectedIds.size) { hideProposal(); return; }
+  proposeTimer = setTimeout(fetchProposal, 250);
+}
+
+async function fetchProposal() {
+  const sig = selectionSignature();
+  if (!sig || sig === proposeDismissedFor) { hideProposal(); return; }
+
+  // Only the newest selection's answer matters — drop the previous request.
+  if (proposeAbort) proposeAbort.abort();
+  proposeAbort = new AbortController();
+  const signal = proposeAbort.signal;
+
+  let data;
+  try {
+    const res = await fetch("/api/geotag/propose", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: [...selectedIds] }),
+      signal,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    data = await res.json();
+  } catch (err) {
+    if (err.name !== "AbortError") hideProposal();
+    return;
+  }
+  // The selection moved on while we were waiting.
+  if (sig !== selectionSignature()) return;
+  renderProposal(data);
+}
+
+function renderProposal(data) {
+  const bar = document.getElementById("propose-bar");
+  const actions = document.getElementById("propose-actions");
+  if (!data.candidates.length) { hideProposal(); return; }
+
+  const top = data.candidates[0];
+  document.getElementById("propose-summary").textContent =
+    `${top.votes} of ${data.selected} nearby →`;
+
+  actions.innerHTML = "";
+  data.candidates.forEach((c, i) => {
+    const btn = document.createElement("button");
+    if (i === 0) btn.className = "primary";
+    btn.textContent = i === 0 ? `📍 Stage all at ${c.label}` : `${c.label} (${c.votes})`;
+    btn.title = `Stage the ${selectedIds.size} selected photo(s) at ${c.lat.toFixed(5)}, ${c.lng.toFixed(5)}`;
+    btn.addEventListener("click", async () => {
+      await stageDrop([...selectedIds], c.lat, c.lng, currentDropAccuracy());
+    });
+    actions.appendChild(btn);
+  });
+  bar.style.display = "flex";
+}
+
+function bindProposeBar() {
+  document.getElementById("propose-dismiss").addEventListener("click", () => {
+    proposeDismissedFor = selectionSignature();
+    hideProposal();
+  });
 }
 
 /* ── Status ── */

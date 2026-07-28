@@ -1167,6 +1167,14 @@ def count_photos_needing_geocode() -> int:
     ).fetchone()[0]
 
 
+def count_geotagged_photos() -> int:
+    """Photos that have coordinates. Doubles as a cheap change-stamp for caches
+    keyed on the set of geotagged photos (see services/hotspots_service.py)."""
+    return get_db().execute(
+        "SELECT COUNT(*) FROM photos WHERE lat IS NOT NULL AND lng IS NOT NULL"
+    ).fetchone()[0]
+
+
 def count_geocoded_photos() -> int:
     """Photos that resolved to a location (geocoded with a country)."""
     return get_db().execute(

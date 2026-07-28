@@ -132,6 +132,19 @@ def test_faces_and_geocode_status(client):
     assert {"geocoded", "pending"} <= set(res.json())
 
 
+def test_geotag_hotspots_and_propose_empty(client):
+    res = client.get("/api/geotag/hotspots")
+    assert res.status_code == 200
+    assert res.json()["hotspots"] == []
+
+    res = client.get("/api/geotag/hotspots?sort=nonsense")
+    assert res.status_code == 422
+
+    res = client.post("/api/geotag/propose", json={"ids": []})
+    assert res.status_code == 200
+    assert res.json()["candidates"] == []
+
+
 def test_crowds_empty(client):
     res = client.get("/api/crowds")
     assert res.status_code == 200

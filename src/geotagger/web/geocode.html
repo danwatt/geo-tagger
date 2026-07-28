@@ -98,7 +98,31 @@
     </div>
     <div id="map"></div>
   </div>
+
+  <!-- Location palette: the places you tag over and over, mined from the
+       coordinates already on the photos. A drop target that never needs the map
+       panned or zoomed — and the 1-9 keys stage the selection at the top nine. -->
+  <div id="palette-pane">
+    <div id="palette-nav">
+      <select id="palette-sort" title="Order the palette by how often, or how recently, you tag there">
+        <option value="count">Frequent</option>
+        <option value="recent">Recent</option>
+      </select>
+      <button id="palette-refresh" title="Rebuild the palette from the current geotags">⟳</button>
+    </div>
+    <div id="palette-list"></div>
+    <div id="palette-footer">
+      <label title="A drop landing near one of these places snaps to it exactly, so repeat visits stop drifting apart">
+        <input type="checkbox" id="snap-toggle" checked/>
+        Snap to nearby
+      </label>
+    </div>
+  </div>
+
   <div id="grid-pane">
+    <!-- Sticky header: the filters and the proposal banner ride together, so a
+         suggestion raised while scrolled deep into a month stays reachable. -->
+    <div id="grid-header">
     <div id="grid-nav">
       <div class="toolbar-group">
         <label>Show:</label>
@@ -120,6 +144,17 @@
         <button id="unmark-ignored-btn" title="Restore selected photos to normal geocoding filtering">↩ Un-ignore</button>
       </div>
     </div>
+
+    <!-- Proposal banner: where the selection's photos were probably taken, based
+         on their nearest-in-time geotagged neighbours. Staging from here never
+         touches the map. -->
+    <div id="propose-bar" style="display:none">
+      <span id="propose-summary"></span>
+      <div id="propose-actions"></div>
+      <button id="propose-dismiss" title="Hide this suggestion">✕</button>
+    </div>
+    </div>
+
     <div id="grid"></div>
 
     <!-- Staging area: photos dropped on the map are reverse-geocoded and parked

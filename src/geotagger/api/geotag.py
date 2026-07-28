@@ -1,13 +1,14 @@
-"""Geotag write/remove/ignore and the time-neighbor location guesser."""
+"""Geotag write/remove/ignore, the hotspot palette, the selection proposer, and
+the time-neighbor location guesser."""
 
 import asyncio
-from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from geotagger import config, index, sidecar, geocode
+from geotagger import index
 from geotagger.executor import get_executor
+from geotagger.services import geotag_service, hotspots_service
 
 router = APIRouter()
 
@@ -25,42 +26,22 @@ class SetGeocodeIgnoredRequest(BaseModel):
     ids: list[int]
     ignored: bool = True
 
+class ProposeRequest(BaseModel):
+    ids: list[int]
+    window: int = geotag_service.DEFAULT_PROPOSE_WINDOW
+    limit: int = 3
+
 
 @router.post("/api/geotag")
 async def api_geotag(req: GeotagRequest):
-    # Reverse-geocode once for the shared drop point (executor avoids blocking the
-    # event loop on the geocoder's one-time KD-tree load). loc is None when the
-    # GeoNames data isn't installed, in which case we just skip the place names.
+    # The whole batch runs in the executor: a commit is one ExifTool round-trip per
+    # photo (plus the geocoder's one-time KD-tree load), which would otherwise stall
+    # the event loop for the length of a several-hundred-photo commit.
     loop = asyncio.get_running_loop()
-    loc = await loop.run_in_executor(get_executor(), geocode.lookup, req.lat, req.lng)
-
-    results = []
-    for photo_id in req.ids:
-        row = index.get_photo(photo_id)
-        if not row:
-            continue
-        p = Path(index.photo_path(row))
-        if config.WRITE_XMP_ON_GEOTAG:
-            sc = sidecar.write_gps(p, req.lat, req.lng, location=loc, gps_accuracy=req.gps_accuracy)
-            sc_mtime = sc.stat().st_mtime if sc.exists() else None
-            source, sc_name = "sidecar", sc.name
-        else:
-            # DB-only: leave any existing sidecar untouched and record whatever
-            # is actually on disk, so a later scan's freshness check (index.is_fresh)
-            # doesn't see a mismatch and re-read a stale/absent sidecar over this.
-            sc = sidecar.sidecar_path(p)
-            sc_mtime = sc.stat().st_mtime if sc.exists() else None
-            source, sc_name = "database", (sc.name if sc.exists() else None)
-        index.update_geotag(photo_id, req.lat, req.lng, source, sc_name, sc_mtime, gps_accuracy=req.gps_accuracy)
-        if loc is not None:
-            index.update_photo_location(photo_id, loc)
-        results.append({
-            "id": photo_id, "lat": req.lat, "lng": req.lng,
-            "geotag_source": source, "sidecar_path": sc_name,
-            "location": loc,
-            "gps_accuracy": req.gps_accuracy,
-        })
-    return results
+    return await loop.run_in_executor(
+        get_executor(), geotag_service.write_geotag,
+        req.ids, req.lat, req.lng, req.gps_accuracy,
+    )
 
 
 @router.post("/api/geotag/ignore")
@@ -70,6 +51,34 @@ async def api_geotag_ignore(req: SetGeocodeIgnoredRequest):
     but count as geotagged for the Show filter and geotagged/not-geotagged stats."""
     index.set_geocode_ignored(req.ids, req.ignored)
     return {"ids": req.ids, "geocode_ignored": req.ignored}
+
+
+# ── Hotspots & proposals ──
+
+@router.get("/api/geotag/hotspots")
+async def api_geotag_hotspots(
+    limit: int = Query(40, ge=1, le=200),
+    merge_meters: float = Query(hotspots_service.DEFAULT_MERGE_METERS, ge=10, le=20000),
+    sort: str = Query("count", pattern="^(count|recent)$"),
+):
+    """Recurring drop points mined from the coordinates already on the photos —
+    the location palette's data. Clustered so drops a few hundred feet apart at
+    the same real place count as one entry."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        get_executor(), hotspots_service.get_hotspots, limit, merge_meters, sort,
+    )
+
+
+@router.post("/api/geotag/propose")
+async def api_geotag_propose(req: ProposeRequest):
+    """Rank likely locations for a selection from its photos' nearest-in-time
+    geotagged neighbors. POST because a selection can be hundreds of ids."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        get_executor(), geotag_service.propose_locations,
+        req.ids, req.window, req.limit,
+    )
 
 
 @router.get("/api/guess/{photo_id}")
@@ -156,15 +165,8 @@ async def api_guess(photo_id: int, window: int = 900):
 
 @router.post("/api/geotag/remove")
 async def api_geotag_remove(req: RemoveGeotagRequest):
-    results = []
-    for photo_id in req.ids:
-        row = index.get_photo(photo_id)
-        if not row:
-            continue
-        p = Path(index.photo_path(row))
-        sc = sidecar.remove_gps(p)
-        sc_mtime = sc.stat().st_mtime if sc.exists() else None
-        index.update_geotag(photo_id, None, None, "none", str(sc), sc_mtime)
-        results.append({"id": photo_id, "geotag_source": "none"})
-    return results
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        get_executor(), geotag_service.remove_geotag, req.ids,
+    )
 
