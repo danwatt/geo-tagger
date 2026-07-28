@@ -16,6 +16,15 @@ let selectedYear = null;
 let selectedMonth = null;
 let undatedMode = false;  // true when browsing the Undated queue instead of a month/year
 
+/* ── Geotag staging state ──
+ * A drop on the map doesn't write: the point is reverse-geocoded, the photos are
+ * pulled out of the grid and parked here under the resolved place name, and a
+ * provisional pin marks the spot until the change is committed or reverted.
+ * See the "Geotag staging" section for the details. */
+let pendingGeo = new Map();      // photo id → { photo, lat, lng, accuracy, loc, label }
+let pendingGeoMarkers = [];      // provisional pins/circles, rebuilt on every render
+const geocodeLabelCache = new Map();   // "lat,lng" (4dp) → { loc, label }
+
 /* ── Places state ── */
 let places = [];
 let placeShapes = {};  // place_id -> L.Rectangle or L.Circle
@@ -221,7 +230,7 @@ function initMap() {
       const radiusSelect = document.getElementById("imprecise-radius-select");
       accuracy = parseFloat(radiusSelect.value);
     }
-    await geotag(ids, latlng.lat, latlng.lng, accuracy);
+    await stageDrop(ids, latlng.lat, latlng.lng, accuracy);
   });
 }
 
@@ -332,6 +341,17 @@ function bindToolbar() {
   document.getElementById("remove-geotag-btn").addEventListener("click", doRemoveGeotag);
   document.getElementById("mark-ignored-btn").addEventListener("click", () => doSetGeocodeIgnored(true));
   document.getElementById("unmark-ignored-btn").addEventListener("click", () => doSetGeocodeIgnored(false));
+
+  document.getElementById("commit-all-btn").addEventListener("click",
+    () => commitPendingGeo(groupPendingGeo()));
+  document.getElementById("revert-all-btn").addEventListener("click",
+    () => revertPendingGeo(groupPendingGeo()));
+  // Staged drops live only in this tab — don't let a reload eat a tagging pass.
+  window.addEventListener("beforeunload", (e) => {
+    if (!pendingGeo.size) return;
+    e.preventDefault();
+    e.returnValue = "";
+  });
 
   // Places — dropdown selects a saved place to jump to. Creating/editing places
   // lives on the Custom Places page (custom-places.html).
@@ -1187,10 +1207,13 @@ function renderGrid() {
   const grid = document.getElementById("grid");
   grid.innerHTML = "";
 
-  // Group filteredPhotos into calendar-day buckets
+  // Group filteredPhotos into calendar-day buckets. Photos with a staged
+  // location have moved to the staging area below, so they're skipped here —
+  // `idx` still indexes into filteredPhotos, which shift-range select needs.
   const dayGroups = [];
   let curGroup = null;
   filteredPhotos.forEach((photo, idx) => {
+    if (pendingGeo.has(photo.id)) return;
     const key = dayKey(photo);
     let year = null, month = null, day = null, date = null;
     if (photo.photo_datetime) {
@@ -1298,6 +1321,10 @@ function renderGrid() {
       groupIdx++;
     });
   });
+
+  // The grid and the staging area are two views of the same photo list — a
+  // staged photo leaves one and appears in the other — so they render together.
+  renderPendingGeo();
 }
 
 // Buckets one day-group's undated photos by resolved location (locationKey,
@@ -1321,7 +1348,10 @@ function handleThumbClick(e, id, idx) {
   if (e.shiftKey && lastClickedIndex >= 0) {
     const lo = Math.min(lastClickedIndex, idx);
     const hi = Math.max(lastClickedIndex, idx);
-    for (let i = lo; i <= hi; i++) selectedIds.add(filteredPhotos[i].id);
+    // Staged photos aren't in the grid, so a range drawn over them skips them.
+    for (let i = lo; i <= hi; i++) {
+      if (!pendingGeo.has(filteredPhotos[i].id)) selectedIds.add(filteredPhotos[i].id);
+    }
   } else if (e.ctrlKey || e.metaKey) {
     selectedIds.has(id) ? selectedIds.delete(id) : selectedIds.add(id);
   } else {
@@ -1423,12 +1453,19 @@ function addOrUpdateMarker(photo) {
       const radiusSelect = document.getElementById("imprecise-radius-select");
       accuracy = parseFloat(radiusSelect.value);
     }
-    await geotag([photo.id], ll.lat, ll.lng, accuracy);
+    // Dragging a pin is the same "put this photo here" gesture as a grid drop, so
+    // it stages too. This marker keeps showing the *saved* position; the staged
+    // one gets a provisional pin until it's committed.
+    const cur = photos.find((p) => p.id === photo.id);
+    if (cur && cur.lat != null) marker.setLatLng([cur.lat, cur.lng]);
+    await stageDrop([photo.id], ll.lat, ll.lng, accuracy);
   });
 
   markersById[photo.id] = marker;
 }
 
+// Writes the location to `ids`. Returns true on success — commitPendingGeo uses
+// that to decide whether a staged batch can be cleared or has to stay put.
 async function geotag(ids, lat, lng, accuracy = null) {
   setStatus(`Geotagging ${ids.length} photo(s)…`);
   try {
@@ -1437,6 +1474,7 @@ async function geotag(ids, lat, lng, accuracy = null) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids, lat, lng, gps_accuracy: accuracy }),
     });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const updated = await res.json();
     updated.forEach((u) => {
       const photo = photos.find((p) => p.id === u.id);
@@ -1454,8 +1492,10 @@ async function geotag(ids, lat, lng, accuracy = null) {
     const accLog = accuracy ? ` (accuracy: ±${accuracy}m)` : "";
     setStatus(`Tagged ${updated.length} photo(s) at ${lat.toFixed(5)}, ${lng.toFixed(5)}${accLog}`);
     if (focusedPhotoId && ids.includes(focusedPhotoId)) showDetail(focusedPhotoId);
+    return true;
   } catch (err) {
     setStatus("Geotag error: " + err.message, true);
+    return false;
   }
 }
 
@@ -1518,7 +1558,7 @@ async function doApplyLatLng() {
   const lng = parseFloat(document.getElementById("lng-input").value);
   if (isNaN(lat) || isNaN(lng)) { setStatus("Invalid lat/lng", true); return; }
   if (!selectedIds.size) { setStatus("No photos selected", true); return; }
-  await geotag([...selectedIds], lat, lng);
+  await stageDrop([...selectedIds], lat, lng, null);
 }
 
 /* ── Copy location ── */
@@ -2007,6 +2047,275 @@ function drawHistogram() {
 window.addEventListener("resize", () => {
   if (histBuckets.length) drawHistogram();
 });
+
+/* ── Geotag staging ──
+ * Dropping photos on the map (or dragging a pin, or the manual lat/lng box)
+ * doesn't write. The point is reverse-geocoded through /api/geocode/lookup —
+ * the same lookup the backend would persist for a photo taken there — the
+ * photos leave the grid for the staging area, grouped by that place name, and a
+ * provisional pin marks the spot. Only Commit calls /api/geotag.
+ *
+ * Entry shape: { photo, lat, lng, accuracy, loc, label }. Photos dropped at
+ * different points that resolve to the same place share one group, so a commit
+ * fans out into one /api/geotag call per distinct point (see commitPendingGeo). */
+
+// Reverse-geocode a dropped point into { loc, label }. Results are cached per
+// 4-decimal coordinate (~11 m — the geocoder's own quantization grid), so
+// repeated drops in one spot don't re-query. A failed or empty lookup degrades
+// to the raw coordinate as the label rather than blocking the drop.
+async function lookupLocation(lat, lng) {
+  const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+  if (geocodeLabelCache.has(key)) return geocodeLabelCache.get(key);
+  const coords = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  let out = { loc: null, label: `📌 ${coords}` };
+  try {
+    const res = await fetch(`/api/geocode/lookup?lat=${lat}&lng=${lng}`);
+    if (res.ok) {
+      const data = await res.json();
+      const loc = data.location;
+      // locationKey (face-grid.js) formats the same {city, sublocation, state,
+      // country} shape the People page groups on.
+      const label = loc ? locationKey({ location: loc }) : null;
+      out = { loc, label: label || `📌 ${coords}` };
+    }
+  } catch (err) {
+    // Offline geocode data missing or unreadable — stage under the coordinate.
+  }
+  geocodeLabelCache.set(key, out);
+  return out;
+}
+
+// Park `ids` at one dropped point. Re-dropping a staged photo overwrites its
+// pending location, so moving it between groups is just another drop.
+async function stageDrop(ids, lat, lng, accuracy = null) {
+  if (!ids.length) return;
+  setStatus(`Looking up ${ids.length} photo(s)…`);
+  const { loc, label } = await lookupLocation(lat, lng);
+  let staged = 0;
+  ids.forEach((id) => {
+    const photo = photos.find((p) => p.id === id);
+    if (!photo) return;
+    pendingGeo.set(id, { photo, lat, lng, accuracy, loc, label });
+    selectedIds.delete(id);
+    staged++;
+  });
+  if (!staged) { setStatus("Nothing to stage.", true); return; }
+  lastClickedIndex = -1;   // the grid's index run shifts under the removed cells
+  renderGrid();            // also renders the staging area + provisional pins
+  const accNote = accuracy ? ` (±${accuracy}m)` : "";
+  setStatus(`Staged ${staged} photo(s) → ${label}${accNote}. Nothing saved yet — ` +
+            `review at the bottom of the grid, then Commit.`);
+}
+
+function unstageGeo(ids, quiet = false) {
+  let removed = 0;
+  ids.forEach((id) => { if (pendingGeo.delete(id)) removed++; });
+  if (!removed) return;
+  renderGrid();
+  if (!quiet) setStatus(`Reverted ${removed} staged location(s).`);
+}
+
+// Distinct coordinate a staged photo will actually be written at — the commit
+// batching key, and what the provisional pins are grouped by.
+function pointKey(e) {
+  return `${e.lat.toFixed(6)},${e.lng.toFixed(6)},${e.accuracy ?? ""}`;
+}
+
+// Group the staging area by resolved place, newest place first is meaningless
+// here, so groups are alphabetical with raw-coordinate ones last.
+function groupPendingGeo() {
+  const groups = new Map();
+  pendingGeo.forEach((e) => {
+    let g = groups.get(e.label);
+    if (!g) { g = { label: e.label, entries: [] }; groups.set(e.label, g); }
+    g.entries.push(e);
+  });
+  return [...groups.values()].sort((a, b) => {
+    const ua = a.label.startsWith("📌"), ub = b.label.startsWith("📌");
+    if (ua !== ub) return ua ? 1 : -1;   // un-geocoded points sink to the bottom
+    return a.label.localeCompare(b.label);
+  });
+}
+
+function renderPendingGeo() {
+  const pane = document.getElementById("pending-pane");
+  const wrap = document.getElementById("pending-groups");
+  wrap.innerHTML = "";
+  renderPendingGeoMarkers();
+  if (!pendingGeo.size) { pane.style.display = "none"; return; }
+  pane.style.display = "";
+
+  const groups = groupPendingGeo();
+  groups.forEach((g, i) => wrap.appendChild(makePendingGeoGroup(g, i)));
+  document.getElementById("pending-summary").textContent =
+    `${pendingGeo.size} staged location(s) in ${groups.length} place(s) — not saved yet`;
+}
+
+function makePendingGeoGroup(g, groupIdx) {
+  const sec = document.createElement("div");
+  sec.className = `face-group-section pending-group group-tint-${groupIdx % 6}`;
+  const points = new Set(g.entries.map(pointKey)).size;
+  sec.appendChild(faceGroupHeader({
+    title: g.label,
+    meta: `· ${g.entries.length} photo${g.entries.length !== 1 ? "s" : ""}` +
+          (points > 1 ? ` · ${points} drop points` : ""),
+    extraClass: "amber",
+    buttons: [
+      { icon: "⛶", label: "Zoom to these photos",
+        title: "Fit the map to this group's staged point(s)",
+        onClick: () => {
+          const bounds = L.latLngBounds(g.entries.map(e => [e.lat, e.lng]));
+          map.flyToBounds(bounds, { padding: [60, 60], maxZoom: 15, duration: 0.6 });
+        } },
+      { label: `✔ Commit (${g.entries.length})`, kind: "primary",
+        title: `Write just this place's ${g.entries.length} location(s) to the photos`,
+        onClick: () => commitPendingGeo([g], g.label) },
+      { label: "↩ Revert", kind: "danger",
+        title: "Discard this place's staged locations and put the photos back in the grid",
+        onClick: () => revertPendingGeo([g], g.label) },
+    ],
+  }));
+
+  const cells = document.createElement("div");
+  cells.className = "face-group-cells";
+  g.entries.forEach(e => cells.appendChild(makePendingGeoCell(e)));
+  sec.appendChild(cells);
+  return sec;
+}
+
+function makePendingGeoCell(e) {
+  const photo = e.photo;
+  const cell = document.createElement("div");
+  cell.className = "thumb-cell pending-cell" +
+    (photo.id === focusedPhotoId ? " focused" : "");
+  cell.dataset.id = photo.id;
+
+  const strip = document.createElement("div");
+  strip.className = "cam-strip";
+  strip.style.background = camColor(photo.camera);
+  cell.appendChild(strip);
+
+  const img = document.createElement("img");
+  img.src = `/api/thumbnail/${photo.id}`;
+  img.loading = "lazy";
+  img.alt = photo.filename;
+  cell.appendChild(img);
+
+  const chip = document.createElement("div");
+  chip.className = "face-label pending-label";
+  chip.textContent = `${e.lat.toFixed(4)}, ${e.lng.toFixed(4)}` +
+    (e.accuracy ? ` ±${e.accuracy}m` : "");
+  chip.title = `${photo.filename} → ${e.label}`;
+  cell.appendChild(chip);
+
+  const undo = document.createElement("button");
+  undo.className = "pending-undo";
+  undo.textContent = "✕";
+  undo.title = "Revert this photo (back to the grid, location unchanged)";
+  undo.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    unstageGeo([photo.id]);
+  });
+  cell.appendChild(undo);
+
+  // Click previews the photo and pans to where it would land.
+  cell.addEventListener("click", () => {
+    showDetail(photo.id);
+    renderPendingGeo();   // move the focus ring
+    map.panTo([e.lat, e.lng]);
+  });
+  return cell;
+}
+
+// One provisional pin per distinct staged point (dashed, amber, badged with the
+// photo count), plus its uncertainty circle for imprecise drops. Rebuilt wholesale
+// — there are only ever a handful, and it keeps them in sync with the staging area.
+function renderPendingGeoMarkers() {
+  pendingGeoMarkers.forEach(m => m.remove());
+  pendingGeoMarkers = [];
+  if (!map || !pendingGeo.size) return;
+
+  const byPoint = new Map();
+  pendingGeo.forEach((e) => {
+    const k = pointKey(e);
+    if (!byPoint.has(k)) byPoint.set(k, { ...e, count: 0 });
+    byPoint.get(k).count++;
+  });
+
+  byPoint.forEach((p) => {
+    if (p.accuracy) {
+      pendingGeoMarkers.push(L.circle([p.lat, p.lng], {
+        radius: p.accuracy,
+        color: "#e0a040", fillColor: "#e0a040", fillOpacity: 0.1,
+        weight: 1.5, opacity: 0.6, dashArray: "5, 5", interactive: false,
+      }).addTo(map));
+    }
+    const marker = L.marker([p.lat, p.lng], {
+      icon: makePendingPinIcon(p.count),
+      zIndexOffset: 500,   // staged pins sit above the saved ones
+    }).addTo(map);
+    marker.bindTooltip(`Staged: ${p.count} photo(s) → ${p.label}`);
+    pendingGeoMarkers.push(marker);
+  });
+}
+
+// Dashed amber teardrop with a count — deliberately unlike the solid camera-colored
+// pins, so "not saved yet" reads at a glance.
+function makePendingPinIcon(count) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="34" viewBox="0 0 24 34">
+    <path d="M12 0C5.373 0 0 5.373 0 12c0 8 12 22 12 22s12-14 12-22C24 5.373 18.627 0 12 0z"
+          fill="#e0a040" fill-opacity="0.85" stroke="#fff2d8" stroke-width="1.5" stroke-dasharray="3,2"/>
+    <text x="12" y="16" text-anchor="middle" font-size="11" font-weight="bold"
+          font-family="system-ui, sans-serif" fill="#3a2a08">${count}</text>
+  </svg>`;
+  return L.divIcon({ html: svg, className: "", iconSize: [24, 34], iconAnchor: [12, 34] });
+}
+
+async function commitPendingGeo(groups, what) {
+  const total = groups.reduce((n, g) => n + g.entries.length, 0);
+  if (!total) { setStatus("Nothing staged to commit.", true); return; }
+  if (!confirm(`Commit ${total} staged location(s)${what ? ` — ${what}` : ""}? ` +
+               `This writes them to the photos.`)) return;
+  setStatus(`Committing ${total} location(s)…`);
+
+  let saved = 0;
+  const failures = [];
+  for (const g of groups) {
+    // Photos in one place group can come from several drops — one call per point.
+    const byPoint = new Map();
+    g.entries.forEach((e) => {
+      const k = pointKey(e);
+      if (!byPoint.has(k)) byPoint.set(k, { lat: e.lat, lng: e.lng, accuracy: e.accuracy, ids: [] });
+      byPoint.get(k).ids.push(e.photo.id);
+    });
+    for (const p of byPoint.values()) {
+      const ok = await geotag(p.ids, p.lat, p.lng, p.accuracy);
+      if (ok) {
+        // Only clear what actually landed — a failed point stays staged.
+        p.ids.forEach(id => pendingGeo.delete(id));
+        saved += p.ids.length;
+      } else {
+        failures.push(`${g.label} (${p.lat.toFixed(4)}, ${p.lng.toFixed(4)})`);
+      }
+    }
+  }
+
+  renderGrid();
+  if (failures.length) {
+    setStatus(`Committed ${saved} of ${total} location(s). Still staged after failing: ` +
+              failures.join(", ") + ".", true);
+  } else {
+    setStatus(`Committed ${saved} location(s).`);
+  }
+}
+
+function revertPendingGeo(groups, what) {
+  const ids = groups.flatMap(g => g.entries.map(e => e.photo.id));
+  if (!ids.length) { setStatus("Nothing staged to revert.", true); return; }
+  if (ids.length > 3 &&
+      !confirm(`Discard ${ids.length} staged location(s)${what ? ` — ${what}` : ""}?`)) return;
+  unstageGeo(ids);
+}
 
 /* ── Status ── */
 function setStatus(msg, isError = false) {

@@ -121,6 +121,19 @@
       </div>
     </div>
     <div id="grid"></div>
+
+    <!-- Staging area: photos dropped on the map are reverse-geocoded and parked
+         here, grouped by the resolved location, until committed or reverted. -->
+    <div id="pending-pane" style="display:none">
+      <div id="pending-groups"></div>
+      <div id="pending-bar">
+        <span id="pending-summary"></span>
+        <div id="pending-bar-btns">
+          <button id="commit-all-btn" class="primary" title="Write every staged location to the photos">✔ Commit all</button>
+          <button id="revert-all-btn" class="danger" title="Throw away every staged location and put the photos back in the grid">↩ Revert all</button>
+        </div>
+      </div>
+    </div>
   </div>
   <div id="detail-pane">
     <div id="detail-placeholder">Select a photo to view details</div>
