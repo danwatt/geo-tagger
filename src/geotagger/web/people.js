@@ -646,9 +646,10 @@ function updateGridNavVisibility() {
   // except Discover/Crowds, which render cluster/photo cards with their own buttons.
   const showSelection = scope !== "discover" && scope !== "crowds";
   // Sort applies to the group-rendering grids only. The Unlabeled queue's
-  // person-first hierarchy orders its own groups by person name, so it opts out.
+  // person-first hierarchy orders its own groups by person name, so it opts out
+  // (date and photo hierarchies both sort their groups).
   const showSort = scope === "discover" || scope === "crowds" || scope === "suggested" ||
-    (scope === "unlabeled" && unlabeledHierarchy === "date");
+    (scope === "unlabeled" && unlabeledHierarchy !== "person");
   document.getElementById("grid-nav-person").style.display = showPerson ? "" : "none";
   document.getElementById("grid-nav-crowds").style.display = showCrowds ? "" : "none";
   document.getElementById("grid-nav-unlabeled").style.display = showUnlabeled ? "" : "none";
@@ -822,7 +823,9 @@ function applyUnlabeledView() {
     return;
   }
   const noun = suggestedOnly ? "suggested face(s)" : "unlabeled face(s)";
-  const groupedBy = unlabeledHierarchy === "person" ? "person then date" : "month then place";
+  const groupedBy = unlabeledHierarchy === "person" ? "person then date"
+    : unlabeledHierarchy === "photo" ? "photo"
+    : "month then place";
   let msg = `${returned} of ${total} ${noun}, grouped by ${groupedBy}`;
   if (total > returned) msg += ` (showing first ${returned})`;
   setStatus(msg + preselNote + focusStatusSuffix());
@@ -958,6 +961,11 @@ function renderGridInner() {
   // meta) and its Ignore button acts on the whole group, not just the selection.
   if (scope === "unlabeled" && unlabeledHierarchy === "person") {
     renderUnlabeledPersonFirst(grid, list);
+    return;
+  }
+
+  if (scope === "unlabeled" && unlabeledHierarchy === "photo") {
+    renderUnlabeledPhotoFirst(grid, list);
     return;
   }
 
@@ -1148,6 +1156,81 @@ function computeUnlabeledPersonGroups(list) {
   const personGroups = none ? [...named, none] : named;
   personGroups.forEach(b => { b.chunks = computeTimeGroups(b.faces, UNLABELED_PERSON_GAP_SECONDS); });
   return personGroups;
+}
+
+// Photo hierarchy for the Unlabeled queue: one group per source photo, so a
+// photo's unlabeled faces are reviewed (and ignored/accepted) together. Faces
+// keep the shared bucket ordering within a photo (suggested people contiguous),
+// and each group carries year/month so the date sort can still draw dividers.
+function computeUnlabeledPhotoGroups(list) {
+  const buckets = new Map();   // photo_id → group
+  list.forEach(f => {
+    let b = buckets.get(f.photo_id);
+    if (!b) {
+      const ts = f.photo_datetime;
+      const d = ts ? new Date(ts * 1000) : null;
+      b = {
+        photoId: f.photo_id,
+        filename: f.filename || dirLabel(f),
+        year: d ? d.getFullYear() : null,
+        month: d ? d.getMonth() : null,
+        faces: [],
+      };
+      buckets.set(f.photo_id, b);
+    }
+    b.faces.push(f);
+  });
+  buckets.forEach(b => { b.faces = sortBucketBySuggestion(b.faces); });
+  return [...buckets.values()];
+}
+
+function renderUnlabeledPhotoFirst(grid, list) {
+  let groupIdx = 0, curYear, curMonth;
+  // Same rule as the month→location grid: dividers only read correctly while the
+  // groups stay chronological, so the count/location sorts drop them.
+  const showDividers = gridSort === "date";
+  sortFaceGroups(computeUnlabeledPhotoGroups(list)).forEach(group => {
+    if (showDividers) {
+      if (group.year !== curYear) {
+        curYear = group.year; curMonth = undefined;
+        const yd = document.createElement("div");
+        yd.className = "grid-year-divider";
+        yd.textContent = group.year === null ? "Undated" : group.year;
+        grid.appendChild(yd);
+      }
+      if (group.month !== curMonth) {
+        curMonth = group.month;
+        if (group.month !== null) {
+          const md = document.createElement("div");
+          md.className = "grid-month-divider";
+          md.textContent = MONTH_NAMES[group.month];
+          grid.appendChild(md);
+        }
+      }
+    }
+    const sec = makeGroupSection(groupIdx++);
+    const place = locationLabel(group.faces);
+    const n = group.faces.length;
+    sec.appendChild(makeGroupHeader(group, {
+      title: `🖼 ${group.filename}`,
+      label: group.filename,
+      meta: `· ${facesDateRange(group.faces)} · ${n} face${n === 1 ? "" : "s"}` +
+            (place ? ` · 📍 ${place}` : ""),
+      ignoreAll: true,
+      extraButtons: [
+        { icon: "🔍", label: "Open photo",
+          title: "Open this photo's full face-review page",
+          onClick: () => {
+            window.location.href = `/photo-faces.html?photo_id=${group.photoId}`;
+          } },
+      ],
+    }));
+    const cells = document.createElement("div");
+    cells.className = "face-group-cells";
+    group.faces.forEach(face => { cells.appendChild(makeFaceCell(face)); });
+    sec.appendChild(cells);
+    grid.appendChild(sec);
+  });
 }
 
 function renderUnlabeledPersonFirst(grid, list) {
@@ -1474,7 +1557,8 @@ function formatGroupRange(group) {
 // used in status messages. `ignoreAll` switches the Ignore button between
 // "ignore the selected faces" (guesses view) and "ignore the whole group
 // regardless of selection" (Unlabeled queue).
-function makeGroupHeader(group, { title, meta = "", label = title, ignoreAll = false } = {}) {
+function makeGroupHeader(group, { title, meta = "", label = title, ignoreAll = false,
+                                  extraButtons = [] } = {}) {
   const acceptable = group.faces.filter(f => f.suggestion && !f.person_name && !f.ignored);
   const ignoreBtn = ignoreAll
     ? { icon: "🚫", label: "Ignore all", kind: "danger",
@@ -1498,6 +1582,7 @@ function makeGroupHeader(group, { title, meta = "", label = title, ignoreAll = f
     title,
     meta,
     buttons: [
+      ...extraButtons,
       acceptable.length > 0 && {
         icon: "✓", label: `Accept all (${acceptable.length})`, kind: "primary",
         title: `Accept all ${acceptable.length} suggestion(s) in this group`,
