@@ -160,6 +160,26 @@ def test_photo_faces_lists_and_404(client):
     assert client.get("/api/photos/999/faces").status_code == 404
 
 
+def test_photo_tagged_people_only_committed(client):
+    db = index.get_db()
+    rng = np.random.default_rng(7)
+    fid = ff.seed_unlabeled(db, ff.unit_vectors(rng, 1))[0]
+    photo_id = db.execute("SELECT photo_id FROM faces WHERE id=?", (fid,)).fetchone()[0]
+
+    # Unassigned face: nothing to list yet.
+    assert client.get(f"/api/photos/{photo_id}/tagged-people").json() == []
+
+    pid = client.post(f"/api/faces/{fid}/assign", json={"name": "Dave"}).json()["person_id"]
+    people = client.get(f"/api/photos/{photo_id}/tagged-people").json()
+    assert len(people) == 1
+    assert people[0]["id"] == fid
+    assert people[0]["person_id"] == pid
+    assert people[0]["person_name"] == "Dave"
+    assert len(people[0]["bbox"]) == 4
+
+    assert client.get("/api/photos/999/tagged-people").status_code == 404
+
+
 # ── Face negatives ("definitely not person A") ──
 
 def test_face_negatives_removes_and_restores_suggestion(client):

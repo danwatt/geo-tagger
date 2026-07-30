@@ -661,6 +661,7 @@ function updateGridNavVisibility() {
 
 /* ── Faces grid ── */
 async function loadFaces() {
+  taggedPeopleCache.clear();   // person tags may have changed since last fetch
   updateGridNavVisibility();
   if (scope === "discover") { await loadClusters(); return; }
   if (scope === "crowds")   { await loadCrowds();   return; }
@@ -2136,6 +2137,67 @@ function findFace(id) {
   return null;
 }
 
+/* ── "Also in this photo" chips ──
+ * Committed (DB) person tags for the focused face's photo. Cached per photo so
+ * arrowing through several faces of the same photo costs one request; cleared
+ * by loadFaces(), which runs after every mutation/commit. */
+const taggedPeopleCache = new Map();
+
+async function fetchTaggedPeople(photoId) {
+  if (taggedPeopleCache.has(photoId)) return taggedPeopleCache.get(photoId);
+  const res = await fetch(`/api/photos/${photoId}/tagged-people`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const people = await res.json();
+  taggedPeopleCache.set(photoId, people);
+  return people;
+}
+
+async function updatePhotoPeople(face) {
+  const box = document.getElementById("photo-people");
+  const hl = document.getElementById("photo-people-box");
+  hl.style.display = "none";
+  let people;
+  try {
+    people = await fetchTaggedPeople(face.photo_id);
+  } catch {
+    box.style.display = "none";
+    return;
+  }
+  // Focus may have moved on while the request was in flight.
+  if (focusedFaceId !== face.id) return;
+  if (!people.length) { box.style.display = "none"; return; }
+
+  box.style.display = "flex";
+  box.innerHTML = "";
+  const label = document.createElement("div");
+  label.className = "pp-label";
+  label.textContent = `Already tagged in this photo (${people.length}):`;
+  box.appendChild(label);
+
+  people.forEach(p => {
+    const chip = document.createElement("div");
+    chip.className = p.id === face.id ? "pp-chip pp-self" : "pp-chip";
+    chip.title = p.id === face.id
+      ? `${p.person_name} — this face`
+      : `${p.person_name} — hover to locate in the photo`;
+    const img = document.createElement("img");
+    img.src = `/api/faces/${p.id}/crop`;
+    img.alt = p.person_name;
+    chip.appendChild(img);
+    const name = document.createElement("span");
+    name.textContent = p.person_name;
+    chip.appendChild(name);
+    if (p.id !== face.id) {
+      chip.addEventListener("mouseenter", () => {
+        applyBbox(hl, p.bbox);
+        hl.style.display = "block";
+      });
+      chip.addEventListener("mouseleave", () => { hl.style.display = "none"; });
+    }
+    box.appendChild(chip);
+  });
+}
+
 function updateDetail() {
   const placeholder = document.getElementById("detail-placeholder");
   const content = document.getElementById("detail-content");
@@ -2144,6 +2206,7 @@ function updateDetail() {
   if (!face) {
     placeholder.style.display = "block";
     content.style.display = "none";
+    document.getElementById("photo-people").style.display = "none";
     return;
   }
   placeholder.style.display = "none";
@@ -2154,6 +2217,8 @@ function updateDetail() {
 
   // Position the bbox overlay (normalized coords map directly to percentages).
   applyBbox(document.getElementById("face-box"), face.bbox);
+
+  updatePhotoPeople(face);   // async, fills in when the photo's tags arrive
 
   const when = face.photo_datetime
     ? new Date(face.photo_datetime * 1000).toLocaleString() : "Unknown";

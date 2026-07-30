@@ -1361,6 +1361,21 @@ def get_faces_for_photo(photo_id: int) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def get_tagged_faces_for_photo(photo_id: int) -> list[sqlite3.Row]:
+    """Faces in a photo already committed to a person — no embeddings, no
+    suggestion work, so the detail pane can ask for this on every focus change."""
+    return get_db().execute(
+        """SELECT f.id, f.person_id, f.bbox, f.assigned_at, p.name AS person_name,
+                  ph.orientation
+           FROM faces f
+           JOIN persons p ON p.id = f.person_id
+           JOIN photos ph ON ph.id = f.photo_id
+           WHERE f.photo_id=? AND f.person_id IS NOT NULL
+           ORDER BY p.name""",
+        (photo_id,),
+    ).fetchall()
+
+
 def get_face(face_id: int) -> sqlite3.Row | None:
     return get_db().execute("SELECT * FROM faces WHERE id=?", (face_id,)).fetchone()
 

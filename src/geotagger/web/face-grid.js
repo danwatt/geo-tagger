@@ -196,6 +196,9 @@ function faceGroupHeader({ title, meta, buttons = [], extraClass = "" }) {
  *   onIgnore,    // (ignored:boolean) => any optional
  *   onComeBack,  // (come_back:boolean) => any optional
  *   onNotPerson, // (personId, personName) => any  optional — rejects face.suggestion
+ *   onNotPersonAll, // (personId, personName) => any  optional — same rejection,
+ *                //   applied to every face the caller's current batch suggests
+ *                //   for that person
  *   onOpenPhoto, // () => void               optional
  *   showConfirm, // override; default = face.suggestion && !face.person_name
  *   sheet,       // force bottom-sheet; default = auto by viewport width
@@ -254,6 +257,18 @@ function openQuickActions(anchor, face, opts) {
     b.textContent = `⛔ Not ${face.suggestion.person_name}`;
     b.addEventListener("click", run(() =>
       opts.onNotPerson(face.suggestion.person_id, face.suggestion.person_name)));
+    panel.appendChild(b);
+  }
+
+  // Bulk form of the above: reject this suggestion everywhere it appears in the
+  // batch the caller has on screen, not just on this one face.
+  if (opts.onNotPersonAll && face.suggestion) {
+    const b = document.createElement("button");
+    b.className = "danger expand-btn";
+    b.textContent = `⛔ Not ${face.suggestion.person_name} — Any`;
+    b.title = `Mark every face currently suggested as ${face.suggestion.person_name} as definitely not them`;
+    b.addEventListener("click", run(() =>
+      opts.onNotPersonAll(face.suggestion.person_id, face.suggestion.person_name)));
     panel.appendChild(b);
   }
 

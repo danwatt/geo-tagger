@@ -405,6 +405,7 @@ function openSearchFaceActions(anchor, face) {
       } catch (err) { setStatus("Come back failed: " + err.message, true); }
     },
     onNotPerson: (personId, personName) => rejectSearchSuggestion(face.id, personId, personName),
+    onNotPersonAll: (personId, personName) => rejectSearchSuggestionAll(personId, personName),
     onOpenPhoto: () => window.open(`/api/preview/${face.photo_id}`, "_blank"),
   });
 }
@@ -518,6 +519,39 @@ async function rejectSearchSuggestion(faceId, personId, personName) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     setStatus(`Marked as not ${personName}.`);
     removeFaceFromCandidates(faceId);
+    renderUntaggedGrid();
+  } catch (err) {
+    setStatus("Reject failed: " + err.message, true);
+  }
+}
+
+// Sweep the whole visible batch: every proposed (untagged) face across the
+// rendered candidates that this person is suggested for gets the same negative.
+// One /negatives call for the lot — the endpoint takes a face_ids list.
+async function rejectSearchSuggestionAll(personId, personName) {
+  const faceIds = [];
+  for (const c of untaggedCandidates) {
+    for (const p of c.proposed) {
+      if (p.person_id === personId) faceIds.push(p.face_id);
+    }
+  }
+  if (!faceIds.length) { setStatus(`No faces suggested as ${personName}.`, true); return; }
+  if (!confirm(`Mark ${faceIds.length} face(s) as definitely NOT ${personName}? ` +
+               `They will stop being suggested as ${personName} and fall through ` +
+               `to their next-best match.`)) return;
+  try {
+    const res = await fetch("/api/faces/negatives", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ face_ids: faceIds, person_id: personId, negative: true }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    setStatus(`Marked ${faceIds.length} face(s) as not ${personName}.`);
+    // One pass over the candidates rather than removeFaceFromCandidates() per
+    // id — that's O(candidates) each, and this batch can be hundreds of faces.
+    const gone = new Set(faceIds);
+    for (const c of untaggedCandidates) {
+      c.proposed = c.proposed.filter((p) => !gone.has(p.face_id));
+    }
     renderUntaggedGrid();
   } catch (err) {
     setStatus("Reject failed: " + err.message, true);

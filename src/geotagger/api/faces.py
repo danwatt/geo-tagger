@@ -524,6 +524,28 @@ async def api_photo_faces(photo_id: int):
     return out
 
 
+@router.get("/api/photos/{photo_id}/tagged-people")
+async def api_photo_tagged_people(photo_id: int):
+    """People already committed to a face in this photo, one entry per face.
+
+    Deliberately lighter than /api/photos/{photo_id}/faces: no embeddings and no
+    recognition pass, because the People detail pane hits this every time focus
+    moves between faces.
+    """
+    if not index.get_photo(photo_id):
+        raise HTTPException(404)
+    return [
+        {
+            "id": r["id"],
+            "person_id": r["person_id"],
+            "person_name": r["person_name"],
+            "bbox": thumbnails.orient_bbox(r["bbox"].split(","), r["orientation"]),
+            "assigned_at": r["assigned_at"],
+        }
+        for r in index.get_tagged_faces_for_photo(photo_id)
+    ]
+
+
 @router.post("/api/faces/{face_id}/assign")
 async def api_assign_face(face_id: int, req: AssignFaceRequest):
     if not index.get_face(face_id):
