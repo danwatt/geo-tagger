@@ -322,7 +322,7 @@ async def api_face_crop(face_id: int, request: Request):
                 Path(index.photo_path(row)), row["mtime"], row["size"], bbox,
                 orientation=row["orientation"]),
         )
-        return Response(content=data, media_type="image/jpeg",
+        return Response(content=data, media_type=thumbnails.media_type(),
                         headers={"Cache-Control": "max-age=86400", "ETag": etag})
     except Exception as e:
         raise HTTPException(500, str(e))

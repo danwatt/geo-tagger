@@ -249,7 +249,7 @@ async def api_thumbnail(photo_id: int, request: Request):
             row["size"],
             row["orientation"],
         )
-        return Response(content=data, media_type="image/jpeg",
+        return Response(content=data, media_type=thumbnails.media_type(),
                         headers={"Cache-Control": "max-age=86400", "ETag": etag})
     except Exception as e:
         import traceback
@@ -277,7 +277,7 @@ async def api_preview(photo_id: int, request: Request):
             row["size"],
             row["orientation"],
         )
-        return Response(content=data, media_type="image/jpeg",
+        return Response(content=data, media_type=thumbnails.media_type(),
                         headers={"Cache-Control": "max-age=86400", "ETag": etag})
     except Exception as e:
         raise HTTPException(500, str(e))

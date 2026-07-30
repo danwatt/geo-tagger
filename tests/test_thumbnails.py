@@ -217,8 +217,8 @@ class TestGetThumbnail:
         fsize = path.stat().st_size
 
         data1 = thumbnails.get_thumbnail(path, 1.0, fsize)
-        assert data1[:2] == b"\xff\xd8"  # JPEG magic bytes
         img = Image.open(io.BytesIO(data1))
+        assert img.format == "WEBP"  # default rendition format
         assert max(img.size) <= THUMB_SIZE
 
         data2 = thumbnails.get_thumbnail(path, 1.0, fsize)  # cache hit
@@ -264,7 +264,7 @@ class TestGetPreviewOriented:
 
         key = thumbnails._cache_key(path, 1.0, fsize)
         subdir = thumbnails._get_thumbs_dir() / key[:2]
-        assert not (subdir / f"{key}_preview_o1.jpg").exists()
+        assert not (subdir / f"{key}_preview_o1{thumbnails.cache_ext()}").exists()
 
     def test_rotated_orientation_creates_a_separate_cached_file(self, thumbs_dir, tmp_path):
         path = _make_photo(tmp_path, size=(40, 20))
@@ -277,10 +277,53 @@ class TestGetPreviewOriented:
 
         key = thumbnails._cache_key(path, 1.0, fsize)
         subdir = thumbnails._get_thumbs_dir() / key[:2]
-        assert (subdir / f"{key}_preview_o6.jpg").exists()
+        assert (subdir / f"{key}_preview_o6{thumbnails.cache_ext()}").exists()
 
         data2 = thumbnails.get_preview_oriented(path, 1.0, fsize, orientation=6)  # cache hit
         assert data2 == data
+
+
+class TestRenditionFormat:
+    def test_webp_default_ext_and_media_type(self):
+        assert thumbnails.cache_ext() == ".webp"
+        assert thumbnails.media_type() == "image/webp"
+
+    def test_jpeg_setting_switches_ext_media_type_and_encoding(self, monkeypatch, thumbs_dir, tmp_path):
+        monkeypatch.setattr(thumbnails.config, "THUMB_FORMAT", "jpeg")
+        assert thumbnails.cache_ext() == ".jpg"
+        assert thumbnails.media_type() == "image/jpeg"
+
+        path = _make_photo(tmp_path, size=(300, 200))
+        fsize = path.stat().st_size
+        data = thumbnails.get_thumbnail(path, 1.0, fsize)
+        assert Image.open(io.BytesIO(data)).format == "JPEG"
+        key = thumbnails._cache_key(path, 1.0, fsize)
+        assert (thumbs_dir / key[:2] / f"{key}_thumb.jpg").exists()
+
+    def test_format_switch_does_not_read_the_other_formats_cache(self, monkeypatch, thumbs_dir, tmp_path):
+        # The extension is part of the filename, so a flipped setting must miss the
+        # existing file rather than serve bytes of the wrong format.
+        path = _make_photo(tmp_path)
+        fsize = path.stat().st_size
+        thumbnails.get_thumbnail(path, 1.0, fsize)             # writes .webp
+        assert thumbnails.thumbnail_exists(path, 1.0, fsize) is True
+        monkeypatch.setattr(thumbnails.config, "THUMB_FORMAT", "jpeg")
+        assert thumbnails.thumbnail_exists(path, 1.0, fsize) is False
+
+    def test_webp_is_smaller_than_jpeg_for_the_same_source(self, monkeypatch, thumbs_dir, tmp_path):
+        # Needs detailed pixels — a flat color compresses to nothing in either format.
+        path = tmp_path / "detailed.jpg"
+        src = Image.new("RGB", (1200, 900))
+        src.putdata([((x * 7) % 256, (x * 13 + x // 1200 * 3) % 256, (x * 29) % 256)
+                     for x in range(1200 * 900)])
+        src.save(path, "JPEG", quality=95)
+        fsize = path.stat().st_size
+        webp = thumbnails.get_preview(path, 1.0, fsize)
+        thumbnails.invalidate_photo_cache(path, 1.0, fsize)
+        monkeypatch.setattr(thumbnails.config, "THUMB_FORMAT", "jpeg")
+        monkeypatch.setattr(thumbnails.config, "THUMB_QUALITY", 85)
+        jpeg = thumbnails.get_preview(path, 1.0, fsize)
+        assert len(webp) < len(jpeg)
 
 
 class TestOpenImageRawFallback:
@@ -294,7 +337,6 @@ class TestOpenImageRawFallback:
 
         data = thumbnails.get_thumbnail(path, 1.0, fsize)
         img = Image.open(io.BytesIO(data))
-        assert img.format == "JPEG"
         assert max(img.size) <= THUMB_SIZE
 
 
@@ -349,8 +391,9 @@ class TestRawFullDecode:
 
         key = thumbnails._cache_key(path, 1.0, 999)
         subdir = thumbs_dir / key[:2]
-        assert (subdir / f"{key}_preview_fd.jpg").exists()
-        assert not (subdir / f"{key}_preview.jpg").exists()
+        ext = thumbnails.cache_ext()
+        assert (subdir / f"{key}_preview_fd{ext}").exists()
+        assert not (subdir / f"{key}_preview{ext}").exists()
 
     def test_detection_preview_full_decode_caps_at_decode_max_and_reports_full(
             self, thumbs_dir, monkeypatch):

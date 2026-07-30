@@ -412,6 +412,10 @@ live from the Settings page):
 | `GEOTAGGER_OSM_CITY_FALLBACK_GEONAMES` | `1` | `0` = strict OSM-only city (no fallback for coordinates outside every imported polygon) |
 | `GEOTAGGER_WRITE_XMP_ON_GEOTAG` | `0` | `1` = write GPS to the XMP sidecar immediately on every geotag edit |
 | `GEOTAGGER_RAW_FULL_DECODE` | `0` | `1` = fully demosaic RAW files via LibRaw instead of using the embedded preview |
+| `GEOTAGGER_THUMB_FORMAT` | `webp` | Format for cached thumbnails/previews/face crops: `webp` (smaller) or `jpeg` |
+| `GEOTAGGER_THUMB_QUALITY` | `80` webp / `85` jpeg | Encoder quality for cached renditions |
+| `GEOTAGGER_THUMB_QUALITY_HIGH` | `90` | Quality for the (uncached) face-detection rendition |
+| `GEOTAGGER_WEBP_METHOD` | `4` | libwebp effort, 0 (fast) … 6 (slowest, smallest) |
 
 ## Cross-platform notes
 

@@ -72,6 +72,28 @@ AUTO_VACUUM_PAGE_SIZE = int(os.environ.get("GEOTAGGER_VACUUM_PAGE_SIZE", "16384"
 THUMB_SIZE = 256
 PREVIEW_SIZE = 1600
 
+# ── Cached rendition encoding (thumbnails.py) ──
+# Format every generated rendition (grid thumb, preview, face crop) is encoded in.
+# WebP at q80 is typically 25-35% smaller than JPEG q85 at comparable perceptual
+# quality, and the thumbs cache is by far the largest thing this app writes.
+# "jpeg" restores the old behaviour. The chosen format's extension is part of every
+# cache filename, so switching swaps to a separate set of files instead of serving a
+# stale mix — old renditions are simply never read again (delete the cache's `thumbs/`
+# dir to reclaim their space).
+THUMB_FORMAT = os.environ.get("GEOTAGGER_THUMB_FORMAT", "webp").strip().lower()
+if THUMB_FORMAT not in ("webp", "jpeg"):
+    raise ValueError(f"GEOTAGGER_THUMB_FORMAT must be 'webp' or 'jpeg', got {THUMB_FORMAT!r}")
+# Encoder quality for cached renditions. Defaults are per-format on purpose: the two
+# scales aren't comparable, and WebP q80 ≈ JPEG q85 visually.
+THUMB_QUALITY = int(os.environ.get("GEOTAGGER_THUMB_QUALITY", "80" if THUMB_FORMAT == "webp" else "85"))
+# Quality for the (uncached, in-memory) face-detection rendition — higher, since
+# compression artifacts cost detection recall and ArcFace embedding accuracy.
+THUMB_QUALITY_HIGH = int(os.environ.get("GEOTAGGER_THUMB_QUALITY_HIGH", "90"))
+# libwebp encoder effort, 0 (fast) … 6 (slowest, smallest). Only matters for WebP.
+# 4 is Pillow's default and a reasonable balance; a full-library scan encodes one
+# thumb per photo, so raising this makes scans noticeably slower for a few % of size.
+WEBP_METHOD = int(os.environ.get("GEOTAGGER_WEBP_METHOD", "4"))
+
 # Sidecar naming: "basename" -> IMG.NEF uses IMG.xmp
 #                 "fullname" -> IMG.NEF uses IMG.NEF.xmp
 SIDECAR_MODE = os.environ.get("GEOTAGGER_SIDECAR_MODE", "basename")  # or "fullname"

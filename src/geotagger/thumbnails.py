@@ -36,6 +36,34 @@ def _cache_key(path: Path, mtime: float, size: int) -> str:
     return hashlib.sha1(f"{path}:{mtime}:{size}".encode()).hexdigest()
 
 
+# ── Rendition encoding (one place, so format is switchable) ──
+
+def cache_ext() -> str:
+    """File extension for cached renditions, per ``config.THUMB_FORMAT``. Part of every
+    cache filename so a format switch reads/writes a distinct set of files rather than
+    serving a stale mix."""
+    return ".webp" if config.THUMB_FORMAT == "webp" else ".jpg"
+
+
+def media_type() -> str:
+    """HTTP content type matching ``cache_ext()`` — routes serving these bytes must use
+    this, not a hardcoded image/jpeg."""
+    return "image/webp" if config.THUMB_FORMAT == "webp" else "image/jpeg"
+
+
+def _encode(img: Image.Image, quality: int | None = None) -> bytes:
+    """Encode ``img`` in the configured rendition format. ``quality`` defaults to
+    ``config.THUMB_QUALITY``; the scales differ per format, hence the per-format
+    defaults in config."""
+    q = config.THUMB_QUALITY if quality is None else quality
+    buf = io.BytesIO()
+    if config.THUMB_FORMAT == "webp":
+        img.save(buf, format="WEBP", quality=q, method=config.WEBP_METHOD)
+    else:
+        img.save(buf, format="JPEG", quality=q, optimize=True)
+    return buf.getvalue()
+
+
 # EXIF orientation (1..8) → the PIL transpose that brings a sensor-orientation
 # image upright. Same mapping PIL's ImageOps.exif_transpose uses, but driven by a
 # value we read ourselves — embedded RAW/HEIC previews often carry no tag, so the
@@ -233,9 +261,7 @@ def _make_thumbnail(path: Path, max_size: int, is_video: bool = False,
     if is_video:
         _stamp_play_icon(img)
 
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=85)
-    return buf.getvalue()
+    return _encode(img)
 
 
 def _stamp_play_icon(img: Image.Image):
@@ -269,7 +295,7 @@ def thumbnail_exists(path: Path, mtime: float, size: int) -> bool:
         thumbs = _get_thumbs_dir()
         key = _cache_key(path, mtime, size)
         subdir = thumbs / key[:2]
-        cached = subdir / (key + "_thumb.jpg")
+        cached = subdir / (key + "_thumb" + cache_ext())
         return cached.exists()
     except Exception:
         return False
@@ -286,7 +312,7 @@ def face_crop_exists(path: Path, mtime: float, size: int,
         bbox_key = hashlib.sha1(",".join(f"{v:.4f}" for v in bbox).encode()).hexdigest()[:10]
         key = _cache_key(path, mtime, size)
         subdir = thumbs / key[:2]
-        cached = subdir / f"{key}_face_{bbox_key}{_fd_suffix(path)}{_orient_suffix(orientation)}.jpg"
+        cached = subdir / f"{key}_face_{bbox_key}{_fd_suffix(path)}{_orient_suffix(orientation)}{cache_ext()}"
         return cached.exists()
     except Exception:
         return False
@@ -322,7 +348,7 @@ def get_thumbnail(path: Path, mtime: float, size: int,
     # Use first 2 chars of hash as subdirectory
     subdir = thumbs / key[:2]
     subdir.mkdir(exist_ok=True)
-    cached = subdir / f"{key}_thumb{_orient_suffix(orientation)}.jpg"
+    cached = subdir / f"{key}_thumb{_orient_suffix(orientation)}{cache_ext()}"
     if cached.exists():
         return cached.read_bytes()
     is_video = path.suffix.lower() in VIDEO_EXTENSIONS
@@ -352,7 +378,7 @@ def rebuild_preview_from_full_decode(path: Path, mtime: float, size: int) -> byt
     subdir.mkdir(exist_ok=True)
     is_raw = path.suffix.lower() in config.RAW_EXTENSIONS
     data = _make_thumbnail(path, PREVIEW_SIZE, full_decode=is_raw)
-    cached = subdir / f"{key}_preview{_fd_suffix(path)}.jpg"
+    cached = subdir / f"{key}_preview{_fd_suffix(path)}{cache_ext()}"
     cached.write_bytes(data)
     return data
 
@@ -376,7 +402,7 @@ def get_preview(path: Path, mtime: float, size: int,
     subdir = thumbs / key[:2]
     subdir.mkdir(exist_ok=True)
     fd = _fd_suffix(path)
-    cached = subdir / f"{key}_preview{fd}.jpg"
+    cached = subdir / f"{key}_preview{fd}{cache_ext()}"
     if cached.exists():
         return cached.read_bytes()
     is_video = path.suffix.lower() in VIDEO_EXTENSIONS
@@ -399,21 +425,22 @@ def get_preview_oriented(path: Path, mtime: float, size: int,
     key = _cache_key(path, mtime, size)
     subdir = thumbs / key[:2]
     subdir.mkdir(exist_ok=True)
-    cached = subdir / f"{key}_preview{_fd_suffix(path)}_o{orientation}.jpg"
+    cached = subdir / f"{key}_preview{_fd_suffix(path)}_o{orientation}{cache_ext()}"
     if cached.exists():
         return cached.read_bytes()
     img = Image.open(io.BytesIO(get_preview(path, mtime, size, orientation))).convert("RGB")
     img = apply_orientation(img, orientation)
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=85)
-    data = buf.getvalue()
+    data = _encode(img)
     cached.write_bytes(data)
     return data
 
 
 def get_detection_preview(path: Path, mtime: float, size: int,
                           orientation: int | None = None) -> tuple[bytes, bool]:
-    """Return ``(jpeg_bytes, ran_on_full_decode)`` — the UPRIGHT input for FACE DETECTION.
+    """Return ``(encoded_bytes, ran_on_full_decode)`` — the UPRIGHT input for FACE DETECTION.
+
+    Bytes are in ``config.THUMB_FORMAT`` (WebP by default) at ``THUMB_QUALITY_HIGH``;
+    the caller decodes them with ``cv2.imdecode``, which handles both formats.
 
     Detection runs on the display-oriented image, NOT the sensor image: SCRFD (detector)
     and ArcFace (embedder) both expect upright faces, so a sideways face in a rotated
@@ -437,9 +464,7 @@ def get_detection_preview(path: Path, mtime: float, size: int,
             img = _decode_raw_full(path).convert("RGB")
             img = apply_orientation(img, orientation)   # detect on the upright image
             img.thumbnail((config.FACE_DECODE_MAX_DIM, config.FACE_DECODE_MAX_DIM), Image.LANCZOS)
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=90)
-            return buf.getvalue(), True
+            return _encode(img, quality=config.THUMB_QUALITY_HIGH), True
         except Exception:
             pass  # fall through to the oriented display preview
     return get_preview_oriented(path, mtime, size, orientation), False
@@ -448,7 +473,8 @@ def get_detection_preview(path: Path, mtime: float, size: int,
 def get_face_crop(path: Path, mtime: float, size: int, bbox: tuple[float, float, float, float],
                   margin: float = 0.4, out_size: int = 160,
                   orientation: int | None = None) -> bytes:
-    """Return a square JPEG crop of one face, cropped from the cached preview.
+    """Return a square crop of one face (encoded per ``config.THUMB_FORMAT``), cropped
+    from the cached preview.
 
     bbox is normalized (0..1) to the canonical (sensor-space) preview, so the
     crop region is computed there and the resulting tile is rotated upright for
@@ -461,7 +487,7 @@ def get_face_crop(path: Path, mtime: float, size: int, bbox: tuple[float, float,
     key = _cache_key(path, mtime, size)
     subdir = thumbs / key[:2]
     subdir.mkdir(exist_ok=True)
-    cached = subdir / f"{key}_face_{bbox_key}{_fd_suffix(path)}{_orient_suffix(orientation)}.jpg"
+    cached = subdir / f"{key}_face_{bbox_key}{_fd_suffix(path)}{_orient_suffix(orientation)}{cache_ext()}"
     if cached.exists():
         return cached.read_bytes()
 
@@ -478,9 +504,7 @@ def get_face_crop(path: Path, mtime: float, size: int, bbox: tuple[float, float,
     crop = apply_orientation(crop, orientation)  # show the face upright
     crop = crop.resize((out_size, out_size), Image.LANCZOS)
 
-    buf = io.BytesIO()
-    crop.save(buf, format="JPEG", quality=85)
-    data = buf.getvalue()
+    data = _encode(crop)
     cached.write_bytes(data)
     return data
 
@@ -519,6 +543,10 @@ def render_fullsize_with_faces(path: Path, orientation: int | None,
     person, amber = unlabeled, grey = ignored. ``face_specs`` is a list of
     ``(bbox_str, person_name, ignored)``. Heavy (full decode + draw) — call from the
     executor, never the event loop. Not disk-cached: it's an on-demand full-size view.
+
+    Deliberately always JPEG, unlike the cached renditions: nothing is stored so there's
+    no size to save, and WebP caps at 16383px per side — a full-res sensor image can
+    exceed that.
     """
     ext = path.suffix.lower()
     img = _decode_raw_full(path) if ext in config.RAW_EXTENSIONS else _open_image(path, orientation=orientation)

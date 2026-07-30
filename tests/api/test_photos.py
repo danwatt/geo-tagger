@@ -76,6 +76,31 @@ def test_missing_ids_404(client):
     assert client.get("/api/photo/999/fullsize").status_code == 404
 
 
+def test_thumbnail_and_preview_serve_the_rendition_format(client, thumbs_dir, tmp_path):
+    """Both routes must advertise thumbnails.media_type(), not a hardcoded image/jpeg —
+    the cached renditions are WebP by default."""
+    import io
+    from PIL import Image
+    from geotagger import thumbnails
+
+    p = tmp_path / "shot.jpg"
+    Image.new("RGB", (300, 200), (20, 180, 90)).save(p, "JPEG")
+    index.upsert_photo(
+        filename="shot.jpg", dir_=str(tmp_path), ext=".jpg",
+        media_type="image", mtime=1.0, size=1, lat=None, lng=None,
+        geotag_source="none", sidecar_path=None, sidecar_mtime=None, orientation=1,
+    )
+    pid = index.get_db().execute(
+        "SELECT id FROM photos WHERE dir=? AND filename=?", (str(tmp_path), "shot.jpg")
+    ).fetchone()[0]
+
+    for route in (f"/api/thumbnail/{pid}", f"/api/preview/{pid}"):
+        r = client.get(route)
+        assert r.status_code == 200
+        assert r.headers["content-type"] == thumbnails.media_type()
+        assert Image.open(io.BytesIO(r.content)).format == "WEBP"
+
+
 def test_fullsize_renders_jpeg_with_face_boxes(client, tmp_path):
     import io
     from PIL import Image, ImageDraw
