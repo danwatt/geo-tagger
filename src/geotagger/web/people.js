@@ -21,6 +21,12 @@ let suggestedOnly = false;      // Unlabeled queue: hide faces with no guess
 let suggestFilterPersonId = null;               // person_id, or null for "all suggestions"
 let unlabeledAll = [];                          // full loaded queue (master; drives the dropdown + filter)
 let unlabeledMeta = { total: 0, returned: 0 };  // server counts for the loaded queue (status text)
+// Frozen person-run ordering: "<bucket key>|<person id>" → the earliest photo
+// timestamp that person had in that bucket *the first time we saw the bucket*.
+// Staging/committing removes faces from the grid, which would otherwise raise a
+// person's earliest timestamp and shuffle their run under the cursor mid-pass —
+// so the rank is captured once per load and reused. Cleared on refetch.
+let runOrderRank = new Map();
 let clusters = [];              // discovered groups (Discover view)
 let crowdGroups = [];           // crowd photo groups (Crowds view)
 let hideCompletedCrowds = true; // hide crowd photos with no unlabeled faces
@@ -700,6 +706,9 @@ async function loadFaces() {
       // e.g. sortBucketBySuggestion, well-defined.) This is the master list;
       // the suggested-person filter narrows it into `faces` in applyUnlabeledView.
       faces.sort((a, b) => (a.photo_datetime || 0) - (b.photo_datetime || 0));
+      // Fresh data → re-freeze run order, off the full queue (this call sees every
+      // face, so the frozen ranks survive later staging/commits within this load).
+      runOrderRank = new Map();
       unlabeledAll = computeMonthLocationGroups(faces).flatMap(g => g.faces);
       unlabeledMeta = { total: data.total, returned: data.returned };
       populateSuggestFilter();
@@ -1128,7 +1137,9 @@ function computeMonthLocationGroups(list) {
       }
       b.faces.push(f);
     });
-    buckets.forEach(b => { b.faces = sortBucketBySuggestion(b.faces); });
+    buckets.forEach((b, key) => {
+      b.faces = sortBucketBySuggestion(b.faces, `ml:${mg.year}-${mg.month}:${key}`);
+    });
     out.push(...buckets.values());
   });
   return out;
@@ -1181,7 +1192,9 @@ function computeUnlabeledPhotoGroups(list) {
     }
     b.faces.push(f);
   });
-  buckets.forEach(b => { b.faces = sortBucketBySuggestion(b.faces); });
+  buckets.forEach(b => {
+    b.faces = sortBucketBySuggestion(b.faces, `photo:${b.photoId}`);
+  });
   return [...buckets.values()];
 }
 
@@ -1269,7 +1282,10 @@ function renderUnlabeledPersonFirst(grid, list) {
 // a fixed point — re-running it on already-sorted faces is a no-op — because the
 // per-person earliest timestamp is order-independent, so the flat list and the
 // re-grouped render stay in sync.
-function sortBucketBySuggestion(faceList) {
+// `cacheKey` identifies the bucket across renders: the per-person rank is frozen
+// on first sight (see runOrderRank) so removing faces mid-pass can't reshuffle
+// the runs. Omit it for one-off/unstable buckets.
+function sortBucketBySuggestion(faceList, cacheKey) {
   const firstTs = new Map();   // person_id → earliest photo_datetime in this bucket
   faceList.forEach(f => {
     const pid = f.suggestion ? f.suggestion.person_id : null;
@@ -1277,6 +1293,14 @@ function sortBucketBySuggestion(faceList) {
     const ts = f.photo_datetime || 0;
     if (!firstTs.has(pid) || ts < firstTs.get(pid)) firstTs.set(pid, ts);
   });
+  if (cacheKey) {
+    firstTs.forEach((ts, pid) => {
+      const k = `${cacheKey}|${pid}`;
+      // Person seen here before → reuse their frozen rank; otherwise freeze now.
+      if (runOrderRank.has(k)) firstTs.set(pid, runOrderRank.get(k));
+      else runOrderRank.set(k, ts);
+    });
+  }
   return faceList.slice().sort((a, b) => {
     const pa = a.suggestion ? a.suggestion.person_id : null;
     const pb = b.suggestion ? b.suggestion.person_id : null;
