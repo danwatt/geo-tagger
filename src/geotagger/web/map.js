@@ -27,6 +27,16 @@
  * before the GeoNames nearest-place estimate. Off by default: these tile the map
  * wall-to-wall, so they're drawn dashed and unfilled and only when asked for.
  *
+ * /api/geocode/zctas is the same deal for ZIP code areas (past MIN_ZOOM_FOR_ZCTA),
+ * the step below Census places in that chain. Each polygon is labeled with its code
+ * and mailing city, since a ZIP boundary is invisible on the basemap underneath.
+ *
+ * All four boundary overlays are toggled from Leaflet's own layers control (top
+ * right); the basemap switcher is a separate custom control in the opposite corner.
+ * Whether an overlay is on is read straight off map.hasLayer() rather than tracked
+ * alongside it, and toggling one triggers that overlay's viewport fetch — nothing is
+ * requested for a layer you haven't turned on.
+ *
  * Named buildings vastly outnumber every other OSM category and are only
  * meaningful once you can see individual rooftops, so they're held back
  * behind their own, deeper MIN_ZOOM_FOR_BUILDINGS threshold — the osm-places
@@ -38,6 +48,7 @@ const MIN_ZOOM_FOR_MARKERS = 8;
 const MIN_ZOOM_FOR_VORONOI = 11;
 const MIN_ZOOM_FOR_OSM = 11;
 const MIN_ZOOM_FOR_CENSUS = 9;   // whole-place polygons, readable further out than OSM's features
+const MIN_ZOOM_FOR_ZCTA = 9;     // same scale as places; each polygon carries a label
 const MIN_ZOOM_FOR_BUILDINGS = 17;
 const REFRESH_DEBOUNCE_MS = 250;
 
@@ -59,17 +70,16 @@ let overlayTileLayer = null;
 let activeBasemap = "street";
 let markerCluster = null;
 let voronoiLayer = null;
-let voronoiEnabled = true;
 let osmLayer = null;
-let osmEnabled = true;
 let censusLayer = null;
-let censusEnabled = false;   // off by default: it blankets the map, unlike OSM's sparser features
+let zctaLayer = null;
 let probeSeq = 0;
 let refreshTimer = null;
 let fetchSeq = 0;
 let voronoiFetchSeq = 0;
 let osmFetchSeq = 0;
 let censusFetchSeq = 0;
+let zctaFetchSeq = 0;
 
 const BASEMAPS = {
   street: {
@@ -93,25 +103,6 @@ const BASEMAPS = {
 document.addEventListener("DOMContentLoaded", () => {
   initMap();
   fitToLibrary();
-
-  const toggle = document.getElementById("voronoi-toggle");
-  toggle.addEventListener("change", () => {
-    voronoiEnabled = toggle.checked;
-    refreshVoronoi();
-  });
-
-  const osmToggle = document.getElementById("osm-toggle");
-  osmToggle.addEventListener("change", () => {
-    osmEnabled = osmToggle.checked;
-    refreshOsm();
-  });
-
-  const censusToggle = document.getElementById("census-toggle");
-  censusToggle.checked = censusEnabled;
-  censusToggle.addEventListener("change", () => {
-    censusEnabled = censusToggle.checked;
-    refreshCensus();
-  });
 });
 
 function initMap() {
@@ -130,14 +121,51 @@ function initMap() {
   // as the geocode result.
   osmLayer = L.geoJSON(null, { style: osmFeatureStyle, interactive: false }).addTo(map);
   // Census place boundaries, drawn dashed so they read as a different source than
-  // the OSM outlines they sit next to (and often overlap).
-  censusLayer = L.geoJSON(null, { style: censusFeatureStyle, interactive: false }).addTo(map);
+  // the OSM outlines they sit next to (and often overlap). Not added to the map:
+  // these tile the country wall-to-wall, so they start off in the layers control.
+  censusLayer = L.geoJSON(null, { style: censusFeatureStyle, interactive: false });
+  // ZIP areas get a label per polygon (the code is the whole point of the layer, and
+  // unlike a place name it isn't guessable from the map underneath). Also off by default.
+  zctaLayer = L.geoJSON(null, {
+    style: zctaFeatureStyle,
+    interactive: false,
+    onEachFeature: addZctaLabel,
+  });
   markerCluster = L.markerClusterGroup({ maxClusterRadius: 60 });
   map.addLayer(markerCluster);
+
+  addOverlayControl();
 
   map.on("moveend", correctWorldWrap);
   map.on("moveend zoomend", scheduleRefresh);
   map.on("click", probePoint);
+}
+
+// Each overlay's data is fetched per viewport, so toggling one on has to kick off
+// its own fetch rather than just revealing already-drawn geometry — hence the
+// refresh per entry, keyed by the control's own label.
+const OVERLAY_REFRESH = {
+  "Place boundaries": refreshVoronoi,
+  "OSM places": refreshOsm,
+  "Census places": refreshCensus,
+  "ZIP areas": refreshZctas,
+};
+
+function addOverlayControl() {
+  L.control.layers(null, {
+    "Place boundaries": voronoiLayer,
+    "OSM places": osmLayer,
+    "Census places": censusLayer,
+    "ZIP areas": zctaLayer,
+  }, { collapsed: true, position: "topright" }).addTo(map);
+
+  // map.hasLayer() is the single source of truth for whether an overlay is on —
+  // the control mutates that directly, so there are no parallel enabled flags to
+  // drift out of sync with it.
+  map.on("overlayadd overlayremove", (e) => {
+    const refresh = OVERLAY_REFRESH[e.name];
+    if (refresh) refresh();
+  });
 }
 
 // Leaflet projects longitude linearly with no wraparound, so continuous
@@ -213,6 +241,7 @@ async function fitToLibrary() {
   refreshVoronoi();
   refreshOsm();
   refreshCensus();
+  refreshZctas();
 }
 
 function scheduleRefresh() {
@@ -222,6 +251,7 @@ function scheduleRefresh() {
     refreshVoronoi();
     refreshOsm();
     refreshCensus();
+    refreshZctas();
   }, REFRESH_DEBOUNCE_MS);
 }
 
@@ -251,7 +281,7 @@ async function refreshMarkers() {
     const data = await res.json();
     if (seq !== fetchSeq) return; // a newer request superseded this one
     renderMarkers(data.places);
-    if (voronoiEnabled && zoom < MIN_ZOOM_FOR_VORONOI) {
+    if (map.hasLayer(voronoiLayer) && zoom < MIN_ZOOM_FOR_VORONOI) {
       showHint("Zoom in further to see place boundaries");
     }
     const shown = data.places.length.toLocaleString();
@@ -265,7 +295,7 @@ async function refreshMarkers() {
 
 async function refreshVoronoi() {
   const zoom = map.getZoom();
-  if (!voronoiEnabled || zoom < MIN_ZOOM_FOR_VORONOI) {
+  if (!map.hasLayer(voronoiLayer) || zoom < MIN_ZOOM_FOR_VORONOI) {
     voronoiLayer.clearLayers();
     return;
   }
@@ -286,7 +316,7 @@ async function refreshVoronoi() {
 
 async function refreshOsm() {
   const zoom = map.getZoom();
-  if (!osmEnabled || zoom < MIN_ZOOM_FOR_OSM) {
+  if (!map.hasLayer(osmLayer) || zoom < MIN_ZOOM_FOR_OSM) {
     osmLayer.clearLayers();
     return;
   }
@@ -316,7 +346,7 @@ async function refreshOsm() {
 
 async function refreshCensus() {
   const zoom = map.getZoom();
-  if (!censusEnabled || zoom < MIN_ZOOM_FOR_CENSUS) {
+  if (!map.hasLayer(censusLayer) || zoom < MIN_ZOOM_FOR_CENSUS) {
     censusLayer.clearLayers();
     return;
   }
@@ -346,6 +376,56 @@ async function refreshCensus() {
 function osmFeatureStyle(feature) {
   const color = OSM_CATEGORY_COLORS[feature.properties.category] || "#888";
   return { color, weight: 2, opacity: 0.9, fillColor: color, fillOpacity: 0.12 };
+}
+
+async function refreshZctas() {
+  const zoom = map.getZoom();
+  if (!map.hasLayer(zctaLayer) || zoom < MIN_ZOOM_FOR_ZCTA) {
+    zctaLayer.clearLayers();
+    return;
+  }
+
+  const b = map.getBounds();
+  const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
+  const seq = ++zctaFetchSeq;
+  try {
+    const res = await fetch(`/api/geocode/zctas?bbox=${encodeURIComponent(bbox)}`);
+    if (res.status === 503) {
+      zctaLayer.clearLayers();
+      const body = await res.json().catch(() => ({}));
+      setStatus(body.detail || "Census ZIP areas not built — run scripts/get_census_places.py", true);
+      return;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const geojson = await res.json();
+    if (seq !== zctaFetchSeq) return; // a newer request superseded this one
+    zctaLayer.clearLayers();
+    zctaLayer.addData(geojson);
+  } catch (e) {
+    if (seq === zctaFetchSeq) setStatus("Error loading ZIP areas: " + e.message, true);
+  }
+}
+
+// ZIP areas: solid outline in their own hue, plus a permanent centroid label —
+// "77070" alone means nothing on a map, and the mailing city next to it is exactly
+// what the geocoder would fall back to for a photo inside this polygon.
+//
+// Magenta because every other hue on this map is taken or camouflaged: blue reads as
+// water (and is OSM's city color), green as parks, yellow/orange are the Census place
+// outlines these sit directly on top of. Keep in sync with .zcta-label in map.css.
+const ZCTA_COLOR = "#ff3ecb";
+
+function zctaFeatureStyle() {
+  return { color: ZCTA_COLOR, weight: 2, opacity: 0.95, fill: false };
+}
+
+function addZctaLabel(feature, layer) {
+  const { zip, city } = feature.properties;
+  layer.bindTooltip(city ? `${zip} · ${city}` : zip, {
+    permanent: true,
+    direction: "center",
+    className: "zcta-label",
+  });
 }
 
 // Census places: one color, dashed, no fill — they tile the map wall-to-wall, so a

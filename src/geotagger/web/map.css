@@ -29,6 +29,37 @@
 }
 #map-hint.visible { display: block; }
 
+/* ── Overlay layers control ──
+   Leaflet ships this control light-themed (white panel, dark text, a white
+   layers icon). Restyled to match .basemap-control in theme.css, which sits in
+   the opposite corner of the same map. */
+.leaflet-control-layers {
+  background: rgba(30, 30, 30, 0.92);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: var(--shadow-map);
+  color: #ccc;
+}
+.leaflet-control-layers-toggle {
+  /* The default sprite is a dark icon meant for a white button; invert it so it
+     reads on the dark panel. */
+  filter: invert(0.85);
+}
+.leaflet-control-layers-expanded {
+  padding: 6px 10px 6px 8px;
+  font-size: 11px;
+}
+.leaflet-control-layers label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 3px 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.leaflet-control-layers label:hover { color: #fff; }
+.leaflet-control-layers-separator { border-top: 1px solid var(--border); }
+
 /* ── Place marker ── */
 .place-dot {
   display: block;
@@ -91,6 +122,23 @@
   min-width: 78px;
   color: #888;
 }
+/* ZIP-area labels: Leaflet's default tooltip is a white box with a border and
+   shadow, which reads as a popup rather than a map label — strip it back to bare
+   text so dozens of them can sit on the map at once without clutter. */
+.zcta-label {
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  color: #ff7ade;  /* lighter tint of ZCTA_COLOR in map.js — text needs more lift than a line */
+  font-size: 11px;
+  font-weight: 600;
+  /* Dark halo, so the text stays legible over both the street and satellite basemaps. */
+  text-shadow: 0 0 3px #000, 0 0 3px #000;
+  white-space: nowrap;
+}
+.zcta-label::before { display: none; }  /* the tooltip's little pointer arrow */
+
 /* The source whose answer became the saved city, in the candidates list. */
 .map-popup-source-win { font-weight: 600; }
 .map-popup-source-win .map-popup-field-key { color: var(--text); }

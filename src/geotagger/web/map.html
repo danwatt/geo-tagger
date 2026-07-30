@@ -12,27 +12,10 @@
 <link rel="stylesheet" href="map.css"/>
 </head>
 <body>
+<!-- Boundary overlays live in Leaflet's own layers control (top right of the map),
+     not here — see map.js addOverlayControl. -->
 <div id="toolbar">
   <div class="toolbar-group" id="app-nav" data-active="map"></div>
-  <div class="toolbar-spacer"></div>
-  <div class="toolbar-group">
-    <label title="Show the boundary each place would win when a photo's coordinates resolve to it, once zoomed in far enough">
-      <input type="checkbox" id="voronoi-toggle" checked/>
-      Place boundaries
-    </label>
-  </div>
-  <div class="toolbar-group">
-    <label title="Show real OSM boundaries (cities, parks, stadiums, campuses, neighborhoods, named buildings) that photos are geocoded inside of">
-      <input type="checkbox" id="osm-toggle" checked/>
-      OSM places
-    </label>
-  </div>
-  <div class="toolbar-group">
-    <label title="Show US Census place boundaries — incorporated places and CDPs, the fallback consulted when a coordinate falls outside every OSM city">
-      <input type="checkbox" id="census-toggle"/>
-      Census places
-    </label>
-  </div>
 </div>
 
 <div id="main">

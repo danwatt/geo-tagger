@@ -158,7 +158,8 @@ uv run python scripts/get_census_places.py --zip path/to/cb_2025_us_place_500k.z
 under the resolved location above (or pass `--db`). Consulted after OSM and before the
 GeoNames estimate — see [Reverse geocoding](#reverse-geocoding). Census Cartographic Boundary
 Files are US Census Bureau public domain; the ZIP→city crosswalk is GeoNames (CC BY 4.0). View
-the boundaries on the **Places DB** map (`/map.html`) via the "Census places" toggle.
+the boundaries on the **Places DB** map (`/map.html`) via the "Census places" and "ZIP areas"
+toggles.
 
 A build always replaces the whole database, so run it with the same options each time — a
 `--no-zip-codes` rebuild drops the ZIP layer rather than leaving it in place. Stop the app
@@ -358,9 +359,10 @@ That makes the city chain, each step skipped if its data isn't installed:
    unaffected by that switch, since they're real answers rather than guesses).
 
 Sub-locations stay OSM-only — the Census files have no parks/campuses/venues in them. The
-Places DB map has a **Census places** overlay (off by default, dashed outlines) and its
-click-to-probe popup lists every source's answer with the winner marked, so you can see which
-step produced the city. Measured on a 61K-photo library: OSM answered 78% of distinct
+Places DB map has **Census places** and **ZIP areas** overlays (both off by default; places
+dashed, ZIP areas outlined and labeled with their code + mailing city), and its click-to-probe
+popup lists every source's answer with the winner marked, so you can see which step produced
+the city. Measured on a 61K-photo library: OSM answered 78% of distinct
 coordinates, census places 2.4% (*Chinatown → San Francisco*, *Keller → Fort Worth*), ZIP city
 18%, GeoNames the remaining 1.3%; 98% of coordinates got a ZIP code.
 

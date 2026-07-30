@@ -447,6 +447,41 @@ class TestPlacesInBbox:
         assert total == 2
         assert [p["name"] for p in places] == ["Big"]
 
+    def test_zctas_empty_when_unavailable(self):
+        assert census_places.zctas_in_bbox(30, 31, -96, -95) == ([], 0)
+
+    def test_zctas_returns_overlapping_areas_with_city(self, census_db):
+        census_db([], zctas=[
+            {"zip": "77070", "city": "Houston", "polygons": _rect(30, 31, -96, -95)},
+            {"zip": "99999", "polygons": _rect(40, 41, -80, -79)},
+        ])
+        zctas, total = census_places.zctas_in_bbox(30.4, 30.6, -95.6, -95.4)
+        assert total == 1
+        assert zctas[0]["zip"] == "77070"
+        assert zctas[0]["city"] == "Houston"
+        assert zctas[0]["polygons"][0][0][0] == [30.0, -96.0]
+
+    def test_zctas_caps_to_the_largest_by_area(self, census_db):
+        census_db([], zctas=[
+            {"zip": "11111", "area": 5.0, "polygons": _rect(30, 31, -96, -95)},
+            {"zip": "22222", "area": 0.1, "polygons": _rect(30.4, 30.5, -95.6, -95.5)},
+        ])
+        zctas, total = census_places.zctas_in_bbox(30, 31, -96, -95, limit=1)
+        assert total == 2
+        assert [z["zip"] for z in zctas] == ["11111"]
+
+    def test_zcta_geojson_feature_shape(self, census_db):
+        census_db([], zctas=[{"zip": "77070", "city": "Houston",
+                              "polygons": _rect(30, 31, -96, -95)}])
+        zctas, _ = census_places.zctas_in_bbox(30, 31, -96, -95)
+        feature = census_places.zcta_to_geojson_feature(zctas[0])
+        assert feature["properties"]["zip"] == "77070"
+        assert feature["properties"]["city"] == "Houston"
+        assert feature["geometry"]["type"] == "MultiPolygon"
+        ring = feature["geometry"]["coordinates"][0][0]
+        assert ring[0] == [-96.0, 30.0]
+        assert ring[0] == ring[-1]
+
     def test_geojson_feature_shape(self, census_db):
         census_db([{"name": "Bigtown", "kind": "city", "geoid": "4835000",
                     "polygons": _rect(30, 31, -96, -95)}])

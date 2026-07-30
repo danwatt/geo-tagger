@@ -253,6 +253,65 @@ def places_in_bbox(min_lat: float, max_lat: float, min_lng: float, max_lng: floa
     return places, total
 
 
+def zctas_in_bbox(min_lat: float, max_lat: float, min_lng: float, max_lng: float,
+                  limit: int = 4000) -> tuple[list[dict], int]:
+    """ZIP areas overlapping a viewport bbox — backs the Places DB map's ZIP overlay.
+
+    Same contract as places_in_bbox (largest-by-area kept when capped), with each ZIP's
+    crosswalk city joined in so the map can label it "77070 Houston" rather than a bare
+    number. Empty when the DB predates the ZCTA layer."""
+    _ensure_loaded()
+    if _state != "ready" or _conn is None or not _has_zctas():
+        return [], 0
+    with _lock:
+        total = _conn.execute(
+            """SELECT COUNT(*) FROM zctas_spatial s
+               WHERE s.min_lat <= ? AND s.max_lat >= ? AND s.min_lng <= ? AND s.max_lng >= ?""",
+            (max_lat, min_lat, max_lng, min_lng),
+        ).fetchone()[0]
+        rows = _conn.execute(
+            """SELECT z.id, z.zip, z.area, z.rings, p.city, p.state, p.state_code
+               FROM zctas_spatial s
+               JOIN zctas z ON z.id = s.id
+               LEFT JOIN zip_places p ON p.zip = z.zip
+               WHERE s.min_lat <= ? AND s.max_lat >= ? AND s.min_lng <= ? AND s.max_lng >= ?
+               ORDER BY z.area DESC LIMIT ?""",
+            (max_lat, min_lat, max_lng, min_lng, limit),
+        ).fetchall()
+    zctas = [
+        {
+            "id": r["id"],
+            "zip": r["zip"],
+            "city": r["city"],
+            "state": r["state"],
+            "state_code": r["state_code"],
+            "area": r["area"],
+            "polygons": json.loads(r["rings"]),
+        }
+        for r in rows
+    ]
+    return zctas, total
+
+
+def zcta_to_geojson_feature(zcta: dict) -> dict:
+    """A zctas_in_bbox() dict -> a GeoJSON Feature, for Leaflet's L.geoJSON()."""
+    return {
+        "type": "Feature",
+        "properties": {
+            "id": zcta["id"],
+            "zip": zcta["zip"],
+            "city": zcta["city"],
+            "state": zcta["state"],
+            "state_code": zcta["state_code"],
+            "area": zcta["area"],
+        },
+        "geometry": {
+            "type": "MultiPolygon",
+            "coordinates": polygons_to_geojson_coords(zcta["polygons"]),
+        },
+    }
+
+
 def place_to_geojson_feature(place: dict) -> dict:
     """A places_in_bbox() place dict -> a GeoJSON Feature (MultiPolygon geometry + the
     non-geometry fields as properties), for handing straight to Leaflet's L.geoJSON()."""

@@ -121,6 +121,30 @@ async def api_geocode_census_places(bbox: str = Query(...), limit: int = Query(4
     }
 
 
+@router.get("/api/geocode/zctas")
+async def api_geocode_zctas(bbox: str = Query(...), limit: int = Query(4000, le=8000)):
+    """ZIP code areas overlapping a viewport bbox, as a GeoJSON FeatureCollection —
+    backs the Places DB map's ZIP overlay. Each feature carries the ZIP plus its
+    crosswalk city, i.e. the mailing city a photo inside it can fall back to.
+    503 if the census DB hasn't been built, or was built without the ZCTA layer."""
+    min_lat, max_lat, min_lng, max_lng = _parse_bbox(bbox)
+    if not census_places.is_available():
+        raise HTTPException(503, "Census places DB not built — run scripts/get_census_places.py")
+    loop = asyncio.get_running_loop()
+    zctas, total = await loop.run_in_executor(
+        get_executor(), census_places.zctas_in_bbox, min_lat, max_lat, min_lng, max_lng, limit
+    )
+    if not zctas and not total and not census_places.status()["zctas"]:
+        raise HTTPException(503, "Census DB has no ZIP areas — rebuild it with "
+                                 "scripts/get_census_places.py (without --no-zip-codes)")
+    return {
+        "type": "FeatureCollection",
+        "features": [census_places.zcta_to_geojson_feature(z) for z in zctas],
+        "total": total,
+        "truncated": total > len(zctas),
+    }
+
+
 def _probe(lat: float, lng: float) -> dict:
     """Blocking half of the point probe: the resolved location plus what each source
     said on its own, so the UI can show *which* of the three produced the city."""

@@ -124,6 +124,41 @@ def test_census_places_returns_geojson_feature_collection(client, census_db):
     assert feature["geometry"]["type"] == "MultiPolygon"
 
 
+def _zcta_row(zip_code, min_lat, max_lat, min_lng, max_lng, city=None):
+    outer = [[min_lat, min_lng], [max_lat, min_lng], [max_lat, max_lng], [min_lat, max_lng]]
+    return {"zip": zip_code, "city": city, "polygons": [[outer, []]]}
+
+
+def test_zctas_503_without_data(client, census_db):
+    assert client.get("/api/geocode/zctas?bbox=-1,-1,1,1").status_code == 503
+
+
+def test_zctas_503_when_the_db_has_no_zcta_layer(client, census_db):
+    # Built places-only (or before the ZCTA layer existed) — a distinct condition
+    # from "no census DB at all", and the map surfaces the message.
+    census_db([_census_row("Testville CDP", 39.9, 40.1, -74.1, -73.9)])
+    r = client.get("/api/geocode/zctas?bbox=-75,39,-73,41")
+    assert r.status_code == 503
+    assert "ZIP areas" in r.json()["detail"]
+
+
+def test_zctas_400_bad_bbox(client, census_db):
+    census_db([], zctas=[_zcta_row("10001", 39.9, 40.1, -74.1, -73.9)])
+    assert client.get("/api/geocode/zctas?bbox=nonsense").status_code == 400
+
+
+def test_zctas_returns_geojson_with_zip_and_city(client, census_db):
+    census_db([], zctas=[_zcta_row("10001", 39.9, 40.1, -74.1, -73.9, city="PostalCity")])
+    r = client.get("/api/geocode/zctas?bbox=-75,39,-73,41")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["type"] == "FeatureCollection"
+    assert body["total"] == 1
+    props = body["features"][0]["properties"]
+    assert props["zip"] == "10001"
+    assert props["city"] == "PostalCity"
+
+
 def test_lookup_reports_each_source(client, geonames_dir, census_db):
     _write_geonames(geonames_dir)
     census_db([_census_row("Census CDP", 39.9, 40.1, -74.1, -73.9)])
