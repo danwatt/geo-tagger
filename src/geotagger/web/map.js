@@ -10,10 +10,12 @@
  * the largest places by population so the view stays representative.
  *
  * Past MIN_ZOOM_FOR_VORONOI, /api/geocode/voronoi additionally supplies each
- * place's Voronoi cell — the exact area a coordinate must fall in to
- * reverse-geocode to that place — drawn as a translucent colored polygon
- * underneath the markers so you can see where the boundary between two
- * places actually falls.
+ * place's cell — the area a coordinate must fall in to reverse-geocode to that
+ * place — drawn as a translucent colored polygon underneath the markers so you
+ * can see where the boundary between two places actually falls. With the
+ * population-weighted lookup on (the default) those boundaries are curved and
+ * the server traces them off a grid, so a cell can come back as more than one
+ * ring; `cell.polygons` carries them all.
  *
  * Past MIN_ZOOM_FOR_OSM, /api/geocode/osm-places additionally supplies real
  * OSM boundaries (cities, parks, stadiums, campuses, neighborhoods, named
@@ -357,14 +359,19 @@ function renderVoronoi(cells) {
   voronoiLayer.clearLayers();
   cells.forEach((cell) => {
     const color = cellColor(cell.city || `${cell.lat},${cell.lng}`);
-    L.polygon(cell.polygon, {
-      color,
-      weight: 1.5,
-      opacity: 0.8,
-      fillColor: color,
-      fillOpacity: 0.12,
-      interactive: false,
-    }).addTo(voronoiLayer);
+    // One L.polygon per ring rather than one multi-ring polygon: Leaflet reads
+    // trailing rings as holes, which is wrong for the disjoint pieces a
+    // grid-traced weighted cell can break into.
+    (cell.polygons || [cell.polygon]).forEach((ring) => {
+      L.polygon(ring, {
+        color,
+        weight: 1.5,
+        opacity: 0.8,
+        fillColor: color,
+        fillOpacity: 0.12,
+        interactive: false,
+      }).addTo(voronoiLayer);
+    });
   });
 }
 

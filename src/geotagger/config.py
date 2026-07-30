@@ -70,7 +70,7 @@ AUTO_VACUUM_PAGE_SIZE = int(os.environ.get("GEOTAGGER_VACUUM_PAGE_SIZE", "16384"
 
 # Thumbnail and preview dimensions
 THUMB_SIZE = 256
-PREVIEW_SIZE = 1600
+PREVIEW_SIZE = 1000
 
 # ── Cached rendition encoding (thumbnails.py) ──
 # Format every generated rendition (grid thumb, preview, face crop) is encoded in.
@@ -113,6 +113,38 @@ GEONAMES_DIR: Path = get_geonames_dir()
 # lookup, so nearby photos share one cached result. 4 decimals ≈ 11 m at the
 # equator (and less at higher latitudes) — fine for city/state/country tagging.
 GEOCODE_PRECISION = int(os.environ.get("GEOTAGGER_GEOCODE_PRECISION", "4"))
+
+# GeoNames cities500 mixes real municipalities with tiny GNIS-imported
+# subdivisions, and both carry feature code "PPL" — so a pure nearest-point
+# lookup can label a photo with a 1,800-person subdivision nobody has heard of
+# while the recognizable town of 200,000 sits barely further away. When
+# GEOCODE_POP_WEIGHT is on, the lookup considers GEOCODE_CANDIDATES nearest
+# places and picks the lowest `distance_km / (1 + log10(population))` instead of
+# the plain nearest, which lets a much larger place win a near-tie in distance.
+# Set to "0" for the old strict nearest-point behaviour.
+GEOCODE_POP_WEIGHT = os.environ.get("GEOTAGGER_GEOCODE_POP_WEIGHT", "1").lower() in ("1", "true", "yes", "on")
+# Hard reach cap for the weighting above: a candidate is only allowed to beat the
+# nearest place if it lies within this many km *past* it. Without the cap, the
+# log-population term can drag a label tens of km away in sparse rural areas
+# (measured: Ridgway 21.8 km -> Montrose 42.0 km).
+GEOCODE_POP_WEIGHT_MAX_KM = float(os.environ.get("GEOTAGGER_GEOCODE_POP_WEIGHT_MAX_KM", "10"))
+# A candidate must beat the nearest place's score by at least this fraction to take
+# the label. Without it, coordinates far from everything (where every score is
+# large and nearly equal) flip on noise — measured: Bryson City NC 3.67 vs
+# Gatlinburg TN 3.66, i.e. a coin toss that also crosses a state line. 0.10 keeps
+# the clear-cut wins (Oak Cliff Place -> Cypress is 13% better) and drops the ties.
+GEOCODE_POP_WEIGHT_MARGIN = float(os.environ.get("GEOTAGGER_GEOCODE_POP_WEIGHT_MARGIN", "0.10"))
+# How many nearest places the weighted lookup scores. 12 is plenty — the reach cap
+# eliminates anything further out anyway, and a k=12 KD-tree query still runs in
+# microseconds. Ignored when GEOCODE_POP_WEIGHT is off.
+GEOCODE_CANDIDATES = int(os.environ.get("GEOTAGGER_GEOCODE_CANDIDATES", "12"))
+# Long-edge resolution of the grid the map's place-boundary overlay is computed on
+# when the weighting above is active. The weighted boundaries are Apollonius arcs
+# (and the margin/reach guards clip them further), so there is no cheap exact
+# diagram to draw — geocode.voronoi_cells instead labels a grid with the real
+# lookup and traces each place's region, making boundary error ~one grid step of
+# the viewport. Higher = smoother outlines, more CPU per pan and a bigger payload.
+GEOCODE_BOUNDARY_GRID = int(os.environ.get("GEOTAGGER_GEOCODE_BOUNDARY_GRID", "192"))
 
 # ── OSM places (offline, polygon reverse geocoding) ──
 # SQLite DB of OSM area polygons (cities, parks, stadiums, campuses, neighborhoods,

@@ -1,6 +1,6 @@
 import pytest
 
-from geotagger import geocode, index
+from geotagger import config, geocode, index
 
 
 def _city_row(geonameid, name, lat, lng, cc, admin1="", admin2="", population=0):
@@ -186,6 +186,83 @@ class TestRawLookup:
         assert result["country_code"] == "CA"
 
 
+class TestPopulationWeighting:
+    # Mirrors the real Houston case that motivated the weighting: "Oak Cliff
+    # Place" (a GNIS subdivision, pop 1800) sits 6.3 km from the query point,
+    # the recognizable town of Cypress (pop 200839) 8.1 km away, and both carry
+    # feature code PPL — so plain nearest-point picks the subdivision.
+    SUBDIVISION = dict(geonameid=10, name="Subdivision", lat=30.0 - 6.3 / 111.0,
+                       lng=-95.0, cc="US", admin1="TX", population=1_800)
+    REAL_TOWN = dict(geonameid=11, name="RealTown", lat=30.0,
+                     lng=-95.0 - 8.1 / 96.13, cc="US", admin1="TX",
+                     population=200_839)
+
+    def test_larger_place_wins_a_near_tie_in_distance(self, geonames_dir):
+        _write_geonames_files(geonames_dir, [self.SUBDIVISION, self.REAL_TOWN])
+        assert geocode._raw_lookup(30.0, -95.0)["city"] == "RealTown"
+
+    def test_disabled_weighting_returns_the_plain_nearest(self, geonames_dir, monkeypatch):
+        monkeypatch.setattr(config, "GEOCODE_POP_WEIGHT", False)
+        _write_geonames_files(geonames_dir, [self.SUBDIVISION, self.REAL_TOWN])
+        assert geocode._raw_lookup(30.0, -95.0)["city"] == "Subdivision"
+
+    def test_nearest_still_wins_when_it_is_also_the_larger_place(self, geonames_dir):
+        _write_geonames_files(geonames_dir, [CITY_A, CITY_B, CITY_C, CITY_D])
+        # Testville: 1M people and the nearest — nothing to trade off.
+        assert geocode._raw_lookup(40.001, -74.001)["city"] == "Testville"
+
+    def test_reach_cap_keeps_a_distant_metropolis_from_stealing_the_label(
+            self, geonames_dir, monkeypatch):
+        monkeypatch.setattr(config, "GEOCODE_POP_WEIGHT_MAX_KM", 2.0)
+        metropolis = dict(geonameid=12, name="FarMetropolis", lat=30.0 - 10.0 / 111.0,
+                          lng=-95.0, cc="US", admin1="TX", population=10_000_000)
+        _write_geonames_files(geonames_dir, [self.SUBDIVISION, metropolis])
+        # Unweighted score would favour FarMetropolis (10.0/8 < 6.3/4.26), but it
+        # lies 3.7 km past the nearest place, beyond the 2 km cap.
+        assert geocode._raw_lookup(30.0, -95.0)["city"] == "Subdivision"
+
+    def test_margin_keeps_the_nearest_place_when_the_scores_nearly_tie(self, geonames_dir):
+        # The real Bryson City NC (1458, 15.3 km) vs Gatlinburg TN (4184, 16.9 km)
+        # case: scores 3.67 vs 3.66, well inside the 10% margin, so the nearest
+        # place keeps the label instead of the label hopping across a state line.
+        near = dict(geonameid=15, name="NearSmall", lat=30.0 - 15.3 / 111.0,
+                    lng=-95.0, cc="US", admin1="TX", population=1_458)
+        far = dict(geonameid=16, name="FarBigger", lat=30.0 - 16.9 / 111.0,
+                   lng=-95.0, cc="US", admin1="TX", population=4_184)
+        _write_geonames_files(geonames_dir, [near, far])
+        assert geocode._raw_lookup(30.0, -95.0)["city"] == "NearSmall"
+
+    def test_a_dropped_margin_lets_the_near_tie_flip(self, geonames_dir, monkeypatch):
+        monkeypatch.setattr(config, "GEOCODE_POP_WEIGHT_MARGIN", 0.0)
+        near = dict(geonameid=15, name="NearSmall", lat=30.0 - 15.3 / 111.0,
+                    lng=-95.0, cc="US", admin1="TX", population=1_458)
+        far = dict(geonameid=16, name="FarBigger", lat=30.0 - 16.9 / 111.0,
+                   lng=-95.0, cc="US", admin1="TX", population=4_184)
+        _write_geonames_files(geonames_dir, [near, far])
+        assert geocode._raw_lookup(30.0, -95.0)["city"] == "FarBigger"
+
+    def test_zero_population_places_do_not_break_the_score(self, geonames_dir):
+        a = dict(geonameid=13, name="Nowhere", lat=30.0, lng=-95.0, cc="US",
+                 admin1="TX", population=0)
+        b = dict(geonameid=14, name="AlsoNowhere", lat=30.02, lng=-95.0, cc="US",
+                 admin1="TX", population=0)
+        _write_geonames_files(geonames_dir, [a, b])
+        # log10 of a clamped population of 1 is 0, so the score is just distance.
+        assert geocode._raw_lookup(30.0, -95.0)["city"] == "Nowhere"
+
+    def test_single_city_dataset_resolves(self, geonames_dir):
+        # k clamps to 1, where scipy hands back scalars instead of arrays.
+        _write_geonames_files(geonames_dir, [self.REAL_TOWN])
+        assert geocode._raw_lookup(30.0, -95.0)["city"] == "RealTown"
+
+    def test_more_candidates_than_places_is_harmless(self, geonames_dir, monkeypatch):
+        # k is clamped to the place count (and _pick_weighted also drops the inf
+        # distances / out-of-range indices cKDTree would pad an unclamped k with).
+        monkeypatch.setattr(config, "GEOCODE_CANDIDATES", 50)
+        _write_geonames_files(geonames_dir, [self.SUBDIVISION, self.REAL_TOWN])
+        assert geocode._raw_lookup(30.0, -95.0)["city"] == "RealTown"
+
+
 class TestCitiesInBbox:
     def test_empty_when_data_unavailable(self, geonames_dir):
         places, total = geocode.cities_in_bbox(0, 1, 0, 1)
@@ -241,18 +318,32 @@ class TestVoronoiCells:
         assert cells == []
         assert total == 0
 
-    def test_fewer_than_three_points_in_padded_region_returns_no_cells(self, geonames_dir):
+    def test_fewer_than_three_points_in_padded_region_returns_no_exact_cells(
+            self, geonames_dir, monkeypatch):
+        # qhull needs three generators for a Voronoi diagram; the exact path gives
+        # up rather than inventing cells.
+        monkeypatch.setattr(config, "GEOCODE_POP_WEIGHT", False)
         _write_geonames_files(geonames_dir, [CITY_A, CITY_B])
         cells, total = geocode.voronoi_cells(39.9, 40.2, -74.2, -73.9)
         assert total == 2
         assert cells == []
 
-    def test_symmetric_neighbours_yield_the_exact_bisector_square(self, geonames_dir):
+    def test_two_points_still_get_grid_traced_cells(self, geonames_dir):
+        # The weighted path traces labelled grid regions, so it has no such floor.
+        _write_geonames_files(geonames_dir, [CITY_A, CITY_B])
+        cells, total = geocode.voronoi_cells(39.9, 40.2, -74.2, -73.9)
+        assert total == 2
+        assert {c["city"] for c in cells} == {"Testville", "Smallburg"}
+
+    def test_symmetric_neighbours_yield_the_exact_bisector_square(self, geonames_dir, monkeypatch):
         # C has one neighbour in each cardinal direction, equidistant after
         # longitude is scaled by cos(lat) — so C's Voronoi cell is exactly
         # the axis-aligned square whose edges are the four perpendicular
-        # bisectors, independent of any qhull/clipping approximation.
+        # bisectors, independent of any qhull/clipping approximation. Pinned to the
+        # unweighted lookup, the only mode whose cells are exact geometry.
         import math
+
+        monkeypatch.setattr(config, "GEOCODE_POP_WEIGHT", False)
 
         center_lat, center_lng = 40.0, -74.0
         cos_lat = math.cos(math.radians(center_lat))
@@ -319,6 +410,135 @@ class TestVoronoiCells:
         assert by_city["Testville"]["population"] == 1_000_000
         assert by_city["Testville"]["lat"] == pytest.approx(40.0)
         assert len(by_city["Testville"]["polygon"]) >= 3
+        assert by_city["Testville"]["polygons"] == [by_city["Testville"]["polygon"]]
+
+
+class TestWeightedCellGeometry:
+    """With config.GEOCODE_POP_WEIGHT on, cells are traced off a grid labelled by
+    the real lookup — so they must agree with _raw_lookup, not with the plain
+    Voronoi diagram."""
+
+    # Two equidistant-from-center places 0.04 deg apart, one 1000x the other's
+    # population: the small one's region has to be visibly smaller than the half
+    # of the viewport a plain Voronoi diagram would give it.
+    SMALL = dict(geonameid=1, name="Small", lat=40.0, lng=-74.02, cc="US",
+                 admin1="NY", population=1_000)
+    BIG = dict(geonameid=2, name="Big", lat=40.0, lng=-73.98, cc="US",
+               admin1="NY", population=1_000_000)
+    BBOX = (39.98, 40.02, -74.04, -73.96)
+
+    @staticmethod
+    def _area(cell):
+        # Shoelace over every ring of the cell, in squared degrees — only ever
+        # compared against another cell from the same viewport, so the lat/lng
+        # distortion cancels out.
+        def ring_area(ring):
+            n = len(ring)
+            return abs(sum(ring[i][0] * ring[(i + 1) % n][1] - ring[(i + 1) % n][0] * ring[i][1]
+                           for i in range(n))) / 2
+        return sum(ring_area(r) for r in cell["polygons"])
+
+    def test_larger_population_claims_the_bigger_share(self, geonames_dir):
+        _write_geonames_files(geonames_dir, [self.SMALL, self.BIG])
+        cells, _ = geocode.voronoi_cells(*self.BBOX)
+        by_city = {c["city"]: c for c in cells}
+        assert set(by_city) == {"Small", "Big"}
+        # Not a landslide — the 10% margin protects a band around the bisector
+        # where the nearest place keeps the label regardless of population.
+        assert self._area(by_city["Big"]) > 1.2 * self._area(by_city["Small"])
+
+    def test_unweighted_cells_split_the_viewport_evenly(self, geonames_dir, monkeypatch):
+        # Same two places, weighting off: population stops mattering and the cells
+        # are the two halves of the bisector. The far north/south pair is only there
+        # to give qhull bounded regions for the two we assert on.
+        monkeypatch.setattr(config, "GEOCODE_POP_WEIGHT", False)
+        # Inside the padded bbox (a viewport's worth on each side) but outside the
+        # viewport, so they bound the two cells symmetrically without getting one.
+        north = dict(geonameid=3, name="North", lat=40.05, lng=-74.0, cc="US", population=10)
+        south = dict(geonameid=4, name="South", lat=39.95, lng=-74.0, cc="US", population=10)
+        _write_geonames_files(geonames_dir, [self.SMALL, self.BIG, north, south])
+        cells, _ = geocode.voronoi_cells(*self.BBOX)
+        by_city = {c["city"]: c for c in cells}
+        assert self._area(by_city["Big"]) == pytest.approx(
+            self._area(by_city["Small"]), rel=0.01)
+
+    def test_cell_boundaries_agree_with_the_lookup(self, geonames_dir):
+        # Sample the viewport and check every point's cell membership matches what
+        # _raw_lookup says, to within the grid step the trace is accurate to.
+        from geotagger.contexts import point_in_polygon
+
+        _write_geonames_files(geonames_dir, [self.SMALL, self.BIG])
+        min_lat, max_lat, min_lng, max_lng = self.BBOX
+        cells, _ = geocode.voronoi_cells(*self.BBOX)
+        rings = {c["city"]: c["polygons"] for c in cells}
+        step = (max_lng - min_lng) / config.GEOCODE_BOUNDARY_GRID
+
+        mismatches = 0
+        checked = 0
+        for i in range(1, 20):
+            lat = min_lat + (max_lat - min_lat) * i / 20
+            for j in range(1, 20):
+                lng = min_lng + (max_lng - min_lng) * j / 20
+                expected = geocode._raw_lookup(lat, lng)["city"]
+                inside = [city for city, polys in rings.items()
+                          if any(point_in_polygon(lat, lng, r) for r in polys)]
+                # Points within one grid step of a boundary may land either side.
+                near_boundary = any(
+                    abs(lng - (-74.0 + d)) <= 2 * step for d in (0.0,)
+                )
+                checked += 1
+                if inside != [expected] and not near_boundary:
+                    mismatches += 1
+        assert checked > 300
+        assert mismatches == 0
+
+    def test_grid_resolution_is_configurable(self, geonames_dir, monkeypatch):
+        _write_geonames_files(geonames_dir, [self.SMALL, self.BIG])
+        monkeypatch.setattr(config, "GEOCODE_BOUNDARY_GRID", 32)
+        coarse, _ = geocode.voronoi_cells(*self.BBOX)
+        monkeypatch.setattr(config, "GEOCODE_BOUNDARY_GRID", 256)
+        fine, _ = geocode.voronoi_cells(*self.BBOX)
+        # Both resolve the same two places; the finer grid can only place the
+        # curved boundary more precisely, never differently.
+        assert {c["city"] for c in coarse} == {c["city"] for c in fine} == {"Small", "Big"}
+        coarse_area = self._area({c["city"]: c for c in coarse}["Small"])
+        fine_area = self._area({c["city"]: c for c in fine}["Small"])
+        assert fine_area == pytest.approx(coarse_area, rel=0.15)
+
+
+class TestRingTracing:
+    def test_single_cell_mask_traces_its_square(self):
+        import numpy as np
+
+        mask = np.zeros((3, 3), dtype=bool)
+        mask[1, 1] = True
+        rings = geocode._trace_mask_rings(mask)
+        assert len(rings) == 1
+        assert set(rings[0]) == {(1, 1), (1, 2), (2, 2), (2, 1)}
+
+    def test_disjoint_blobs_trace_as_separate_rings(self):
+        import numpy as np
+
+        mask = np.zeros((5, 5), dtype=bool)
+        mask[0, 0] = True
+        mask[4, 4] = True
+        assert len(geocode._trace_mask_rings(mask)) == 2
+
+    def test_collinear_points_are_dropped(self):
+        ring = [(0.0, 0.0), (0.0, 1.0), (0.0, 2.0), (1.0, 2.0), (1.0, 0.0)]
+        assert geocode._drop_collinear(ring) == [(0.0, 0.0), (0.0, 2.0), (1.0, 2.0), (1.0, 0.0)]
+
+    def test_simplify_keeps_the_shape_within_tolerance(self):
+        # A staircase along a diagonal collapses toward the diagonal itself.
+        ring = [(0.0, 0.0), (0.0, 0.1), (0.1, 0.1), (0.1, 0.2), (0.2, 0.2), (0.2, 0.0)]
+        simplified = geocode._simplify_ring(ring, 0.06)
+        assert 3 <= len(simplified) < len(ring)
+
+    def test_simplify_never_degenerates_a_ring(self):
+        # A tolerance coarser than the shape itself would collapse it to a line;
+        # the original ring is returned instead of something unrenderable.
+        ring = [(0.0, 0.0), (0.0, 0.1), (0.1, 0.1), (0.1, 0.2), (0.2, 0.2), (0.2, 0.0)]
+        assert geocode._simplify_ring(ring, 10.0) == ring
 
 
 def _rect(min_lat, max_lat, min_lng, max_lng):

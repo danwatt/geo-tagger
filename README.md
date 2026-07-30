@@ -308,6 +308,22 @@ useful since OSM coverage is usually only a handful of imported regions. Once yo
 regions cover your whole library, set `GEOTAGGER_OSM_CITY_FALLBACK_GEONAMES=0` for strict
 "OSM only" behavior, where a coordinate outside every polygon gets no city name at all.
 
+The GeoNames side of that lookup is **population-weighted**: its dataset mixes real
+municipalities with tiny GNIS-imported subdivisions (both tagged the same way), so a strictly
+nearest-point lookup can label a photo with a 1,800-person subdivision nobody recognizes while
+the actual town of 200,000 sits barely further away. Instead the 12 nearest places are scored
+by `distance_km / (1 + log10(population))`, letting a much larger place win a near-tie in
+distance. Two guards keep it conservative: a candidate must be within 10 km of the nearest
+place (`GEOTAGGER_GEOCODE_POP_WEIGHT_MAX_KM`) and must beat it by 10%
+(`GEOTAGGER_GEOCODE_POP_WEIGHT_MARGIN`), so remote coordinates — where every score is large and
+nearly equal — keep their plain nearest place. `GEOTAGGER_GEOCODE_POP_WEIGHT=0` restores the
+old strict nearest-point behavior.
+
+The Places DB map's cell overlay reflects whichever mode is active: exact Voronoi cells for the
+unweighted lookup, and — since weighted boundaries are curved arcs trimmed by those two guards —
+grid-traced outlines otherwise, accurate to about one grid step of the viewport
+(`GEOTAGGER_GEOCODE_BOUNDARY_GRID`).
+
 - **On scan:** newly-indexed geotagged photos are reverse-geocoded automatically (stored in
   the database).
 - **On geotag:** dropping/applying a location also writes the place names.
@@ -408,6 +424,11 @@ live from the Settings page):
 | `GEOTAGGER_NO_SCAN` | `0` | `1` = skip the startup scan |
 | `GEOTAGGER_GEONAMES_DIR` | *(none — see [tools/data location](#where-downloaded-toolsdata-end-up))* | Directory holding the downloaded GeoNames files |
 | `GEOTAGGER_GEOCODE_PRECISION` | `4` | Decimal degrees of coordinate quantization for the geocode cache (4 ≈ 11 m) |
+| `GEOTAGGER_GEOCODE_POP_WEIGHT` | `1` | `0` = strict nearest-point GeoNames city (no population weighting) |
+| `GEOTAGGER_GEOCODE_POP_WEIGHT_MAX_KM` | `10` | How far past the nearest place a larger one may still win the label |
+| `GEOTAGGER_GEOCODE_POP_WEIGHT_MARGIN` | `0.10` | Fraction by which a candidate must beat the nearest place's score to win |
+| `GEOTAGGER_GEOCODE_CANDIDATES` | `12` | Nearest places scored by the population weighting |
+| `GEOTAGGER_GEOCODE_BOUNDARY_GRID` | `192` | Grid resolution the map's place-boundary overlay is traced at (higher = smoother, slower) |
 | `GEOTAGGER_OSM_DB` | *(none — see [tools/data location](#where-downloaded-toolsdata-end-up))* | OSM place-boundary database (built by `scripts/build_osm_places.py`) |
 | `GEOTAGGER_OSM_CITY_FALLBACK_GEONAMES` | `1` | `0` = strict OSM-only city (no fallback for coordinates outside every imported polygon) |
 | `GEOTAGGER_WRITE_XMP_ON_GEOTAG` | `0` | `1` = write GPS to the XMP sidecar immediately on every geotag edit |

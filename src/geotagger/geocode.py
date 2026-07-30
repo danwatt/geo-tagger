@@ -7,9 +7,11 @@ resolves that place's administrative hierarchy into human names:
 
 Lookup is a nearest-neighbour search over a KD-tree built on unit-sphere XYZ
 vectors, so it's globally correct (no longitude-wrap or latitude-scaling bugs)
-and runs in microseconds. Results are cached by quantized coordinate (see
-config.GEOCODE_PRECISION) via the index module, so nearby photos share one
-lookup.
+and runs in microseconds. By default the winner among the k nearest is then
+population-weighted (config.GEOCODE_POP_WEIGHT) so an obscure GNIS subdivision
+doesn't beat a real town it happens to sit slightly closer than. Results are
+cached by quantized coordinate (see config.GEOCODE_PRECISION) via the index
+module, so nearby photos share one lookup.
 
 The data is downloaded with `scripts/get_geonames.py`. If it's missing, every
 lookup returns None and `status()` reports it — the rest of the app keeps working.
@@ -192,8 +194,60 @@ def _place_dict(i: int) -> dict:
     }
 
 
+_EARTH_RADIUS_KM = 6371.0
+
+
+def _chord_to_km(chord: float) -> float:
+    """Unit-sphere chord length (what the KD-tree returns) -> great-circle km."""
+    return 2 * _EARTH_RADIUS_KM * math.asin(min(1.0, chord / 2))
+
+
+def _pick_weighted(dists: list[float], idxs: list[int]) -> int:
+    """Choose among k nearest candidates (parallel chord distances / row indices,
+    nearest first) by `km / (1 + log10(population))`, so a much larger place can
+    win a near-tie in distance — see config.GEOCODE_POP_WEIGHT for why.
+
+    Two guards keep this from rewriting labels it has no business rewriting:
+    candidates further than config.GEOCODE_POP_WEIGHT_MAX_KM past the nearest one
+    are dropped before scoring (no drifting to a distant city in sparse rural
+    areas), and a survivor must beat the nearest place's own score by
+    config.GEOCODE_POP_WEIGHT_MARGIN to win (no flipping on near-ties).
+
+    Returns a row index into _names/_populations.
+    """
+    # cKDTree pads a k larger than the point count with inf distances and
+    # out-of-range indices; drop those before doing any arithmetic.
+    pairs = [(_chord_to_km(d), i) for d, i in zip(dists, idxs)
+             if math.isfinite(d) and 0 <= i < len(_names)]
+    if not pairs:
+        return int(idxs[0])
+
+    def score(km: float, i: int) -> float:
+        pop = int(_populations[i]) if _populations is not None else 0
+        return km / (1 + math.log10(max(pop, 1)))
+
+    nearest_km, nearest_i = pairs[0]
+    reach = nearest_km + config.GEOCODE_POP_WEIGHT_MAX_KM
+    # Anything that wins must clear this, so the nearest place keeps the label by
+    # default — including when it's already the best-scoring candidate.
+    threshold = score(nearest_km, nearest_i) * (1.0 - config.GEOCODE_POP_WEIGHT_MARGIN)
+    best_i = nearest_i
+    best_score = threshold
+    for km, i in pairs[1:]:
+        if km > reach:
+            continue
+        s = score(km, i)
+        if s < best_score:
+            best_score, best_i = s, i
+    return best_i
+
+
 def _raw_lookup(lat: float, lng: float) -> dict | None:
-    """Nearest-city lookup without the cache. None if data unavailable."""
+    """Nearest-city lookup without the cache. None if data unavailable.
+
+    "Nearest" is population-weighted when config.GEOCODE_POP_WEIGHT is on (see
+    _pick_weighted); otherwise it's the plain nearest point.
+    """
     _ensure_loaded()
     if _state != "ready" or _tree is None:
         return None
@@ -201,8 +255,14 @@ def _raw_lookup(lat: float, lng: float) -> dict | None:
     lng_r = math.radians(lng)
     cos_lat = math.cos(lat_r)
     point = [cos_lat * math.cos(lng_r), cos_lat * math.sin(lng_r), math.sin(lat_r)]
-    _, idx = _tree.query(point)
-    return _place_dict(int(idx))
+    if not config.GEOCODE_POP_WEIGHT:
+        _, idx = _tree.query(point)
+        return _place_dict(int(idx))
+    k = max(1, min(config.GEOCODE_CANDIDATES, len(_names)))
+    dists, idxs = _tree.query(point, k=k)
+    if k == 1:  # scipy returns scalars, not arrays, for k=1
+        return _place_dict(int(idxs))
+    return _place_dict(_pick_weighted([float(d) for d in dists], [int(i) for i in idxs]))
 
 
 def cities_in_bbox(min_lat: float, max_lat: float, min_lng: float, max_lng: float,
@@ -333,14 +393,239 @@ def _finite_voronoi_regions(vor, radius: float):
     return new_regions, np.asarray(new_vertices)
 
 
+def _label_grid(lat_grid, lng_grid):
+    """Vectorized twin of _pick_weighted: resolve a whole array of coordinates to
+    winning GeoNames row indices in one KD-tree query. Same scoring, same reach
+    cap, same margin — kept in lockstep with _pick_weighted so the map's
+    boundaries describe the lookup that actually runs, not a lookalike.
+
+    ``lat_grid``/``lng_grid`` are flat float arrays of equal length; returns an
+    int array of row indices into _names/_populations.
+    """
+    import numpy as np
+
+    lat_r = np.radians(lat_grid)
+    lng_r = np.radians(lng_grid)
+    cos_lat = np.cos(lat_r)
+    pts = np.column_stack((cos_lat * np.cos(lng_r), cos_lat * np.sin(lng_r), np.sin(lat_r)))
+
+    k = max(1, min(config.GEOCODE_CANDIDATES, len(_names)))
+    dists, idxs = _tree.query(pts, k=k)
+    # k=1 collapses scipy's (N, k) result to (N,); reshape so the rest is uniform.
+    dists = np.reshape(dists, (len(lat_grid), k))
+    idxs = np.reshape(idxs, (len(lat_grid), k))
+    nearest = idxs[:, 0]
+    if k == 1:
+        return nearest
+
+    km = 2 * _EARTH_RADIUS_KM * np.arcsin(np.clip(dists / 2, 0.0, 1.0))
+    pops = np.maximum(_populations[idxs], 1)
+    score = km / (1 + np.log10(pops))
+
+    threshold = score[:, 0] * (1.0 - config.GEOCODE_POP_WEIGHT_MARGIN)
+    within_reach = km <= (km[:, 0:1] + config.GEOCODE_POP_WEIGHT_MAX_KM)
+    # Only the challengers compete; the nearest place holds the label unless one
+    # of them clears the margin (mirrors _pick_weighted's seeded best_score).
+    challenger = np.where(within_reach, score, np.inf)
+    challenger[:, 0] = np.inf
+    best_j = np.argmin(challenger, axis=1)
+    rows = np.arange(len(lat_grid))
+    best_score = challenger[rows, best_j]
+    return np.where(best_score < threshold, idxs[rows, best_j], nearest)
+
+
+def _trace_mask_rings(mask) -> list[list[tuple[int, int]]]:
+    """Outline a boolean grid region as closed rings of integer lattice corners.
+
+    Emits every cell edge that borders a non-region cell, directed so the region
+    stays on a consistent side, then chains those edges head-to-tail into rings.
+    Shared edges between two region cells are never emitted, so the walk closes
+    exactly — no marching-squares interpolation and no dependency beyond numpy.
+    Returns rings as [(row, col), …] lattice coordinates, where (row, col) is the
+    corner at grid index (row, col); a region with holes or disjoint blobs yields
+    one ring each.
+    """
+    import numpy as np
+
+    ny, nx = mask.shape
+    padded = np.zeros((ny + 2, nx + 2), dtype=bool)
+    padded[1:-1, 1:-1] = mask
+    inner = padded[1:-1, 1:-1]
+
+    # (start, end) corner pairs per boundary edge, in grid-index space where row
+    # increases "up" (see _weighted_cells' lat mapping) — so this order walks the
+    # region's outer boundary counter-clockwise.
+    edges: dict[tuple[int, int], list[tuple[int, int]]] = {}
+    def add(starts, ends):
+        for s, e in zip(starts, ends):
+            edges.setdefault(s, []).append(e)
+
+    rr, cc = np.nonzero(inner & ~padded[2:, 1:-1])    # nothing above -> top edge
+    add(list(zip(rr + 1, cc + 1)), list(zip(rr + 1, cc)))
+    rr, cc = np.nonzero(inner & ~padded[:-2, 1:-1])   # nothing below -> bottom edge
+    add(list(zip(rr, cc)), list(zip(rr, cc + 1)))
+    rr, cc = np.nonzero(inner & ~padded[1:-1, 2:])    # nothing right -> right edge
+    add(list(zip(rr, cc + 1)), list(zip(rr + 1, cc + 1)))
+    rr, cc = np.nonzero(inner & ~padded[1:-1, :-2])   # nothing left -> left edge
+    add(list(zip(rr + 1, cc)), list(zip(rr, cc)))
+
+    rings: list[list[tuple[int, int]]] = []
+    while edges:
+        start = next(iter(edges))
+        ring = [start]
+        node = start
+        while True:
+            outgoing = edges.get(node)
+            if not outgoing:
+                break  # shouldn't happen for a closed boundary; bail rather than loop
+            nxt = outgoing.pop()
+            if not outgoing:
+                del edges[node]
+            if nxt == start:
+                break
+            ring.append(nxt)
+            node = nxt
+        if len(ring) >= 3:
+            rings.append(ring)
+    return rings
+
+
+def _drop_collinear(ring: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Collapse straight runs in a closed ring (the long axis-aligned stretches a
+    traced grid boundary is mostly made of) down to their endpoints."""
+    n = len(ring)
+    if n < 3:
+        return ring
+    out = []
+    for i in range(n):
+        prev = ring[i - 1]
+        curr = ring[i]
+        nxt = ring[(i + 1) % n]
+        cross = ((curr[0] - prev[0]) * (nxt[1] - curr[1])
+                 - (curr[1] - prev[1]) * (nxt[0] - curr[0]))
+        if abs(cross) > 1e-12:
+            out.append(curr)
+    return out if len(out) >= 3 else ring
+
+
+def _simplify_ring(ring: list[tuple[float, float]], tolerance: float) -> list[tuple[float, float]]:
+    """Ramer-Douglas-Peucker on a closed ring, run on the open chain between the
+    ring's first point and its most distant point so both halves keep their shape.
+    Cuts the staircase a grid trace produces down to a fraction of the vertices
+    (the payload is one polygon per visible place, so this matters)."""
+    if len(ring) < 4 or tolerance <= 0:
+        return ring
+
+    def rdp(points):
+        if len(points) < 3:
+            return points
+        (x0, y0), (x1, y1) = points[0], points[-1]
+        dx, dy = x1 - x0, y1 - y0
+        seg = math.hypot(dx, dy)
+        worst, worst_i = -1.0, 0
+        for i in range(1, len(points) - 1):
+            x, y = points[i]
+            if seg == 0:
+                d = math.hypot(x - x0, y - y0)
+            else:
+                d = abs(dy * (x - x0) - dx * (y - y0)) / seg
+            if d > worst:
+                worst, worst_i = d, i
+        if worst <= tolerance:
+            return [points[0], points[-1]]
+        left = rdp(points[:worst_i + 1])
+        right = rdp(points[worst_i:])
+        return left[:-1] + right
+
+    # Split at the vertex furthest from the ring's first point so RDP can't
+    # shortcut across the whole shape.
+    x0, y0 = ring[0]
+    split = max(range(len(ring)), key=lambda i: (ring[i][0] - x0) ** 2 + (ring[i][1] - y0) ** 2)
+    first = rdp(ring[:split + 1])
+    second = rdp(ring[split:] + [ring[0]])
+    simplified = first[:-1] + second[:-1]
+    return simplified if len(simplified) >= 3 else ring
+
+
+def _weighted_cells(min_lat: float, max_lat: float, min_lng: float, max_lng: float,
+                     in_view_idxs) -> dict[int, list[list[list[float]]]]:
+    """Region outlines for the population-weighted lookup, as {row index: [ring, …]}
+    with each ring a list of [lat, lng].
+
+    The weighted boundary between two places is an Apollonius arc, further clipped
+    by the margin and reach guards — there's no cheap exact diagram, so this labels
+    a config.GEOCODE_BOUNDARY_GRID grid over the viewport with the real lookup
+    (_label_grid) and traces the region of each in-view place. Boundary error is
+    therefore about one grid step of the viewport.
+    """
+    import numpy as np
+
+    long_edge = max(16, config.GEOCODE_BOUNDARY_GRID)
+    lat_span = max(max_lat - min_lat, 1e-9)
+    lng_span = max(max_lng - min_lng, 1e-9)
+    if lat_span >= lng_span:
+        ny, nx = long_edge, max(16, round(long_edge * lng_span / lat_span))
+    else:
+        nx, ny = long_edge, max(16, round(long_edge * lat_span / lng_span))
+
+    # Row r / column c covers [min + r*step, min + (r+1)*step]; sample its center.
+    lat_step = lat_span / ny
+    lng_step = lng_span / nx
+    lat_centers = min_lat + (np.arange(ny) + 0.5) * lat_step
+    lng_centers = min_lng + (np.arange(nx) + 0.5) * lng_step
+    grid_lat, grid_lng = np.meshgrid(lat_centers, lng_centers, indexing="ij")
+
+    labels = _label_grid(grid_lat.ravel(), grid_lng.ravel())
+
+    # Group the grid cells by winning site once, so each region is traced out of a
+    # mask its own size instead of a full-grid mask per site — a dense viewport can
+    # hold ~100 places, and that difference is most of the runtime.
+    order = np.argsort(labels, kind="stable")
+    sorted_labels = labels[order]
+
+    # A grid step is the resolution floor of the trace, so simplifying at half of
+    # one only removes the staircase, not real shape.
+    tolerance = 0.5 * min(lat_step, lng_step)
+    out: dict[int, list[list[list[float]]]] = {}
+    for site in in_view_idxs:
+        site = int(site)
+        lo, hi = np.searchsorted(sorted_labels, [site, site + 1])
+        if lo == hi:
+            continue  # a place the weighting never wins anywhere in this viewport
+        flat = order[lo:hi]
+        rows, cols = flat // nx, flat % nx
+        r0, c0 = int(rows.min()), int(cols.min())
+        submask = np.zeros((int(rows.max()) - r0 + 1, int(cols.max()) - c0 + 1), dtype=bool)
+        submask[rows - r0, cols - c0] = True
+        rings = []
+        for ring in _trace_mask_rings(submask):
+            coords = [(min_lat + (r + r0) * lat_step, min_lng + (c + c0) * lng_step)
+                      for r, c in ring]
+            coords = _simplify_ring(_drop_collinear(coords), tolerance)
+            if len(coords) >= 3:
+                rings.append([[round(la, 6), round(ln, 6)] for la, ln in coords])
+        if rings:
+            out[site] = rings
+    return out
+
+
 def voronoi_cells(min_lat: float, max_lat: float, min_lng: float, max_lng: float,
                    limit: int = 4000) -> tuple[list[dict], int]:
-    """Voronoi cells for the GeoNames places behind reverse geocoding — the
-    cell around each place is exactly the area where lookup()/_raw_lookup()
-    would resolve to that place, so the Places DB map can show where the
-    boundary between two places actually falls.
+    """Place-boundary cells for the GeoNames places behind reverse geocoding — the
+    cell around each place is the area a coordinate must fall in for _raw_lookup to
+    resolve to that place, so the Places DB map can show where the boundary between
+    two places actually falls.
 
-    Computed as a planar Voronoi diagram on points projected to a local
+    Two ways of computing it, matching the two lookup modes:
+
+    * config.GEOCODE_POP_WEIGHT **off** — plain nearest-point lookup, so the cells
+      are an exact Voronoi diagram (below).
+    * config.GEOCODE_POP_WEIGHT **on** — boundaries are population-weighted arcs
+      trimmed by the margin/reach guards, so the cells are traced from a grid
+      labelled with the real lookup instead (see _weighted_cells), accurate to
+      about one grid step of the viewport.
+
+    The exact path is computed as a planar Voronoi diagram on points projected to a local
     equirectangular plane (longitude scaled by cos(latitude) so cells aren't
     stretched east-west). This is an approximation of the true spherical
     nearest-neighbour lookup the KD-tree does, but the error is negligible at
@@ -356,7 +641,9 @@ def voronoi_cells(min_lat: float, max_lat: float, min_lng: float, max_lng: float
     returned, matching what cities_in_bbox would show as markers.
 
     Returns (cells, total_in_viewport). Each cell is a place dict (as
-    cities_in_bbox) plus "polygon": a list of [lat, lng] pairs.
+    cities_in_bbox) plus "polygons": a list of rings, each a list of [lat, lng]
+    pairs (a weighted region can be pinched into more than one piece), and
+    "polygon": the largest of those rings, for callers that want just one.
     """
     _ensure_loaded()
     if _state != "ready" or _lats is None:
@@ -368,6 +655,27 @@ def voronoi_cells(min_lat: float, max_lat: float, min_lng: float, max_lng: float
     total = int(np.count_nonzero(in_view))
     if total == 0:
         return [], 0
+
+    if config.GEOCODE_POP_WEIGHT:
+        in_view_idxs = np.nonzero(in_view)[0]
+        if len(in_view_idxs) > limit:
+            # Same "keep what's nearest the center" cap as the exact path, except
+            # here every candidate is already in view, so it caps the cells drawn.
+            center_lat = (min_lat + max_lat) / 2.0
+            center_lng = (min_lng + max_lng) / 2.0
+            d2 = (_lats[in_view_idxs] - center_lat) ** 2 + (_lngs[in_view_idxs] - center_lng) ** 2
+            in_view_idxs = in_view_idxs[np.argsort(d2)[:limit]]
+        rings_by_site = _weighted_cells(min_lat, max_lat, min_lng, max_lng, in_view_idxs)
+        cells = []
+        for site, rings in rings_by_site.items():
+            d = _place_dict(site)
+            d["lat"] = float(_lats[site])
+            d["lng"] = float(_lngs[site])
+            d["population"] = int(_populations[site])
+            d["polygons"] = rings
+            d["polygon"] = max(rings, key=len)
+            cells.append(d)
+        return cells, total
 
     # Pad by a full viewport's worth on each side so cells for sites near the
     # edge of the viewport have real neighbours to bound them against.
@@ -425,6 +733,7 @@ def voronoi_cells(min_lat: float, max_lat: float, min_lng: float, max_lng: float
         d["lng"] = lng
         d["population"] = int(_populations[orig_idx])
         d["polygon"] = [[round(la, 6), round(ln, 6)] for la, ln in poly]
+        d["polygons"] = [d["polygon"]]  # exact cells are always a single ring
         cells.append(d)
     return cells, total
 

@@ -143,6 +143,7 @@ def main():
 
     root = resolve_root(args)
     index.init_db(root)
+    config.resolve_data_paths(root)
     config.apply_all_overrides(index.get_all_settings())
     thumbnails.init_thumbs(root)
 

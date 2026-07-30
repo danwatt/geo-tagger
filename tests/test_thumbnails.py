@@ -387,7 +387,7 @@ class TestRawFullDecode:
         data = thumbnails.get_preview(path, 1.0, 999)
         assert calls == [path]                    # LibRaw decode used, not ExifTool
         img = Image.open(io.BytesIO(data))
-        assert max(img.size) <= PREVIEW_SIZE      # served preview still capped at 1600
+        assert max(img.size) <= PREVIEW_SIZE      # served preview still capped at PREVIEW_SIZE
 
         key = thumbnails._cache_key(path, 1.0, 999)
         subdir = thumbs_dir / key[:2]
@@ -398,14 +398,16 @@ class TestRawFullDecode:
     def test_detection_preview_full_decode_caps_at_decode_max_and_reports_full(
             self, thumbs_dir, monkeypatch):
         monkeypatch.setattr(thumbnails.config, "RAW_FULL_DECODE", True)
-        monkeypatch.setattr(thumbnails.config, "FACE_DECODE_MAX_DIM", 1000)
+        # Deliberately not equal to PREVIEW_SIZE, so the assert below proves the
+        # detect cap (not the preview cap) is what sized this rendition.
+        monkeypatch.setattr(thumbnails.config, "FACE_DECODE_MAX_DIM", 1200)
         monkeypatch.setattr(thumbnails, "_decode_raw_full",
                             lambda p: Image.new("RGB", (6000, 4000), (5, 5, 5)))
 
         data, is_full = thumbnails.get_detection_preview(Path("x.dng"), 1.0, 1)
         assert is_full is True
         img = Image.open(io.BytesIO(data))
-        assert max(img.size) == 1000              # downscaled to the detect cap, not 1600
+        assert max(img.size) == 1200              # detect cap, not PREVIEW_SIZE
 
     def test_detection_preview_plain_jpg_is_not_full_decode(self, thumbs_dir, tmp_path):
         path = _make_photo(tmp_path, size=(800, 600))

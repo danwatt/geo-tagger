@@ -56,9 +56,12 @@ async def api_geocode_places(bbox: str = Query(...), limit: int = Query(3000, le
 
 @router.get("/api/geocode/voronoi")
 async def api_geocode_voronoi(bbox: str = Query(...), limit: int = Query(4000, le=8000)):
-    """Voronoi cells for GeoNames places in a viewport bbox — for each place,
-    the exact area a coordinate must fall in to reverse-geocode to it. Backs
-    the Places DB map's cell overlay, shown once zoomed in far enough."""
+    """Boundary cells for GeoNames places in a viewport bbox — for each place, the
+    area a coordinate must fall in to reverse-geocode to it. Exact Voronoi cells
+    under the plain nearest-point lookup; grid-traced outlines (accurate to about
+    one grid step of the viewport) when the population weighting is on, since those
+    boundaries are curved — see geocode.voronoi_cells. Backs the Places DB map's
+    cell overlay, shown once zoomed in far enough."""
     min_lat, max_lat, min_lng, max_lng = _parse_bbox(bbox)
     if not geocode.is_available():
         raise HTTPException(503, "GeoNames data not installed — run scripts/get_geonames.py")

@@ -290,7 +290,7 @@ async def api_fullsize(photo_id: int):
     Powers the detail pane's "View full size" button for RAW files: decodes the RAW
     at full resolution via LibRaw (see thumbnails.render_fullsize_with_faces) and
     draws each face's box + name, so the new tab shows the real pixels — not the
-    1600px preview. Heavy (full decode + draw), so it runs in the executor and is not
+    downscaled preview. Heavy (full decode + draw), so it runs in the executor and is not
     disk-cached; boxes reflect current labels, so it must not be cached either.
     """
     row = index.get_photo(photo_id)
