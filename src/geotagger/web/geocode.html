@@ -17,6 +17,10 @@
     <button id="select-month-btn">Select Month</button>
     <span id="selected-month-label">No month selected</span>
   </div>
+  <div class="toolbar-group" id="timeline-toolbar-group" style="display:none">
+    <button id="timeline-btn" title="Filter the loaded photos down to a date range">📊 Date range</button>
+    <span id="timeline-range-label"></span>
+  </div>
   <div class="toolbar-group">
     <button id="select-area-btn">Select Area</button>
     <select id="window-select">
@@ -44,16 +48,6 @@
 </div>
 
 <div id="cam-legend"></div>
-
-<div id="timeline">
-  <canvas id="hist-canvas"></canvas>
-  <input id="range-lo" class="hist-range" type="range" min="0" max="1000" value="0"/>
-  <input id="range-hi" class="hist-range" type="range" min="0" max="1000" value="1000"/>
-  <div id="hist-labels">
-    <span id="hist-label-lo"></span>
-    <span id="hist-label-hi"></span>
-  </div>
-</div>
 
 <div id="main">
   <div id="map-pane">
@@ -204,6 +198,29 @@
     <span class="modal-close">&times;</span>
     <h2>Select Month</h2>
     <div id="month-picker-list"></div>
+  </div>
+</div>
+
+<!-- Timeline Modal: the histogram + range handles used to sit permanently under
+     the toolbar; it costs 72px of vertical space to answer a question you ask
+     once per month, so it lives here now and the toolbar shows the range. -->
+<div id="timeline-modal" class="modal" style="display:none">
+  <div class="modal-content" id="timeline-modal-content">
+    <span class="modal-close" id="timeline-modal-close">&times;</span>
+    <h2>Date range</h2>
+    <div id="timeline">
+      <canvas id="hist-canvas"></canvas>
+      <input id="range-lo" class="hist-range" type="range" min="0" max="1000" value="0"/>
+      <input id="range-hi" class="hist-range" type="range" min="0" max="1000" value="1000"/>
+      <div id="hist-labels">
+        <span id="hist-label-lo"></span>
+        <span id="hist-label-hi"></span>
+      </div>
+    </div>
+    <div id="timeline-modal-actions">
+      <button id="timeline-reset-btn" title="Widen the range back to every photo loaded">↩ Reset range</button>
+      <button id="timeline-done-btn" class="primary">Done</button>
+    </div>
   </div>
 </div>
 

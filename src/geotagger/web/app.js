@@ -393,7 +393,9 @@ function bindToolbar() {
   bindProposeBar();
 
   // Modal close handlers
-  document.querySelector(".modal-close").addEventListener("click", hideMonthPicker);
+  // Scoped: there is more than one .modal-close on the page now.
+  document.querySelector("#month-picker-modal .modal-close")
+    .addEventListener("click", hideMonthPicker);
   document.getElementById("month-picker-modal").addEventListener("click", (e) => {
     if (e.target.id === "month-picker-modal") hideMonthPicker();
   });
@@ -499,7 +501,7 @@ async function selectMonth(year, month) {
   selectedMonth = month;
   dayIsolation = null;
   undatedMode = false;
-  document.getElementById("timeline").style.display = "";
+  setTimelineAvailable(true);
   hideMonthPicker();
 
   // Clear area and context selections
@@ -525,7 +527,7 @@ async function selectYear(year) {
   selectedMonth = null;
   dayIsolation = null;
   undatedMode = false;
-  document.getElementById("timeline").style.display = "";
+  setTimelineAvailable(true);
   hideMonthPicker();
 
   areaSelectParams = null;
@@ -563,7 +565,7 @@ async function selectUndated() {
   clearContextFilter();
 
   document.getElementById("selected-month-label").textContent = "Undated photos";
-  document.getElementById("timeline").style.display = "none";
+  setTimelineAvailable(false);
 
   await loadPhotos(true);
 }
@@ -1816,10 +1818,51 @@ function makeGuessPinIcon() {
   });
 }
 
-/* ── Timeline histogram ── */
+/* ── Timeline histogram ──
+ * The histogram lives in a modal rather than a permanent strip under the
+ * toolbar: it's a once-per-month adjustment that was costing every screen 72px
+ * of grid height. The toolbar keeps a button and, once the range is narrowed,
+ * the range itself — so a filter hidden behind a modal can't be forgotten. */
+
+// Whether the loaded photos carry enough dates to filter on. Hides the toolbar
+// entry (and closes the modal) when they don't.
+function setTimelineAvailable(available) {
+  document.getElementById("timeline-toolbar-group").style.display = available ? "" : "none";
+  if (!available) hideTimelineModal();
+}
+
+function showTimelineModal() {
+  document.getElementById("timeline-modal").style.display = "flex";
+  // The canvas had no layout while the modal was hidden, so offsetWidth was 0
+  // and every draw during that time was a no-op — redraw now that it has size.
+  drawHistogram();
+}
+
+function hideTimelineModal() {
+  document.getElementById("timeline-modal").style.display = "none";
+}
+
+function resetDateFilter() {
+  document.getElementById("range-lo").value = 0;
+  document.getElementById("range-hi").value = 1000;
+  updateDateFilter();
+  applyFilters();
+}
+
 function bindTimeline() {
   const lo = document.getElementById("range-lo");
   const hi = document.getElementById("range-hi");
+
+  document.getElementById("timeline-btn").addEventListener("click", showTimelineModal);
+  document.getElementById("timeline-modal-close").addEventListener("click", hideTimelineModal);
+  document.getElementById("timeline-done-btn").addEventListener("click", hideTimelineModal);
+  document.getElementById("timeline-reset-btn").addEventListener("click", resetDateFilter);
+  document.getElementById("timeline-modal").addEventListener("click", (e) => {
+    if (e.target.id === "timeline-modal") hideTimelineModal();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") hideTimelineModal();
+  });
 
   function onInput() {
     // Prevent handles from crossing
@@ -1881,14 +1924,14 @@ function buildHistogram() {
   const tsList = photos.map(p => p.photo_datetime).filter(ts => ts && ts > 0);
   if (tsList.length < 2) {
     // Hide timeline if there's no date data
-    document.getElementById("timeline").style.display = "none";
+    setTimelineAvailable(false);
     dateRangeMin = dateRangeMax = 0;
     dateFilterLo = dateFilterHi = 0;
     histBuckets = [];
     reloadHotspotsIfRelative("time");   // nothing dated on screen to rank against
     return;
   }
-  document.getElementById("timeline").style.display = "";
+  setTimelineAvailable(true);
 
   dateRangeMin = Math.min(...tsList);
   dateRangeMax = Math.max(...tsList);
@@ -1937,6 +1980,18 @@ function updateDateFilter() {
 function updateDateLabels() {
   document.getElementById("hist-label-lo").textContent = fmtDate(dateFilterLo);
   document.getElementById("hist-label-hi").textContent = fmtDate(dateFilterHi);
+
+  // Mirror the range into the toolbar — with the histogram behind a modal this
+  // is the only place a narrowed range is visible.
+  const label = document.getElementById("timeline-range-label");
+  const narrowed = dateFilterLo > dateRangeMin || dateFilterHi < dateRangeMax;
+  if (!narrowed) {
+    label.textContent = "All dates";
+    label.style.color = "";
+  } else {
+    label.textContent = `${fmtDate(dateFilterLo)} – ${fmtDate(dateFilterHi)}`;
+    label.style.color = "#e0a030";   // an active filter reads as a warning, not chrome
+  }
 }
 
 function fmtDate(ts) {
@@ -1953,6 +2008,8 @@ function drawHistogram() {
   // Size canvas to its CSS size
   const cssW = canvas.offsetWidth;
   const cssH = canvas.offsetHeight;
+  // Modal closed: no layout box, nothing to draw. showTimelineModal redraws.
+  if (!cssW || !cssH) return;
   if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
     canvas.width = cssW * dpr;
     canvas.height = cssH * dpr;
@@ -2696,6 +2753,7 @@ function bindHotspotKeys() {
     if (t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA" ||
               t.isContentEditable)) return;
     if (document.getElementById("month-picker-modal").style.display !== "none") return;
+    if (document.getElementById("timeline-modal").style.display !== "none") return;
     if (!/^[1-9]$/.test(e.key)) return;
     if (!selectedIds.size) return;    // leave the key alone when it would do nothing
     e.preventDefault();
