@@ -23,53 +23,16 @@ def test_stats_summary_shape(client):
     assert res.status_code == 200
     body = res.json()
     assert set(body) >= {"photos", "geotag", "guessable", "geocode", "faces",
-                         "people", "contexts"}
+                         "people"}
     # SQLite SUM() over zero rows is NULL, so image/video breakdowns come back None.
     assert body["photos"] == {"total": 0, "images": None, "videos": None}
     assert body["people"] == {"persons": 0, "families": 0}
-    assert body["contexts"] == {"count": 0}
 
 
 def test_photos_empty(client):
     res = client.get("/api/photos")
     assert res.status_code == 200
     assert res.json() == []
-
-
-def test_contexts_crud_round_trip(client):
-    # Create
-    payload = {
-        "name": "Test Trip",
-        "polygon": [[10.0, 20.0], [10.0, 21.0], [11.0, 20.5]],
-        "start_date": "2020-01-01",
-        "end_date": "2020-01-31",
-    }
-    res = client.post("/api/contexts", json=payload)
-    assert res.status_code == 200, res.text
-    created = res.json()
-    assert created["name"] == "Test Trip"
-    assert created["start_date"] == "2020-01-01"
-    # end_ts is stored as an exclusive end-of-day (start + 86400), so the returned
-    # end_date is the day after the requested one. Locking in current behavior.
-    assert created["end_date"] == "2020-02-01"
-    assert created["polygon"] == payload["polygon"]
-    assert created["persons"] == []
-    ctx_id = created["id"]
-
-    # Read
-    res = client.get("/api/contexts")
-    assert res.status_code == 200
-    listing = res.json()
-    assert any(c["id"] == ctx_id for c in listing)
-
-    # Delete
-    res = client.delete(f"/api/contexts/{ctx_id}")
-    assert res.status_code == 200
-    assert res.json() == {"success": True}
-
-    res = client.get("/api/contexts")
-    assert res.status_code == 200
-    assert all(c["id"] != ctx_id for c in res.json())
 
 
 def test_settings_list_has_defaults(client):

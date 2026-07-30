@@ -27,16 +27,6 @@ def _in_window(ts, start_ts: int | None, end_ts: int | None) -> bool:
     return (start_ts is None or ts >= start_ts) and (end_ts is None or ts <= end_ts)
 
 
-def _spatial_photo_ids(spatial_context_id: int | None) -> list[int] | None:
-    """Resolve the People page's spatial Focus ("also limit to this area") to the
-    set of photo ids inside a context's polygon, or None when it's off (the query
-    then stays time-only). An empty list is a real answer — the area has no
-    geotagged photos — and correctly yields empty windowed views."""
-    if spatial_context_id is None:
-        return None
-    return index.get_context_photo_ids(spatial_context_id)
-
-
 class CreatePersonRequest(BaseModel):
     name: str
 
@@ -89,19 +79,16 @@ class AddManualFaceRequest(BaseModel):
 async def api_get_persons(
     start_ts: int | None = Query(None),
     end_ts: int | None = Query(None),
-    spatial_context_id: int | None = Query(None),
 ):
-    """List persons. With a start_ts/end_ts window (the People page's time Focus)
-    and/or spatial_context_id (its "also limit to this area" Focus — photos inside
-    that context's polygon), people with no faces in range are omitted. No
-    face_count in either case — see index.get_persons."""
-    photo_ids = _spatial_photo_ids(spatial_context_id)
+    """List persons. With a start_ts/end_ts window (the People page's time Focus),
+    people with no faces in range are omitted. No face_count in either case — see
+    index.get_persons."""
     return [
         {"id": p["id"], "name": p["name"],
          "birth_date": p["birth_date"], "not_before": p["not_before"],
          "not_after": p["not_after"], "created_at": p["created_at"],
          "family_id": p["family_id"], "family_name": p["family_name"]}
-        for p in index.get_persons(start_ts=start_ts, end_ts=end_ts, photo_ids=photo_ids)
+        for p in index.get_persons(start_ts=start_ts, end_ts=end_ts)
     ]
 
 
@@ -193,7 +180,6 @@ async def api_list_faces(
     suggested_only: bool = Query(False),
     start_ts: int | None = Query(None),
     end_ts: int | None = Query(None),
-    spatial_context_id: int | None = Query(None),
 ):
     """List faces. scope=unlabeled attaches a recognition suggestion to each face;
     scope=suggested returns only unlabeled faces whose *best* guess is `person_id`,
@@ -201,11 +187,9 @@ async def api_list_faces(
     suggested_only (scope=unlabeled) drops faces with no guess, scanning up to the
     suggest cap so it finds matches beyond the first detection-ranked page.
 
-    start_ts/end_ts (epoch secs) are the People page's time Focus; spatial_context_id
-    is its "also limit to this area" Focus (photos inside that context's polygon).
-    Both window the candidate faces for the unlabeled and suggested scopes only
-    (person/all/recent/ignored ignore them, and the recognition gallery stays global
-    either way)."""
+    start_ts/end_ts (epoch secs) are the People page's time Focus. They window the
+    candidate faces for the unlabeled and suggested scopes only (person/all/recent/
+    ignored ignore them, and the recognition gallery stays global either way)."""
     neg_map = faces.get_negatives_map()
 
     if scope == "unlabeled" and suggested_only:
@@ -215,11 +199,8 @@ async def api_list_faces(
             faces.get_suggested_scores,
         )
         names = serializers.person_name_map()
-        pid_set = _spatial_photo_ids(spatial_context_id)
-        pid_set = set(pid_set) if pid_set is not None else None
         scored = [(r, m) for r, m in zip(rows, matches)
-                  if m and _in_window(r["photo_datetime"], start_ts, end_ts)
-                     and (pid_set is None or r["photo_id"] in pid_set)]
+                  if m and _in_window(r["photo_datetime"], start_ts, end_ts)]
         scored.sort(key=lambda rm: rm[1][1], reverse=True)  # most confident first
         total = len(scored)
         out = []
@@ -243,11 +224,9 @@ async def api_list_faces(
         _unlabeled_n = 0
         if len(gallery) > 0:
             rows, unknowns, _u_times = faces.get_unlabeled_matrix()
-            # Focus narrows the candidates (gallery stays global): by time, and by
-            # a context's polygon when "also limit to this area" is on.
-            _pids = _spatial_photo_ids(spatial_context_id)
+            # Focus narrows the candidates by time; the gallery stays global.
             rows, unknowns, _u_times = faces.window_rows(
-                rows, unknowns, _u_times, start_ts, end_ts, _pids)
+                rows, unknowns, _u_times, start_ts, end_ts)
             _t2 = time.perf_counter()
             _unlabeled_n = len(rows)
             loop = asyncio.get_running_loop()
@@ -281,9 +260,8 @@ async def api_list_faces(
 
     # The Focus applies to the unlabeled queue only; other scopes ignore it.
     w_start, w_end = (start_ts, end_ts) if scope == "unlabeled" else (None, None)
-    w_pids = _spatial_photo_ids(spatial_context_id) if scope == "unlabeled" else None
     rows = index.list_faces(scope=scope, person_id=person_id, limit=limit,
-                            start_ts=w_start, end_ts=w_end, photo_ids=w_pids)
+                            start_ts=w_start, end_ts=w_end)
     gallery = faces.build_gallery() if scope == "unlabeled" else None
     matches = (faces.suggest_persons_batch(rows, gallery)
                if gallery is not None and len(gallery) > 0 else [None] * len(rows))
@@ -300,7 +278,7 @@ async def api_list_faces(
     return {
         "faces": out,
         "total": index.count_faces(scope=scope, person_id=person_id,
-                                   start_ts=w_start, end_ts=w_end, photo_ids=w_pids),
+                                   start_ts=w_start, end_ts=w_end),
         "returned": len(out),
     }
 
@@ -572,19 +550,17 @@ async def api_faces_scan(req: ScanFacesRequest):
 async def api_faces_scan_status(
     start_ts: int | None = Query(None),
     end_ts: int | None = Query(None),
-    spatial_context_id: int | None = Query(None),
 ):
     """Face-pipeline counts for the People nav. The Focus (start_ts/end_ts time
-    window and/or spatial_context_id polygon) scopes only unlabeled_faces (the one
-    windowed nav scope); total/ignored/tagged stay global to match the un-windowed
+    window) scopes only unlabeled_faces (the one windowed nav scope);
+    total/ignored/tagged stay global to match the un-windowed
     All/Ignored/Recently-tagged scopes."""
     remaining = len(index.get_unscanned_photo_ids())
-    photo_ids = _spatial_photo_ids(spatial_context_id)
     return {
         "remaining_photos": remaining,
         "total_faces": index.count_faces("all"),
         "unlabeled_faces": index.count_faces("unlabeled", start_ts=start_ts,
-                                             end_ts=end_ts, photo_ids=photo_ids),
+                                             end_ts=end_ts),
         "ignored_faces": index.count_faces("ignored"),
         "come_back_faces": index.count_faces("come_back"),
         "tagged_faces": index.count_faces("recent"),
@@ -599,7 +575,6 @@ async def api_face_clusters(
     full: bool = Query(False),
     start_ts: int | None = Query(None),
     end_ts: int | None = Query(None),
-    spatial_context_id: int | None = Query(None),
 ):
     """Discover groups of likely same-person faces among the unlabeled queue, so a
     new person can be named in one go (no seed example needed). Clusters the top
@@ -612,10 +587,9 @@ async def api_face_clusters(
     cap = config.FACE_CLUSTER_CAP if cap is None else cap
     gallery = faces.build_gallery()
     rows, unknowns, times = faces.get_unlabeled_matrix()
-    # Focus narrows the candidates before the det-score cap (gallery stays global):
-    # by time, and by a context's polygon when "also limit to this area" is on.
-    _pids = _spatial_photo_ids(spatial_context_id)
-    rows, unknowns, times = faces.window_rows(rows, unknowns, times, start_ts, end_ts, _pids)
+    # Focus narrows the candidates before the det-score cap by time; the gallery
+    # stays global.
+    rows, unknowns, times = faces.window_rows(rows, unknowns, times, start_ts, end_ts)
     if cap and 0 < cap < len(rows):
         rows, unknowns, times = rows[:cap], unknowns[:cap], times[:cap]
     names = serializers.person_name_map()
@@ -637,16 +611,12 @@ async def api_crowds(
     group_gap: int = Query(86400, ge=60),
     start_ts: int | None = Query(None),
     end_ts: int | None = Query(None),
-    spatial_context_id: int | None = Query(None),
 ):
     """Return crowd photos (>= min_faces detected faces) grouped by time gaps.
-    min_faces defaults to the live config.FACE_CROWD_MIN_SIZE setting. The Focus
-    (start_ts/end_ts time window and/or spatial_context_id polygon) is the People
-    page's Focus."""
+    min_faces defaults to the live config.FACE_CROWD_MIN_SIZE setting.
+    start_ts/end_ts is the People page's time Focus."""
     min_faces = config.FACE_CROWD_MIN_SIZE if min_faces is None else min_faces
-    photo_ids = _spatial_photo_ids(spatial_context_id)
-    rows = index.get_crowd_photos(min_faces, start_ts=start_ts, end_ts=end_ts,
-                                  photo_ids=photo_ids)
+    rows = index.get_crowd_photos(min_faces, start_ts=start_ts, end_ts=end_ts)
     groups: list[dict] = []
     for row in rows:
         ts = row["photo_datetime"] or 0

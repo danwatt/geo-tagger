@@ -9,7 +9,6 @@
     { key: "timesync", label: "🕐 Time Sync", href: "/timesync.html" },
     { key: "people", label: "🙂 People", href: "/people.html" },
     { key: "representatives", label: "⭐ Representatives", href: "/representatives.html" },
-    { key: "contexts", label: "🗺️ Contexts", href: "/contexts.html" },
     { key: "map", label: "🌍 Geo Data", href: "/map.html" },
     { key: "data", label: "📦 Data", href: "/data.html" },
     { key: "settings", label: "⚙ Settings", href: "/settings.html" },

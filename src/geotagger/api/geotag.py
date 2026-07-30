@@ -91,10 +91,7 @@ async def api_geotag_propose(req: ProposeRequest):
 
 @router.get("/api/guess/{photo_id}")
 async def api_guess(photo_id: int, window: int = 900):
-    """Return a guessed lat/lng from nearby-in-time geotagged photos (±window seconds).
-    Falls back to the centroid of a matched Life Context when no time-neighbors exist."""
-    import json as _json
-    from geotagger.contexts import point_in_polygon, polygon_centroid
+    """Return a guessed lat/lng from nearby-in-time geotagged photos (±window seconds)."""
     row = index.get_photo(photo_id)
     if not row:
         raise HTTPException(404)
@@ -103,11 +100,6 @@ async def api_guess(photo_id: int, window: int = 900):
     ts = row["photo_datetime"]
     if not ts or ts <= 0:
         raise HTTPException(400, "Photo has no timestamp — cannot guess location")
-
-    # Look up matching contexts by timestamp (polygon is the answer, not a filter)
-    matched_contexts = index.contexts_for_time(ts)
-    ctx_payload = [{"id": c["id"], "name": c["name"], "polygon": _json.loads(c["polygon"])}
-                   for c in matched_contexts]
 
     db = index.get_db()
     nearby = db.execute("""
@@ -119,15 +111,6 @@ async def api_guess(photo_id: int, window: int = 900):
         ORDER BY ABS(photo_datetime - ?) ASC
         LIMIT 50
     """, (ts - window, ts + window, photo_id, ts)).fetchall()
-
-    # When contexts exist, constrain to in-polygon neighbors only
-    if nearby and matched_contexts:
-        in_ctx = [r for r in nearby if any(
-            point_in_polygon(r["lat"], r["lng"], _json.loads(c["polygon"]))
-            for c in matched_contexts
-        )]
-        if in_ctx:
-            nearby = in_ctx
 
     if nearby:
         weights = [1.0 / (abs(r["photo_datetime"] - ts) + 1) for r in nearby]
@@ -144,28 +127,6 @@ async def api_guess(photo_id: int, window: int = 900):
                          "lat": r["lat"], "lng": r["lng"],
                          "delta_sec": abs(r["photo_datetime"] - ts),
                          "is_before": r["photo_datetime"] < ts} for r in nearby],
-            "contexts": ctx_payload,
-        }
-
-    # No usable neighbors — fall back to context centroid if a context matched
-    if matched_contexts:
-        # Pick the most specific (smallest-area) context
-        def _area(c):
-            verts = _json.loads(c["polygon"])
-            lat_span = (c["max_lat"] or 0) - (c["min_lat"] or 0)
-            lng_span = (c["max_lng"] or 0) - (c["min_lng"] or 0)
-            return lat_span * lng_span
-        best = min(matched_contexts, key=_area)
-        verts = _json.loads(best["polygon"])
-        clat, clng = polygon_centroid(verts)
-        return {
-            "lat": clat,
-            "lng": clng,
-            "source": "context-centroid",
-            "source_count": 0,
-            "window_sec": window,
-            "sources": [],
-            "contexts": ctx_payload,
         }
 
     raise HTTPException(404, detail="No geotagged photos found within the time window")

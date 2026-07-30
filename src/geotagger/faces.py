@@ -536,15 +536,15 @@ def window_rows(rows, unknowns: np.ndarray, times: np.ndarray,
                 start_ts: int | None, end_ts: int | None,
                 photo_ids: set[int] | list[int] | None = None
                 ) -> tuple[list, np.ndarray, np.ndarray]:
-    """Filter a decoded unlabeled matrix (rows/embeddings/times) to a Focus window.
+    """Filter a decoded unlabeled matrix (rows/embeddings/times) to a window.
 
     The People page's Focus windows the *candidate* faces (not the gallery),
     reusing the cached full-library matrix from ``get_unlabeled_matrix`` so the
     cache stays warm. ``start_ts``/``end_ts`` window by time (undated faces, NaN
-    time, fall out of any time window); ``photo_ids`` (its "also limit to this
-    area" spatial Focus) keeps only faces whose photo is inside a context's
-    polygon. Returns the filtered ``(rows, unknowns, times)``; an all-None Focus
-    returns them unchanged.
+    time, fall out of any time window); ``photo_ids`` restricts to an explicit
+    photo set — the Search page's untagged-face candidate scan passes the photos
+    a person could appear in. Returns the filtered ``(rows, unknowns, times)``;
+    an all-None window returns them unchanged.
     """
     if start_ts is None and end_ts is None and photo_ids is None:
         return rows, unknowns, times

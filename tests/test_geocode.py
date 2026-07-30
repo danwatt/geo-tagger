@@ -465,7 +465,7 @@ class TestWeightedCellGeometry:
     def test_cell_boundaries_agree_with_the_lookup(self, geonames_dir):
         # Sample the viewport and check every point's cell membership matches what
         # _raw_lookup says, to within the grid step the trace is accurate to.
-        from geotagger.contexts import point_in_polygon
+        from geotagger.geometry import point_in_polygon
 
         _write_geonames_files(geonames_dir, [self.SMALL, self.BIG])
         min_lat, max_lat, min_lng, max_lng = self.BBOX

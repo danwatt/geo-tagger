@@ -119,36 +119,6 @@ class TestPersonNameMap:
         assert serializers.person_name_map() == {}
 
 
-class TestContextRowToDict:
-    def test_shape_and_date_formatting(self, db):
-        import json
-        cid = index.create_context(
-            "Trip", json.dumps([[0, 0], [0, 1], [1, 1]]),
-            start_ts=1_577_836_800, end_ts=1_577_923_200,  # 2020-01-01, 2020-01-02
-            min_lat=0, max_lat=1, min_lng=0, max_lng=1,
-        )
-        d = serializers.context_row_to_dict(index.get_context(cid))
-        assert d["name"] == "Trip"
-        assert d["polygon"] == [[0, 0], [0, 1], [1, 1]]
-        assert d["start_date"] == "2020-01-01"
-        assert d["end_date"] == "2020-01-02"
-        assert d["persons"] == []
-
-    def test_persons_included(self, db):
-        import json
-        cid = index.create_context("C", json.dumps([[0, 0], [0, 1], [1, 1]]),
-                                   None, None, 0, 1, 0, 1)
-        pid = index.create_person("Alice")
-        # persons are accessed via p["id"] / p["name"], so real rows work here.
-        d = serializers.context_row_to_dict(index.get_context(cid),
-                                            index.get_context_persons(cid))
-        assert d["persons"] == []  # none assigned yet
-        index.set_context_persons(cid, [pid])
-        d = serializers.context_row_to_dict(index.get_context(cid),
-                                            index.get_context_persons(cid))
-        assert d["persons"] == [{"id": pid, "name": "Alice"}]
-
-
 class TestFormatCrowdGroupLabel:
     def test_zero_is_unknown(self):
         assert serializers.format_crowd_group_label(0) == "Unknown date"

@@ -49,7 +49,7 @@ function initMap() {
   map.on("moveend", correctWorldWrap);
 }
 
-// See contexts.js — keeps the map's own center from drifting past ±180 when
+// See map.js — keeps the map's own center from drifting past ±180 when
 // panning continuously across the antimeridian, which would otherwise render
 // canonical shapes a full world-width off screen.
 function correctWorldWrap() {

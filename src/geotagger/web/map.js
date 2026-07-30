@@ -178,7 +178,7 @@ function addOverlayControl() {
 // Leaflet projects longitude linearly with no wraparound, so continuous
 // horizontal dragging lets the map's own center drift past +/-180 (the same
 // root cause as getBounds() returning e.g. lng=-458 instead of -98 — see
-// contexts.normalize_lng_bbox on the backend, which fixes the *query*). But
+// geometry.normalize_lng_bbox on the backend, which fixes the *query*). But
 // every vector layer we draw (GeoNames markers, Voronoi cells, OSM polygons)
 // is placed at its canonical (wrapped) longitude, so once the view has
 // drifted a full world away, those layers render a full world-width off

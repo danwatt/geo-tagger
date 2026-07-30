@@ -161,7 +161,7 @@ input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
 }
 #status-bar.error { color: var(--danger-text); }
 
-/* ── Sidebar (contexts / representatives split-pane pages) ── */
+/* ── Sidebar (representatives split-pane pages) ── */
 #sidebar {
   width: 300px;
   flex-shrink: 0;

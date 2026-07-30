@@ -32,7 +32,7 @@ async function loadSummary() {
     renderGeotag(data.geotag, data.guessable, data.photos.total);
     renderReverseGeocode(data.geocode);
     renderFaces(data.faces);
-    renderPeople(data.people, data.contexts);
+    renderPeople(data.people);
   } catch (e) {
     cards.forEach((id) => showError(id, e.message));
   }
@@ -83,11 +83,9 @@ function renderFaces(faces) {
     `${faces.unscanned_photos.toLocaleString()} photos not yet scanned for faces`;
 }
 
-function renderPeople(people, contexts) {
+function renderPeople(people) {
   document.getElementById("people-stats").textContent =
     `${people.persons.toLocaleString()} people · ${people.families.toLocaleString()} families`;
-  document.getElementById("contexts-stats").textContent =
-    `${contexts.count.toLocaleString()} life contexts`;
 }
 
  /* ── Face-coverage card ── */

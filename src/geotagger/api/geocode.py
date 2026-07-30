@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from geotagger import census_places, index, geocode, osm_places, serializers
-from geotagger.contexts import normalize_lng_bbox
+from geotagger.geometry import normalize_lng_bbox
 from geotagger.executor import get_executor
 from geotagger.services import geocode_service
 
@@ -22,7 +22,7 @@ def _parse_bbox(bbox: str) -> tuple[float, float, float, float]:
     """-> (min_lat, max_lat, min_lng, max_lng), with longitude unwrapped back into
     [-180, 180]. map.getBounds() (Leaflet) returns raw longitudes outside that
     range once the map has been panned all the way around the globe — see
-    contexts.normalize_lng_bbox."""
+    geometry.normalize_lng_bbox."""
     try:
         min_lng, min_lat, max_lng, max_lat = map(float, bbox.split(","))
     except ValueError:

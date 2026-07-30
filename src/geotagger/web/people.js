@@ -58,21 +58,15 @@ const UNLABELED_HIERARCHY_LS_KEY = "geotagger.people.unlabeledHierarchy";
 let unlabeledHierarchy = localStorage.getItem(UNLABELED_HIERARCHY_LS_KEY) || "date";
 
 // Focus: narrows the tagging/discovery surfaces (people list, Unlabeled,
-// suggestions, Discover, Crowds) to one Context's time window. null = all time.
+// suggestions, Discover, Crowds) to one Year's time window. null = all time.
 // The per-person / All / Recently-tagged views and the recognition gallery are
-// unaffected — only the *candidates* shown are windowed. The "＋ in its area"
-// checkbox additionally limits to photos inside the Context's polygon (spatial),
-// off by default; the backend resolves the polygon from focusContextId.
+// unaffected — only the *candidates* shown are windowed.
 let focusStartTs = null;        // epoch secs, or null
 let focusEndTs = null;          // epoch secs, or null
-let focusLabel = null;          // active Context's name (for status messages)
-let focusContextId = null;      // active Context's id (drives the spatial Focus)
-let focusSpatial = false;       // also limit to the active Context's polygon
-let focusContexts = [];         // contexts that have a time component
+let focusLabel = null;          // active window's name (for status messages)
 let focusYears = [];            // distinct years present in the library, descending
 let jumpToUndated = false;      // one-shot: scroll to the Undated section once loaded (?month=undated)
-const FOCUS_LS_KEY = "geotagger.people.focusContextId";
-const FOCUS_SPATIAL_LS_KEY = "geotagger.people.focusSpatial";
+const FOCUS_LS_KEY = "geotagger.people.focusYear";
 
 // Max faces fetched per grid load. Loaded from the server's FACE_QUERY_LIMIT
 // setting (see loadLiveSettings, which pulls both in one /api/settings
@@ -100,7 +94,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindToolbar();
   bindKeyboardShortcuts();
   await loadLiveSettings();  // before loadFaces, so the first render pre-selects correctly
-  await loadFocusContexts();   // restores any saved Focus before the first load
+  await loadFocusYears();      // restores any saved Focus before the first load
   await loadPersons();
 
   // Deep-link from the Search page's "find untagged faces" candidates:
@@ -148,12 +142,7 @@ function bindToolbar() {
     window.location.href = "/people-manage.html";
   });
 
-  document.getElementById("focus-context-select").addEventListener("change", onFocusChange);
-  document.getElementById("focus-spatial-chk").addEventListener("change", () => {
-    localStorage.setItem(FOCUS_SPATIAL_LS_KEY,
-      document.getElementById("focus-spatial-chk").checked ? "1" : "0");
-    onFocusChange();   // applyFocusFromSelect re-reads the checkbox, then reloads
-  });
+  document.getElementById("focus-year-select").addEventListener("change", onFocusChange);
 
   document.getElementById("deselect-all-btn").addEventListener("click", deselectAll);
   document.getElementById("suggested-only-chk").addEventListener("change", (e) => {
@@ -278,29 +267,18 @@ function openAssignPickerForSelection() {
 }
 
 /* ── Time Focus ──
- * The Focus dropdown offers two kinds of time window: a plain calendar Year
- * (all photos taken in it, no polygon — spatial narrowing doesn't apply), and
- * each Context that has a time component (start_ts/end_ts); a Context's place
- * polygon is only used when "＋ in its area" is also checked. Year option
- * values are prefixed "y:" to tell them apart from Context ids. */
-async function loadFocusContexts() {
-  const sel = document.getElementById("focus-context-select");
-  try {
-    const res = await fetch("/api/contexts");
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const all = await res.json();
-    // Only Contexts with a time component can drive a time Focus.
-    focusContexts = all.filter(c => c.start_ts != null || c.end_ts != null);
-  } catch (err) {
-    focusContexts = [];   // non-fatal: Focus just stays at "All time"
-  }
+ * The Focus dropdown windows the tagging surfaces to one calendar Year (all
+ * photos taken in it). Option values are prefixed "y:"; a "?month=YYYY-MM" URL
+ * argument adds a one-shot "m:" option for a single month. */
+async function loadFocusYears() {
+  const sel = document.getElementById("focus-year-select");
   try {
     const res = await fetch("/api/stats/years");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     focusYears = data.years;
   } catch (err) {
-    focusYears = [];   // non-fatal: no Year options, Contexts still work
+    focusYears = [];   // non-fatal: Focus just stays at "All time"
   }
 
   sel.innerHTML = '<option value="">All time</option>';
@@ -311,17 +289,6 @@ async function loadFocusContexts() {
       const opt = document.createElement("option");
       opt.value = `y:${y}`;
       opt.textContent = String(y);
-      grp.appendChild(opt);
-    });
-    sel.appendChild(grp);
-  }
-  if (focusContexts.length) {
-    const grp = document.createElement("optgroup");
-    grp.label = "Context";
-    focusContexts.forEach(c => {
-      const opt = document.createElement("option");
-      opt.value = String(c.id);
-      opt.textContent = `${c.name} (${focusRangeLabel(c)})`;
       grp.appendChild(opt);
     });
     sel.appendChild(grp);
@@ -348,67 +315,49 @@ async function loadFocusContexts() {
   } else {
     // Restore a previously chosen Focus so the window survives reloads.
     const saved = localStorage.getItem(FOCUS_LS_KEY);
-    if (saved && (focusContexts.some(c => String(c.id) === saved) || focusYears.some(y => `y:${y}` === saved))) {
+    if (saved && focusYears.some(y => `y:${y}` === saved)) {
       sel.value = saved;
     }
   }
-  document.getElementById("focus-spatial-chk").checked =
-    localStorage.getItem(FOCUS_SPATIAL_LS_KEY) === "1";
   applyFocusFromSelect();   // sets state + note; the initial load picks it up
 }
 
 // Read the dropdown, set the active window (state + localStorage + note). Does
 // not reload — callers decide whether to refresh the views.
 function applyFocusFromSelect() {
-  const sel = document.getElementById("focus-context-select");
-  const chk = document.getElementById("focus-spatial-chk");
+  const sel = document.getElementById("focus-year-select");
   const val = sel.value;
 
   if (val.startsWith("m:")) {
     // A calendar month (from a "?month=YYYY-MM" URL argument), computed as a
     // UTC range for the same reason the Year case is — matches photo_datetime
-    // bucketing. No polygon, so spatial narrowing doesn't apply. Not persisted
-    // to localStorage: URL-driven, one-shot on arrival, not a saved preference.
+    // bucketing. Not persisted to localStorage: URL-driven, one-shot on arrival,
+    // not a saved preference.
     const [year, month] = val.slice(2).split("-").map(Number);
     focusStartTs = Date.UTC(year, month - 1, 1) / 1000;
     focusEndTs = Date.UTC(month === 12 ? year + 1 : year, month === 12 ? 0 : month, 1) / 1000;
     focusLabel = `${MONTH_NAMES[month - 1]} ${year}`;
-    focusContextId = null;
-    chk.disabled = true;
-    document.getElementById("focus-spatial-label").classList.toggle("disabled", true);
-    focusSpatial = false;
     updateFocusNote();
     return;
   }
 
   if (val.startsWith("y:")) {
     // A calendar year, computed as a UTC range to match how the backend buckets
-    // photo_datetime (strftime(..., 'unixepoch') is UTC) and Context date_to_ts_*.
+    // photo_datetime (strftime(..., 'unixepoch') is UTC).
     const year = parseInt(val.slice(2), 10);
     focusStartTs = Date.UTC(year, 0, 1) / 1000;
     focusEndTs = Date.UTC(year + 1, 0, 1) / 1000;
     focusLabel = String(year);
-    focusContextId = null;
-    chk.disabled = true;
-    document.getElementById("focus-spatial-label").classList.toggle("disabled", true);
-    focusSpatial = false;   // years have no polygon — spatial narrowing doesn't apply
     localStorage.setItem(FOCUS_LS_KEY, val);
     updateFocusNote();
     return;
   }
 
-  const c = focusContexts.find(x => String(x.id) === val);
-  focusStartTs = c ? c.start_ts : null;
-  focusEndTs = c ? c.end_ts : null;
-  focusLabel = c ? c.name : null;
-  focusContextId = c ? c.id : null;
-  // "＋ in its area" only means something with a Context picked; disable it under
-  // "All time" so it's clear it needs one. focusSpatial follows the live checkbox.
-  chk.disabled = !c;
-  document.getElementById("focus-spatial-label").classList.toggle("disabled", !c);
-  focusSpatial = chk.checked && !!c;
-  if (c) localStorage.setItem(FOCUS_LS_KEY, String(c.id));
-  else localStorage.removeItem(FOCUS_LS_KEY);
+  // "All time"
+  focusStartTs = null;
+  focusEndTs = null;
+  focusLabel = null;
+  localStorage.removeItem(FOCUS_LS_KEY);
   updateFocusNote();
 }
 
@@ -420,53 +369,29 @@ async function onFocusChange() {
 }
 
 function focusActive() {
-  return focusStartTs != null || focusEndTs != null
-      || (focusSpatial && focusContextId != null);
+  return focusStartTs != null || focusEndTs != null;
 }
 
-// Query fragment (no leading separator) for the active Focus, else "". Carries the
-// time window and, when "＋ in its area" is on, the Context id so the backend can
-// resolve its polygon and drop out-of-area photos.
+// Query fragment (no leading separator) for the active Focus, else "".
 function focusQuery() {
   const parts = [];
   if (focusStartTs != null) parts.push(`start_ts=${focusStartTs}`);
   if (focusEndTs != null) parts.push(`end_ts=${focusEndTs}`);
-  if (focusSpatial && focusContextId != null) {
-    parts.push(`spatial_context_id=${focusContextId}`);
-  }
   return parts.join("&");
-}
-
-// Human label for a Context's window, matching the Contexts page convention
-// (raw start_date/end_date; end_date is the app's exclusive end-of-day value).
-function focusRangeLabel(c) {
-  const s = c.start_date, e = c.end_date;
-  if (s && e) return s === e ? s : `${s} → ${e}`;
-  if (s) return `from ${s}`;
-  if (e) return `until ${e}`;
-  return "any time";
 }
 
 // " · Focus: <name>" for windowed status lines, or "" when no Focus is active.
 function focusStatusSuffix() {
   if (!focusActive()) return "";
-  return ` · Focus: ${focusLabel || "time window"}` + (focusSpatial ? " (in its area)" : "");
+  return ` · Focus: ${focusLabel || "time window"}`;
 }
 
 function updateFocusNote() {
   const note = document.getElementById("focus-note");
-  document.getElementById("focus-context-select").classList.toggle("focus-active", focusActive());
+  document.getElementById("focus-year-select").classList.toggle("focus-active", focusActive());
   if (!focusActive()) { note.textContent = ""; note.title = ""; return; }
-  note.textContent = focusSpatial
-    ? "◦ windowing by time + area (people, Unlabeled, suggestions, Discover & Crowds)"
-    : "◦ windowing people, Unlabeled, suggestions, Discover & Crowds";
-  const c = focusContextId != null ? focusContexts.find(x => x.id === focusContextId) : null;
-  note.title = c
-    ? `Focused on “${c.name}” (${focusRangeLabel(c)})` +
-      (focusSpatial ? " — limited to its map area" : "")
-    : focusLabel
-      ? `Focused on ${focusLabel}`
-      : "";
+  note.textContent = "◦ windowing people, Unlabeled, suggestions, Discover & Crowds";
+  note.title = focusLabel ? `Focused on ${focusLabel}` : "";
 }
 
 /* ── People list ── */

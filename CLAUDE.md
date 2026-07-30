@@ -71,7 +71,7 @@ don't.
   `index.init_db()`; **migrations additive**, done in-code via `PRAGMA table_info` +
   `ALTER TABLE ADD COLUMN` guards. Add columns same way — never assume fresh DB.
 - **Local imports**: heavy or rarely-used modules (`bisect`, `json as _json`, `datetime`,
-  submodules like `geotagger.contexts`) imported **inside function** that needs them, keep
+  submodules like `geotagger.geometry`) imported **inside function** that needs them, keep
   module import light. Intentional; keep doing for same cases.
 - **Type hints** everywhere, modern syntax: `int | None`, `list[int]`, `dict[str, float]`,
   `tuple[int, int, list[str]]`. Pydantic `BaseModel`s for request bodies, defined inline near

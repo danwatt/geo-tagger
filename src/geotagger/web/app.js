@@ -10,7 +10,6 @@ let map;
 let guessMarker = null;        // temporary guess pin (amber ?)
 let guessSourceMarkers = [];   // source photo pins shown during guess
 let guessPending = null;       // { lat, lng } awaiting apply/dismiss
-let guessContextLayers = [];   // context polygons shown during guess
 let accuracyCircle = null;     // L.circle shown for selected photo's GPS accuracy
 let selectedYear = null;
 let selectedMonth = null;
@@ -39,10 +38,6 @@ let areaSelectParams = null;  // { lat, lng, radius }
 /* ── Place filter state ── */
 let placeFilterParams = null;  // { placeId } — active saved-place bounds filter
 let placeFilterRect = null;    // L.Rectangle drawn for the (buffered) search bounds
-
-/* ── Context filter state ── */
-let contextFilterData = null;  // full context object from API when active
-let contextPolygonLayer = null;
 
 /* ── Date range filter state ── */
 let dateRangeMin = 0;   // Unix ts — absolute min across all photos
@@ -131,7 +126,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   await checkStatus();
   await loadPlaces();
   await loadHotspots();
-  await loadContextsDropdown();
   await fitMapToAllLocations();
 
   // A "?month=YYYY-MM" URL argument (e.g. from the homepage month charts)
@@ -310,25 +304,10 @@ function addBasemapControl() {
 }
 
 function bindToolbar() {
-  document.getElementById("context-filter-select").addEventListener("change", async (e) => {
-    const id = parseInt(e.target.value);
-    if (!id) {
-      clearContextFilter();
-      return;
-    }
-    // Find the context in the already-loaded list
-    const res = await fetch("/api/contexts");
-    const all = await res.json();
-    const ctx = all.find(c => c.id === id);
-    if (ctx) await loadPhotosByContext(ctx);
-  });
-
   document.getElementById("select-month-btn").addEventListener("click", showMonthPicker);
   document.getElementById("select-area-btn").addEventListener("click", startAreaSelection);
   function reloadCurrentView() {
-    if (contextFilterData) {
-      loadPhotosByContext(contextFilterData);
-    } else if (selectedYear) {
+    if (selectedYear) {
       loadPhotos();
     } else if (areaSelectParams) {
       loadPhotosByArea(areaSelectParams.lat, areaSelectParams.lng, areaSelectParams.radius);
@@ -504,7 +483,7 @@ async function selectMonth(year, month) {
   setTimelineAvailable(true);
   hideMonthPicker();
 
-  // Clear area and context selections
+  // Clear area and place selections
   areaSelectParams = null;
   if (areaSelectCircle) {
     map.removeLayer(areaSelectCircle);
@@ -512,7 +491,6 @@ async function selectMonth(year, month) {
   }
   document.getElementById("selected-area-label").textContent = "";
   clearPlaceFilter();
-  clearContextFilter();
 
   // Update label
   document.getElementById("selected-month-label").textContent =
@@ -537,7 +515,6 @@ async function selectYear(year) {
   }
   document.getElementById("selected-area-label").textContent = "";
   clearPlaceFilter();
-  clearContextFilter();
 
   document.getElementById("selected-month-label").textContent = `${year} (all months)`;
 
@@ -562,7 +539,6 @@ async function selectUndated() {
   }
   document.getElementById("selected-area-label").textContent = "";
   clearPlaceFilter();
-  clearContextFilter();
 
   document.getElementById("selected-month-label").textContent = "Undated photos";
   setTimelineAvailable(false);
@@ -665,7 +641,7 @@ function placeBboxWithBuffer(place, bufferMiles) {
 }
 
 // Filter the grid/map to photos inside a saved place's (buffered) bounds. Takes
-// over as the active view, clearing month/area/context selections like the other
+// over as the active view, clearing month/area selections like the other
 // selectors do.
 async function filterPhotosByPlace(place) {
   // Clear the other view modes
@@ -675,7 +651,6 @@ async function filterPhotosByPlace(place) {
   document.getElementById("selected-month-label").textContent = "No month selected";
   areaSelectParams = null;
   if (areaSelectCircle) { map.removeLayer(areaSelectCircle); areaSelectCircle = null; }
-  clearContextFilter();
 
   const bufferMiles = parseFloat(document.getElementById("place-buffer-select").value) || 0;
   const box = placeBboxWithBuffer(place, bufferMiles);
@@ -728,79 +703,6 @@ function clearPlaceFilter() {
 // Shared by the Area Selection feature below (its onAreaSelectStart records the
 // drag origin here). Place drawing/creation moved to the Custom Places page.
 let drawStartLatLng = null;
-
-/* ── Context Filter ── */
-
-async function loadContextsDropdown() {
-  try {
-    const res = await fetch("/api/contexts");
-    if (!res.ok) return;
-    const contexts = await res.json();
-    const select = document.getElementById("context-filter-select");
-    // Preserve current value if possible
-    const currentVal = select.value;
-    select.innerHTML = '<option value="">-- none --</option>';
-    contexts.forEach(c => {
-      const opt = document.createElement("option");
-      opt.value = c.id;
-      const dateStr = c.start_date && c.end_date
-        ? ` (${c.start_date.slice(0,4)}–${c.end_date.slice(0,4)})`
-        : c.start_date ? ` (from ${c.start_date.slice(0,4)})`
-        : c.end_date   ? ` (until ${c.end_date.slice(0,4)})`
-        : "";
-      opt.textContent = c.name + dateStr;
-      select.appendChild(opt);
-    });
-    if (currentVal) select.value = currentVal;
-  } catch (e) {
-    console.error("Failed to load contexts for dropdown:", e);
-  }
-}
-
-async function loadPhotosByContext(ctx) {
-  contextFilterData = ctx;
-  dayIsolation = null;
-  clearPlaceFilter();
-
-  // Draw / update the polygon layer
-  if (contextPolygonLayer) { map.removeLayer(contextPolygonLayer); contextPolygonLayer = null; }
-  if (ctx.polygon && ctx.polygon.length >= 3) {
-    contextPolygonLayer = L.polygon(ctx.polygon.map(v => [v[0], v[1]]), {
-      color: "#4a8", fillColor: "#4a8", fillOpacity: 0.08, weight: 2,
-    }).addTo(map).bindTooltip(ctx.name, { sticky: true });
-    map.fitBounds(contextPolygonLayer.getBounds().pad(0.15), { maxZoom: 12 });
-  }
-
-  // Update label
-  document.getElementById("selected-context-label").textContent = ctx.name;
-
-  const url = `/api/photos?geotagged=all&context_id=${ctx.id}`;
-
-  try {
-    setStatus(`Loading photos in context "${ctx.name}"…`);
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    photos = await res.json();
-    photos.forEach(p => camColor(p.camera));
-    renderLegend();
-    buildHistogram();
-    applyFilters(false);  // don't re-fit map — we already zoomed to polygon
-    const tagged = photos.filter(p => p.lat != null).length;
-    const untagged = photos.length - tagged;
-    setStatus(`"${ctx.name}": ${photos.length} photos (${tagged} geotagged, ${untagged} untagged)`);
-  } catch (err) {
-    setStatus("Load error: " + err.message, true);
-  }
-}
-
-function clearContextFilter() {
-  if (contextPolygonLayer) { map.removeLayer(contextPolygonLayer); contextPolygonLayer = null; }
-  contextFilterData = null;
-  const sel = document.getElementById("context-filter-select");
-  if (sel) sel.value = "";
-  const lbl = document.getElementById("selected-context-label");
-  if (lbl) lbl.textContent = "";
-}
 
 /* ── Area Selection ── */
 function startAreaSelection() {
@@ -882,12 +784,11 @@ async function onAreaSelectEnd(e) {
   document.getElementById("selected-area-label").textContent =
     `Area: ${(radius / 1000).toFixed(2)}km radius`;
 
-  // Clear month, place, and context selections
+  // Clear month and place selections
   selectedYear = null;
   selectedMonth = null;
   document.getElementById("selected-month-label").textContent = "No month selected";
   clearPlaceFilter();
-  clearContextFilter();
 }
 
 function stopAreaSelection() {
@@ -1664,16 +1565,6 @@ async function doGuess() {
 
     guessPending = { lat: data.lat, lng: data.lng };
 
-    // Draw matched context polygons (faint green outline)
-    if (data.contexts && data.contexts.length) {
-      data.contexts.forEach(ctx => {
-        const layer = L.polygon(ctx.polygon.map(v => [v[0], v[1]]), {
-          color: "#4a8", fillColor: "#4a8", fillOpacity: 0.08, weight: 2, dashArray: "6,3",
-        }).addTo(map).bindTooltip(ctx.name, { sticky: true });
-        guessContextLayers.push(layer);
-      });
-    }
-
     // Place source photo pins (before=blue, after=green, brightness by proximity)
     data.sources.forEach(src => {
       const icon = makeSourcePinIcon(src.delta_sec, src.is_before, data.window_sec);
@@ -1705,19 +1596,13 @@ async function doGuess() {
       guessPending = { lat: ll.lat, lng: ll.lng };
     });
 
-    // Fit map to include source pins, context polygons, and the guess pin
+    // Fit map to include the source pins and the guess pin
     const allPoints = [[data.lat, data.lng], ...data.sources.map(s => [s.lat, s.lng])];
-    if (data.contexts && data.contexts.length) {
-      data.contexts.forEach(ctx => ctx.polygon.forEach(v => allPoints.push([v[0], v[1]])));
-    }
     map.flyToBounds(L.latLngBounds(allPoints).pad(0.3), { duration: 1, maxZoom: 16 });
 
     // Build summary text
     let summaryText;
-    if (data.source === "context-centroid") {
-      const ctxNames = (data.contexts || []).map(c => c.name).join(", ");
-      summaryText = `No time neighbors — center of context: ${ctxNames}`;
-    } else {
+    {
       const srcList = data.sources.slice(0, 3)
         .map(s => {
           const mins = s.delta_sec < 60 ? `${s.delta_sec}s` : `${Math.round(s.delta_sec / 60)}min`;
@@ -1748,8 +1633,6 @@ function dismissGuess(hideResult = true) {
   if (guessMarker) { guessMarker.remove(); guessMarker = null; }
   guessSourceMarkers.forEach(m => m.remove());
   guessSourceMarkers = [];
-  guessContextLayers.forEach(l => l.remove());
-  guessContextLayers = [];
   guessPending = null;
   if (hideResult) document.getElementById("guess-result").style.display = "none";
 }
@@ -2408,7 +2291,7 @@ function hotspotQuery() {
     params.set("lng", c.lng);
   } else if (hotspotSort === "time") {
     // dateRangeMin/Max come from the loaded photos, so this follows whichever
-    // view is active — a month, an area, a context — not just the month picker.
+    // view is active — a month, an area, a place — not just the month picker.
     if (!dateRangeMin || !dateRangeMax) return null;
     params.set("from_ts", Math.round(dateRangeMin - TIME_SORT_SLACK_SECS));
     params.set("to_ts", Math.round(dateRangeMax + TIME_SORT_SLACK_SECS));

@@ -1,5 +1,4 @@
 import asyncio
-import json
 
 import pytest
 from fastapi import HTTPException
@@ -40,7 +39,7 @@ class TestApiGuessErrors:
             _guess(pid)
         assert exc.value.status_code == 400
 
-    def test_no_neighbors_no_context_404s(self, db):
+    def test_no_neighbors_404s(self, db):
         pid = _upsert("a.jpg", photo_datetime=1000)
         with pytest.raises(HTTPException) as exc:
             _guess(pid)
@@ -79,67 +78,3 @@ class TestTimeNeighborWeighting:
         with pytest.raises(HTTPException) as exc:
             _guess(target, window=900)
         assert exc.value.status_code == 404
-
-
-class TestContextFallback:
-    def _make_square_context(self, db, name="ctx", start_ts=None, end_ts=None):
-        polygon = [[0, 0], [0, 1], [1, 1], [1, 0]]
-        return index.create_context(
-            name, json.dumps(polygon), start_ts, end_ts, 0, 1, 0, 1,
-        )
-
-    def test_centroid_fallback_when_no_time_neighbors(self, db):
-        self._make_square_context(db)
-        target = _upsert("target.jpg", photo_datetime=1000)
-        result = _guess(target)
-        assert result["source"] == "context-centroid"
-        assert result["lat"] == pytest.approx(0.5)
-        assert result["lng"] == pytest.approx(0.5)
-        assert result["source_count"] == 0
-        assert len(result["contexts"]) == 1
-
-    def test_no_matching_context_and_no_neighbors_still_404s(self, db):
-        # Context exists but its time range doesn't cover the target photo.
-        self._make_square_context(db, start_ts=5000, end_ts=6000)
-        target = _upsert("target.jpg", photo_datetime=1000)
-        with pytest.raises(HTTPException) as exc:
-            _guess(target)
-        assert exc.value.status_code == 404
-
-    def test_neighbors_outside_context_polygon_still_used_when_no_in_context_neighbor(self, db):
-        # A context matches by time but none of the time-neighbors fall inside
-        # its polygon -> falls back to using the unfiltered neighbor list
-        # (not the centroid), per the `if in_ctx: nearby = in_ctx` guard.
-        self._make_square_context(db)
-        target = _upsert("target.jpg", photo_datetime=1000)
-        _upsert("outside.jpg", lat=50.0, lng=50.0, photo_datetime=1010, geotag_source="sidecar")
-        result = _guess(target)
-        assert result["source"] == "time-neighbors"
-        assert result["lat"] == pytest.approx(50.0)
-        assert result["lng"] == pytest.approx(50.0)
-
-    def test_neighbors_inside_context_polygon_are_preferred(self, db):
-        # One neighbor inside the polygon, one outside — only the in-polygon
-        # one should be averaged in.
-        self._make_square_context(db)
-        target = _upsert("target.jpg", photo_datetime=1000)
-        _upsert("inside.jpg", lat=0.5, lng=0.5, photo_datetime=1010, geotag_source="sidecar")
-        _upsert("outside.jpg", lat=50.0, lng=50.0, photo_datetime=1020, geotag_source="sidecar")
-        result = _guess(target)
-        assert result["source"] == "time-neighbors"
-        assert result["source_count"] == 1
-        assert result["lat"] == pytest.approx(0.5)
-        assert result["lng"] == pytest.approx(0.5)
-
-    def test_smallest_context_chosen_for_centroid_when_multiple_match(self, db):
-        # Bigger context: 0..10, centroid (5,5). Smaller: 0..1, centroid (0.5,0.5).
-        # The smaller (more specific) one should win the centroid fallback.
-        index.create_context("big", json.dumps([[0, 0], [0, 10], [10, 10], [10, 0]]),
-                              None, None, 0, 10, 0, 10)
-        index.create_context("small", json.dumps([[0, 0], [0, 1], [1, 1], [1, 0]]),
-                              None, None, 0, 1, 0, 1)
-        target = _upsert("target.jpg", photo_datetime=1000)
-        result = _guess(target)
-        assert result["source"] == "context-centroid"
-        assert result["lat"] == pytest.approx(0.5)
-        assert result["lng"] == pytest.approx(0.5)

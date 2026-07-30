@@ -25,91 +25,15 @@ async def api_photos(
     bbox: str | None = Query(None),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
-    context_id: int | None = Query(None),
     undated: bool = Query(False),
 ):
-    """Get photos, optionally filtered by date range, Life Context, or (undated=true)
-    photos with no timestamp at all — mutually exclusive with date_from/date_to and
-    context_id, which are meaningless without a photo_datetime.
-
-    When context_id is supplied all other filtering is handled here:
-      - Geotagged photos: R*Tree bbox prefilter in SQL, then exact point-in-polygon
-        in Python.  Date range is also pushed into the SQL when the context has one.
-      - Untagged photos: included only when the context has a date range (otherwise
-        the entire untagged library would match with no constraint).
-      - No-date contexts: only geotagged photos inside the polygon are returned.
-    """
-    if context_id is not None:
-        import json as _json
-        from geotagger.contexts import point_in_polygon
-
-        ctx = index.get_context(context_id)
-        if ctx is None:
-            raise HTTPException(404, "Context not found")
-
-        verts        = _json.loads(ctx["polygon"])
-        min_lat      = ctx["min_lat"]
-        max_lat      = ctx["max_lat"]
-        min_lng      = ctx["min_lng"]
-        max_lng      = ctx["max_lng"]
-        start_ts     = ctx["start_ts"]
-        end_ts       = ctx["end_ts"]
-        has_bbox     = min_lat is not None
-        has_dates    = start_ts is not None or end_ts is not None
-
-        db = index.get_db()
-        rows: list = []
-
-        # ── Geotagged photos ──────────────────────────────────────────────────
-        # Use the R*Tree spatial index for the bbox prefilter, then do exact PIP
-        # in Python.  Also push the date range into SQL when available.
-        if geotagged != "no" and has_bbox:
-            # R*Tree stores point data as min==max, so the overlap check reduces
-            # to a simple range test on each axis.
-            sql = """
-                SELECT photos.* FROM photos
-                INNER JOIN photos_spatial ON photos.id = photos_spatial.id
-                WHERE photos_spatial.max_lat >= ? AND photos_spatial.min_lat <= ?
-                  AND photos_spatial.max_lng >= ? AND photos_spatial.min_lng <= ?
-            """
-            params: list = [min_lat, max_lat, min_lng, max_lng]
-            if start_ts is not None:
-                sql += " AND photos.photo_datetime >= ?"
-                params.append(start_ts)
-            if end_ts is not None:
-                sql += " AND photos.photo_datetime <= ?"
-                params.append(end_ts)
-            sql += " ORDER BY photos.photo_datetime, photos.filename"
-
-            candidates = db.execute(sql, params).fetchall()
-            # Exact point-in-polygon post-filter
-            rows += [r for r in candidates
-                     if point_in_polygon(r["lat"], r["lng"], verts)]
-
-        # ── Untagged photos ───────────────────────────────────────────────────
-        # Only included when the context has a date range — without one there is
-        # no constraint and we would return the entire untagged library.
-        if geotagged != "yes" and has_dates:
-            u_sql    = "SELECT * FROM photos WHERE lat IS NULL AND geocode_ignored = 0"
-            u_params: list = []
-            if start_ts is not None:
-                u_sql += " AND photo_datetime >= ?"
-                u_params.append(start_ts)
-            if end_ts is not None:
-                u_sql += " AND photo_datetime <= ?"
-                u_params.append(end_ts)
-            u_sql += " ORDER BY photo_datetime, filename"
-            rows += db.execute(u_sql, u_params).fetchall()
-
-        # Sort merged result by time then filename
-        rows.sort(key=lambda r: (r["photo_datetime"] or 0, r["filename"]))
-
-    else:
-        rows = index.get_photos(
-            geotagged=geotagged, bbox=bbox,
-            date_from=date_from, date_to=date_to, undated=undated,
-        )
-
+    """Get photos, optionally filtered by date range or (undated=true) photos with no
+    timestamp at all — mutually exclusive with date_from/date_to, which are
+    meaningless without a photo_datetime."""
+    rows = index.get_photos(
+        geotagged=geotagged, bbox=bbox,
+        date_from=date_from, date_to=date_to, undated=undated,
+    )
     return [serializers.photo_to_dict(r) for r in rows]
 
 

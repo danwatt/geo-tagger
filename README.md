@@ -249,7 +249,7 @@ All state lives in a small number of places, all safe to delete to start over:
   GeoNames/OSM data, where `<cache-dir>` is the same location as above, or `~/.geotagger`
   if neither `--cache-dir` nor `--root` was ever passed.
 
-Deleting the `.geotagger` cache loses tagged faces, life contexts, and any geotags/place
+Deleting the `.geotagger` cache loses tagged faces and any geotags/place
 names that were never exported to XMP sidecars (see below) — sidecars themselves and the
 original media are untouched either way.
 
@@ -272,7 +272,7 @@ forwarding) without adding your own auth layer in front of it.
 ## Data model: DB vs. sidecars
 
 The SQLite database (in the cache directory above) is the working store for everything —
-geotags, resolved place names, face detections/labels, life contexts, time-sync offsets.
+geotags, resolved place names, face detections/labels, time-sync offsets.
 Sidecar files are the durable, portable output, brought in sync with the database on demand:
 
 - Geotags are DB-only by default; `POST /api/geocode/export-sidecars` (or the export button
@@ -296,7 +296,6 @@ before exporting loses any geotagging/face work that hasn't been written out yet
 | **Time Sync** (`/timesync.html`) | Correct a camera's clock drift/timezone by matching known-time photos, then batch-adjust that camera's timestamps |
 | **People** (`/people.html`) | Face tagging: label detected faces, review suggested matches, manage the unlabeled queue |
 | **Representatives** (`/representatives.html`) | Review the kept representative (medoid) faces for prolific people, after deduplication |
-| **Contexts** (`/contexts.html`) | Draw/manage "Life Context" time+place polygons used for guessing and filtering photos |
 | **Settings** (`/settings.html`) | Runtime-tunable knobs (face-matching thresholds, RAW decode, XMP-on-geotag, etc.) — see `config.py`'s `SETTINGS_SPEC` for the full list and semantics |
 
 Reachable but not in the top nav:
@@ -452,12 +451,6 @@ photos against another source of ground truth (e.g. a phone photo of the same mo
 known event time), compute the offset, and batch-apply it to correct that camera's
 timestamps across the library — useful since accurate timestamps also drive Quick Geocode's
 time-clustering and age-aware face matching.
-
-## Life Contexts
-
-Draw named time+place polygons (e.g. "Home 2020–2023", "College") on the Contexts page.
-These are used elsewhere to guess a plausible location for undated/ungeotagged photos and to
-filter search results by context.
 
 ## Sidecar naming
 

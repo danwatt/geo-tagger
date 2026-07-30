@@ -11,11 +11,13 @@ Parked ideas for geo-tagger, to revisit later.
 
 ## Narrow the face detection to time/space
 
-Use contexts?
 Use a date range picker?
 
 
 ## Life Contexts
+
+> **Built, then removed (2026-07-30)** — unused in practice. See
+> LIFE_CONTEXTS_PLAN.md if it is ever revived.
 
 Add the concept of a **Life Context** to the app. A context is the *where* and *when* of a
 chapter of life: you start out in City A, move to City B for high school, go away to college in

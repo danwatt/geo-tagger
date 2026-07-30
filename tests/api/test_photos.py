@@ -32,20 +32,6 @@ def test_photo_list_shape(client):
                       "dir", "location"}
 
 
-def test_context_filter_uses_polygon_and_dates(client):
-    poly = [[9, 19], [9, 21], [11, 21], [11, 19]]
-    cid = index.create_context("Trip", json.dumps(poly), 500, 1500, 9, 11, 19, 21)
-    _add("in.jpg", lat=10, lng=20, dt=1000)     # inside polygon + date window
-    _add("out_geo.jpg", lat=50, lng=50, dt=1000)  # outside polygon
-    _add("out_time.jpg", lat=10, lng=20, dt=9999)  # inside polygon, outside dates
-    names = [p["filename"] for p in client.get(f"/api/photos?context_id={cid}").json()]
-    assert names == ["in.jpg"]
-
-
-def test_context_not_found_404(client):
-    assert client.get("/api/photos?context_id=999").status_code == 404
-
-
 def test_by_area_radius(client):
     _add("near.jpg", lat=10.0, lng=20.0, dt=1000)
     _add("far.jpg", lat=11.0, lng=21.0, dt=1000)

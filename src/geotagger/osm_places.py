@@ -25,7 +25,7 @@ import sqlite3
 import threading
 
 from geotagger import config
-from geotagger.contexts import point_in_polygon
+from geotagger.geometry import point_in_polygon
 from geotagger.db_timing import TimedConnection
 
 logger = logging.getLogger(__name__)

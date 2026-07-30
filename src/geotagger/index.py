@@ -254,25 +254,13 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     if "postal_code" not in cache_cols:
         _db.execute("ALTER TABLE geocode_cache ADD COLUMN postal_code TEXT")
 
-    _db.execute("""
-        CREATE TABLE IF NOT EXISTS contexts (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL,
-            polygon TEXT NOT NULL,
-            start_ts INTEGER,
-            end_ts INTEGER,
-            min_lat REAL, max_lat REAL,
-            min_lng REAL, max_lng REAL,
-            created_at REAL NOT NULL
-        )
-    """)
-    _db.execute("""
-        CREATE TABLE IF NOT EXISTS context_persons (
-            context_id INTEGER NOT NULL REFERENCES contexts(id) ON DELETE CASCADE,
-            person_id  INTEGER NOT NULL REFERENCES persons(id)  ON DELETE CASCADE,
-            PRIMARY KEY (context_id, person_id)
-        )
-    """)
+    # Life Contexts (time+place polygons) were removed. Migrations are otherwise
+    # additive, but leaving these tables behind would keep every existing DB
+    # carrying a feature that no longer has code to read it — so drop them once,
+    # on the next open. Nothing else references them; the plan doc
+    # (docs/LIFE_CONTEXTS_PLAN.md) is kept if the feature ever comes back.
+    _db.execute("DROP TABLE IF EXISTS context_persons")
+    _db.execute("DROP TABLE IF EXISTS contexts")
 
     # Named family groups — a person can belong to one family.
     _db.execute("""
@@ -620,7 +608,7 @@ def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str |
     if bbox:
         # bbox=minLng,minLat,maxLng,maxLat
         try:
-            from geotagger.contexts import normalize_lng_bbox
+            from geotagger.geometry import normalize_lng_bbox
             min_lng, min_lat, max_lng, max_lat = map(float, bbox.split(","))
             min_lng, max_lng = normalize_lng_bbox(min_lng, max_lng)
             clauses.append("lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?")
@@ -710,7 +698,7 @@ def search_photos(date_from: str | None = None, date_to: str | None = None,
     if bbox:
         # bbox=minLng,minLat,maxLng,maxLat
         try:
-            from geotagger.contexts import normalize_lng_bbox
+            from geotagger.geometry import normalize_lng_bbox
             min_lng, min_lat, max_lng, max_lat = map(float, bbox.split(","))
             min_lng, max_lng = normalize_lng_bbox(min_lng, max_lng)
             clauses.append("lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?")
@@ -966,148 +954,6 @@ def set_place_representative(place_id: int, photo_id: int | None):
     db = get_db()
     db.execute("UPDATE places SET representative_photo_id=? WHERE id=?", (photo_id, place_id))
     db.commit()
-
-
-# ── Contexts ──
-
-def get_contexts() -> list[dict]:
-    """All contexts, each with a bbox-approximate photo count (no exact polygon
-    test — see get_context_photo_ids for that).
-
-    Computed as one targeted, indexed query per context rather than a single SQL
-    statement with a correlated subquery: the ``c.start_ts IS NULL OR
-    p.photo_datetime >= c.start_ts``-style conditions reference the outer row, so
-    SQLite can't use idx_photos_datetime or the photos_spatial R*Tree — every
-    context forced a full table scan of photos. Per-context, the filters are
-    concrete params instead, so each query can actually use those indexes."""
-    db = get_db()
-    contexts = db.execute("SELECT * FROM contexts ORDER BY name").fetchall()
-    out = []
-    for c in contexts:
-        conds, params = [], []
-        if c["start_ts"] is not None:
-            conds.append("p.photo_datetime >= ?")
-            params.append(c["start_ts"])
-        if c["end_ts"] is not None:
-            conds.append("p.photo_datetime <= ?")
-            params.append(c["end_ts"])
-        if c["min_lat"] is not None:
-            # R*Tree bbox prefilter (indexed), same pattern as get_context_photo_ids.
-            sql = f"""SELECT COUNT(*) FROM photos_spatial s
-                      JOIN photos p ON p.id = s.id
-                      WHERE s.max_lat >= ? AND s.min_lat <= ?
-                        AND s.max_lng >= ? AND s.min_lng <= ?
-                        {"AND " + " AND ".join(conds) if conds else ""}"""
-            bbox_params = [c["min_lat"], c["max_lat"], c["min_lng"], c["max_lng"], *params]
-        else:
-            where = " AND ".join(conds) if conds else "1=1"
-            sql = f"SELECT COUNT(*) FROM photos p WHERE {where}"
-            bbox_params = params
-        count = db.execute(sql, bbox_params).fetchone()[0]
-        out.append({**dict(c), "photo_count_approx": count})
-    return out
-
-
-def get_context(context_id: int) -> sqlite3.Row | None:
-    return get_db().execute("SELECT * FROM contexts WHERE id=?", (context_id,)).fetchone()
-
-
-def get_context_photo_ids(context_id: int) -> list[int] | None:
-    """Photo IDs whose GPS falls inside a context's polygon — the spatial half of
-    the People page's Focus ("also limit to this area").
-
-    Uses the context's cached polygon bbox as an R*Tree prefilter (photos_spatial),
-    then the exact ray-casting point_in_polygon test, matching the app's spatial
-    pattern elsewhere. Returns None when the context is missing or has no polygon
-    (→ caller applies no spatial constraint); an empty list means the area holds no
-    geotagged photos (→ the windowed views come back empty, which is correct)."""
-    import json as _json
-    from geotagger.contexts import point_in_polygon
-    c = get_context(context_id)
-    if not c or c["polygon"] is None or c["min_lat"] is None:
-        return None
-    polygon = _json.loads(c["polygon"])
-    rows = get_db().execute(
-        """SELECT ph.id, ph.lat, ph.lng
-           FROM photos_spatial s JOIN photos ph ON ph.id = s.id
-           WHERE s.max_lat >= ? AND s.min_lat <= ?
-             AND s.max_lng >= ? AND s.min_lng <= ?""",
-        (c["min_lat"], c["max_lat"], c["min_lng"], c["max_lng"]),
-    ).fetchall()
-    return [r["id"] for r in rows if point_in_polygon(r["lat"], r["lng"], polygon)]
-
-
-def create_context(name: str, polygon_json: str, start_ts: int | None, end_ts: int | None,
-                   min_lat: float, max_lat: float, min_lng: float, max_lng: float) -> int:
-    db = get_db()
-    cursor = db.execute(
-        """INSERT INTO contexts (name, polygon, start_ts, end_ts, min_lat, max_lat, min_lng, max_lng, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (name, polygon_json, start_ts, end_ts, min_lat, max_lat, min_lng, max_lng, time.time())
-    )
-    db.commit()
-    return cursor.lastrowid
-
-
-def update_context(context_id: int, **fields):
-    if not fields:
-        return
-    db = get_db()
-    set_clause = ", ".join(f"{k}=?" for k in fields)
-    db.execute(f"UPDATE contexts SET {set_clause} WHERE id=?", (*fields.values(), context_id))
-    db.commit()
-
-
-def delete_context(context_id: int):
-    db = get_db()
-    db.execute("DELETE FROM context_persons WHERE context_id=?", (context_id,))
-    db.execute("DELETE FROM contexts WHERE id=?", (context_id,))
-    db.commit()
-
-
-def get_context_persons(context_id: int) -> list[sqlite3.Row]:
-    return get_db().execute(
-        """SELECT p.id, p.name FROM persons p
-           JOIN context_persons cp ON cp.person_id = p.id
-           WHERE cp.context_id = ?
-           ORDER BY p.name""",
-        (context_id,)
-    ).fetchall()
-
-
-def set_context_persons(context_id: int, person_ids: list[int]):
-    db = get_db()
-    db.execute("DELETE FROM context_persons WHERE context_id=?", (context_id,))
-    if person_ids:
-        db.executemany(
-            "INSERT INTO context_persons (context_id, person_id) VALUES (?, ?)",
-            [(context_id, pid) for pid in person_ids]
-        )
-    db.commit()
-
-
-def contexts_for_time(ts: int) -> list[sqlite3.Row]:
-    return get_db().execute(
-        "SELECT * FROM contexts "
-        "WHERE (start_ts IS NULL OR start_ts <= ?) "
-        "  AND (end_ts   IS NULL OR end_ts   >= ?)",
-        (ts, ts),
-    ).fetchall()
-
-
-def contexts_for_point_time(lat: float, lng: float, ts: int) -> list[sqlite3.Row]:
-    import json as _json
-    from geotagger.contexts import point_in_polygon
-    rows = contexts_for_time(ts)
-    out = []
-    for r in rows:
-        if r["min_lat"] is not None and not (
-            r["min_lat"] <= lat <= r["max_lat"] and r["min_lng"] <= lng <= r["max_lng"]
-        ):
-            continue
-        if point_in_polygon(lat, lng, _json.loads(r["polygon"])):
-            out.append(r)
-    return out
 
 
 # ── Reverse geocoding ──
@@ -1485,8 +1331,8 @@ def _photo_ids_in_window(start_ts: int | None, end_ts: int | None) -> list[int]:
 
 def list_faces(scope: str = "unlabeled", person_id: int | None = None,
                limit: int = 500, min_det_score: float | None = None,
-               start_ts: int | None = None, end_ts: int | None = None,
-               photo_ids: list[int] | None = None) -> list[sqlite3.Row]:
+               start_ts: int | None = None,
+               end_ts: int | None = None) -> list[sqlite3.Row]:
     """List faces across the whole library for the people UI.
 
     scope: 'unlabeled' (person_id IS NULL), 'person' (a specific person),
@@ -1499,8 +1345,8 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
     (NULL photo_datetime) fall out of any window.
 
     A start_ts/end_ts window is resolved to a photo_id set up front (via
-    idx_photos_datetime) rather than joined as ``ph.photo_datetime BETWEEN``,
-    same as the ``photo_ids`` spatial Focus below — measured on a 78K-row
+    idx_photos_datetime) rather than joined as ``ph.photo_datetime BETWEEN`` —
+    measured on a 78K-row
     unlabeled queue: with the direct join, idx_faces_queue drives the scan in
     det_score order (to satisfy ORDER BY for free) and photo_datetime can only
     be checked *after* a rowid lookup into photos per candidate face, so a
@@ -1534,13 +1380,13 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
     if min_det_score is not None:
         clause += (" AND " if clause else "WHERE ") + "f.det_score >= ?"
         params.append(min_det_score)
+    photo_ids = None
     if start_ts is not None or end_ts is not None:
-        window_ids = _photo_ids_in_window(start_ts, end_ts)
-        photo_ids = window_ids if photo_ids is None else list(set(window_ids) & set(photo_ids))
+        photo_ids = _photo_ids_in_window(start_ts, end_ts)
     if photo_ids is not None:
-        # Time and/or spatial Focus, pre-resolved to a photo_id set (see above /
-        # docstring). json_each keeps this to one bound param regardless of how
-        # many ids (SQLite has a ~999-variable cap on a literal IN list).
+        # Time Focus, pre-resolved to a photo_id set (see above / docstring).
+        # json_each keeps this to one bound param regardless of how many ids
+        # (SQLite has a ~999-variable cap on a literal IN list).
         import json as _json
         clause += (" AND " if clause else "WHERE ") + \
                   "f.photo_id IN (SELECT value FROM json_each(?))"
@@ -1578,13 +1424,11 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
 
 
 def count_faces(scope: str = "unlabeled", person_id: int | None = None,
-                start_ts: int | None = None, end_ts: int | None = None,
-                photo_ids: list[int] | None = None) -> int:
+                start_ts: int | None = None, end_ts: int | None = None) -> int:
     if scope == "unlabeled":
-        # The People page's Focus windows only the unlabeled count; a window (time
-        # and/or a context's polygon) needs the photos join, so keep the plain
-        # (unwindowed) path join-free.
-        if start_ts is None and end_ts is None and photo_ids is None:
+        # The People page's time Focus windows only the unlabeled count; a window
+        # needs the photos join, so keep the plain (unwindowed) path join-free.
+        if start_ts is None and end_ts is None:
             return get_db().execute(
                 "SELECT COUNT(*) FROM faces WHERE person_id IS NULL AND ignored = 0 AND come_back = 0"
             ).fetchone()[0]
@@ -1592,9 +1436,9 @@ def count_faces(scope: str = "unlabeled", person_id: int | None = None,
         # instead of joining photos — same reasoning as list_faces: it lets this
         # stay a plain faces-table query (photo_id is already indexed there), no
         # per-candidate-face lookup into photos needed.
+        photo_ids = None
         if start_ts is not None or end_ts is not None:
-            window_ids = _photo_ids_in_window(start_ts, end_ts)
-            photo_ids = window_ids if photo_ids is None else list(set(window_ids) & set(photo_ids))
+            photo_ids = _photo_ids_in_window(start_ts, end_ts)
         clause = "WHERE f.person_id IS NULL AND f.ignored = 0 AND f.come_back = 0"
         params: list = []
         if photo_ids is not None:
@@ -1790,12 +1634,10 @@ def get_face_coverage() -> dict[str, int]:
 
 
 def get_crowd_photos(min_faces: int = 50, start_ts: int | None = None,
-                     end_ts: int | None = None,
-                     photo_ids: list[int] | None = None) -> list[sqlite3.Row]:
+                     end_ts: int | None = None) -> list[sqlite3.Row]:
     """Return photos with at least `min_faces` detected faces, ordered by
     photo_datetime. Each row includes per-state face counts. ``start_ts``/
-    ``end_ts`` (epoch secs) window by photo_datetime and ``photo_ids`` restricts to
-    a context's polygon — both for the People page's Focus."""
+    ``end_ts`` (epoch secs) window by photo_datetime — the People page's Focus."""
     clause = "WHERE ph.media_type = 'image' AND ph.faces_scanned_at IS NOT NULL"
     params: list = []
     if start_ts is not None:
@@ -1804,10 +1646,6 @@ def get_crowd_photos(min_faces: int = 50, start_ts: int | None = None,
     if end_ts is not None:
         clause += " AND ph.photo_datetime <= ?"
         params.append(end_ts)
-    if photo_ids is not None:
-        import json as _json
-        clause += " AND ph.id IN (SELECT value FROM json_each(?))"
-        params.append(_json.dumps(photo_ids))
     params.append(min_faces)
     return get_db().execute(
         f"""SELECT ph.id, ph.filename, ph.photo_datetime, ph.orientation,
@@ -1960,24 +1798,22 @@ def get_or_create_person(name: str) -> int:
     return create_person(name)
 
 
-def get_persons(start_ts: int | None = None, end_ts: int | None = None,
-                photo_ids: list[int] | None = None) -> list[sqlite3.Row]:
+def get_persons(start_ts: int | None = None,
+                end_ts: int | None = None) -> list[sqlite3.Row]:
     """All persons, with family info. No ``face_count`` ever — a live COUNT(*)
     join over the whole faces table on every call was the People page's biggest
     single latency cost at scale, and nothing currently needs the number.
 
     With a ``start_ts``/``end_ts`` window (epoch secs, the People page's time
-    Focus) and/or ``photo_ids`` (its "also limit to this area" spatial Focus —
-    photos inside a context's polygon), the list is filtered to just people who
-    have at least one face in range.
+    Focus), the list is filtered to just people who have at least one face in
+    range.
 
     The filter is a single uncorrelated ``IN`` subquery over faces (materialized
     once), not a per-person correlated EXISTS — the latter re-runs per person and,
     for a person with no faces in range, only gives up after scanning that
-    person's *entire* face history. The photos join is skipped entirely when only
-    photo_ids is given (no time bound), since faces.photo_id alone is enough.
+    person's *entire* face history.
     """
-    if start_ts is None and end_ts is None and photo_ids is None:
+    if start_ts is None and end_ts is None:
         return get_db().execute(
             """SELECT p.id, p.name, p.birth_date, p.not_before, p.not_after,
                       p.created_at, p.family_id, fam.name AS family_name
@@ -1986,20 +1822,14 @@ def get_persons(start_ts: int | None = None, end_ts: int | None = None,
                ORDER BY p.name"""
         ).fetchall()
     conds, params = ["f.person_id IS NOT NULL"], []
-    needs_photos = start_ts is not None or end_ts is not None
     if start_ts is not None:
         conds.append("ph.photo_datetime >= ?")
         params.append(start_ts)
     if end_ts is not None:
         conds.append("ph.photo_datetime <= ?")
         params.append(end_ts)
-    if photo_ids is not None:
-        import json as _json
-        photo_col = "ph.id" if needs_photos else "f.photo_id"
-        conds.append(f"{photo_col} IN (SELECT value FROM json_each(?))")
-        params.append(_json.dumps(photo_ids))
     where = " AND ".join(conds)
-    join = "JOIN photos ph ON ph.id = f.photo_id" if needs_photos else ""
+    join = "JOIN photos ph ON ph.id = f.photo_id"
     return get_db().execute(
         f"""SELECT p.id, p.name, p.birth_date, p.not_before, p.not_after,
                    p.created_at, p.family_id, fam.name AS family_name

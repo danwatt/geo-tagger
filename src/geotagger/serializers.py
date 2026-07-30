@@ -2,7 +2,7 @@
 and no writes/I/O beyond the one read in person_name_map(); safe to unit-test against
 sqlite3.Row objects."""
 
-from geotagger import index, thumbnails, contexts
+from geotagger import index, thumbnails
 
 
 def photo_to_dict(r) -> dict:
@@ -76,22 +76,6 @@ def person_name_map() -> dict[int, str]:
     """All person ids -> names in one query, for labeling a batch of suggestions."""
     return {r["id"]: r["name"]
             for r in index.get_db().execute("SELECT id, name FROM persons").fetchall()}
-
-
-def context_row_to_dict(c, persons=None) -> dict:
-    import json as _json
-    return {
-        "id": c["id"],
-        "name": c["name"],
-        "polygon": _json.loads(c["polygon"]),
-        "start_date": contexts.ts_to_date(c["start_ts"]),
-        "end_date": contexts.ts_to_date(c["end_ts"]),
-        "start_ts": c["start_ts"],
-        "end_ts": c["end_ts"],
-        "photo_count_approx": c["photo_count_approx"] if "photo_count_approx" in c.keys() else None,
-        "created_at": c["created_at"],
-        "persons": [{"id": p["id"], "name": p["name"]} for p in (persons or [])],
-    }
 
 
 def format_crowd_group_label(ts: int) -> str:

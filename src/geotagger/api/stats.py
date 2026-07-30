@@ -179,7 +179,7 @@ async def api_stats_faces_months():
 @router.get("/api/stats/summary")
 async def api_stats_summary():
     """One-shot health snapshot for the home dashboard: library size, geotagging /
-    reverse-geocoding / face-labeling progress, and people/context counts."""
+    reverse-geocoding / face-labeling progress, and people counts."""
     try:
         import bisect
 
@@ -239,7 +239,6 @@ async def api_stats_summary():
                 "persons": db.execute("SELECT COUNT(*) FROM persons").fetchone()[0],
                 "families": db.execute("SELECT COUNT(*) FROM families").fetchone()[0],
             },
-            "contexts": {"count": db.execute("SELECT COUNT(*) FROM contexts").fetchone()[0]},
         }
     except Exception as e:
         raise HTTPException(500, str(e))

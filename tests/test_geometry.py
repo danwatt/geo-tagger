@@ -1,6 +1,6 @@
 import pytest
 
-from geotagger.contexts import (point_in_polygon, polygon_bbox, polygon_centroid,
+from geotagger.geometry import (point_in_polygon, polygon_bbox, polygon_centroid,
                                 normalize_lng_bbox)
 
 # A simple 1x1 degree square: lat 0..1, lng 0..1

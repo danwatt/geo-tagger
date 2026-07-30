@@ -1,5 +1,10 @@
 # Life Contexts — Implementation Handoff
 
+> **Status: removed (2026-07-30).** Life Contexts shipped, went unused, and
+> was removed from the code and the database — the contexts /
+> context_persons tables are dropped on DB open (index.init_db). This
+> plan is kept as the spec to rebuild from if the feature ever comes back.
+
 A self-contained spec for implementing the **Life Contexts** feature. You should
 not need to read `IDEAS.md` to do this work, but it is the origin of the idea if
 you want the original framing (see `IDEAS.md` → "Life Contexts").

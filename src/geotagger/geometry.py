@@ -1,3 +1,11 @@
+"""Pure geometry helpers: point-in-polygon, polygon bbox/centroid, and the
+longitude normalization Leaflet's unwrapped bounds need.
+
+Lived in contexts.py until the Life Contexts feature was removed; nothing here
+was context-specific, and the geocoder, OSM place lookup and area queries all
+depend on it."""
+
+
 def point_in_polygon(lat: float, lng: float, verts: list[list[float]]) -> bool:
     """Ray-casting point-in-polygon. verts is [[lat, lng], ...]."""
     inside = False
@@ -18,26 +26,6 @@ def polygon_bbox(verts) -> tuple[float, float, float, float]:
     lats = [v[0] for v in verts]
     lngs = [v[1] for v in verts]
     return min(lats), max(lats), min(lngs), max(lngs)
-
-
-def date_to_ts_start(d: str) -> int:
-    # Use calendar.timegm (UTC struct_time) to avoid the Windows OSError for
-    # pre-1970 dates that hits datetime.timestamp() via the C mktime() call.
-    import calendar
-    from datetime import datetime
-    return calendar.timegm(datetime.strptime(d, "%Y-%m-%d").timetuple())
-
-
-def date_to_ts_end(d: str) -> int:
-    return date_to_ts_start(d) + 86400
-
-
-def ts_to_date(ts: int | None) -> str | None:
-    if ts is None:
-        return None
-    from datetime import datetime, timedelta, timezone
-    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
-    return (epoch + timedelta(seconds=ts)).strftime("%Y-%m-%d")
 
 
 def normalize_lng(lng: float) -> float:
