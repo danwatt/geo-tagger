@@ -48,7 +48,13 @@ const MIN_ZOOM_FOR_MARKERS = 8;
 const MIN_ZOOM_FOR_VORONOI = 11;
 const MIN_ZOOM_FOR_OSM = 11;
 const MIN_ZOOM_FOR_CENSUS = 9;   // whole-place polygons, readable further out than OSM's features
-const MIN_ZOOM_FOR_ZCTA = 9;     // same scale as places; each polygon carries a label
+// ZIP areas are a metro-scale layer: a labeled polygon per ZIP is unreadable (and a
+// large payload) once the view spans several states. Leaflet zoom z is
+// ~156543*cos(lat)/2^z metres per pixel, so at Houston's latitude a ~1400px-wide
+// window covers roughly 370 km at z9, 185 km at z10, 95 km at z11 — z10 is the
+// "whole metro, ~50 mile radius" view, and anything wider stays blank rather than
+// fetching.
+const MIN_ZOOM_FOR_ZCTA = 10;
 const MIN_ZOOM_FOR_BUILDINGS = 17;
 const REFRESH_DEBOUNCE_MS = 250;
 
@@ -165,6 +171,7 @@ function addOverlayControl() {
   map.on("overlayadd overlayremove", (e) => {
     const refresh = OVERLAY_REFRESH[e.name];
     if (refresh) refresh();
+    updateZoomHint();  // the layer may be one this zoom is too far out to draw
   });
 }
 
@@ -281,9 +288,7 @@ async function refreshMarkers() {
     const data = await res.json();
     if (seq !== fetchSeq) return; // a newer request superseded this one
     renderMarkers(data.places);
-    if (map.hasLayer(voronoiLayer) && zoom < MIN_ZOOM_FOR_VORONOI) {
-      showHint("Zoom in further to see place boundaries");
-    }
+    updateZoomHint();
     const shown = data.places.length.toLocaleString();
     setStatus(data.truncated
       ? `Showing ${shown} largest of ${data.total.toLocaleString()} places in view — zoom in for the rest`
@@ -291,6 +296,23 @@ async function refreshMarkers() {
   } catch (e) {
     if (seq === fetchSeq) setStatus("Error loading places: " + e.message, true);
   }
+}
+
+// Each overlay only draws past its own zoom threshold, so an overlay switched on
+// from too far out would silently show nothing and read as broken. Say so instead.
+// Below MIN_ZOOM_FOR_MARKERS the hint belongs to refreshMarkers, which is a stronger
+// message ("nothing at all is loaded here") — don't fight it for the element.
+function updateZoomHint() {
+  const zoom = map.getZoom();
+  if (zoom < MIN_ZOOM_FOR_MARKERS) return;
+  const waiting = [
+    [voronoiLayer, MIN_ZOOM_FOR_VORONOI, "place boundaries"],
+    [osmLayer, MIN_ZOOM_FOR_OSM, "OSM places"],
+    [censusLayer, MIN_ZOOM_FOR_CENSUS, "Census places"],
+    [zctaLayer, MIN_ZOOM_FOR_ZCTA, "ZIP areas"],
+  ].filter(([layer, min]) => map.hasLayer(layer) && zoom < min).map(([, , label]) => label);
+  if (waiting.length) showHint(`Zoom in further to see ${waiting.join(", ")}`);
+  else hideHint();
 }
 
 async function refreshVoronoi() {
