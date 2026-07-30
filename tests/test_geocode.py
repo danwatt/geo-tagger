@@ -655,6 +655,52 @@ class TestCensusInTheCityChain:
         assert geocode.lookup(40.0, -74.0) is None
 
 
+class TestZctaInTheCityChain:
+    """The ZIP's mailing city sits below Census place containment and above the
+    GeoNames distance estimate; the ZIP code itself is returned regardless."""
+
+    ZCTA = {"zip": "10001", "city": "PostalCity", "state": "New York",
+            "state_code": "NY", "polygons": _rect(39.9, 40.1, -74.1, -73.9)}
+
+    def test_postal_code_is_returned_whoever_wins_the_city(self, geonames_dir, osm_db, census_db):
+        _write_geonames_files(geonames_dir, [CITY_A])
+        osm_db([dict(name="OsmCity", category="city", admin_level=8, area=1.0,
+                     polygons=_rect(39.9, 40.1, -74.1, -73.9))])
+        census_db([], zctas=[self.ZCTA])
+        r = geocode.lookup(40.0, -74.0)
+        assert r["city"] == "OsmCity"          # OSM still wins
+        assert r["postal_code"] == "10001"     # ZIP rides along anyway
+
+    def test_zip_city_beats_the_geonames_estimate(self, geonames_dir, census_db):
+        _write_geonames_files(geonames_dir, [CITY_A])
+        census_db([], zctas=[self.ZCTA])
+        assert geocode.lookup(40.0, -74.0)["city"] == "PostalCity"
+
+    def test_census_place_beats_the_zip_city(self, geonames_dir, census_db):
+        _write_geonames_files(geonames_dir, [CITY_A])
+        census_db([{"name": "CensusPlace", "polygons": _rect(39.9, 40.1, -74.1, -73.9)}],
+                  zctas=[self.ZCTA])
+        assert geocode.lookup(40.0, -74.0)["city"] == "CensusPlace"
+
+    def test_fallback_can_be_disabled_without_losing_the_zip(self, geonames_dir, census_db,
+                                                             monkeypatch):
+        # Rural ZIPs are named for whichever small post office serves them, so this
+        # switch exists; it must not also suppress the stored ZIP code.
+        monkeypatch.setattr(geocode.config, "ZCTA_CITY_FALLBACK", False)
+        _write_geonames_files(geonames_dir, [CITY_A])
+        census_db([], zctas=[self.ZCTA])
+        r = geocode.lookup(40.0, -74.0)
+        assert r["city"] == "Testville"        # back to the GeoNames estimate
+        assert r["postal_code"] == "10001"
+
+    def test_zip_without_a_city_name_does_not_win(self, geonames_dir, census_db):
+        _write_geonames_files(geonames_dir, [CITY_A])
+        census_db([], zctas=[{"zip": "10001", "polygons": _rect(39.9, 40.1, -74.1, -73.9)}])
+        r = geocode.lookup(40.0, -74.0)
+        assert r["city"] == "Testville"
+        assert r["postal_code"] == "10001"
+
+
 class TestLookupCacheIntegration:
     def test_none_coordinates_return_none(self, geonames_dir):
         assert geocode.lookup(None, -74.0) is None

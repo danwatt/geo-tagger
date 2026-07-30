@@ -748,39 +748,41 @@ def _merged_lookup(lat: float, lng: float) -> dict | None:
     2. **US Census** place containing the point (see census_places) — incorporated
        places *and* CDPs, so unincorporated suburbia that OSM carries no boundary
        for still gets a real containment answer.
-    3. **GeoNames** nearest populated place (_raw_lookup) — a distance estimate, not
+    3. **ZCTA** postal city (census_places.postal_lookup) — the ZIP's USPS mailing
+       city. Weaker than a place boundary (a mailing address is not a jurisdiction,
+       and rural ZIPs are named for whichever small post office serves them), but
+       still containment, so it outranks the estimate below when
+       config.ZCTA_CITY_FALLBACK allows it.
+    4. **GeoNames** nearest populated place (_raw_lookup) — a distance estimate, not
        containment, so it runs last and only when config.OSM_CITY_FALLBACK_GEONAMES
        allows it (or when OSM isn't installed at all, so the app still geocodes out
        of the box).
 
-    Sub-location is OSM-only (None without OSM) — the Census place file has no
-    parks/campuses/venues to draw one from."""
+    The ZIP code itself is returned as `postal_code` whenever the ZCTA layer resolves
+    one, independent of which step won the city. Sub-location is OSM-only (None
+    without OSM) — the Census files have no parks/campuses/venues to draw one from."""
     from geotagger import census_places, osm_places
     osm = osm_places.lookup(lat, lng)          # {city, sublocation} or None
     gn = _raw_lookup(lat, lng) or {}           # state/county/country/cc (+ its own city)
-    if osm is None and not gn:
-        # Census can still name the point even with neither of the other two, so it's
-        # only "nothing at all" if that comes up empty too.
-        census = census_places.lookup(lat, lng)
-        if census is None:
-            return None
-    else:
-        census = None
+    census = census_places.lookup(lat, lng)    # {city, kind, …} or None
+    postal = census_places.postal_lookup(lat, lng)  # {postal_code, postal_city, …} or None
+    if osm is None and not gn and census is None and postal is None:
+        return None
 
     if osm and osm.get("city"):
         city = osm["city"]
+    elif census and census.get("city"):
+        city = census["city"]                  # containment beats the distance estimate
+    elif postal and postal.get("postal_city") and config.ZCTA_CITY_FALLBACK:
+        city = postal["postal_city"]           # mailing city: weaker, still containment
+    elif osm_places.is_available() and not config.OSM_CITY_FALLBACK_GEONAMES:
+        city = None                            # polygons are the authority; point in none
     else:
-        if census is None:
-            census = census_places.lookup(lat, lng)
-        if census and census.get("city"):
-            city = census["city"]              # containment beats the distance estimate
-        elif osm_places.is_available() and not config.OSM_CITY_FALLBACK_GEONAMES:
-            city = None                        # polygons are the authority; point in none
-        else:
-            city = gn.get("city")              # OSM absent, or fallback enabled
+        city = gn.get("city")                  # OSM absent, or fallback enabled
     return {
         "city": city,
         "sublocation": osm.get("sublocation") if osm else None,
+        "postal_code": postal.get("postal_code") if postal else None,
         "state": gn.get("state"),
         "county": gn.get("county"),
         "country": gn.get("country"),
@@ -790,10 +792,10 @@ def _merged_lookup(lat: float, lng: float) -> dict | None:
 
 def lookup(lat: float | None, lng: float | None, use_cache: bool = True) -> dict | None:
     """Reverse-geocode a coordinate to
-    {city, sublocation, state, county, country, country_code}.
+    {city, sublocation, postal_code, state, county, country, country_code}.
 
     City comes from OSM polygon containment, then US Census place containment, then
-    the GeoNames nearest-point estimate; sub-location is OSM-only and
+    the ZCTA mailing city, then the GeoNames nearest-point estimate; sub-location is OSM-only and
     state/county/country always come from GeoNames (see _merged_lookup). Caches by quantized coordinate so nearby
     photos reuse one result — note the quantization grid (config.GEOCODE_PRECISION,
     ~11 m) is coarser than a small building, so two photos in adjacent buildings

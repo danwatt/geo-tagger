@@ -179,6 +179,20 @@ CENSUS_DB_PATH: Path = get_census_db()
 # one each year at a stable URL shape (…/GENZ<year>/shp/cb_<year>_us_place_500k.zip);
 # the downloader walks back a couple of years from here if that year isn't posted yet.
 CENSUS_CB_YEAR = int(os.environ.get("GEOTAGGER_CENSUS_CB_YEAR", "2025"))
+# ZCTA boundaries get their own vintage: ZIP Code Tabulation Areas are only
+# retabulated with the decennial census, so the Cartographic Boundary set publishes
+# them once per decade rather than yearly — GENZ2021..GENZ2025 have no ZCTA file at
+# all (verified against the Census file listings), and 2020 is the current series.
+CENSUS_ZCTA_YEAR = int(os.environ.get("GEOTAGGER_CENSUS_ZCTA_YEAR", "2020"))
+# Whether a ZIP's USPS mailing city may stand in as the photo's city when neither OSM
+# nor a Census place contains the point. On by default: a mailing city is how the
+# address there actually reads, and it's containment rather than a distance guess.
+# The trade-off is rural ZIPs, which are named for whichever tiny post office serves
+# them — measured on a 61K-photo library, this answered 18% of distinct coordinates
+# and disagreed with the GeoNames guess 657 times, including Navasota -> Washington
+# and Ridgway -> Cimarron. Set to "0" to keep storing loc_postal_code but leave the
+# city to the GeoNames nearest-place estimate.
+ZCTA_CITY_FALLBACK = os.environ.get("GEOTAGGER_ZCTA_CITY_FALLBACK", "1").lower() in ("1", "true", "yes", "on")
 
 
 def resolve_data_paths(primary_root: Path | None):

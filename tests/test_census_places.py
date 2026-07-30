@@ -163,6 +163,115 @@ class TestBuild:
             census_builder.build(tmp_path / "places.sqlite", bad)
 
 
+@pytest.fixture
+def zcta_zip(tmp_path):
+    """A cb_*_us_zcta520_500k-shaped zip: two ZIP areas, fields named for the 2020
+    vintage the real file uses."""
+    import io
+    import zipfile
+
+    import shapefile
+
+    shp, dbf, shx = io.BytesIO(), io.BytesIO(), io.BytesIO()
+    w = shapefile.Writer(shp=shp, dbf=dbf, shx=shx)
+    w.field("ZCTA5CE20", "C", 5)
+    w.field("GEOID20", "C", 5)
+    w.field("NAME20", "C", 100)
+
+    w.poly([[list(p) for p in _CW_BOX]])
+    w.record("77070", "77070", "77070")
+    small = [(-95.9, 30.1), (-95.9, 30.2), (-95.8, 30.2), (-95.8, 30.1), (-95.9, 30.1)]
+    w.poly([[list(p) for p in small]])
+    w.record("77429", "77429", "77429")
+    w.close()
+
+    zip_path = tmp_path / "cb_2020_us_zcta520_500k.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("cb_2020_us_zcta520_500k.shp", shp.getvalue())
+        zf.writestr("cb_2020_us_zcta520_500k.dbf", dbf.getvalue())
+        zf.writestr("cb_2020_us_zcta520_500k.shx", shx.getvalue())
+    return zip_path
+
+
+@pytest.fixture
+def postal_zip(tmp_path):
+    """GeoNames' US.zip shape: tab-separated US.txt, ZIP -> place/state."""
+    import zipfile
+
+    rows = [
+        "US\t77070\tHouston\tTexas\tTX\tHarris\t201\t\t\t29.99\t-95.58\t4",
+        "US\t77429\tCypress\tTexas\tTX\tHarris\t201\t\t\t29.96\t-95.69\t4",
+        # A second name for an already-seen ZIP: GeoNames lists the USPS-preferred
+        # name first, so this must not overwrite "Cypress".
+        "US\t77429\tHouston\tTexas\tTX\tHarris\t201\t\t\t29.96\t-95.69\t4",
+        "malformed row with no tabs",
+    ]
+    zip_path = tmp_path / "US.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("US.txt", "\n".join(rows) + "\n")
+        zf.writestr("readme.txt", "ignore me")
+    return zip_path
+
+
+class TestBuildZctas:
+    def test_loads_zctas_and_crosswalk(self, cb_zip, zcta_zip, postal_zip, tmp_path, monkeypatch):
+        db_path = tmp_path / "places.sqlite"
+        monkeypatch.setattr(config, "CENSUS_DB_PATH", db_path)
+        summary = census_builder.build(db_path, cb_zip, zcta_zip, postal_zip)
+        assert summary["total_zctas"] == 2
+        assert summary["total_zip_names"] == 2  # the duplicate ZIP row is ignored
+
+        census_places.reset()
+        got = census_places.postal_lookup(30.9, -95.9)
+        assert got["postal_code"] == "77070"
+        assert got["postal_city"] == "Houston"
+        # First row for a ZIP wins, so 77429 keeps its preferred name.
+        assert census_places.postal_lookup(30.15, -95.85)["postal_city"] == "Cypress"
+
+    def test_places_only_build_leaves_the_zcta_layer_empty(self, cb_zip, tmp_path, monkeypatch):
+        db_path = tmp_path / "places.sqlite"
+        monkeypatch.setattr(config, "CENSUS_DB_PATH", db_path)
+        summary = census_builder.build(db_path, cb_zip)
+        assert summary["total_zctas"] == 0
+        census_places.reset()
+        assert census_places.postal_lookup(30.9, -95.9) is None
+        assert census_places.status()["places"] == 2
+
+    def test_rebuild_without_zctas_drops_them(self, cb_zip, zcta_zip, postal_zip,
+                                              tmp_path, monkeypatch):
+        # A build is a full replace, so omitting a layer removes it — the reason the
+        # download job always fetches all three.
+        db_path = tmp_path / "places.sqlite"
+        monkeypatch.setattr(config, "CENSUS_DB_PATH", db_path)
+        census_builder.build(db_path, cb_zip, zcta_zip, postal_zip)
+        census_builder.build(db_path, cb_zip)
+        census_places.reset()
+        assert census_places.status()["zctas"] == 0
+
+    def test_rejects_a_shapefile_with_no_zcta_code_field(self, cb_zip, tmp_path, monkeypatch):
+        db_path = tmp_path / "places.sqlite"
+        monkeypatch.setattr(config, "CENSUS_DB_PATH", db_path)
+        # The *place* file has GEOID, so it isn't rejected on the field name — this is
+        # about the archive having no ZCTA5CE*/GEOID* at all.
+        import io
+        import zipfile
+
+        import shapefile
+        shp, dbf, shx = io.BytesIO(), io.BytesIO(), io.BytesIO()
+        w = shapefile.Writer(shp=shp, dbf=dbf, shx=shx)
+        w.field("SOMETHING", "C", 5)
+        w.poly([[list(p) for p in _CW_BOX]])
+        w.record("x")
+        w.close()
+        bad = tmp_path / "bad_zcta.zip"
+        with zipfile.ZipFile(bad, "w") as zf:
+            zf.writestr("a.shp", shp.getvalue())
+            zf.writestr("a.dbf", dbf.getvalue())
+            zf.writestr("a.shx", shx.getvalue())
+        with pytest.raises(ValueError, match="ZCTA5CE"):
+            census_builder.build(db_path, cb_zip, bad)
+
+
 class TestCbUrls:
     def test_newest_first_then_walks_back(self, monkeypatch):
         monkeypatch.setattr(config, "CENSUS_CB_YEAR", 2025)
@@ -176,6 +285,15 @@ class TestCbUrls:
     def test_explicit_year_overrides_config(self, monkeypatch):
         monkeypatch.setattr(config, "CENSUS_CB_YEAR", 2025)
         assert [y for y, _ in census_builder.cb_urls(2020)] == [2020, 2019, 2018]
+
+    def test_zcta_urls_use_their_own_vintage(self, monkeypatch):
+        # ZCTAs are only published with the decennial series, so they don't follow the
+        # yearly place-file vintage (GENZ2021..2025 have no ZCTA file at all).
+        monkeypatch.setattr(config, "CENSUS_CB_YEAR", 2025)
+        monkeypatch.setattr(config, "CENSUS_ZCTA_YEAR", 2020)
+        year, url = census_builder.cb_zcta_urls()[0]
+        assert year == 2020
+        assert url.endswith("/GENZ2020/shp/cb_2020_us_zcta520_500k.zip")
 
 
 # ── Lookup module ──
@@ -252,6 +370,58 @@ class TestLookup:
         census_db([{"name": "Lshape", "polygons": [[outer, []]]}])
         assert census_places.lookup(30.1, -95.5)["city"] == "Lshape"
         assert census_places.lookup(30.9, -95.4) is None
+
+
+class TestPostalLookup:
+    def test_none_when_no_db(self):
+        assert census_places.postal_lookup(30.0, -95.0) is None
+
+    def test_none_coordinates(self, census_db):
+        census_db([], zctas=[{"zip": "77070", "polygons": _rect(30, 31, -96, -95)}])
+        assert census_places.postal_lookup(None, -95.0) is None
+
+    def test_returns_zip_and_crosswalk_city(self, census_db):
+        census_db([], zctas=[{"zip": "77070", "city": "Houston",
+                              "polygons": _rect(30, 31, -96, -95)}])
+        got = census_places.postal_lookup(30.5, -95.5)
+        assert got == {"postal_code": "77070", "postal_city": "Houston",
+                       "state": "Texas", "state_code": "TX"}
+
+    def test_zip_without_a_crosswalk_row_still_returns_the_code(self, census_db):
+        census_db([], zctas=[{"zip": "99999", "polygons": _rect(30, 31, -96, -95)}])
+        got = census_places.postal_lookup(30.5, -95.5)
+        assert got["postal_code"] == "99999"
+        assert got["postal_city"] is None
+
+    def test_point_outside_every_zcta(self, census_db):
+        census_db([], zctas=[{"zip": "77070", "polygons": _rect(30, 31, -96, -95)}])
+        assert census_places.postal_lookup(45.0, -70.0) is None
+
+    def test_smallest_zcta_wins_a_sliver_overlap(self, census_db):
+        census_db([], zctas=[
+            {"zip": "11111", "area": 1.0, "polygons": _rect(30, 31, -96, -95)},
+            {"zip": "22222", "area": 0.01, "polygons": _rect(30.4, 30.6, -95.6, -95.4)},
+        ])
+        assert census_places.postal_lookup(30.5, -95.5)["postal_code"] == "22222"
+
+    def test_places_only_db_has_no_zcta_layer(self, census_db, tmp_path, monkeypatch):
+        # A DB built before ZCTAs existed: postal_lookup must return None rather than
+        # raising "no such table" on every geocode.
+        import sqlite3
+        db_path = tmp_path / "old-census.sqlite"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE places (id INTEGER PRIMARY KEY, geoid TEXT, name TEXT, "
+                     "name_lsad TEXT, lsad TEXT, kind TEXT, state_fp TEXT, state_name TEXT, "
+                     "area REAL, min_lat REAL, max_lat REAL, min_lng REAL, max_lng REAL, rings TEXT)")
+        conn.execute("CREATE VIRTUAL TABLE places_spatial USING rtree(id, min_lat, max_lat, min_lng, max_lng)")
+        conn.commit()
+        conn.close()
+        monkeypatch.setattr(config, "CENSUS_DB_PATH", db_path)
+        census_places.reset()
+        assert census_places.postal_lookup(30.5, -95.5) is None
+        st = census_places.status()
+        assert st["state"] == "ready"
+        assert st["zctas"] == 0
 
 
 class TestPlacesInBbox:

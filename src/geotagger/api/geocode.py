@@ -129,6 +129,7 @@ def _probe(lat: float, lng: float) -> dict:
         "sources": {
             "osm": osm_places.lookup(lat, lng),
             "census": census_places.lookup(lat, lng),
+            "zcta": census_places.postal_lookup(lat, lng),
             "geonames": geocode._raw_lookup(lat, lng),
         },
     }
@@ -137,9 +138,10 @@ def _probe(lat: float, lng: float) -> dict:
 @router.get("/api/geocode/lookup")
 async def api_geocode_lookup(lat: float = Query(...), lng: float = Query(...)):
     """Reverse-geocode a single coordinate exactly as a photo taken there would be —
-    returns the {city, sublocation, state, county, country, country_code} that would
-    be persisted on that photo, plus each source's own answer under `sources` (OSM
-    containment, Census place containment, GeoNames nearest-point). Backs the Places
+    returns the {city, sublocation, postal_code, state, county, country, country_code}
+    that would be persisted on that photo, plus each source's own answer under
+    `sources` (OSM containment, Census place containment, ZCTA/ZIP containment,
+    GeoNames nearest-point). Backs the Places
     DB map's click-to-probe: click a point and see what location the geocoder would
     save, and why. 503 only if none of the datasets is installed."""
     if not (geocode.is_available() or osm_places.is_available() or census_places.is_available()):

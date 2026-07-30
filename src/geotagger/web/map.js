@@ -401,6 +401,7 @@ function renderProbe(data) {
   const fields = loc ? [
     ["Sub-location", loc.sublocation],
     ["City", loc.city],
+    ["ZIP", loc.postal_code],
     ["County", loc.county],
     ["State", loc.state],
     ["Country", loc.country],
@@ -413,8 +414,31 @@ function renderProbe(data) {
     <div class="map-popup-name">${escHtml(name)}</div>
     <div class="map-popup-probe-label">Would be saved for a photo here:</div>
     ${rows || `<div class="map-popup-meta">(nothing — no location)</div>`}
+    ${renderProbeSources(data.sources, loc)}
     <div class="map-popup-meta">${coords}</div>
   </div>`;
+}
+
+// Which source produced the city, and what the others said — the whole point of the
+// OSM -> Census place -> ZCTA -> GeoNames chain is that you can't tell from the
+// result alone which step answered.
+function renderProbeSources(sources, loc) {
+  if (!sources) return "";
+  const zcta = sources.zcta;
+  const candidates = [
+    ["OSM", sources.osm && sources.osm.city],
+    ["Census place", sources.census && sources.census.city],
+    ["ZIP city", zcta && zcta.postal_city],
+    ["GeoNames", sources.geonames && sources.geonames.city],
+  ].filter(([, v]) => v);
+  if (!candidates.length) return "";
+  const winner = loc && loc.city;
+  const rows = candidates.map(([k, v]) => {
+    const won = v === winner ? " map-popup-source-win" : "";
+    return `<div class="map-popup-field${won}">
+      <span class="map-popup-field-key">${k}</span>${escHtml(v)}</div>`;
+  }).join("");
+  return `<div class="map-popup-probe-label">City candidates, best first:</div>${rows}`;
 }
 
 function renderVoronoi(cells) {

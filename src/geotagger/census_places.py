@@ -1,9 +1,13 @@
-"""Offline polygon reverse geocoding from US Census place boundaries.
+"""Offline polygon reverse geocoding from US Census boundaries.
 
 Answers "what US Census place is this coordinate inside?" — every incorporated
 place plus every census designated place (CDP):
 
     {city, geoid, kind, place_id}
+
+…and, from the ZCTA layer, "what ZIP code covers it?" (see postal_lookup):
+
+    {postal_code, postal_city, state}
 
 Same shape as osm_places.py (R*Tree bbox prefilter + exact point-in-polygon over
 a read-only SQLite DB, shared across executor threads under a lock), and the same
@@ -48,7 +52,7 @@ def status() -> dict:
     cheap open + COUNT) so the first call already reports real numbers."""
     _ensure_loaded()
     st = {"available": is_available(), "state": _state, "error": _error,
-          "places": 0, "by_kind": {}, "source": None}
+          "places": 0, "by_kind": {}, "source": None, "zctas": 0, "zip_names": 0}
     if _state == "ready" and _conn is not None:
         try:
             st["places"] = _conn.execute("SELECT COUNT(*) FROM places").fetchone()[0]
@@ -59,9 +63,26 @@ def status() -> dict:
             }
             row = _conn.execute("SELECT value FROM meta WHERE key='source'").fetchone()
             st["source"] = row[0] if row else None
+            # A DB built before the ZCTA layer existed has neither table.
+            if _has_zctas():
+                st["zctas"] = _conn.execute("SELECT COUNT(*) FROM zctas").fetchone()[0]
+                st["zip_names"] = _conn.execute("SELECT COUNT(*) FROM zip_places").fetchone()[0]
         except Exception:
             pass
     return st
+
+
+def _has_zctas() -> bool:
+    """Whether the open DB carries the ZCTA layer. Older builds (places only) don't,
+    and the app must keep working against one rather than erroring on every lookup."""
+    if _conn is None:
+        return False
+    try:
+        return _conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('zctas','zip_places')"
+        ).fetchone()[0] == 2
+    except Exception:
+        return False
 
 
 def _load():
@@ -148,6 +169,46 @@ def lookup(lat: float | None, lng: float | None) -> dict | None:
         "kind": row["kind"],
         "place_id": row["id"],
         "state": row["state_name"],
+    }
+
+
+def postal_lookup(lat: float | None, lng: float | None) -> dict | None:
+    """Resolve a coordinate to {postal_code, postal_city, state}, or None if the point
+    is in no ZCTA (or the DB predates the ZCTA layer).
+
+    ZCTAs approximate USPS ZIP delivery areas, and the city attached to one is the
+    *mailing* city — deliberately a weaker signal than a place boundary, which is why
+    geocode._merged_lookup only reaches for it after OSM and Census place both miss.
+    It is still containment, so it beats the GeoNames distance estimate. `postal_city`
+    is None when the crosswalk has no row for the code (the ZIP is still returned).
+    """
+    if lat is None or lng is None:
+        return None
+    _ensure_loaded()
+    if _state != "ready" or _conn is None or not _has_zctas():
+        return None
+    with _lock:
+        candidates = _conn.execute(
+            """SELECT z.id, z.zip, z.area, z.rings, p.city, p.state, p.state_code
+               FROM zctas_spatial s
+               JOIN zctas z ON z.id = s.id
+               LEFT JOIN zip_places p ON p.zip = z.zip
+               WHERE s.min_lat <= ? AND s.max_lat >= ?
+                 AND s.min_lng <= ? AND s.max_lng >= ?""",
+            (lat, lat, lng, lng),
+        ).fetchall()
+    hits = [r for r in candidates
+            if point_in_multipolygon(lat, lng, json.loads(r["rings"]))]
+    if not hits:
+        return None
+    # ZCTAs tile the country without overlapping, but 1:500,000 generalization can
+    # leave slivers where two abut — smallest wins, same tiebreak as places.
+    row = min(hits, key=lambda r: r["area"])
+    return {
+        "postal_code": row["zip"],
+        "postal_city": row["city"],
+        "state": row["state"],
+        "state_code": row["state_code"],
     }
 
 

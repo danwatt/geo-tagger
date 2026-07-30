@@ -331,7 +331,8 @@ _census_job: dict = {"running": False, "done": False, "error": None, "message": 
 
 
 def census_status() -> dict:
-    """Census places DB presence + counts, for the Data Management page."""
+    """Census DB presence + counts (places, ZCTAs, ZIP names), for the Data
+    Management page."""
     from geotagger import census_builder, census_places
     st = census_places.status()
     return {**st, "db_path": str(config.CENSUS_DB_PATH),
@@ -352,27 +353,45 @@ def _run_census_download(force: bool = False):
             _census_job["message"] = message
 
     try:
-        zip_path = config.CENSUS_DB_PATH.parent / "cb-place-500k.zip"
-        if zip_path.exists() and force:
-            progress("Forcing re-download (discarding cached zip)…")
-            zip_path.unlink()
-        if zip_path.exists():
-            progress(f"Using cached download ({zip_path.stat().st_size / 1e6:.1f} MB)")
-            url = None
-        else:
-            _year, url = census_builder.download_cb_zip(zip_path, progress_cb=progress)
+        cache_dir = config.CENSUS_DB_PATH.parent
+
+        def fetch(name: str, downloader) -> tuple[Path, str | None]:
+            """Download `name` into the cache dir unless it's already there (or force
+            discards it first). Returns (path, url-or-None-if-cached)."""
+            dest = cache_dir / name
+            if dest.exists() and force:
+                progress(f"Forcing re-download of {name} (discarding cached copy)…")
+                dest.unlink()
+            if dest.exists():
+                progress(f"Using cached {name} ({dest.stat().st_size / 1e6:.1f} MB)")
+                return dest, None
+            return dest, downloader(dest)
+
+        zip_path, url = fetch(
+            "cb-place-500k.zip",
+            lambda d: census_builder.download_cb_zip(d, progress_cb=progress)[1])
+        zcta_path, _zcta_url = fetch(
+            "cb-zcta520-500k.zip",
+            lambda d: census_builder.download_zcta_zip(d, progress_cb=progress)[1])
+        postal_path, _postal_url = fetch(
+            "geonames-us-postal.zip",
+            lambda d: census_builder.download_geonames_zip_codes(d, progress_cb=progress))
+
         # The build replaces the DB file, which this process may still hold open
         # read-only — drop that handle first (Windows won't allow the replace).
         census_places.reset()
-        summary = census_builder.build(config.CENSUS_DB_PATH, zip_path, progress_cb=progress)
+        summary = census_builder.build(config.CENSUS_DB_PATH, zip_path, zcta_path,
+                                       postal_path, progress_cb=progress)
         index.record_dataset_download(
             dataset="census_places", region="us", url=url,
-            size_bytes=zip_path.stat().st_size, records_loaded=summary["total_places"],
+            size_bytes=sum(p.stat().st_size for p in (zip_path, zcta_path, postal_path)),
+            records_loaded=summary["total_places"] + summary["total_zctas"],
         )
         with _census_lock:
             _census_job["result"] = summary
-            _census_job["message"] = (f"Done. {summary['total_places']:,} US Census places "
-                                      "(incorporated places + CDPs) ready.")
+            _census_job["message"] = (
+                f"Done. {summary['total_places']:,} US Census places "
+                f"(incorporated places + CDPs) and {summary['total_zctas']:,} ZIP areas ready.")
             _census_job["done"] = True
     except Exception as e:  # noqa: BLE001 — surfaced to the UI via job status
         logger.exception("Census places download/build failed")
@@ -384,9 +403,10 @@ def _run_census_download(force: bool = False):
 
 
 def start_census_download(executor, force: bool = False) -> bool:
-    """Kick off the Census place-boundary download + build on the shared executor.
-    Returns False if already running. force=True discards the cached zip first so a
-    fresh vintage is pulled (a plain re-run reuses it and just rebuilds)."""
+    """Kick off the Census download + build (place boundaries, ZCTA boundaries, and
+    the GeoNames ZIP -> city crosswalk) on the shared executor. Returns False if
+    already running. force=True discards the cached archives first so a fresh vintage
+    is pulled (a plain re-run reuses them and just rebuilds)."""
     with _census_lock:
         if _census_job["running"]:
             return False

@@ -140,23 +140,30 @@ state/county/country. Skip it and geocoding falls back to GeoNames city names. O
 © OpenStreetMap contributors (ODbL). View the boundaries on the **Places DB** map
 (`/map.html`) via the "OSM places" toggle.
 
-### 5. Install US Census place boundaries (optional — fills OSM's gaps in the US)
+### 5. Install US Census boundaries (optional — fills OSM's gaps in the US)
 
 US unincorporated areas have no OSM city boundary at all, so photos there fall through to
-the GeoNames nearest-place estimate. The Census Bureau's national place file covers them
-(incorporated places **and** census designated places):
+the GeoNames nearest-place estimate. The Census Bureau's national files cover them — places
+(incorporated **and** census designated) plus ZIP code areas:
 
 ```bash
 uv run python scripts/get_census_places.py --root "D:\Photos"
-# already have the zip? skip the download entirely:
-uv run python scripts/get_census_places.py --zip path/to/cb_2025_us_place_500k.zip
+uv run python scripts/get_census_places.py --no-zip-codes          # places only
+# already have the archives? skip the downloads entirely:
+uv run python scripts/get_census_places.py --zip path/to/cb_2025_us_place_500k.zip \
+    --zcta-zip path/to/cb_2020_us_zcta520_500k.zip --postal-zip path/to/US.zip
 ```
 
-~23 MB download, ~32,600 polygons, builds in seconds into `data/census/places.sqlite` under
-the resolved location above (or pass `--db`). Consulted after OSM and before the GeoNames
-estimate — see [Reverse geocoding](#reverse-geocoding). Census Cartographic Boundary Files
-are US Census Bureau public domain. View them on the **Places DB** map (`/map.html`) via the
-"Census places" toggle.
+~90 MB of downloads, ~66,000 polygons, builds in seconds into `data/census/places.sqlite`
+under the resolved location above (or pass `--db`). Consulted after OSM and before the
+GeoNames estimate — see [Reverse geocoding](#reverse-geocoding). Census Cartographic Boundary
+Files are US Census Bureau public domain; the ZIP→city crosswalk is GeoNames (CC BY 4.0). View
+the boundaries on the **Places DB** map (`/map.html`) via the "Census places" toggle.
+
+A build always replaces the whole database, so run it with the same options each time — a
+`--no-zip-codes` rebuild drops the ZIP layer rather than leaving it in place. Stop the app
+first if it's running: it holds the database open, and Windows won't let the new build replace
+a file that's in use (the Data Management page has no such problem).
 
 ### 6. Point it at your photos and run
 
@@ -326,29 +333,41 @@ useful since OSM coverage is usually only a handful of imported regions. Once yo
 regions cover your whole library, set `GEOTAGGER_OSM_CITY_FALLBACK_GEONAMES=0` for strict
 "OSM only" behavior, where a coordinate outside every polygon gets no city name at all.
 
-### US Census places (optional middle step — setup step 5)
+### US Census places and ZIP areas (optional middle steps — setup step 5)
 
 OSM only carries `boundary=administrative` city polygons, so US **unincorporated** areas —
 which is most of suburban metro fringe — fall inside no OSM city at all, and OSM city limits
-can also lag real annexations. Downloading the **US Census place boundaries** (Data Management
-page, or `uv run python scripts/get_census_places.py`) fills that gap: the national 1:500,000
-Cartographic Boundary file, ~23 MB, ~32,600 polygons covering every incorporated place *plus*
-every **census designated place (CDP)**.
+can also lag real annexations. Downloading the **US Census boundaries** (Data Management page,
+or `uv run python scripts/get_census_places.py`) fills that gap with two layers:
+
+- **Places** (~23 MB, ~32,600 polygons) — every incorporated place *plus* every **census
+  designated place (CDP)**.
+- **ZCTAs** (~65 MB, ~33,800 polygons) — ZIP code areas, which give each photo a `postal_code`
+  and, as a last resort, the ZIP's USPS mailing city. The boundary file carries only the bare
+  5-digit code, so a small GeoNames postal table (~1 MB, CC BY) supplies the city name.
 
 That makes the city chain, each step skipped if its data isn't installed:
 
 1. **OSM** city boundary containing the point.
 2. **US Census** place containing the point.
-3. **GeoNames** nearest populated place — a distance estimate, so it runs last (and is what
-   `GEOTAGGER_OSM_CITY_FALLBACK_GEONAMES=0` turns off; census containment is unaffected by
-   that switch, since it's a real answer rather than a guess).
+3. **ZIP** mailing city — containment, but a mailing address is not a jurisdiction, and rural
+   ZIPs are named for whichever small post office serves them. `GEOTAGGER_ZCTA_CITY_FALLBACK=0`
+   turns this step off while still storing the ZIP code.
+4. **GeoNames** nearest populated place — a distance estimate, so it runs last (and is what
+   `GEOTAGGER_OSM_CITY_FALLBACK_GEONAMES=0` turns off; the containment steps above are
+   unaffected by that switch, since they're real answers rather than guesses).
 
-Sub-locations stay OSM-only — the Census file has no parks/campuses/venues in it. The Places
-DB map has a **Census places** overlay (off by default, dashed outlines) and its click-to-probe
-popup shows what each of the three sources said, so you can see which one produced a city.
-Measured on a 61K-photo library: OSM answered 78% of distinct coordinates, census 2.4% (of
-which 70 labels changed, e.g. *Chinatown → San Francisco*, *Keller → Fort Worth*), GeoNames
-the remaining 20%.
+Sub-locations stay OSM-only — the Census files have no parks/campuses/venues in them. The
+Places DB map has a **Census places** overlay (off by default, dashed outlines) and its
+click-to-probe popup lists every source's answer with the winner marked, so you can see which
+step produced the city. Measured on a 61K-photo library: OSM answered 78% of distinct
+coordinates, census places 2.4% (*Chinatown → San Francisco*, *Keller → Fort Worth*), ZIP city
+18%, GeoNames the remaining 1.3%; 98% of coordinates got a ZIP code.
+
+A note on that ZIP-city step: it's the loudest of the four. On the same library it disagreed
+with the GeoNames guess 657 times — often better (*Cypress*, *Franklin*), sometimes worse in
+rural areas (*Navasota → Washington*, *Ridgway → Cimarron*, both tiny post-office towns). Turn
+it off if you'd rather have the nearest recognizable town than the postal one.
 
 The GeoNames side of that lookup is **population-weighted**: its dataset mixes real
 municipalities with tiny GNIS-imported subdivisions (both tagged the same way), so a strictly
@@ -475,6 +494,8 @@ live from the Settings page):
 | `GEOTAGGER_OSM_CITY_FALLBACK_GEONAMES` | `1` | `0` = strict polygon-only city (no GeoNames nearest-place fallback for coordinates outside every polygon) |
 | `GEOTAGGER_CENSUS_DB` | *(none — see [tools/data location](#where-downloaded-toolsdata-end-up))* | US Census place-boundary database (built by `scripts/get_census_places.py`) |
 | `GEOTAGGER_CENSUS_CB_YEAR` | `2025` | Cartographic Boundary vintage to download; earlier years are tried if it isn't published yet |
+| `GEOTAGGER_CENSUS_ZCTA_YEAR` | `2020` | ZCTA vintage — published once per decennial census, not yearly like the place file |
+| `GEOTAGGER_ZCTA_CITY_FALLBACK` | `1` | `0` = never use a ZIP's mailing city as the city (the ZIP code is still stored) |
 | `GEOTAGGER_WRITE_XMP_ON_GEOTAG` | `0` | `1` = write GPS to the XMP sidecar immediately on every geotag edit |
 | `GEOTAGGER_RAW_FULL_DECODE` | `0` | `1` = fully demosaic RAW files via LibRaw instead of using the embedded preview |
 | `GEOTAGGER_THUMB_FORMAT` | `webp` | Format for cached thumbnails/previews/face crops: `webp` (smaller) or `jpeg` |

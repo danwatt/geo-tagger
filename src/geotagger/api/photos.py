@@ -341,6 +341,7 @@ async def api_photo(photo_id: int):
         "location": {
             "city": row["loc_city"],
             "sublocation": row["loc_sublocation"],
+            "postal_code": row["loc_postal_code"],
             "state": row["loc_state"],
             "county": row["loc_county"],
             "country": row["loc_country"],

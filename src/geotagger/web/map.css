@@ -91,3 +91,6 @@
   min-width: 78px;
   color: #888;
 }
+/* The source whose answer became the saved city, in the candidates list. */
+.map-popup-source-win { font-weight: 600; }
+.map-popup-source-win .map-popup-field-key { color: var(--text); }

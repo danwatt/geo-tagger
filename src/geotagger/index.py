@@ -104,6 +104,10 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     # building) from polygon reverse geocoding — a sub-location under loc_city.
     if "loc_sublocation" not in cols:
         _db.execute("ALTER TABLE photos ADD COLUMN loc_sublocation TEXT")
+    # ZIP code from the Census ZCTA layer (US only; NULL everywhere else, and on
+    # photos geocoded before that layer was installed).
+    if "loc_postal_code" not in cols:
+        _db.execute("ALTER TABLE photos ADD COLUMN loc_postal_code TEXT")
     if "geocoded_at" not in cols:
         _db.execute("ALTER TABLE photos ADD COLUMN geocoded_at REAL")
     # Files that don't matter for geocoding (e.g. screenshots). They still show
@@ -178,6 +182,7 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
                 loc_country TEXT,
                 loc_country_code TEXT,
                 loc_sublocation TEXT,
+                loc_postal_code TEXT,
                 loc_landmark TEXT,
                 loc_landmark_type TEXT,
                 geocoded_at REAL,
@@ -244,6 +249,10 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     cache_cols = {r[1] for r in _db.execute("PRAGMA table_info(geocode_cache)").fetchall()}
     if "sublocation" not in cache_cols:
         _db.execute("ALTER TABLE geocode_cache ADD COLUMN sublocation TEXT")
+    # ZIP code from the Census ZCTA layer, same deal. Rows cached before it existed
+    # simply have NULL here — a stale-but-valid result, refreshed by scripts/regeocode.py.
+    if "postal_code" not in cache_cols:
+        _db.execute("ALTER TABLE geocode_cache ADD COLUMN postal_code TEXT")
 
     _db.execute("""
         CREATE TABLE IF NOT EXISTS contexts (
@@ -1106,13 +1115,14 @@ def contexts_for_point_time(lat: float, lng: float, ts: int) -> list[sqlite3.Row
 def get_cached_geocode(qlat: int, qlng: int) -> dict | None:
     """Return a cached location for quantized coords, or None on a miss."""
     row = get_db().execute(
-        "SELECT city, sublocation, state, county, country, country_code FROM geocode_cache "
-        "WHERE qlat=? AND qlng=?",
+        "SELECT city, sublocation, postal_code, state, county, country, country_code "
+        "FROM geocode_cache WHERE qlat=? AND qlng=?",
         (qlat, qlng),
     ).fetchone()
     if row is None:
         return None
     return {"city": row["city"], "sublocation": row["sublocation"],
+            "postal_code": row["postal_code"],
             "state": row["state"], "county": row["county"],
             "country": row["country"], "country_code": row["country_code"]}
 
@@ -1122,10 +1132,12 @@ def put_cached_geocode(qlat: int, qlng: int, loc: dict, source: str = "local"):
     db = get_db()
     db.execute(
         """INSERT OR REPLACE INTO geocode_cache
-               (qlat, qlng, city, sublocation, state, county, country, country_code, source, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (qlat, qlng, loc.get("city"), loc.get("sublocation"), loc.get("state"),
-         loc.get("county"), loc.get("country"), loc.get("country_code"), source, time.time()),
+               (qlat, qlng, city, sublocation, postal_code, state, county, country,
+                country_code, source, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (qlat, qlng, loc.get("city"), loc.get("sublocation"), loc.get("postal_code"),
+         loc.get("state"), loc.get("county"), loc.get("country"), loc.get("country_code"),
+         source, time.time()),
     )
     db.commit()
 
@@ -1136,16 +1148,17 @@ def update_photo_location(photo_id: int, loc: dict | None):
     db = get_db()
     if loc is None:
         db.execute(
-            "UPDATE photos SET loc_city=NULL, loc_sublocation=NULL, loc_state=NULL, "
-            "loc_county=NULL, loc_country=NULL, loc_country_code=NULL, geocoded_at=? WHERE id=?",
+            "UPDATE photos SET loc_city=NULL, loc_sublocation=NULL, loc_postal_code=NULL, "
+            "loc_state=NULL, loc_county=NULL, loc_country=NULL, loc_country_code=NULL, "
+            "geocoded_at=? WHERE id=?",
             (time.time(), photo_id),
         )
     else:
         db.execute(
-            "UPDATE photos SET loc_city=?, loc_sublocation=?, loc_state=?, loc_county=?, "
-            "loc_country=?, loc_country_code=?, geocoded_at=? WHERE id=?",
-            (loc.get("city"), loc.get("sublocation"), loc.get("state"), loc.get("county"),
-             loc.get("country"), loc.get("country_code"), time.time(), photo_id),
+            "UPDATE photos SET loc_city=?, loc_sublocation=?, loc_postal_code=?, loc_state=?, "
+            "loc_county=?, loc_country=?, loc_country_code=?, geocoded_at=? WHERE id=?",
+            (loc.get("city"), loc.get("sublocation"), loc.get("postal_code"), loc.get("state"),
+             loc.get("county"), loc.get("country"), loc.get("country_code"), time.time(), photo_id),
         )
     db.commit()
 

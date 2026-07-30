@@ -105,9 +105,20 @@ function renderCensus(c) {
         <span>${n.toLocaleString()}</span>
       </div>
     `).join("")}
+    <div class="data-file-row">
+      <span>ZIP areas (ZCTA)</span>
+      <span class="${c.zctas ? "present" : "missing"}">
+        ${c.zctas ? `${c.zctas.toLocaleString()} total` : "not loaded"}
+      </span>
+    </div>
+    ${c.zctas ? `
+      <div class="data-file-row data-file-subrow">
+        <span>with a city name</span>
+        <span>${(c.zip_names || 0).toLocaleString()}</span>
+      </div>` : ""}
   `;
   document.getElementById("census-download-btn").textContent =
-    c.available ? "Re-download Census places" : "Download Census places";
+    c.available ? "Re-download Census data" : "Download Census data";
 }
 
 function renderOsmCheckboxes() {

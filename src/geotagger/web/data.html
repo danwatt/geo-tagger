@@ -36,13 +36,14 @@
   </div>
 
   <div class="data-group" id="card-census">
-    <h2>US Census places (incorporated places + CDPs)</h2>
+    <h2>US Census places &amp; ZIP areas</h2>
     <p class="data-help">
-      The Census Bureau's national 1:500,000 place boundaries (~10 MB). Unlike OSM,
-      this includes <strong>census designated places</strong> — the unincorporated
-      suburbia that has no city boundary at all, so a photo there gets a real place
-      name instead of whichever GeoNames town happens to be nearest. Consulted
-      after OSM and before that nearest-city estimate.
+      The Census Bureau's national 1:500,000 boundaries. <strong>Places</strong>
+      include census designated places — the unincorporated suburbia that has no city
+      boundary at all, so a photo there gets a real place name instead of whichever
+      GeoNames town happens to be nearest. <strong>ZCTAs</strong> add each photo's ZIP
+      code, and (via a small GeoNames crosswalk) the ZIP's mailing city as a last
+      resort before that nearest-city estimate. ~90 MB total; rebuilds in seconds.
     </p>
     <div id="census-status" class="data-files"></div>
     <label class="force-label"><input type="checkbox" id="census-force"> Force re-download (ignore local cache)</label>

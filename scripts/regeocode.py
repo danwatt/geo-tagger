@@ -59,7 +59,10 @@ def find_candidates(bbox: str | None, limit: int):
 
 def _describe_loc(r) -> str:
     city = r["loc_city"] or "(none)"
-    return f"{city} / {r['loc_sublocation']}" if r["loc_sublocation"] else city
+    text = f"{city} / {r['loc_sublocation']}" if r["loc_sublocation"] else city
+    keys = r.keys()
+    zip_code = r["loc_postal_code"] if "loc_postal_code" in keys else None
+    return f"{text} {zip_code}" if zip_code else text
 
 
 def main():

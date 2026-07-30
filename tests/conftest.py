@@ -170,7 +170,11 @@ def census_db(tmp_path, monkeypatch):
     writes the real schema (census_builder.init_db) + the given place rows.
 
     A row is a dict: {name, kind?, geoid?, area?, state?, polygons}, where polygons is
-    the stored ring format [[outer, [hole,...]], ...] (ring=[[lat,lng],...])."""
+    the stored ring format [[outer, [hole,...]], ...] (ring=[[lat,lng],...]).
+
+    `build(rows, zctas=[...])` also loads ZIP areas — {zip, polygons, area?, city?,
+    state?}, with `city` writing the ZIP -> city crosswalk row the real build gets
+    from GeoNames."""
     import json as _json
     import sqlite3
 
@@ -180,9 +184,24 @@ def census_db(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CENSUS_DB_PATH", db_path)
     _reset_census_places_state()
 
-    def build(rows):
+    def build(rows, zctas=()):
         conn = sqlite3.connect(str(db_path))
         census_builder.init_db(conn)
+        for i, z in enumerate(zctas, start=1):
+            polys = z["polygons"]
+            lats = [pt[0] for outer, _ in polys for pt in outer]
+            lngs = [pt[1] for outer, _ in polys for pt in outer]
+            bbox = (min(lats), max(lats), min(lngs), max(lngs))
+            conn.execute(
+                "INSERT INTO zctas (id, zip, area, min_lat, max_lat, min_lng, max_lng, rings) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (i, z["zip"], z.get("area", 1.0), *bbox, _json.dumps(polys)))
+            conn.execute("INSERT INTO zctas_spatial VALUES (?,?,?,?,?)", (i, *bbox))
+            if z.get("city"):
+                conn.execute(
+                    "INSERT OR IGNORE INTO zip_places (zip, city, state, state_code) "
+                    "VALUES (?,?,?,?)",
+                    (z["zip"], z["city"], z.get("state", "Texas"), z.get("state_code", "TX")))
         for i, r in enumerate(rows, start=1):
             polys = r["polygons"]
             lats = [pt[0] for outer, _ in polys for pt in outer]
