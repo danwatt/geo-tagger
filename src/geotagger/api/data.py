@@ -1,5 +1,5 @@
-"""Data Management page: status + start/poll endpoints for the GeoNames and
-GeoFabrik/OSM offline dataset downloads. Actual work runs on the shared
+"""Data Management page: status + start/poll endpoints for the GeoNames,
+GeoFabrik/OSM and US Census offline dataset downloads. Actual work runs on the shared
 executor via services/data_service.py's background jobs; routes just start a
 job and report its polled state (no request stays open for the download)."""
 
@@ -28,6 +28,7 @@ async def api_data_status():
     return {
         "geonames": data_service.geonames_status(),
         "osm": data_service.osm_status(),
+        "census": data_service.census_status(),
         "face_model": data_service.face_model_status(),
     }
 
@@ -66,6 +67,19 @@ async def api_data_osm_download(req: OsmDownloadRequest):
 @router.get("/api/data/osm/download/status")
 async def api_data_osm_download_status():
     return data_service.osm_job_status()
+
+
+@router.post("/api/data/census/download")
+async def api_data_census_download(req: ForceRequest = ForceRequest()):
+    started = data_service.start_census_download(get_executor(), req.force)
+    if not started:
+        raise HTTPException(409, "Census places download already in progress")
+    return {"started": True}
+
+
+@router.get("/api/data/census/download/status")
+async def api_data_census_download_status():
+    return data_service.census_job_status()
 
 
 @router.post("/api/data/face-model/download")

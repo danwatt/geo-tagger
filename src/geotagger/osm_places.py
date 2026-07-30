@@ -220,10 +220,13 @@ def _to_geojson_ring(ring: list) -> list:
     return coords
 
 
-def _polygons_to_geojson_coords(polygons: list) -> list:
+def polygons_to_geojson_coords(polygons: list) -> list:
     """Our stored ring format [[outer, [hole, ...]], ...] (ring = [[lat,lng],...])
     -> GeoJSON MultiPolygon coordinates: [[exterior, hole, ...], ...], with each
-    ring [[lng,lat],...] (GeoJSON is lng/lat, the opposite of our stored order)."""
+    ring [[lng,lat],...] (GeoJSON is lng/lat, the opposite of our stored order).
+
+    Public because census_places stores its rings in this same format and hands them
+    to the map the same way."""
     return [
         [_to_geojson_ring(outer)] + [_to_geojson_ring(hole) for hole in holes]
         for outer, holes in polygons
@@ -246,6 +249,6 @@ def place_to_geojson_feature(place: dict) -> dict:
         },
         "geometry": {
             "type": "MultiPolygon",
-            "coordinates": _polygons_to_geojson_coords(place["polygons"]),
+            "coordinates": polygons_to_geojson_coords(place["polygons"]),
         },
     }

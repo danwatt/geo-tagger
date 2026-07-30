@@ -739,26 +739,45 @@ def voronoi_cells(min_lat: float, max_lat: float, min_lng: float, max_lng: float
 
 
 def _merged_lookup(lat: float, lng: float) -> dict | None:
-    """Combine OSM polygon containment (authoritative city + sub-location) with
-    the GeoNames nearest-point lookup (state/county/country).
+    """Combine the polygon-containment sources (city + sub-location) with the
+    GeoNames nearest-point lookup (state/county/country).
 
-    OSM replaces the city: when the OSM places DB is installed, the city is the
-    boundary that contains the point (or None if the point is in no OSM city,
-    unless config.OSM_CITY_FALLBACK_GEONAMES). When OSM is *not* installed at all,
-    we fall back to the GeoNames city so the app still geocodes out of the box.
-    Sub-location is OSM-only (None without OSM)."""
-    from geotagger import osm_places
+    City resolution, in order — every step is skipped if its data isn't installed:
+
+    1. **OSM** city boundary containing the point. The authority wherever it has one.
+    2. **US Census** place containing the point (see census_places) — incorporated
+       places *and* CDPs, so unincorporated suburbia that OSM carries no boundary
+       for still gets a real containment answer.
+    3. **GeoNames** nearest populated place (_raw_lookup) — a distance estimate, not
+       containment, so it runs last and only when config.OSM_CITY_FALLBACK_GEONAMES
+       allows it (or when OSM isn't installed at all, so the app still geocodes out
+       of the box).
+
+    Sub-location is OSM-only (None without OSM) — the Census place file has no
+    parks/campuses/venues to draw one from."""
+    from geotagger import census_places, osm_places
     osm = osm_places.lookup(lat, lng)          # {city, sublocation} or None
     gn = _raw_lookup(lat, lng) or {}           # state/county/country/cc (+ its own city)
     if osm is None and not gn:
-        return None
+        # Census can still name the point even with neither of the other two, so it's
+        # only "nothing at all" if that comes up empty too.
+        census = census_places.lookup(lat, lng)
+        if census is None:
+            return None
+    else:
+        census = None
 
     if osm and osm.get("city"):
         city = osm["city"]
-    elif osm_places.is_available() and not config.OSM_CITY_FALLBACK_GEONAMES:
-        city = None                            # OSM is the authority; point in no city
     else:
-        city = gn.get("city")                  # OSM absent, or fallback enabled
+        if census is None:
+            census = census_places.lookup(lat, lng)
+        if census and census.get("city"):
+            city = census["city"]              # containment beats the distance estimate
+        elif osm_places.is_available() and not config.OSM_CITY_FALLBACK_GEONAMES:
+            city = None                        # polygons are the authority; point in none
+        else:
+            city = gn.get("city")              # OSM absent, or fallback enabled
     return {
         "city": city,
         "sublocation": osm.get("sublocation") if osm else None,
@@ -773,8 +792,9 @@ def lookup(lat: float | None, lng: float | None, use_cache: bool = True) -> dict
     """Reverse-geocode a coordinate to
     {city, sublocation, state, county, country, country_code}.
 
-    City + sub-location come from OSM polygon containment; state/county/country
-    from GeoNames (see _merged_lookup). Caches by quantized coordinate so nearby
+    City comes from OSM polygon containment, then US Census place containment, then
+    the GeoNames nearest-point estimate; sub-location is OSM-only and
+    state/county/country always come from GeoNames (see _merged_lookup). Caches by quantized coordinate so nearby
     photos reuse one result — note the quantization grid (config.GEOCODE_PRECISION,
     ~11 m) is coarser than a small building, so two photos in adjacent buildings
     can share a bucket. Returns None when neither source resolves anything. Cache

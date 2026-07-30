@@ -15,8 +15,8 @@
 
 <div id="data-page">
   <p class="data-intro">
-    Offline reference datasets used for reverse geocoding. Both downloads pull
-    from the public GeoNames / GeoFabrik servers and can take a while — the
+    Offline reference datasets used for reverse geocoding. Downloads pull from the
+    public GeoNames / GeoFabrik / US Census servers and can take a while — the
     page keeps polling while a download runs, so it's safe to leave this tab
     and come back.
   </p>
@@ -33,6 +33,22 @@
     <button id="geonames-download-btn">Download GeoNames data</button>
     <div id="geonames-progress" class="data-progress"></div>
     <div id="geonames-error" class="data-error"></div>
+  </div>
+
+  <div class="data-group" id="card-census">
+    <h2>US Census places (incorporated places + CDPs)</h2>
+    <p class="data-help">
+      The Census Bureau's national 1:500,000 place boundaries (~10 MB). Unlike OSM,
+      this includes <strong>census designated places</strong> — the unincorporated
+      suburbia that has no city boundary at all, so a photo there gets a real place
+      name instead of whichever GeoNames town happens to be nearest. Consulted
+      after OSM and before that nearest-city estimate.
+    </p>
+    <div id="census-status" class="data-files"></div>
+    <label class="force-label"><input type="checkbox" id="census-force"> Force re-download (ignore local cache)</label>
+    <button id="census-download-btn">Download Census places</button>
+    <div id="census-progress" class="data-progress"></div>
+    <div id="census-error" class="data-error"></div>
   </div>
 
   <div class="data-group" id="card-face-model">

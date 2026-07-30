@@ -159,16 +159,38 @@ def get_osm_db(data_root: Path | None = None) -> Path:
 
 OSM_DB_PATH: Path = get_osm_db()
 
+# ── US Census places (offline, polygon reverse geocoding) ──
+# SQLite DB of US Census Cartographic Boundary "places" — every incorporated place
+# *plus* every census designated place (CDP), which is what covers the unincorporated
+# suburbia OSM has no boundary for (OSM only carries boundary=administrative cities;
+# there are ~15 boundary=census areas in the whole Texas extract). Built from the
+# national 1:500,000 shapefile with:
+#     uv run python scripts/get_census_places.py
+# Consulted after OSM and before the GeoNames nearest-point fallback — see
+# census_places.py and geocode._merged_lookup.
+def get_census_db(data_root: Path | None = None) -> Path:
+    if env := os.environ.get("GEOTAGGER_CENSUS_DB"):
+        return Path(env)
+    return resolve_data_root(data_root) / "data" / "census" / "places.sqlite"
+
+CENSUS_DB_PATH: Path = get_census_db()
+
+# Vintage of the Cartographic Boundary files to download. The Census publishes a new
+# one each year at a stable URL shape (…/GENZ<year>/shp/cb_<year>_us_place_500k.zip);
+# the downloader walks back a couple of years from here if that year isn't posted yet.
+CENSUS_CB_YEAR = int(os.environ.get("GEOTAGGER_CENSUS_CB_YEAR", "2025"))
+
 
 def resolve_data_paths(primary_root: Path | None):
-    """(Re)resolve EXIFTOOL_PATH/GEONAMES_DIR/OSM_DB_PATH once the app's primary
-    scan root is known, so they default alongside the DB's cache_dir instead of
-    the state-dir fallback used at import time (no root known yet). Call once
-    during startup, before ExifTool/geocoder/OSM places are touched."""
-    global EXIFTOOL_PATH, GEONAMES_DIR, OSM_DB_PATH
+    """(Re)resolve EXIFTOOL_PATH/GEONAMES_DIR/OSM_DB_PATH/CENSUS_DB_PATH once the
+    app's primary scan root is known, so they default alongside the DB's cache_dir
+    instead of the state-dir fallback used at import time (no root known yet). Call
+    once during startup, before ExifTool/geocoder/OSM/Census places are touched."""
+    global EXIFTOOL_PATH, GEONAMES_DIR, OSM_DB_PATH, CENSUS_DB_PATH
     EXIFTOOL_PATH = get_exiftool_path(primary_root)
     GEONAMES_DIR = get_geonames_dir(primary_root)
     OSM_DB_PATH = get_osm_db(primary_root)
+    CENSUS_DB_PATH = get_census_db(primary_root)
 
 # When True, fall back to the GeoNames nearest-city name for photos that fall
 # outside every OSM city polygon (e.g. rural areas, or a region not yet ingested).

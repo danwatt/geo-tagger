@@ -49,6 +49,11 @@
   color: #999;
   font-size: 11px;
 }
+/* Which source file a built dataset came from, next to its label. */
+.data-file-note {
+  color: #888;
+  font-size: 11px;
+}
 
 .force-label {
   display: flex;

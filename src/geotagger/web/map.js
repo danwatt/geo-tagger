@@ -22,6 +22,11 @@
  * buildings) as a GeoJSON FeatureCollection, rendered with Leaflet's built-in
  * L.geoJSON() layer (no extra plugin needed — GeoJSON support is core Leaflet).
  *
+ * Past MIN_ZOOM_FOR_CENSUS, /api/geocode/census-places can overlay US Census place
+ * boundaries (incorporated places + CDPs) — the source consulted after OSM and
+ * before the GeoNames nearest-place estimate. Off by default: these tile the map
+ * wall-to-wall, so they're drawn dashed and unfilled and only when asked for.
+ *
  * Named buildings vastly outnumber every other OSM category and are only
  * meaningful once you can see individual rooftops, so they're held back
  * behind their own, deeper MIN_ZOOM_FOR_BUILDINGS threshold — the osm-places
@@ -32,6 +37,7 @@
 const MIN_ZOOM_FOR_MARKERS = 8;
 const MIN_ZOOM_FOR_VORONOI = 11;
 const MIN_ZOOM_FOR_OSM = 11;
+const MIN_ZOOM_FOR_CENSUS = 9;   // whole-place polygons, readable further out than OSM's features
 const MIN_ZOOM_FOR_BUILDINGS = 17;
 const REFRESH_DEBOUNCE_MS = 250;
 
@@ -56,11 +62,14 @@ let voronoiLayer = null;
 let voronoiEnabled = true;
 let osmLayer = null;
 let osmEnabled = true;
+let censusLayer = null;
+let censusEnabled = false;   // off by default: it blankets the map, unlike OSM's sparser features
 let probeSeq = 0;
 let refreshTimer = null;
 let fetchSeq = 0;
 let voronoiFetchSeq = 0;
 let osmFetchSeq = 0;
+let censusFetchSeq = 0;
 
 const BASEMAPS = {
   street: {
@@ -96,6 +105,13 @@ document.addEventListener("DOMContentLoaded", () => {
     osmEnabled = osmToggle.checked;
     refreshOsm();
   });
+
+  const censusToggle = document.getElementById("census-toggle");
+  censusToggle.checked = censusEnabled;
+  censusToggle.addEventListener("change", () => {
+    censusEnabled = censusToggle.checked;
+    refreshCensus();
+  });
 });
 
 function initMap() {
@@ -113,6 +129,9 @@ function initMap() {
   // reverse-geocodes the clicked point, and the containing city/feature come back
   // as the geocode result.
   osmLayer = L.geoJSON(null, { style: osmFeatureStyle, interactive: false }).addTo(map);
+  // Census place boundaries, drawn dashed so they read as a different source than
+  // the OSM outlines they sit next to (and often overlap).
+  censusLayer = L.geoJSON(null, { style: censusFeatureStyle, interactive: false }).addTo(map);
   markerCluster = L.markerClusterGroup({ maxClusterRadius: 60 });
   map.addLayer(markerCluster);
 
@@ -193,6 +212,7 @@ async function fitToLibrary() {
   refreshMarkers();
   refreshVoronoi();
   refreshOsm();
+  refreshCensus();
 }
 
 function scheduleRefresh() {
@@ -201,6 +221,7 @@ function scheduleRefresh() {
     refreshMarkers();
     refreshVoronoi();
     refreshOsm();
+    refreshCensus();
   }, REFRESH_DEBOUNCE_MS);
 }
 
@@ -293,11 +314,52 @@ async function refreshOsm() {
   }
 }
 
+async function refreshCensus() {
+  const zoom = map.getZoom();
+  if (!censusEnabled || zoom < MIN_ZOOM_FOR_CENSUS) {
+    censusLayer.clearLayers();
+    return;
+  }
+
+  const b = map.getBounds();
+  const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
+  const seq = ++censusFetchSeq;
+  try {
+    const res = await fetch(`/api/geocode/census-places?bbox=${encodeURIComponent(bbox)}`);
+    if (res.status === 503) {
+      censusLayer.clearLayers();
+      setStatus("Census places DB not built — run scripts/get_census_places.py", true);
+      return;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const geojson = await res.json();
+    if (seq !== censusFetchSeq) return; // a newer request superseded this one
+    censusLayer.clearLayers();
+    censusLayer.addData(geojson);
+  } catch (e) {
+    if (seq === censusFetchSeq) setStatus("Error loading Census places: " + e.message, true);
+  }
+}
+
 // style/onEachFeature callbacks for the osmLayer L.geoJSON() instance (created
 // once in initMap; refreshOsm just swaps the data via clearLayers()/addData()).
 function osmFeatureStyle(feature) {
   const color = OSM_CATEGORY_COLORS[feature.properties.category] || "#888";
   return { color, weight: 2, opacity: 0.9, fillColor: color, fillOpacity: 0.12 };
+}
+
+// Census places: one color, dashed, no fill — they tile the map wall-to-wall, so a
+// fill would bury everything under it, and the dashes distinguish a CDP boundary
+// from the OSM city boundary it may sit on top of.
+function censusFeatureStyle(feature) {
+  const isCdp = feature.properties.kind === "CDP";
+  return {
+    color: isCdp ? "#ffd166" : "#f4a259",
+    weight: 2,
+    opacity: 0.95,
+    dashArray: "6 4",
+    fill: false,
+  };
 }
 
 // Click anywhere on the map to reverse-geocode that exact point the way a photo

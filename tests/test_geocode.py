@@ -605,6 +605,56 @@ class TestMergedLookup:
         assert r["sublocation"] is None
 
 
+class TestCensusInTheCityChain:
+    """The city chain is OSM containment -> Census containment -> GeoNames estimate.
+    Census only ever displaces the GeoNames guess, never an OSM boundary."""
+
+    def test_census_beats_the_geonames_estimate(self, geonames_dir, osm_db, census_db):
+        _write_geonames_files(geonames_dir, [CITY_A])  # Testville @ (40,-74)
+        osm_db([dict(name="Elsewhere", category="city", admin_level=8, area=1.0,
+                     polygons=_rect(10.0, 11.0, 10.0, 11.0))])
+        census_db([{"name": "CensusPlace", "kind": "CDP",
+                    "polygons": _rect(39.9, 40.1, -74.1, -73.9)}])
+        r = geocode.lookup(40.0, -74.0)
+        assert r["city"] == "CensusPlace"
+        assert r["state"] == "New York"       # still GeoNames
+        assert r["sublocation"] is None       # census file has no sub-features
+
+    def test_osm_city_still_wins_over_census(self, geonames_dir, osm_db, census_db):
+        _write_geonames_files(geonames_dir, [CITY_A])
+        osm_db([dict(name="OsmCity", category="city", admin_level=8, area=1.0,
+                     polygons=_rect(39.9, 40.1, -74.1, -73.9))])
+        census_db([{"name": "CensusPlace", "polygons": _rect(39.9, 40.1, -74.1, -73.9)}])
+        assert geocode.lookup(40.0, -74.0)["city"] == "OsmCity"
+
+    def test_census_applies_even_with_the_geonames_fallback_disabled(
+            self, geonames_dir, osm_db, census_db, monkeypatch):
+        # OSM_CITY_FALLBACK_GEONAMES governs the *distance estimate*; census
+        # containment is a real answer, so it still applies.
+        monkeypatch.setattr(geocode.config, "OSM_CITY_FALLBACK_GEONAMES", False)
+        _write_geonames_files(geonames_dir, [CITY_A])
+        osm_db([dict(name="Elsewhere", category="city", admin_level=8, area=1.0,
+                     polygons=_rect(10.0, 11.0, 10.0, 11.0))])
+        census_db([{"name": "CensusPlace", "polygons": _rect(39.9, 40.1, -74.1, -73.9)}])
+        assert geocode.lookup(40.0, -74.0)["city"] == "CensusPlace"
+
+    def test_geonames_still_used_where_census_has_no_place(self, geonames_dir, census_db):
+        _write_geonames_files(geonames_dir, [CITY_A])
+        census_db([{"name": "CensusPlace", "polygons": _rect(10.0, 11.0, 10.0, 11.0)}])
+        assert geocode.lookup(40.001, -74.001)["city"] == "Testville"
+
+    def test_census_alone_can_name_a_point(self, census_db):
+        # No GeoNames data and no OSM DB: census containment is the only source, and
+        # it still produces a city rather than the whole lookup returning None.
+        census_db([{"name": "CensusPlace", "polygons": _rect(39.9, 40.1, -74.1, -73.9)}])
+        r = geocode.lookup(40.0, -74.0)
+        assert r["city"] == "CensusPlace"
+        assert r["state"] is None
+
+    def test_nothing_installed_still_returns_none(self, geonames_dir):
+        assert geocode.lookup(40.0, -74.0) is None
+
+
 class TestLookupCacheIntegration:
     def test_none_coordinates_return_none(self, geonames_dir):
         assert geocode.lookup(None, -74.0) is None

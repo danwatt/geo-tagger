@@ -16,7 +16,7 @@ def _write_geonames(dir_, rows=None):
 
 def test_status_shape(client):
     s = client.get("/api/geocode/status").json()
-    assert {"available", "geocoded", "pending"} <= set(s)
+    assert {"available", "geocoded", "pending", "osm", "census"} <= set(s)
     assert s["geocoded"] == 0 and s["pending"] == 0
 
 
@@ -95,6 +95,48 @@ def test_osm_places_returns_geojson_feature_collection_within_bbox(client, osm_d
     assert feature["type"] == "Feature"
     assert feature["properties"]["name"] == "Testville"
     assert feature["geometry"]["type"] == "MultiPolygon"
+
+
+def _census_row(name, min_lat, max_lat, min_lng, max_lng, kind="CDP"):
+    outer = [[min_lat, min_lng], [max_lat, min_lng], [max_lat, max_lng], [min_lat, max_lng]]
+    return {"name": name, "kind": kind, "polygons": [[outer, []]]}
+
+
+def test_census_places_503_without_data(client, census_db):
+    assert client.get("/api/geocode/census-places?bbox=-1,-1,1,1").status_code == 503
+
+
+def test_census_places_400_bad_bbox(client, census_db):
+    census_db([_census_row("Testville CDP", 39.9, 40.1, -74.1, -73.9)])
+    assert client.get("/api/geocode/census-places?bbox=nonsense").status_code == 400
+
+
+def test_census_places_returns_geojson_feature_collection(client, census_db):
+    census_db([_census_row("Testville CDP", 39.9, 40.1, -74.1, -73.9)])
+    r = client.get("/api/geocode/census-places?bbox=-75,39,-73,41")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["type"] == "FeatureCollection"
+    assert body["total"] == 1
+    feature = body["features"][0]
+    assert feature["properties"]["name"] == "Testville CDP"
+    assert feature["properties"]["kind"] == "CDP"
+    assert feature["geometry"]["type"] == "MultiPolygon"
+
+
+def test_lookup_reports_each_source(client, geonames_dir, census_db):
+    _write_geonames(geonames_dir)
+    census_db([_census_row("Census CDP", 39.9, 40.1, -74.1, -73.9)])
+    body = client.get("/api/geocode/lookup?lat=40.0&lng=-74.0").json()
+    # Census containment wins the city; the GeoNames guess is still reported.
+    assert body["location"]["city"] == "Census CDP"
+    assert body["sources"]["osm"] is None
+    assert body["sources"]["census"]["city"] == "Census CDP"
+    assert body["sources"]["geonames"]["city"] == "Testville"
+
+
+def test_lookup_503_with_nothing_installed(client, geonames_dir):
+    assert client.get("/api/geocode/lookup?lat=40.0&lng=-74.0").status_code == 503
 
 
 def test_osm_places_unwraps_a_bbox_panned_around_the_globe(client, osm_db):

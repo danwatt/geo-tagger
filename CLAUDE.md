@@ -32,9 +32,12 @@ don't.
   files** (`.xmp`) next to image, via `sidecar.py`. Never write EXIF into original.
 - **Face/person tags DB-only** by design (sidecar export deferred). Don't add sidecar
   writes for face data without checking memory note / asking.
-- **Reverse geocoding offline**: uses bundled GeoNames data (`data/geonames/`), not
-  network API. Don't add calls to online geocoders. Leaflet + OSM tiles only sanctioned
-  network deps (load from CDN, not vendored locally) — don't add more.
+- **Reverse geocoding offline**: bundled datasets only — OSM polygons (`data/osm/`), US
+  Census places (`data/census/`), GeoNames (`data/geonames/`), in that lookup order (see
+  `geocode._merged_lookup`). Not a network API — don't add calls to online geocoders.
+  Downloading a dataset is a one-shot admin action (`scripts/get_*.py` + Data Management
+  page), never a per-lookup fetch. Leaflet + OSM tiles only sanctioned runtime network deps
+  (load from CDN, not vendored locally) — don't add more.
 
 ## Python conventions
 

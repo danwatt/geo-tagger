@@ -140,7 +140,25 @@ state/county/country. Skip it and geocoding falls back to GeoNames city names. O
 © OpenStreetMap contributors (ODbL). View the boundaries on the **Places DB** map
 (`/map.html`) via the "OSM places" toggle.
 
-### 5. Point it at your photos and run
+### 5. Install US Census place boundaries (optional — fills OSM's gaps in the US)
+
+US unincorporated areas have no OSM city boundary at all, so photos there fall through to
+the GeoNames nearest-place estimate. The Census Bureau's national place file covers them
+(incorporated places **and** census designated places):
+
+```bash
+uv run python scripts/get_census_places.py --root "D:\Photos"
+# already have the zip? skip the download entirely:
+uv run python scripts/get_census_places.py --zip path/to/cb_2025_us_place_500k.zip
+```
+
+~23 MB download, ~32,600 polygons, builds in seconds into `data/census/places.sqlite` under
+the resolved location above (or pass `--db`). Consulted after OSM and before the GeoNames
+estimate — see [Reverse geocoding](#reverse-geocoding). Census Cartographic Boundary Files
+are US Census Bureau public domain. View them on the **Places DB** map (`/map.html`) via the
+"Census places" toggle.
+
+### 6. Point it at your photos and run
 
 The app needs at least one photo directory before any page will work — either pass it on
 the command line every run:
@@ -308,6 +326,30 @@ useful since OSM coverage is usually only a handful of imported regions. Once yo
 regions cover your whole library, set `GEOTAGGER_OSM_CITY_FALLBACK_GEONAMES=0` for strict
 "OSM only" behavior, where a coordinate outside every polygon gets no city name at all.
 
+### US Census places (optional middle step — setup step 5)
+
+OSM only carries `boundary=administrative` city polygons, so US **unincorporated** areas —
+which is most of suburban metro fringe — fall inside no OSM city at all, and OSM city limits
+can also lag real annexations. Downloading the **US Census place boundaries** (Data Management
+page, or `uv run python scripts/get_census_places.py`) fills that gap: the national 1:500,000
+Cartographic Boundary file, ~23 MB, ~32,600 polygons covering every incorporated place *plus*
+every **census designated place (CDP)**.
+
+That makes the city chain, each step skipped if its data isn't installed:
+
+1. **OSM** city boundary containing the point.
+2. **US Census** place containing the point.
+3. **GeoNames** nearest populated place — a distance estimate, so it runs last (and is what
+   `GEOTAGGER_OSM_CITY_FALLBACK_GEONAMES=0` turns off; census containment is unaffected by
+   that switch, since it's a real answer rather than a guess).
+
+Sub-locations stay OSM-only — the Census file has no parks/campuses/venues in it. The Places
+DB map has a **Census places** overlay (off by default, dashed outlines) and its click-to-probe
+popup shows what each of the three sources said, so you can see which one produced a city.
+Measured on a 61K-photo library: OSM answered 78% of distinct coordinates, census 2.4% (of
+which 70 labels changed, e.g. *Chinatown → San Francisco*, *Keller → Fort Worth*), GeoNames
+the remaining 20%.
+
 The GeoNames side of that lookup is **population-weighted**: its dataset mixes real
 municipalities with tiny GNIS-imported subdivisions (both tagged the same way), so a strictly
 nearest-point lookup can label a photo with a 1,800-person subdivision nobody recognizes while
@@ -430,7 +472,9 @@ live from the Settings page):
 | `GEOTAGGER_GEOCODE_CANDIDATES` | `12` | Nearest places scored by the population weighting |
 | `GEOTAGGER_GEOCODE_BOUNDARY_GRID` | `192` | Grid resolution the map's place-boundary overlay is traced at (higher = smoother, slower) |
 | `GEOTAGGER_OSM_DB` | *(none — see [tools/data location](#where-downloaded-toolsdata-end-up))* | OSM place-boundary database (built by `scripts/build_osm_places.py`) |
-| `GEOTAGGER_OSM_CITY_FALLBACK_GEONAMES` | `1` | `0` = strict OSM-only city (no fallback for coordinates outside every imported polygon) |
+| `GEOTAGGER_OSM_CITY_FALLBACK_GEONAMES` | `1` | `0` = strict polygon-only city (no GeoNames nearest-place fallback for coordinates outside every polygon) |
+| `GEOTAGGER_CENSUS_DB` | *(none — see [tools/data location](#where-downloaded-toolsdata-end-up))* | US Census place-boundary database (built by `scripts/get_census_places.py`) |
+| `GEOTAGGER_CENSUS_CB_YEAR` | `2025` | Cartographic Boundary vintage to download; earlier years are tried if it isn't published yet |
 | `GEOTAGGER_WRITE_XMP_ON_GEOTAG` | `0` | `1` = write GPS to the XMP sidecar immediately on every geotag edit |
 | `GEOTAGGER_RAW_FULL_DECODE` | `0` | `1` = fully demosaic RAW files via LibRaw instead of using the embedded preview |
 | `GEOTAGGER_THUMB_FORMAT` | `webp` | Format for cached thumbnails/previews/face crops: `webp` (smaller) or `jpeg` |
@@ -451,11 +495,12 @@ welcome.
 
 ## Attribution / data licenses
 
-This project's code is MIT-licensed (see `LICENSE`). It optionally downloads and bundles two
+This project's code is MIT-licensed (see `LICENSE`). It optionally downloads and bundles
 third-party geographic datasets under their own licenses, unrelated to the code license:
 
 - [GeoNames](https://www.geonames.org) data — [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
 - [OpenStreetMap](https://www.openstreetmap.org/copyright) extracts — [ODbL](https://opendatacommons.org/licenses/odbl/)
+- [US Census Cartographic Boundary Files](https://www.census.gov/geographies/mapping-files.html) — public domain
 
 Map tiles are served live from `tile.openstreetmap.org`; see OSM's tile usage policy if you
 plan on heavy use.

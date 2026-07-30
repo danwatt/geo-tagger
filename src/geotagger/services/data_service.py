@@ -1,9 +1,10 @@
 """Data Management page: downloading the offline reference datasets (GeoNames,
-GeoFabrik/OSM, InsightFace model pack) the app depends on. Framework-free (no
-FastAPI imports) — the api/data.py router calls in here and pushes the actual
-work to the shared executor, per CLAUDE.md's routes-stay-thin convention.
+GeoFabrik/OSM, US Census place boundaries, InsightFace model pack) the app depends
+on. Framework-free (no FastAPI imports) — the api/data.py router calls in here and
+pushes the actual work to the shared executor, per CLAUDE.md's routes-stay-thin
+convention.
 
-All three downloads are one-shot, potentially multi-minute admin actions kicked
+All of these downloads are one-shot, potentially multi-minute admin actions kicked
 off from the UI, not per-request runtime calls — same network-access footprint
 as the existing scripts/get_geonames.py, scripts/build_osm_places.py, and the
 InsightFace pack's existing first-use auto-download, just wired to a button
@@ -321,6 +322,76 @@ def start_osm_download(executor, keys: list[str], force: bool = False) -> bool:
             return False
         _osm_job.update(running=True, done=False, error=None, message="Starting…", result=None)
     executor.submit(_run_osm_download_and_merge, keys, force)
+    return True
+
+
+# ── US Census places download + build job ──
+_census_lock = threading.Lock()
+_census_job: dict = {"running": False, "done": False, "error": None, "message": "", "result": None}
+
+
+def census_status() -> dict:
+    """Census places DB presence + counts, for the Data Management page."""
+    from geotagger import census_builder, census_places
+    st = census_places.status()
+    return {**st, "db_path": str(config.CENSUS_DB_PATH),
+            "year": config.CENSUS_CB_YEAR,
+            "url": census_builder.cb_urls()[0][1]}
+
+
+def census_job_status() -> dict:
+    with _census_lock:
+        return dict(_census_job)
+
+
+def _run_census_download(force: bool = False):
+    from geotagger import census_builder, census_places
+
+    def progress(message: str):
+        with _census_lock:
+            _census_job["message"] = message
+
+    try:
+        zip_path = config.CENSUS_DB_PATH.parent / "cb-place-500k.zip"
+        if zip_path.exists() and force:
+            progress("Forcing re-download (discarding cached zip)…")
+            zip_path.unlink()
+        if zip_path.exists():
+            progress(f"Using cached download ({zip_path.stat().st_size / 1e6:.1f} MB)")
+            url = None
+        else:
+            _year, url = census_builder.download_cb_zip(zip_path, progress_cb=progress)
+        # The build replaces the DB file, which this process may still hold open
+        # read-only — drop that handle first (Windows won't allow the replace).
+        census_places.reset()
+        summary = census_builder.build(config.CENSUS_DB_PATH, zip_path, progress_cb=progress)
+        index.record_dataset_download(
+            dataset="census_places", region="us", url=url,
+            size_bytes=zip_path.stat().st_size, records_loaded=summary["total_places"],
+        )
+        with _census_lock:
+            _census_job["result"] = summary
+            _census_job["message"] = (f"Done. {summary['total_places']:,} US Census places "
+                                      "(incorporated places + CDPs) ready.")
+            _census_job["done"] = True
+    except Exception as e:  # noqa: BLE001 — surfaced to the UI via job status
+        logger.exception("Census places download/build failed")
+        with _census_lock:
+            _census_job["error"] = str(e)
+    finally:
+        with _census_lock:
+            _census_job["running"] = False
+
+
+def start_census_download(executor, force: bool = False) -> bool:
+    """Kick off the Census place-boundary download + build on the shared executor.
+    Returns False if already running. force=True discards the cached zip first so a
+    fresh vintage is pulled (a plain re-run reuses it and just rebuilds)."""
+    with _census_lock:
+        if _census_job["running"]:
+            return False
+        _census_job.update(running=True, done=False, error=None, message="Starting…", result=None)
+    executor.submit(_run_census_download, force)
     return True
 
 

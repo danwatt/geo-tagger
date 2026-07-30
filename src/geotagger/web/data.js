@@ -1,5 +1,6 @@
 let geonamesPolling = false;
 let osmPolling = false;
+let censusPolling = false;
 let faceModelPolling = false;
 let osmGroups = [];         // [{group, label, items: [{key, name}]}]
 let osmIngested = new Set();
@@ -21,6 +22,7 @@ async function loadStatus() {
     const data = await res.json();
     renderGeonames(data.geonames);
     renderOsm(data.osm);
+    renderCensus(data.census);
     renderFaceModel(data.face_model);
   } catch (e) {
     document.getElementById("geonames-error").textContent = e.message;
@@ -85,6 +87,27 @@ function renderOsm(o) {
   ).join("");
 
   renderOsmCheckboxes();
+}
+
+function renderCensus(c) {
+  if (!c) return;
+  const kinds = Object.entries(c.by_kind || {});
+  document.getElementById("census-status").innerHTML = `
+    <div class="data-file-row">
+      <span>Places DB${c.source ? ` <span class="data-file-note">(${c.source})</span>` : ""}</span>
+      <span class="${c.available ? "present" : "missing"}">
+        ${c.available ? `${c.places.toLocaleString()} total` : "not built yet"}
+      </span>
+    </div>
+    ${kinds.map(([kind, n]) => `
+      <div class="data-file-row data-file-subrow">
+        <span>${kind}</span>
+        <span>${n.toLocaleString()}</span>
+      </div>
+    `).join("")}
+  `;
+  document.getElementById("census-download-btn").textContent =
+    c.available ? "Re-download Census places" : "Download Census places";
 }
 
 function renderOsmCheckboxes() {
@@ -224,6 +247,58 @@ async function startOsmDownload() {
   }
 }
 
+async function pollCensus() {
+  if (censusPolling) return;
+  censusPolling = true;
+  const btn = document.getElementById("census-download-btn");
+  const progress = document.getElementById("census-progress");
+  const errorEl = document.getElementById("census-error");
+  try {
+    while (true) {
+      const res = await fetch("/api/data/census/download/status");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const job = await res.json();
+      progress.textContent = job.message || "";
+      if (job.error) {
+        errorEl.textContent = job.error;
+        break;
+      }
+      if (job.done) {
+        progress.textContent = job.message;
+        await loadStatus();
+        break;
+      }
+      if (!job.running) break;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  } finally {
+    censusPolling = false;
+    btn.disabled = false;
+    await loadStatus();
+  }
+}
+
+async function startCensusDownload() {
+  const btn = document.getElementById("census-download-btn");
+  const errorEl = document.getElementById("census-error");
+  errorEl.textContent = "";
+  const force = document.getElementById("census-force").checked;
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/data/census/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force }),
+    });
+    if (res.status === 409) { pollCensus(); return; }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    pollCensus();
+  } catch (e) {
+    errorEl.textContent = e.message;
+    btn.disabled = false;
+  }
+}
+
 async function pollFaceModel() {
   if (faceModelPolling) return;
   faceModelPolling = true;
@@ -278,6 +353,7 @@ async function startFaceModelDownload() {
 
 document.getElementById("geonames-download-btn").addEventListener("click", startGeonamesDownload);
 document.getElementById("osm-download-btn").addEventListener("click", startOsmDownload);
+document.getElementById("census-download-btn").addEventListener("click", startCensusDownload);
 document.getElementById("face-model-download-btn").addEventListener("click", startFaceModelDownload);
 
 document.getElementById("osm-group-select").addEventListener("change", (e) => {
@@ -297,6 +373,9 @@ loadStatus().then(() => {
   });
   fetch("/api/data/osm/download/status").then((r) => r.json()).then((j) => {
     if (j.running) { document.getElementById("osm-download-btn").disabled = true; pollOsm(); }
+  });
+  fetch("/api/data/census/download/status").then((r) => r.json()).then((j) => {
+    if (j.running) { document.getElementById("census-download-btn").disabled = true; pollCensus(); }
   });
   fetch("/api/data/face-model/download/status").then((r) => r.json()).then((j) => {
     if (j.running) { document.getElementById("face-model-download-btn").disabled = true; pollFaceModel(); }

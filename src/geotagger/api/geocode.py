@@ -6,7 +6,7 @@ import asyncio
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from geotagger import index, geocode, osm_places, serializers
+from geotagger import census_places, index, geocode, osm_places, serializers
 from geotagger.contexts import normalize_lng_bbox
 from geotagger.executor import get_executor
 from geotagger.services import geocode_service
@@ -37,6 +37,7 @@ async def api_geocode_status():
     return {
         **geocode.status(),
         "osm": osm_places.status(),
+        "census": census_places.status(),
         "geocoded": index.count_geocoded_photos(),
         "pending": index.count_photos_needing_geocode(),
     }
@@ -98,19 +99,55 @@ async def api_geocode_osm_places(bbox: str = Query(...), limit: int = Query(4000
     }
 
 
+@router.get("/api/geocode/census-places")
+async def api_geocode_census_places(bbox: str = Query(...), limit: int = Query(4000, le=8000)):
+    """US Census place polygons overlapping a viewport bbox, as a GeoJSON
+    FeatureCollection — backs the Places DB map's census overlay. These are the
+    boundaries consulted after OSM and before the GeoNames distance estimate, so
+    seeing them explains why an unincorporated coordinate resolves the way it does.
+    503 if the census places DB hasn't been built."""
+    min_lat, max_lat, min_lng, max_lng = _parse_bbox(bbox)
+    if not census_places.is_available():
+        raise HTTPException(503, "Census places DB not built — run scripts/get_census_places.py")
+    loop = asyncio.get_running_loop()
+    places, total = await loop.run_in_executor(
+        get_executor(), census_places.places_in_bbox, min_lat, max_lat, min_lng, max_lng, limit
+    )
+    return {
+        "type": "FeatureCollection",
+        "features": [census_places.place_to_geojson_feature(p) for p in places],
+        "total": total,
+        "truncated": total > len(places),
+    }
+
+
+def _probe(lat: float, lng: float) -> dict:
+    """Blocking half of the point probe: the resolved location plus what each source
+    said on its own, so the UI can show *which* of the three produced the city."""
+    return {
+        "location": geocode.lookup(lat, lng),
+        "sources": {
+            "osm": osm_places.lookup(lat, lng),
+            "census": census_places.lookup(lat, lng),
+            "geonames": geocode._raw_lookup(lat, lng),
+        },
+    }
+
+
 @router.get("/api/geocode/lookup")
 async def api_geocode_lookup(lat: float = Query(...), lng: float = Query(...)):
     """Reverse-geocode a single coordinate exactly as a photo taken there would be —
     returns the {city, sublocation, state, county, country, country_code} that would
-    be persisted on that photo. Backs the Places DB map's click-to-probe: click a
-    point and see what location the geocoder would save. 503 only if neither the OSM
-    nor the GeoNames dataset is installed."""
-    if not geocode.is_available() and not osm_places.is_available():
-        raise HTTPException(503, "No geocode data installed — run scripts/get_geonames.py "
-                                 "and/or scripts/build_osm_places.py")
+    be persisted on that photo, plus each source's own answer under `sources` (OSM
+    containment, Census place containment, GeoNames nearest-point). Backs the Places
+    DB map's click-to-probe: click a point and see what location the geocoder would
+    save, and why. 503 only if none of the datasets is installed."""
+    if not (geocode.is_available() or osm_places.is_available() or census_places.is_available()):
+        raise HTTPException(503, "No geocode data installed — run scripts/get_geonames.py, "
+                                 "scripts/get_census_places.py and/or scripts/build_osm_places.py")
     loop = asyncio.get_running_loop()
-    loc = await loop.run_in_executor(get_executor(), geocode.lookup, lat, lng)
-    return {"lat": lat, "lng": lng, "location": loc}
+    probe = await loop.run_in_executor(get_executor(), _probe, lat, lng)
+    return {"lat": lat, "lng": lng, **probe}
 
 
 @router.post("/api/geocode/backfill")

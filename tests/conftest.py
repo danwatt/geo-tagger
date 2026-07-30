@@ -147,6 +147,64 @@ def osm_db(tmp_path, monkeypatch):
     _reset_osm_places_state()
 
 
+def _reset_census_places_state():
+    from geotagger import census_places
+    census_places.reset()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_census_places(tmp_path, monkeypatch):
+    """Default every test to 'Census places not installed' (points
+    config.CENSUS_DB_PATH at an absent file + resets the singleton), so the city
+    chain stays OSM -> GeoNames unless a test opts in via the `census_db` fixture."""
+    monkeypatch.setattr(config, "CENSUS_DB_PATH", tmp_path / "__no_census__.sqlite")
+    _reset_census_places_state()
+    yield
+    _reset_census_places_state()
+
+
+@pytest.fixture
+def census_db(tmp_path, monkeypatch):
+    """Point census_places at an isolated (initially absent) places.sqlite and reset
+    its load-state singleton around the test. Yields a `build(rows)` callable that
+    writes the real schema (census_builder.init_db) + the given place rows.
+
+    A row is a dict: {name, kind?, geoid?, area?, state?, polygons}, where polygons is
+    the stored ring format [[outer, [hole,...]], ...] (ring=[[lat,lng],...])."""
+    import json as _json
+    import sqlite3
+
+    from geotagger import census_builder
+
+    db_path = tmp_path / "census-places.sqlite"
+    monkeypatch.setattr(config, "CENSUS_DB_PATH", db_path)
+    _reset_census_places_state()
+
+    def build(rows):
+        conn = sqlite3.connect(str(db_path))
+        census_builder.init_db(conn)
+        for i, r in enumerate(rows, start=1):
+            polys = r["polygons"]
+            lats = [pt[0] for outer, _ in polys for pt in outer]
+            lngs = [pt[1] for outer, _ in polys for pt in outer]
+            bbox = (min(lats), max(lats), min(lngs), max(lngs))
+            conn.execute(
+                "INSERT INTO places (id, geoid, name, name_lsad, lsad, kind, state_fp, "
+                "state_name, area, min_lat, max_lat, min_lng, max_lng, rings) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (i, r.get("geoid", f"48{i:05d}"), r["name"],
+                 r.get("name_lsad", r["name"]), r.get("lsad", "25"), r.get("kind", "city"),
+                 r.get("state_fp", "48"), r.get("state", "Texas"),
+                 r.get("area", 1.0), *bbox, _json.dumps(polys)))
+            conn.execute("INSERT INTO places_spatial VALUES (?,?,?,?,?)", (i, *bbox))
+        conn.commit()
+        conn.close()
+        return db_path
+
+    yield build
+    _reset_census_places_state()
+
+
 @pytest.fixture(scope="session")
 def et_session():
     """Shared ExifTool process for sidecar round-trip tests. Skips the tests
