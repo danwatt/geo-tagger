@@ -64,15 +64,17 @@ async def api_geotag_hotspots(
     lng: float | None = Query(None, description="map centre longitude; required for sort=near"),
     from_ts: int | None = Query(None, description="window start; required for sort=time"),
     to_ts: int | None = Query(None, description="window end; required for sort=time"),
+    hide_named: bool = Query(True, description="drop hotspots a saved place already covers"),
 ):
     """Recurring drop points mined from the coordinates already on the photos —
     the location palette's data. Clustered so drops a few hundred feet apart at
-    the same real place count as one entry."""
+    the same real place count as one entry, and (by default) with the ones a
+    saved place already covers left out."""
     loop = asyncio.get_running_loop()
     try:
         return await loop.run_in_executor(
             get_executor(), hotspots_service.get_hotspots,
-            limit, merge_meters, sort, lat, lng, from_ts, to_ts,
+            limit, merge_meters, sort, lat, lng, from_ts, to_ts, hide_named,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))

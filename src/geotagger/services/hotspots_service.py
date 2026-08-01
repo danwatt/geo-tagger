@@ -14,21 +14,32 @@ from geotagger import geocode, index
 
 logger = logging.getLogger(__name__)
 
-# Coordinate quantization for the SQL pre-aggregation. 3 decimal places is
-# ~110 m of latitude — already coarse enough to fuse the drift between two drops
-# a few hundred feet apart, and it collapses a 100k-row table to a few thousand
-# cells before any Python touches it.
-_CELL_DECIMALS = 3
+# Coordinate quantization for the SQL pre-aggregation. 4 decimal places is ~11 m
+# of latitude, which keeps the grid well under the merge radius below — the merge
+# pass, not the quantization, decides what counts as one place. (It was 3 places
+# / ~110 m, fine while the merge radius was 300 m; at 100 m the grid would have
+# become the real cutoff and split single places on cell boundaries.)
+_CELL_DECIMALS = 4
 
-# Cells whose centres are within this get folded into one hotspot. Deliberately
-# larger than the cell size: a single real place (a house, a park entrance)
-# routinely straddles a cell boundary, and the user's own drops for it vary by
-# "100s of feet".
-DEFAULT_MERGE_METERS = 300.0
+# Cells whose centres are within this get folded into one hotspot. A hotspot is
+# meant to be a place you could point at — a house, a park entrance — not a
+# neighbourhood, so this stays tight; drops further apart than this stay separate
+# rows in the palette.
+DEFAULT_MERGE_METERS = 100.0
 
 # Rows fed into the Python merge pass. Sorted by photo count, so this keeps the
 # places actually worth showing and discards the long tail of one-off drops.
-_MAX_CELLS = 4000
+# Scaled up alongside _CELL_DECIMALS: finer cells means more of them per place,
+# so the old 4000 would have clipped the head much earlier than it used to.
+_MAX_CELLS = 20000
+
+# How much of a hotspot's disc has to lie inside a saved place before the hotspot
+# is suppressed. The palette exists to surface recurring spots you *haven't*
+# named yet — once a place covers one, the place's own entry in the Places
+# dropdown is the better handle, and the palette row is a duplicate. Below 1.0
+# because a place saved from a hotspot sits at the clustering centroid, which
+# drifts by a few metres as new photos land there.
+PLACE_COVERAGE_THRESHOLD = 0.9
 
 _METERS_PER_DEG_LAT = 111_320.0
 
@@ -163,6 +174,137 @@ def place_label(loc: dict | None, lat: float, lng: float) -> str:
     return f"{lat:.5f}, {lng:.5f}"
 
 
+# ── Suppressing hotspots that a saved place already covers ──
+
+def _disc_fraction_inside(margin_m: float, radius_m: float) -> float:
+    """What fraction of a disc of `radius_m` lies on the inner side of a boundary
+    whose signed distance from the disc's centre is `margin_m` (positive when the
+    centre is inside).
+
+    Exact for a straight boundary — the inner area is the disc minus the circular
+    segment the boundary cuts off — and close enough for a circular one at the
+    ~100 m scale a hotspot spans, where a saved place's arc is nearly straight.
+    """
+    if radius_m <= 0:
+        return 1.0 if margin_m >= 0 else 0.0
+    if margin_m >= radius_m:
+        return 1.0
+    if margin_m <= -radius_m:
+        return 0.0
+    # Area of the cap cut off beyond distance h from the centre.
+    h = abs(margin_m)
+    cap = radius_m ** 2 * math.acos(h / radius_m) - h * math.sqrt(radius_m ** 2 - h ** 2)
+    whole = math.pi * radius_m ** 2
+    # Centre inside: everything but the cap poking out. Centre outside: only the
+    # cap that reaches back over the boundary.
+    return 1.0 - cap / whole if margin_m >= 0 else cap / whole
+
+
+def _place_margin_meters(place_bounds: dict, place_type: str,
+                         lat: float, lng: float) -> float | None:
+    """Signed distance in metres from (lat, lng) to a saved place's boundary —
+    positive inside, negative outside. None when the bounds don't parse as the
+    shape they claim to be (a hand-edited row shouldn't take the palette down)."""
+    try:
+        if place_type == "circle":
+            clat = float(place_bounds["lat"])
+            clng = float(place_bounds["lng"])
+            radius = float(place_bounds["radius"])
+            return radius - meters_between(lat, lng, clat, clng)
+
+        if place_type == "rectangle":
+            north = float(place_bounds["north"])
+            south = float(place_bounds["south"])
+            east = float(place_bounds["east"])
+            west = float(place_bounds["west"])
+        else:
+            return None
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    # Distance to each edge, signed so all four are positive only when inside.
+    # Longitude gaps are scaled at this latitude, same approximation as the rest
+    # of this module.
+    lng_scale = _lng_scale(lat)
+    to_north = (north - lat) * _METERS_PER_DEG_LAT
+    to_south = (lat - south) * _METERS_PER_DEG_LAT
+    to_east = (east - lng) * lng_scale
+    to_west = (lng - west) * lng_scale
+    inner = min(to_north, to_south, to_east, to_west)
+    if inner >= 0:
+        return inner
+    # Outside: the true distance to the rectangle, not the least-negative edge.
+    dy = max(south - lat, 0.0, lat - north) * _METERS_PER_DEG_LAT
+    dx = max(west - lng, 0.0, lng - east) * lng_scale
+    return -math.hypot(dx, dy)
+
+
+def _place_inside_disc(place_bounds: dict, place_type: str,
+                       lat: float, lng: float, radius_m: float,
+                       threshold: float) -> bool:
+    """Is the saved place itself (almost) swallowed by the hotspot's disc?
+
+    The other direction of the same question — a 20 m pin dropped on "Grandma's"
+    describes the same spot as the 100 m hotspot sitting on it, even though the
+    pin is far too small to cover the hotspot.
+    """
+    try:
+        if place_type == "circle":
+            dist = meters_between(lat, lng, float(place_bounds["lat"]),
+                                  float(place_bounds["lng"]))
+            place_r = float(place_bounds["radius"])
+            return _disc_fraction_inside(radius_m - dist, place_r) >= threshold
+
+        if place_type == "rectangle":
+            north = float(place_bounds["north"])
+            south = float(place_bounds["south"])
+            east = float(place_bounds["east"])
+            west = float(place_bounds["west"])
+        else:
+            return False
+    except (KeyError, TypeError, ValueError):
+        return False
+
+    # A rectangle sits inside the disc exactly when all four corners do. Stricter
+    # than the "almost" the circle case allows, but exact and cheap, and a saved
+    # rectangle smaller than a hotspot is the rare shape here anyway.
+    return all(
+        meters_between(lat, lng, clat, clng) <= radius_m
+        for clat in (south, north)
+        for clng in (west, east)
+    )
+
+
+def covered_by_place(lat: float, lng: float, radius_m: float, places: list,
+                     threshold: float = PLACE_COVERAGE_THRESHOLD) -> bool:
+    """Does a saved place describe the same spot as this hotspot?
+
+    True when either shape (almost) swallows the other: a place drawn around the
+    hotspot, or a smaller pin sitting inside it. Both readings mean the same
+    thing in practice — you have already named this spot — and the palette is for
+    the ones you haven't.
+
+    Any single place clearing the bar is enough; overlapping places don't get to
+    pool their coverage, since a hotspot straddling two named places is its own
+    spot and worth keeping.
+    """
+    import json as _json
+
+    for p in places:
+        try:
+            bounds = _json.loads(p["bounds"])
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(bounds, dict):
+            continue
+        margin = _place_margin_meters(bounds, p["type"], lat, lng)
+        if margin is not None and _disc_fraction_inside(margin, radius_m) >= threshold:
+            return True
+        if _place_inside_disc(bounds, p["type"], lat, lng, radius_m, threshold):
+            return True
+    return False
+
+
 def _all_clusters(merge_meters: float) -> list[dict]:
     """The full clustering of every geotagged photo, count-descending. Cached on
     the geotagged-photo count, so a commit rebuilds it on the next request."""
@@ -232,7 +374,8 @@ def _window_counts(clusters: list[dict], merge_meters: float,
 def get_hotspots(limit: int = 40, merge_meters: float = DEFAULT_MERGE_METERS,
                  sort: str = "count",
                  lat: float | None = None, lng: float | None = None,
-                 from_ts: int | None = None, to_ts: int | None = None) -> dict:
+                 from_ts: int | None = None, to_ts: int | None = None,
+                 hide_named: bool = True) -> dict:
     """Recurring drop points, best-first for the chosen `sort`:
 
     · "count"  — how often you've tagged there. The default.
@@ -247,6 +390,12 @@ def get_hotspots(limit: int = 40, merge_meters: float = DEFAULT_MERGE_METERS,
     `count` and `last_ts` are on every entry regardless of sort; `meters` is added
     for "near" and `window_count` for "time", so the UI can say why a row ranks
     where it does.
+
+    With `hide_named` (the default), hotspots a saved place already covers are
+    dropped — see covered_by_place. The filter runs on the ordered list *before*
+    the limit slice, so suppressed entries don't eat slots, and it is applied per
+    request rather than baked into the cached clustering, so naming a place takes
+    effect on the next palette refresh.
 
     Only the `limit` entries actually returned get reverse-geocoded — labelling
     the whole long tail would dominate the request for names nobody sees.
@@ -274,6 +423,16 @@ def get_hotspots(limit: int = 40, merge_meters: float = DEFAULT_MERGE_METERS,
         extra = {k: {"window_count": v["count"]} for k, v in counts.items()}
     else:
         ordered = clusters
+
+    if hide_named:
+        places = index.get_places()
+        if places:
+            before = len(ordered)
+            ordered = [c for c in ordered
+                       if not covered_by_place(c["lat"], c["lng"], merge_meters, places)]
+            if before != len(ordered):
+                logger.info(f"hotspots: {before - len(ordered)} of {before} "
+                            f"suppressed by saved places")
 
     out = []
     for c in ordered[:max(1, limit)]:

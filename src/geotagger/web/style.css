@@ -125,7 +125,8 @@
   color: var(--text-muted);
   font-size: 10px;
 }
-.palette-zoom {
+.palette-zoom,
+.palette-save {
   flex-shrink: 0;
   padding: 2px 5px;
   font-size: 11px;

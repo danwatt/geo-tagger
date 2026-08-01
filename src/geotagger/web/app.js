@@ -1356,7 +1356,11 @@ async function geotag(ids, lat, lng, accuracy = null) {
         filename: photo?.filename || "", camera: photo?.camera,
         gps_accuracy: u.gps_accuracy });
     });
-    renderGrid();
+    // applyFilters, not renderGrid — these photos just became geotagged, which
+    // can move them out of the Show filter ("Not geotagged", "Mixed geotagged
+    // days"). renderGrid alone re-draws the stale filteredPhotos, leaving them
+    // on screen until the dropdown is touched.
+    applyFilters();
     const accLog = accuracy ? ` (accuracy: ±${accuracy}m)` : "";
     setStatus(`Tagged ${updated.length} photo(s) at ${lat.toFixed(5)}, ${lng.toFixed(5)}${accLog}`);
     if (focusedPhotoId && ids.includes(focusedPhotoId)) showDetail(focusedPhotoId);
@@ -1382,7 +1386,9 @@ async function doRemoveGeotag() {
       if (photo) { photo.lat = null; photo.lng = null; photo.geotag_source = "none"; }
       if (markersById[id]) { markersById[id].remove(); delete markersById[id]; }
     });
-    renderGrid();
+    // Same reason as geotag(): losing a geotag can move a photo into or out of
+    // the Show filter, so the filtered set has to be rebuilt, not just redrawn.
+    applyFilters();
     setStatus(`Removed geotag from ${ids.length} photo(s)`);
     if (focusedPhotoId && ids.includes(focusedPhotoId)) showDetail(focusedPhotoId);
   } catch (err) {
@@ -2250,9 +2256,12 @@ let hotspots = [];
 let hotspotSort = "count";
 let snapEnabled = true;
 
-// Snap radius, matched to the server's cluster merge radius — a drop closer than
-// this to a known place is the same place, just aimed by hand.
-const SNAP_METERS = 300;
+// Snap radius, matched to the server's cluster merge radius
+// (hotspots_service.DEFAULT_MERGE_METERS) — a drop closer than this to a known
+// place is the same place, just aimed by hand. Keep the two in step: the drawn
+// ring is this wide, and a ring that doesn't match the server's clustering
+// promises a snap that won't happen.
+const SNAP_METERS = 100;
 
 let snapRowIndex = -1;         // palette entry currently flagged as the snap target
 
@@ -2527,6 +2536,19 @@ function makePaletteRow(h, i) {
     row.appendChild(key);
   }
 
+  // A hotspot is already the shape of a named place — a point you keep coming
+  // back to — so promoting one saves redrawing it by hand on the Custom Places
+  // page. Saved as a circle at the hotspot's own snap radius.
+  const save = document.createElement("button");
+  save.className = "palette-save";
+  save.textContent = "✏️";
+  save.title = "Save this hotspot as a named place";
+  save.addEventListener("click", (e) => {
+    e.stopPropagation();   // don't also stage the selection
+    savePlaceFromHotspot(h);
+  });
+  row.appendChild(save);
+
   const zoom = document.createElement("button");
   zoom.className = "palette-zoom";
   zoom.textContent = "⛶";
@@ -2569,6 +2591,34 @@ function makePaletteRow(h, i) {
   });
 
   return row;
+}
+
+// Promote a hotspot to a saved place. The geocoded label is only a suggestion —
+// it names the neighbourhood, not the place ("Elm St, Springfield" for what you
+// think of as "Grandma's"), so it goes in as the prompt's default rather than
+// being used silently.
+async function savePlaceFromHotspot(h) {
+  const name = prompt("Name this place:", h.label);
+  if (name === null) return;             // cancelled
+  const trimmed = name.trim();
+  if (!trimmed) { setStatus("A place needs a name.", true); return; }
+
+  const bounds = { lat: h.lat, lng: h.lng, radius: SNAP_METERS };
+  try {
+    const res = await fetch("/api/places", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: trimmed, type: "circle",
+                             bounds: JSON.stringify(bounds) }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await loadPlaces();     // repopulate the Places dropdown and draw the new shape
+    await loadHotspots();   // the new place now covers this hotspot, so its row goes
+    setStatus(`Saved “${trimmed}” as a place (${SNAP_METERS} m radius). ` +
+              `It's in the Places dropdown now, so it has left the palette.`);
+  } catch (err) {
+    setStatus("Could not save place: " + err.message, true);
+  }
 }
 
 // The imprecise-drop toggle applies wherever a drop happens — map or palette.

@@ -1,5 +1,7 @@
 """Hotspot clustering (the location palette) and the selection proposer."""
 
+import json
+
 import pytest
 
 from geotagger import index
@@ -31,11 +33,11 @@ def _lat_offset(meters):
 
 
 class TestClustering:
-    def test_drops_a_few_hundred_feet_apart_become_one_hotspot(self, db):
-        # ~50 m and ~150 m north of the anchor — the "slight variation" case.
+    def test_drops_within_the_merge_radius_become_one_hotspot(self, db):
+        # ~40 m and ~80 m north of the anchor — the "aimed by hand twice" case.
         _upsert("a.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")
-        _upsert("b.jpg", lat=40.0 + _lat_offset(50), lng=-75.0, geotag_source="sidecar")
-        _upsert("c.jpg", lat=40.0 + _lat_offset(150), lng=-75.0, geotag_source="sidecar")
+        _upsert("b.jpg", lat=40.0 + _lat_offset(40), lng=-75.0, geotag_source="sidecar")
+        _upsert("c.jpg", lat=40.0 + _lat_offset(80), lng=-75.0, geotag_source="sidecar")
 
         result = hotspots_service.get_hotspots()
         assert len(result["hotspots"]) == 1
@@ -47,6 +49,14 @@ class TestClustering:
 
         result = hotspots_service.get_hotspots()
         assert len(result["hotspots"]) == 2
+
+    def test_a_block_away_is_a_different_hotspot(self, db):
+        # 250 m apart: one hotspot under the old 300 m radius, two under the
+        # current 100 m one. A hotspot is a place you can point at, not a block.
+        _upsert("a.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")
+        _upsert("b.jpg", lat=40.0 + _lat_offset(250), lng=-75.0, geotag_source="sidecar")
+
+        assert len(hotspots_service.get_hotspots()["hotspots"]) == 2
 
     def test_ranked_by_photo_count(self, db):
         for i in range(5):
@@ -68,11 +78,12 @@ class TestClustering:
         assert by_recent[0]["count"] == 1
 
     def test_centroid_anchors_on_the_busiest_cell(self, db):
-        # 10 photos at the anchor, 1 photo ~200 m away: the centroid should stay
-        # essentially on the anchor rather than splitting the difference.
+        # 10 photos at the anchor, 1 photo ~60 m away (inside the merge radius):
+        # the centroid should stay essentially on the anchor rather than
+        # splitting the difference.
         for i in range(10):
             _upsert(f"a{i}.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")
-        _upsert("outlier.jpg", lat=40.0 + _lat_offset(200), lng=-75.0,
+        _upsert("outlier.jpg", lat=40.0 + _lat_offset(60), lng=-75.0,
                 geotag_source="sidecar")
 
         hotspot = hotspots_service.get_hotspots()["hotspots"][0]
@@ -153,7 +164,7 @@ class TestSortTime:
 
     def test_jittered_drops_in_the_window_fold_into_one_entry(self, db):
         for i in range(4):
-            _upsert(f"a{i}.jpg", lat=40.0 + _lat_offset(60 * i), lng=-75.0,
+            _upsert(f"a{i}.jpg", lat=40.0 + _lat_offset(30 * i), lng=-75.0,
                     photo_datetime=500_000 + i, geotag_source="sidecar")
 
         result = hotspots_service.get_hotspots(sort="time", from_ts=400_000, to_ts=600_000)
@@ -254,3 +265,102 @@ class TestProposeLocations:
         result = geotag_service.propose_locations([])
         assert result == {"candidates": [], "selected": 0, "voted": 0,
                           "window_sec": geotag_service.DEFAULT_PROPOSE_WINDOW}
+
+
+class TestSuppressedByNamedPlaces:
+    """A hotspot a saved place already covers is a duplicate of that place, so the
+    palette drops it (hotspots_service.PLACE_COVERAGE_THRESHOLD)."""
+
+    def _circle(self, name, lat, lng, radius):
+        return index.create_place(name, "circle", json.dumps(
+            {"lat": lat, "lng": lng, "radius": radius}))
+
+    def _rect(self, name, south, north, west, east):
+        return index.create_place(name, "rectangle", json.dumps(
+            {"south": south, "north": north, "west": west, "east": east}))
+
+    def test_place_on_the_hotspot_hides_it(self, db):
+        _upsert("a.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")
+        assert len(hotspots_service.get_hotspots()["hotspots"]) == 1
+
+        # What "save this hotspot as a place" writes: same point, same radius.
+        self._circle("Home", 40.0, -75.0, 100)
+        assert hotspots_service.get_hotspots()["hotspots"] == []
+
+    def test_hide_named_false_shows_it_anyway(self, db):
+        _upsert("a.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")
+        self._circle("Home", 40.0, -75.0, 100)
+        assert len(hotspots_service.get_hotspots(hide_named=False)["hotspots"]) == 1
+
+    def test_place_a_few_metres_off_still_hides_it(self, db):
+        # The centroid drifts as photos land, so coverage is a threshold, not
+        # an equality test.
+        _upsert("a.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")
+        self._circle("Home", 40.0 + _lat_offset(8), -75.0, 100)
+        assert hotspots_service.get_hotspots()["hotspots"] == []
+
+    def test_place_next_door_leaves_it_alone(self, db):
+        # 150 m away with a 100 m radius: the discs barely touch, nowhere near
+        # the coverage threshold.
+        _upsert("a.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")
+        self._circle("Neighbour", 40.0 + _lat_offset(150), -75.0, 100)
+        assert len(hotspots_service.get_hotspots()["hotspots"]) == 1
+
+    def test_small_pin_inside_the_hotspot_also_hides_it(self, db):
+        # The other direction of "overlaps": a 20 m pin is far too small to
+        # cover the hotspot, but it names the same spot, so the row still goes.
+        _upsert("a.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")
+        self._circle("Grandma's", 40.0, -75.0, 20)
+        assert hotspots_service.get_hotspots()["hotspots"] == []
+
+    def test_small_pin_outside_the_hotspot_leaves_it_alone(self, db):
+        # Same tiny pin, but 300 m away: different spot, keep the hotspot.
+        _upsert("a.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")
+        self._circle("Mailbox", 40.0 + _lat_offset(300), -75.0, 20)
+        assert len(hotspots_service.get_hotspots()["hotspots"]) == 1
+
+    def test_small_rectangle_inside_the_hotspot_hides_it(self, db):
+        _upsert("a.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")
+        self._rect("Yard", 40.0 - _lat_offset(20), 40.0 + _lat_offset(20),
+                   -75.0002, -74.9998)
+        assert hotspots_service.get_hotspots()["hotspots"] == []
+
+    def test_rectangle_place_covers_a_hotspot_inside_it(self, db):
+        _upsert("a.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")
+        self._rect("Campus", 40.0 - _lat_offset(500), 40.0 + _lat_offset(500),
+                   -75.01, -74.99)
+        assert hotspots_service.get_hotspots()["hotspots"] == []
+
+    def test_rectangle_place_elsewhere_leaves_it_alone(self, db):
+        _upsert("a.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")
+        self._rect("Elsewhere", 41.0, 41.1, -75.01, -74.99)
+        assert len(hotspots_service.get_hotspots()["hotspots"]) == 1
+
+    def test_only_the_covered_hotspot_is_dropped(self, db):
+        _upsert("a.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")
+        _upsert("b.jpg", lat=41.0, lng=-75.0, geotag_source="sidecar")
+        self._circle("Home", 40.0, -75.0, 100)
+
+        remaining = hotspots_service.get_hotspots()["hotspots"]
+        assert len(remaining) == 1
+        assert remaining[0]["lat"] == pytest.approx(41.0)
+
+    def test_suppressed_entries_do_not_eat_the_limit(self, db):
+        # Three distinct places, the busiest one named. limit=2 should still
+        # come back with two rows, not one.
+        for i in range(5):
+            _upsert(f"named{i}.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")
+        for i in range(3):
+            _upsert(f"mid{i}.jpg", lat=41.0, lng=-75.0, geotag_source="sidecar")
+        _upsert("quiet.jpg", lat=42.0, lng=-75.0, geotag_source="sidecar")
+        self._circle("Home", 40.0, -75.0, 100)
+
+        result = hotspots_service.get_hotspots(limit=2)
+        assert [h["count"] for h in result["hotspots"]] == [3, 1]
+        assert result["total"] == 2   # total counts what survived the filter
+
+    def test_unparseable_bounds_are_ignored(self, db):
+        _upsert("a.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")
+        index.create_place("Broken", "circle", "not json")
+        index.create_place("Half", "circle", json.dumps({"lat": 40.0}))
+        assert len(hotspots_service.get_hotspots()["hotspots"]) == 1
