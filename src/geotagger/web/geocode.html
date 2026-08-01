@@ -96,20 +96,18 @@
          suggestion raised while scrolled deep into a month stays reachable. -->
     <div id="grid-header">
     <div id="grid-nav">
-      <div class="toolbar-group">
-        <label>Show:</label>
-        <select id="filter-select">
-          <option value="all">All</option>
-          <option value="yes">Geotagged</option>
-          <option value="no">Not geotagged</option>
-          <option value="mixed">Mixed geotagged days</option>
-        </select>
-      </div>
-      <div class="toolbar-group imprecise-control-group">
-        <label>
-          <input type="checkbox" id="include-screenshots-chk" checked/>
-          Screenshots
-        </label>
+      <!-- Show filter: four independent toggles, not a dropdown. Each photo falls
+           in exactly one of geotagged / not tagged / ignored; Screenshots cuts
+           across all three. Wired in app.js's FILTER_TOGGLES. -->
+      <div class="toolbar-group filter-toggles" id="filter-toggles">
+        <button class="filter-toggle on" data-filter="geotagged" aria-pressed="true"
+                title="Show photos that already have a location">📍 Geotagged</button>
+        <button class="filter-toggle on" data-filter="untagged" aria-pressed="true"
+                title="Show photos still waiting for a location">❓ Not tagged</button>
+        <button class="filter-toggle on" data-filter="screenshots" aria-pressed="true"
+                title="Show screenshots (.png)">🖼 Screenshots</button>
+        <button class="filter-toggle" data-filter="ignored" aria-pressed="false"
+                title="Show photos marked as needing no location">🚫 Ignored</button>
       </div>
       <div class="toolbar-group">
         <button id="tag-as-btn" class="primary" title="Tag the selected photos at a place you already use — saved places, recent locations, hotspots (shortcut: L)">📍 Tag as… <kbd>L</kbd></button>

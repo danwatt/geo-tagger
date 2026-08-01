@@ -111,6 +111,25 @@ button.primary:hover { background: var(--accent-bg-2); }
 button.danger { border-color: #a33; color: var(--danger-text); }
 button.danger:hover { background: #500; }
 button.icon-btn { padding: 2px 8px; font-size: 14px; line-height: 1.2; }
+/* Icon toggles — a row of independent on/off filters (the geo page's Show row).
+   Off is dimmed and greyscale rather than hidden: which filters exist, and which
+   ones you switched off, both have to read at a glance. */
+.filter-toggles { display: flex; gap: 4px; }
+.filter-toggle {
+  padding: 3px 9px;
+  opacity: .45;
+  filter: grayscale(1);
+}
+.filter-toggle:hover { opacity: .75; }
+.filter-toggle.on {
+  opacity: 1;
+  filter: none;
+  background: var(--accent-bg);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+.filter-toggle.on:hover { background: var(--accent-bg-2); }
+
 /* Keyboard hint inside a button label, e.g. "📍 Tag as… [L]". */
 button kbd {
   font: inherit;

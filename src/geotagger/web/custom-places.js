@@ -183,8 +183,9 @@ function renderSidebar() {
     div.className = "place-item" + (p.id === selectedPlaceId ? " selected" : "");
     div.dataset.id = p.id;
 
-    // Representative photo (set from the Geo page's right-click menu) shown as a
-    // thumbnail, with a Clear action when present.
+    // Representative photo shown as a thumbnail, with a Clear action when
+    // present. The thumbnail is also the way into the picker — this page is the
+    // only place a representative is chosen.
     const repThumb = p.representative_photo_id
       ? `<img class="place-rep-thumb" src="/api/thumbnail/${p.representative_photo_id}"
              alt="Representative photo" title="Click to choose a different photo"/>`
@@ -270,9 +271,25 @@ function renderPlaces() {
 
 function selectPlace(placeId) {
   selectedPlaceId = placeId;
+  // Clicking a shape on the map is a request to work on that place, so its row
+  // has to be reachable — if the sidebar filter is hiding it, drop back to All
+  // rather than silently selecting something the user can't see or edit.
+  if (placeFilter !== "all" && !filteredPlaces().some(p => p.id === placeId)) {
+    placeFilter = "all";
+    const sel = document.getElementById("place-filter");
+    if (sel) sel.value = "all";
+    renderSidebar();
+  }
+  let row = null;
   document.querySelectorAll(".place-item").forEach(el => {
-    el.classList.toggle("selected", parseInt(el.dataset.id) === placeId);
+    const isIt = parseInt(el.dataset.id) === placeId;
+    el.classList.toggle("selected", isIt);
+    if (isIt) row = el;
   });
+  // `nearest` so a row already on screen doesn't jump the list around under a
+  // sidebar click; only an off-screen one scrolls.
+  if (row) row.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
   const shape = placeShapes[placeId];
   if (!shape) return;
   if (shape.getBounds) {

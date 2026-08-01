@@ -22,3 +22,4 @@
     return `<a class="${cls}" href="${item.href}">${item.label}</a>`;
   }).join("");
 })();
+

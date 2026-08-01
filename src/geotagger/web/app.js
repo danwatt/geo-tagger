@@ -26,6 +26,16 @@ let undatedMode = false;  // true when browsing the Undated queue instead of a m
 let pendingGeo = new Map();
 let pendingGeoMarkers = [];      // provisional pins/circles, rebuilt on every render
 const geocodeLabelCache = new Map();   // "lat,lng" (4dp) → { loc, label }
+// Grid "Show" toggles, keyed by the buttons' data-filter. Ignored starts off:
+// those photos are done, and the point of this screen is the ones that aren't.
+// Must match the `on` classes / aria-pressed in geocode.html.
+const FILTER_TOGGLES = {
+  geotagged: true,
+  untagged: true,
+  screenshots: true,
+  ignored: false,
+};
+
 // Group heading for staged "needs no location" marks. Doubles as their key in
 // groupPendingGeo, so it must not collide with a real geocoded place name.
 const IGNORE_LABEL = "🚫 No location needed";
@@ -310,8 +320,15 @@ function bindToolbar() {
     }
   }
   // Show is a pure client-side view of the already-loaded scope — no reload.
-  document.getElementById("filter-select").addEventListener("change", () => applyFilters());
-  document.getElementById("include-screenshots-chk").addEventListener("change", () => applyFilters());
+  document.getElementById("filter-toggles").addEventListener("click", (e) => {
+    const btn = e.target.closest(".filter-toggle");
+    if (!btn) return;
+    const key = btn.dataset.filter;
+    FILTER_TOGGLES[key] = !FILTER_TOGGLES[key];
+    btn.classList.toggle("on", FILTER_TOGGLES[key]);
+    btn.setAttribute("aria-pressed", String(FILTER_TOGGLES[key]));
+    applyFilters();
+  });
   document.getElementById("window-select").addEventListener("change", reloadCurrentView);
   document.getElementById("place-search-btn").addEventListener("click", doPlaceSearch);
   document.getElementById("place-search").addEventListener("keydown", (e) => {
@@ -320,7 +337,7 @@ function bindToolbar() {
   document.getElementById("apply-latlng-btn").addEventListener("click", doApplyLatLng);
   document.getElementById("copy-location-btn").addEventListener("click", doCopyLocation);
   document.getElementById("remove-geotag-btn").addEventListener("click", doRemoveGeotag);
-  document.getElementById("mark-ignored-btn").addEventListener("click", stageIgnore);
+  document.getElementById("mark-ignored-btn").addEventListener("click", () => stageIgnore());
 
   document.getElementById("commit-all-btn").addEventListener("click",
     () => commitPendingGeo(groupPendingGeo()));
@@ -355,7 +372,8 @@ function bindToolbar() {
   // Location picker — the map-free way to tag a selection at a place that
   // already exists. "l" is the shortcut; the toolbar button is the discoverable
   // form of the same thing.
-  document.getElementById("tag-as-btn").addEventListener("click", openLocationPicker);
+  // Wrapped, not passed by reference: the click event would land in `ids`.
+  document.getElementById("tag-as-btn").addEventListener("click", () => openLocationPicker());
   document.addEventListener("keydown", (e) => {
     if (e.key !== "l" && e.key !== "L") return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -369,6 +387,17 @@ function bindToolbar() {
     if (openModal) return;
     e.preventDefault();
     openLocationPicker();
+  });
+
+  // Esc drops the "Show nearby on map" day override — but only once whatever it
+  // is stacked on top of (picker, modal) has taken its own turn at the key.
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !mapDayOverride) return;
+    if (typeof isPersonPickerOpen === "function" && isPersonPickerOpen()) return;
+    const openModal = [...document.querySelectorAll(".modal")]
+      .some(m => m.style.display !== "none");
+    if (openModal) return;
+    clearDayOnMap();
   });
 
   // Modal close handlers
@@ -479,6 +508,7 @@ async function selectMonth(year, month) {
   selectedYear = year;
   selectedMonth = month;
   dayIsolation = null;
+  mapDayOverride = null;   // new scope, so the "show this day" map override is stale
   undatedMode = false;
   setTimelineAvailable(true);
   hideMonthPicker();
@@ -504,6 +534,7 @@ async function selectYear(year) {
   selectedYear = year;
   selectedMonth = null;
   dayIsolation = null;
+  mapDayOverride = null;   // new scope, so the "show this day" map override is stale
   undatedMode = false;
   setTimelineAvailable(true);
   hideMonthPicker();
@@ -529,6 +560,7 @@ async function selectUndated() {
   selectedYear = null;
   selectedMonth = null;
   dayIsolation = null;
+  mapDayOverride = null;   // new scope, so the "show this day" map override is stale
   undatedMode = true;
   hideMonthPicker();
 
@@ -672,6 +704,7 @@ async function filterPhotosByPlace(place) {
 
 async function loadPhotosByBounds(box, label) {
   dayIsolation = null;
+  mapDayOverride = null;   // new scope, so the "show this day" map override is stale
   const window = document.getElementById("window-select").value;
 
   try {
@@ -884,8 +917,9 @@ async function buildLocationItems() {
   return items;
 }
 
-async function openLocationPicker() {
-  const ids = [...selectedIds];
+// `ids` defaults to the grid selection (the toolbar button and the "l" shortcut);
+// the photo context menu passes its own target set instead.
+async function openLocationPicker(ids = [...selectedIds]) {
   if (!ids.length) { setStatus("Select some photos first, then pick a location.", true); return; }
 
   setStatus("Loading known locations…");
@@ -1021,6 +1055,7 @@ function stopAreaSelection() {
 
 async function loadPhotosByArea(lat, lng, radius) {
   dayIsolation = null;
+  mapDayOverride = null;   // new scope, so the "show this day" map override is stale
   const window = document.getElementById("window-select").value;
 
   try {
@@ -1085,48 +1120,32 @@ async function loadPhotos(fitMap = false) {
   }
 }
 
-function filterMixedDays(photoList) {
-  const dayCounts = new Map(); // dayKey -> { tagged, untagged }
-  photoList.forEach(p => {
-    const k = dayKey(p) || "__undated__";
-    if (!dayCounts.has(k)) dayCounts.set(k, { tagged: 0, untagged: 0 });
-    const e = dayCounts.get(k);
-    if (p.lat != null || p.geocode_ignored) e.tagged++; else e.untagged++;
-  });
-  const mixedKeys = new Set(
-    [...dayCounts.entries()].filter(([, v]) => v.tagged > 0 && v.untagged > 0).map(([k]) => k)
-  );
-  return photoList.filter(p => mixedKeys.has(dayKey(p) || "__undated__"));
-}
-
-// "Geotagged" for the Show filter means it needs no location: either it has one,
-// or it's been marked as not needing one. Mirrors index.get_photos' SQL so the
-// client-side filter and the server's agree.
-function isGeotagged(photo) {
-  return photo.lat != null || !!photo.geocode_ignored;
+// Which of the three mutually exclusive buckets a photo is in. Ignored wins over
+// having a coordinate: a photo marked "no location needed" belongs under 🚫 even
+// if it happens to carry one from a previous pass.
+function photoBucket(photo) {
+  if (photo.geocode_ignored) return "ignored";
+  return photo.lat != null ? "geotagged" : "untagged";
 }
 
 /* ── Apply all active filters → filteredPhotos ──
  * Every view loads its whole scope (geotagged=all) and filters here, so the
  * timeline histogram can describe the whole scope while the grid shows a subset,
- * and so flipping Show is instant instead of a round trip. */
+ * and so flipping a toggle is instant instead of a round trip. */
 function applyFilters(fitMap = false) {
-  const includeScreenshots = document.getElementById("include-screenshots-chk").checked;
-  const showFilter = document.getElementById("filter-select").value;
   filteredPhotos = photos.filter(p => {
     if (hiddenCameras.has(p.camera || "Unknown")) return false;
-    if (!includeScreenshots && /\.png$/i.test(p.filename)) return false;
-    if (showFilter === "yes" && !isGeotagged(p)) return false;
-    if (showFilter === "no" && isGeotagged(p)) return false;
+    // Screenshots cuts across the buckets rather than being one of them — a
+    // screenshot is usually also untagged, and hiding the noise shouldn't cost
+    // you the rest of the untagged photos.
+    if (!FILTER_TOGGLES.screenshots && /\.png$/i.test(p.filename)) return false;
+    if (!FILTER_TOGGLES[photoBucket(p)]) return false;
     if (dateRangeMin !== dateRangeMax) {
       const ts = p.photo_datetime || 0;
       if (ts > 0 && (ts < dateFilterLo || ts > dateFilterHi)) return false;
     }
     return true;
   });
-  if (showFilter === "mixed") {
-    filteredPhotos = filterMixedDays(filteredPhotos);
-  }
   renderGrid();
   renderMarkers();
   drawHistogram();
@@ -1202,7 +1221,14 @@ function makeThumbCell(photo, idx) {
   return cell;
 }
 
-/* ── Photo right-click menu: set a photo as a named place's representative ── */
+/* ── Photo right-click menu ──
+ * The quick actions for one photo, in the shape the Faces page uses: right-click
+ * a thumbnail, act on it without first building a selection. Acting on the whole
+ * selection when the clicked photo is part of it is the rule everywhere else in
+ * this grid, so the menu follows it and says how many it will touch.
+ *
+ * (Choosing a place's representative photo used to live here. It moved to the
+ * Custom Places page, where the place being edited is on screen.) */
 let photoCtxMenuEl = null;
 
 function closePhotoContextMenu() {
@@ -1222,30 +1248,36 @@ function openPhotoContextMenu(e, photo) {
   const menu = document.createElement("div");
   menu.className = "photo-ctx-menu";
 
+  // Right-clicking inside the selection acts on all of it; right-clicking
+  // outside acts on that one photo and leaves the selection alone.
+  const ids = selectedIds.has(photo.id) ? [...selectedIds] : [photo.id];
+  const n = ids.length;
+  const suffix = n > 1 ? ` (${n})` : "";
+
   const header = document.createElement("div");
   header.className = "photo-ctx-header";
-  header.textContent = "Representative photo for place…";
+  header.textContent = n > 1 ? `${n} selected photos` : photo.filename;
+  header.title = photo.filename;
   menu.appendChild(header);
 
-  if (!places.length) {
-    const empty = document.createElement("div");
-    empty.className = "photo-ctx-empty";
-    empty.textContent = "No saved places";
-    menu.appendChild(empty);
-  } else {
-    places.forEach(place => {
-      const item = document.createElement("div");
-      item.className = "photo-ctx-item";
-      const isRep = place.representative_photo_id === photo.id;
-      // ✓ marks the place this photo already represents — clicking it clears.
-      item.textContent = (isRep ? "✓ " : "") + place.name;
-      item.addEventListener("click", () => {
-        closePhotoContextMenu();
-        setPlaceRepresentative(place, isRep ? null : photo.id);
-      });
-      menu.appendChild(item);
-    });
-  }
+  const add = (label, title, onClick) => {
+    const item = document.createElement("div");
+    item.className = "photo-ctx-item";
+    item.textContent = label;
+    item.title = title;
+    item.addEventListener("click", () => { closePhotoContextMenu(); onClick(); });
+    menu.appendChild(item);
+  };
+
+  add(`🚫 Ignore location${suffix}`,
+      "Stage as needing no location — review and Commit below",
+      () => stageIgnore(ids));
+  add(`📍 Assign location…${suffix}`,
+      "Pick from saved places, recent locations and hotspots (same as the L key)",
+      () => openLocationPicker(ids));
+  add("🗺 Show nearby on map",
+      "Put every photo from this photo's day on the map, whatever the Show toggles say",
+      () => showDayOnMap(photo));
 
   document.body.appendChild(menu);
   // Position at the cursor, clamped inside the viewport.
@@ -1264,21 +1296,45 @@ function openPhotoContextMenu(e, photo) {
   }, 0);
 }
 
-async function setPlaceRepresentative(place, photoId) {
-  try {
-    const res = await fetch(`/api/places/${place.id}/representative`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ photo_id: photoId }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    place.representative_photo_id = photoId;  // keep the local list in sync
-    setStatus(photoId
-      ? `Set representative photo for "${place.name}"`
-      : `Cleared representative photo for "${place.name}"`);
-  } catch (err) {
-    setStatus("Failed to set representative: " + err.message, true);
+/* ── "Show nearby on map" ──
+ * Answering "where was I that day?" means seeing the day's *geotagged* photos —
+ * which are usually exactly the ones the Show toggles have hidden, since the
+ * reason you're here is the untagged ones. So the map takes a day override that
+ * outranks the toggles, and the grid is left alone. */
+let mapDayOverride = null;   // dayKey string, or null
+
+// Photos the map should pin: everything the filters kept, plus the override
+// day's photos even when a toggle excludes them.
+function markerPhotos() {
+  if (!mapDayOverride) return filteredPhotos;
+  const shown = new Set(filteredPhotos.map(p => p.id));
+  return filteredPhotos.concat(
+    photos.filter(p => !shown.has(p.id) && dayKey(p) === mapDayOverride));
+}
+
+function showDayOnMap(photo) {
+  const key = dayKey(photo);
+  if (!key) { setStatus("That photo has no date, so it has no day to show.", true); return; }
+  mapDayOverride = key;
+  dayIsolation = null;    // an isolation would fight the override
+  renderMarkers();
+
+  const dayPhotos = photos.filter(p => dayKey(p) === key);
+  const located = dayPhotos.filter(p => p.lat != null && p.lng != null);
+  if (located.length) {
+    map.flyToBounds(L.latLngBounds(located.map(p => [p.lat, p.lng])),
+                    { padding: [50, 50], maxZoom: 15, duration: 0.8 });
   }
+  setStatus(`Map: ${located.length} of ${dayPhotos.length} photo(s) from ${key} ` +
+            `(ignoring the Show toggles). Press Esc to clear.`);
+}
+
+function clearDayOnMap() {
+  if (!mapDayOverride) return false;
+  mapDayOverride = null;
+  renderMarkers();
+  setStatus("Map back to the filtered photos.");
+  return true;
 }
 
 function renderGrid() {
@@ -1488,10 +1544,11 @@ function makePinIcon(color, isImprecise = false) {
 }
 
 function renderMarkers() {
+  const pinnable = markerPhotos();
   const isolatedSet = dayIsolation
-    ? new Set(filteredPhotos.filter(p => dayKey(p) === dayIsolation).map(p => p.id))
+    ? new Set(pinnable.filter(p => dayKey(p) === dayIsolation).map(p => p.id))
     : null;
-  const inScope = new Set(filteredPhotos.map(p => p.id));
+  const inScope = new Set(pinnable.map(p => p.id));
   Object.entries(markersById).forEach(([id, m]) => {
     const nid = Number(id);
     if (!inScope.has(nid) || (isolatedSet && !isolatedSet.has(nid))) {
@@ -1499,7 +1556,7 @@ function renderMarkers() {
       delete markersById[id];
     }
   });
-  filteredPhotos.forEach((photo) => {
+  pinnable.forEach((photo) => {
     if (isolatedSet && !isolatedSet.has(photo.id)) return;
     if (photo.lat != null && photo.lng != null) addOrUpdateMarker(photo);
   });
@@ -1636,9 +1693,8 @@ async function setGeocodeIgnored(ids, ignored) {
 // locations instead of writing straight through, and Revert undoes it for free.
 // Un-ignoring is the detail pane's checkbox (one photo at a time, immediate);
 // nothing bulk-restores, because a wrong bulk mark is now caught before commit.
-function stageIgnore() {
-  if (!selectedIds.size) { setStatus("No photos selected", true); return; }
-  const ids = [...selectedIds];
+function stageIgnore(ids = [...selectedIds]) {
+  if (!ids.length) { setStatus("No photos selected", true); return; }
   let staged = 0;
   ids.forEach((id) => {
     const photo = photos.find((p) => p.id === id);
