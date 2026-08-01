@@ -125,7 +125,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindTimeline();
   await checkStatus();
   await loadPlaces();
-  await loadHotspots();
   await fitMapToAllLocations();
 
   // A "?month=YYYY-MM" URL argument (e.g. from the homepage month charts)
@@ -160,8 +159,6 @@ function initMap() {
   setBasemap("street");
   addBasemapControl();
   map.on("moveend", correctWorldWrap);
-  map.on("moveend", () => reloadHotspotsIfRelative("near"));
-  map.on("zoomend", onZoomChanged);
 
   const mapPane = document.getElementById("map-pane");
   let dragAccuracyCircle = null;
@@ -176,7 +173,6 @@ function initMap() {
     e.preventDefault();
     mapPane.classList.add("drop-target");
     const latlng = dragLatLng(e);
-    showSnapPreview(latlng.lat, latlng.lng);
 
     const toggle = document.getElementById("imprecise-toggle");
     if (toggle && toggle.checked) {
@@ -214,25 +210,16 @@ function initMap() {
   mapPane.addEventListener("dragleave", () => {
     mapPane.classList.remove("drop-target");
     cleanupDragCircle();
-    clearSnapPreview();
   });
 
   mapPane.addEventListener("drop", async (e) => {
     e.preventDefault();
     mapPane.classList.remove("drop-target");
     cleanupDragCircle();
-    clearSnapPreview();
     const ids = JSON.parse(e.dataTransfer.getData("application/json") || "[]");
     if (!ids.length) return;
     const latlng = dragLatLng(e);
-
-    // A near-miss on a place already in the palette lands on that place exactly,
-    // so repeat visits stop drifting a few hundred feet apart.
-    const point = snapPoint(latlng.lat, latlng.lng);
-    const note = point.snapped
-      ? ` Snapped ${Math.round(point.snapped.meters)} m to a place you already use.`
-      : "";
-    await stageDrop(ids, point.lat, point.lng, currentDropAccuracy(), note);
+    await stageDrop(ids, latlng.lat, latlng.lng, currentDropAccuracy());
   });
 }
 
@@ -358,17 +345,6 @@ function bindToolbar() {
     });
   }
 
-  // Location palette
-  document.getElementById("palette-sort").addEventListener("change", (e) => {
-    hotspotSort = e.target.value;
-    loadHotspots();
-  });
-  document.getElementById("palette-refresh").addEventListener("click", loadHotspots);
-  document.getElementById("snap-toggle").addEventListener("change", (e) => {
-    snapEnabled = e.target.checked;
-    if (!snapEnabled) clearSnapPreview();
-  });
-  bindHotspotKeys();
   bindProposeBar();
 
   // Modal close handlers
@@ -1817,7 +1793,6 @@ function buildHistogram() {
     dateRangeMin = dateRangeMax = 0;
     dateFilterLo = dateFilterHi = 0;
     histBuckets = [];
-    reloadHotspotsIfRelative("time");   // nothing dated on screen to rank against
     return;
   }
   setTimelineAvailable(true);
@@ -1853,8 +1828,6 @@ function buildHistogram() {
 
   updateDateLabels();
   drawHistogram();
-  // The date span just moved, which is what "Nearby (time)" ranks against.
-  reloadHotspotsIfRelative("time");
 }
 
 function updateDateFilter() {
@@ -2009,7 +1982,7 @@ async function lookupLocation(lat, lng) {
 // Park `ids` at one dropped point. Re-dropping a staged photo overwrites its
 // pending location, so moving it between groups is just another drop. `note` is
 // appended to the status line by callers that did something to the point the
-// user should know about (currently only snapping).
+// user should know about.
 async function stageDrop(ids, lat, lng, accuracy = null, note = "") {
   if (!ids.length) return;
   setStatus(`Looking up ${ids.length} photo(s)…`);
@@ -2225,7 +2198,6 @@ async function commitPendingGeo(groups, what) {
   }
 
   renderGrid();
-  if (saved) loadHotspots();   // committed points are palette entries now
   if (failures.length) {
     setStatus(`Committed ${saved} of ${total} location(s). Still staged after failing: ` +
               failures.join(", ") + ".", true);
@@ -2234,464 +2206,19 @@ async function commitPendingGeo(groups, what) {
   }
 }
 
-function revertPendingGeo(groups, what) {
-  const ids = groups.flatMap(g => g.entries.map(e => e.photo.id));
-  if (!ids.length) { setStatus("Nothing staged to revert.", true); return; }
-  if (ids.length > 3 &&
-      !confirm(`Discard ${ids.length} staged location(s)${what ? ` — ${what}` : ""}?`)) return;
-  unstageGeo(ids);
-}
-
-/* ── Location palette (hotspots) ──
- * The same handful of places come up month after month, so the fastest drop
- * target isn't a spot on the map you have to pan and zoom to find — it's a row
- * in a list. /api/geotag/hotspots mines those places from the coordinates
- * already on the photos and clusters them, so drops a few hundred feet apart at
- * one real place count as a single entry.
- *
- * A palette row is three things at once: a drag-and-drop target, a click target
- * that stages the current selection, and (for the first nine) a number key. */
-
-let hotspots = [];
-let hotspotSort = "count";
-let snapEnabled = true;
-
-// Snap radius, matched to the server's cluster merge radius
-// (hotspots_service.DEFAULT_MERGE_METERS) — a drop closer than this to a known
-// place is the same place, just aimed by hand. Keep the two in step: the drawn
-// ring is this wide, and a ring that doesn't match the server's clustering
-// promises a snap that won't happen.
-const SNAP_METERS = 100;
-
-let snapRowIndex = -1;         // palette entry currently flagged as the snap target
-
-const METERS_PER_DEG_LAT = 111320;
-
-// Equirectangular approximation. Exact enough at the few-hundred-metre scale we
-// snap at, and it runs on every dragover frame.
-function metersBetween(lat1, lng1, lat2, lng2) {
-  const dy = (lat2 - lat1) * METERS_PER_DEG_LAT;
-  const dx = (lng2 - lng1) * METERS_PER_DEG_LAT * Math.cos(lat1 * Math.PI / 180);
-  return Math.hypot(dx, dy);
-}
-
-// Nearest palette entry within `maxMeters`, as { hotspot, index, meters }, or null.
-function nearestHotspot(lat, lng, maxMeters = SNAP_METERS) {
-  let best = null;
-  hotspots.forEach((h, i) => {
-    const m = metersBetween(lat, lng, h.lat, h.lng);
-    if (m <= maxMeters && (!best || m < best.meters)) best = { hotspot: h, index: i, meters: m };
-  });
-  return best;
-}
-
-// Widen the on-screen time span by a month either side for the "Nearby (time)"
-// ranking — the trip that explains an untagged June photo often starts in May.
-const TIME_SORT_SLACK_SECS = 31 * 86400;
-
-// Query string for the current ranking. "near" and "time" are relative to what's
-// on screen, so they carry the map centre / the loaded photos' date span.
-function hotspotQuery() {
-  const params = new URLSearchParams({ limit: "40", sort: hotspotSort });
-  if (hotspotSort === "near") {
-    if (!map) return null;
-    const c = map.getCenter();
-    params.set("lat", c.lat);
-    params.set("lng", c.lng);
-  } else if (hotspotSort === "time") {
-    // dateRangeMin/Max come from the loaded photos, so this follows whichever
-    // view is active — a month, an area, a place — not just the month picker.
-    if (!dateRangeMin || !dateRangeMax) return null;
-    params.set("from_ts", Math.round(dateRangeMin - TIME_SORT_SLACK_SECS));
-    params.set("to_ts", Math.round(dateRangeMax + TIME_SORT_SLACK_SECS));
-  }
-  return params;
-}
-
-async function loadHotspots() {
-  const list = document.getElementById("palette-list");
-  const params = hotspotQuery();
-  if (!params) {
-    // "Nearby (time)" before any photos are loaded — nothing to be near to.
-    hotspots = [];
-    list.innerHTML = `<div class="palette-empty">Pick a month to see the places
-      you tagged around then.</div>`;
-    return;
-  }
-  try {
-    const res = await fetch(`/api/geotag/hotspots?${params}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    hotspots = data.hotspots;
-  } catch (err) {
-    hotspots = [];
-    list.innerHTML = `<div class="palette-empty">Couldn't load places: ${err.message}</div>`;
-    return;
-  }
-  renderPalette();
-}
-
-// "Nearby (map)" has to follow the map, and "Nearby (time)" the loaded photos.
-// Both changes arrive in bursts (a pan is many moveends, a view switch reloads
-// photos), so the reload is debounced.
-let hotspotReloadTimer = null;
-function reloadHotspotsIfRelative(mode) {
-  if (hotspotSort !== mode) return;
-  clearTimeout(hotspotReloadTimer);
-  hotspotReloadTimer = setTimeout(loadHotspots, 350);
-}
-
-const PALETTE_EMPTY_TEXT = {
-  near: "Nothing tagged near this part of the map yet.",
-  time: "Nothing tagged in the months on screen yet.",
-};
-
-function renderPalette() {
-  const list = document.getElementById("palette-list");
-  list.innerHTML = "";
-  renderHotspotMarkers();   // the list and its map circles are one view
-  if (!hotspots.length) {
-    list.innerHTML = `<div class="palette-empty">${PALETTE_EMPTY_TEXT[hotspotSort] ||
-      "No places yet — tag some photos and the spots you use most will collect here."}</div>`;
-    return;
-  }
-  hotspots.forEach((h, i) => list.appendChild(makePaletteRow(h, i)));
-}
-
-/* ── Hotspot circles ──
- * Every palette entry is also a permanent circle on the map, in the colour of
- * its row, so the list and the map read as one thing: press 3, watch the third
- * colour light up. The keyed top nine get distinct colours; past that there are
- * no more colours worth telling apart, so the tail goes uniform grey.
- *
- * Deliberately unlike both the camera-coloured photo pins (teardrops) and the
- * amber staged pins — these are flat rings that sit under everything else. */
-
-const HOTSPOT_COLORS = [
-  "#4ad9c8", // teal
-  "#f2a33c", // amber
-  "#7c9ef5", // periwinkle
-  "#e56ab3", // magenta
-  "#8ed44f", // lime
-  "#f26a5c", // coral
-  "#b98cf0", // violet
-  "#3fc4f0", // cyan
-  "#d9c341", // gold
-];
-const HOTSPOT_TAIL_COLOR = "#8a8a8a";
-
-let hotspotMarkers = [];
-
-function hotspotColor(i) {
-  return i < HOTSPOT_COLORS.length ? HOTSPOT_COLORS[i] : HOTSPOT_TAIL_COLOR;
-}
-
-/* The ring *is* the snap catchment, drawn at its true ground size (L.circle takes
- * metres, so it rescales with the map for free). Nothing about it is fudged for
- * legibility, because the moment the drawn radius stops equalling SNAP_METERS the
- * ring starts lying: a drop that looks safely outside it gets captured anyway.
- * Inside the ring snaps, outside it doesn't, and you can see which is which.
- *
- * That honesty is only affordable while 300 m is big enough to aim inside. Zoomed
- * out past HOTSPOT_MIN_ZOOM the circle is a few pixels wide — too small to hit or
- * avoid deliberately — so the whole mechanism switches off rather than quietly
- * hijacking drops aimed kilometres away. */
-const HOTSPOT_MIN_ZOOM = 13;   // 300 m is ~20 px here, and halves with each step out
-
-function hotspotsActiveOnMap() {
-  return !!map && map.getZoom() >= HOTSPOT_MIN_ZOOM;
-}
-
-// Photo count rides on stroke weight rather than size, since size is spoken for.
-function hotspotWeight(count, maxCount) {
-  return 1.5 + 2.5 * Math.sqrt(Math.min(count, maxCount) / Math.max(maxCount, 1));
-}
-
-// Rings live above the photo pins in their own pane. Underneath them they were
-// invisible in exactly the case that matters — a well-used place has a stack of
-// pins standing on its centroid, hiding anything drawn there. Unfilled, so
-// sitting on top costs nothing: only the stroke is ever over a pin.
-function ensureHotspotPane() {
-  if (map.getPane("hotspotPane")) return;
-  const pane = map.createPane("hotspotPane");
-  pane.style.zIndex = 610;   // markerPane is 600, tooltipPane 650
-}
-
-function renderHotspotMarkers() {
-  hotspotMarkers.forEach(m => m.remove());
-  hotspotMarkers = [];
-  updateSnapHint();
-  if (!map || !hotspots.length || !hotspotsActiveOnMap()) return;
-  ensureHotspotPane();
-
-  const maxCount = Math.max(...hotspots.map(h => h.count), 1);
-  hotspots.forEach((h, i) => {
-    const color = hotspotColor(i);
-    // L.circle, not L.circleMarker — metres on the ground, not pixels on screen.
-    const marker = L.circle([h.lat, h.lng], {
-      radius: SNAP_METERS,
-      color,
-      weight: hotspotWeight(h.count, maxCount),
-      fill: false,
-      opacity: 0.95,
-      pane: "hotspotPane",
-    }).addTo(map);
-    marker._baseWeight = marker.options.weight;   // restored when un-highlighted
-
-    const key = i < 9 ? ` · press ${i + 1}` : "";
-    marker.bindTooltip(`${h.label} — ${h.count} photo${h.count !== 1 ? "s" : ""}${key}`);
-    // Clicking a circle does what clicking its row does.
-    marker.on("click", () => {
-      if (selectedIds.size) stageAtHotspot(i);
-      else map.panTo([h.lat, h.lng]);
-    });
-    // Hovering either the circle or the row highlights both.
-    marker.on("mouseover", () => setHotspotHighlight(i, true));
-    marker.on("mouseout", () => setHotspotHighlight(i, false));
-    hotspotMarkers.push(marker);
-  });
-}
-
-// L.circle rescales itself, so a zoom only decides whether the rings exist at all.
-function onZoomChanged() {
-  const active = hotspotsActiveOnMap();
-  if (active === !!hotspotMarkers.length) return;   // nothing to do
-  clearSnapPreview();
-  renderHotspotMarkers();
-}
-
-// Tell the user why snapping isn't happening, rather than letting it look broken.
-function updateSnapHint() {
-  const hint = document.getElementById("snap-hint");
-  if (!hint) return;
-  const off = map && !hotspotsActiveOnMap();
-  hint.textContent = off ? `zoom in to ${HOTSPOT_MIN_ZOOM}+ to use` : "";
-  hint.style.display = off ? "" : "none";
-}
-
-// Two-way hover link between a palette row and its circle.
-function setHotspotHighlight(i, on) {
-  const row = document.querySelector(`.palette-row[data-index="${i}"]`);
-  if (row) row.classList.toggle("hovered", on);
-  const marker = hotspotMarkers[i];
-  if (marker) {
-    // Hover fills the ring in — the only time it's allowed to cover the pins.
-    marker.setStyle(on
-      ? { weight: marker._baseWeight + 3, fill: true, fillOpacity: 0.35 }
-      : { weight: marker._baseWeight, fill: false });
-    if (on) marker.bringToFront();
-  }
-}
-
-function formatMiles(meters) {
-  const miles = meters / 1609.34;
-  if (miles < 0.1) return `${Math.round(meters)} m`;
-  return `${miles < 10 ? miles.toFixed(1) : Math.round(miles)} mi`;
-}
-
-function makePaletteRow(h, i) {
-  const row = document.createElement("div");
-  row.className = "palette-row";
-  row.dataset.index = i;
-  // Same colour as this entry's map circle — the only thing tying the two together.
-  row.style.borderLeftColor = hotspotColor(i);
-
-  if (h.sample_photo_id) {
-    const img = document.createElement("img");
-    img.className = "palette-thumb";
-    img.src = `/api/thumbnail/${h.sample_photo_id}`;
-    img.loading = "lazy";
-    img.alt = "";
-    row.appendChild(img);
-  }
-
-  const body = document.createElement("div");
-  body.className = "palette-body";
-  const label = document.createElement("div");
-  label.className = "palette-label";
-  label.textContent = h.label;
-  // Lead the meta line with whatever the active ranking sorted on, so the order
-  // on screen is always explained by the number next to it.
-  const meta = document.createElement("div");
-  meta.className = "palette-meta";
-  const bits = [];
-  if (h.meters !== undefined) bits.push(formatMiles(h.meters));
-  if (h.window_count !== undefined) bits.push(`${h.window_count} then`);
-  bits.push(`${h.count} photo${h.count !== 1 ? "s" : ""}`);
-  if (h.last_ts) bits.push(new Date(h.last_ts * 1000).toLocaleDateString());
-  meta.textContent = bits.join(" · ");
-  body.appendChild(label);
-  body.appendChild(meta);
-  row.appendChild(body);
-
-  // Only the first nine get a key; past that the label would be a lie. The key
-  // chip wears the entry's colour, so the number on the keyboard, the chip, and
-  // the circle on the map are all the same thing.
-  if (i < 9) {
-    const key = document.createElement("span");
-    key.className = "palette-key";
-    key.textContent = String(i + 1);
-    key.style.borderColor = hotspotColor(i);
-    key.style.color = hotspotColor(i);
-    row.appendChild(key);
-  }
-
-  // A hotspot is already the shape of a named place — a point you keep coming
-  // back to — so promoting one saves redrawing it by hand on the Custom Places
-  // page. Saved as a circle at the hotspot's own snap radius.
-  const save = document.createElement("button");
-  save.className = "palette-save";
-  save.textContent = "✏️";
-  save.title = "Save this hotspot as a named place";
-  save.addEventListener("click", (e) => {
-    e.stopPropagation();   // don't also stage the selection
-    savePlaceFromHotspot(h);
-  });
-  row.appendChild(save);
-
-  const zoom = document.createElement("button");
-  zoom.className = "palette-zoom";
-  zoom.textContent = "⛶";
-  zoom.title = "Move the map here";
-  zoom.addEventListener("click", (e) => {
-    e.stopPropagation();   // don't also stage the selection
-    map.flyTo([h.lat, h.lng], Math.max(map.getZoom(), 15), { duration: 0.6 });
-  });
-  row.appendChild(zoom);
-
-  row.title = `${h.label}\n${h.lat.toFixed(5)}, ${h.lng.toFixed(5)}\n` +
-    (i < 9 ? `Drop photos here, click to stage the selection, or press ${i + 1}`
-           : "Drop photos here, or click to stage the selection");
-
-  // Clicking with nothing selected is a navigation request, not a tagging one.
-  row.addEventListener("click", () => {
-    if (selectedIds.size) stageAtHotspot(i);
-    else map.flyTo([h.lat, h.lng], Math.max(map.getZoom(), 15), { duration: 0.6 });
-  });
-
-  row.addEventListener("mouseenter", () => setHotspotHighlight(i, true));
-  row.addEventListener("mouseleave", () => setHotspotHighlight(i, false));
-
-  row.addEventListener("dragover", (e) => {
-    e.preventDefault();
-    row.classList.add("drop-target");
-    setHotspotHighlight(i, true);   // show on the map where this drop would land
-  });
-  row.addEventListener("dragleave", () => {
-    row.classList.remove("drop-target");
-    setHotspotHighlight(i, false);
-  });
-  row.addEventListener("drop", async (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    row.classList.remove("drop-target");
-    setHotspotHighlight(i, false);
-    const ids = JSON.parse(e.dataTransfer.getData("application/json") || "[]");
-    if (ids.length) await stageDrop(ids, h.lat, h.lng, currentDropAccuracy());
-  });
-
-  return row;
-}
-
-// Promote a hotspot to a saved place. The geocoded label is only a suggestion —
-// it names the neighbourhood, not the place ("Elm St, Springfield" for what you
-// think of as "Grandma's"), so it goes in as the prompt's default rather than
-// being used silently.
-async function savePlaceFromHotspot(h) {
-  const name = prompt("Name this place:", h.label);
-  if (name === null) return;             // cancelled
-  const trimmed = name.trim();
-  if (!trimmed) { setStatus("A place needs a name.", true); return; }
-
-  const bounds = { lat: h.lat, lng: h.lng, radius: SNAP_METERS };
-  try {
-    const res = await fetch("/api/places", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: trimmed, type: "circle",
-                             bounds: JSON.stringify(bounds) }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    await loadPlaces();     // repopulate the Places dropdown and draw the new shape
-    await loadHotspots();   // the new place now covers this hotspot, so its row goes
-    setStatus(`Saved “${trimmed}” as a place (${SNAP_METERS} m radius). ` +
-              `It's in the Places dropdown now, so it has left the palette.`);
-  } catch (err) {
-    setStatus("Could not save place: " + err.message, true);
-  }
-}
-
-// The imprecise-drop toggle applies wherever a drop happens — map or palette.
+// The imprecise-drop toggle applies wherever a drop happens.
 function currentDropAccuracy() {
   const toggle = document.getElementById("imprecise-toggle");
   if (!toggle || !toggle.checked) return null;
   return parseFloat(document.getElementById("imprecise-radius-select").value);
 }
 
-async function stageAtHotspot(i) {
-  const h = hotspots[i];
-  if (!h) return;
-  if (!selectedIds.size) { setStatus("Select some photos first.", true); return; }
-  await stageDrop([...selectedIds], h.lat, h.lng, currentDropAccuracy());
-}
-
-/* ── Snapping ──
- * Aiming by hand at the same place on different days lands a few hundred feet
- * apart every time, which fragments the staging groups and smears the palette.
- * Snapping folds a near-miss onto the exact point already in use. */
-
-// Resolve a raw drop point to where it will actually land. Only a drop *inside* a
-// drawn ring moves — nearestHotspot' cutoff is SNAP_METERS, the same number the
-// ring is drawn at — so aiming anywhere else on the map still lands exactly where
-// you let go, which is the whole point of being able to see the rings.
-function snapPoint(lat, lng) {
-  if (!snapEnabled || !hotspotsActiveOnMap()) return { lat, lng, snapped: null };
-  const near = nearestHotspot(lat, lng);
-  if (!near) return { lat, lng, snapped: null };
-  return { lat: near.hotspot.lat, lng: near.hotspot.lng, snapped: near };
-}
-
-// Live feedback while a drag is over the map. The hotspot circles are already on
-// the map, so the target just gets swollen and its palette row flagged — no
-// separate ghost ring to explain.
-function showSnapPreview(lat, lng) {
-  const near = (snapEnabled && hotspotsActiveOnMap()) ? nearestHotspot(lat, lng) : null;
-  const index = near ? near.index : -1;
-  if (index === snapRowIndex) return;
-
-  clearSnapPreview();
-  snapRowIndex = index;
-  if (index < 0) return;
-
-  const row = document.querySelector(`.palette-row[data-index="${index}"]`);
-  if (row) row.classList.add("snap-target");
-  setHotspotHighlight(index, true);
-}
-
-function clearSnapPreview() {
-  if (snapRowIndex >= 0) {
-    const row = document.querySelector(`.palette-row[data-index="${snapRowIndex}"]`);
-    if (row) row.classList.remove("snap-target");
-    setHotspotHighlight(snapRowIndex, false);
-  }
-  snapRowIndex = -1;
-}
-
-/* ── Number-key shortcuts ── */
-function bindHotspotKeys() {
-  document.addEventListener("keydown", (e) => {
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
-    // Never steal a digit the user is typing into a field.
-    const t = e.target;
-    if (t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA" ||
-              t.isContentEditable)) return;
-    if (document.getElementById("month-picker-modal").style.display !== "none") return;
-    if (document.getElementById("timeline-modal").style.display !== "none") return;
-    if (!/^[1-9]$/.test(e.key)) return;
-    if (!selectedIds.size) return;    // leave the key alone when it would do nothing
-    e.preventDefault();
-    stageAtHotspot(parseInt(e.key, 10) - 1);
-  });
+function revertPendingGeo(groups, what) {
+  const ids = groups.flatMap(g => g.entries.map(e => e.photo.id));
+  if (!ids.length) { setStatus("Nothing staged to revert.", true); return; }
+  if (ids.length > 3 &&
+      !confirm(`Discard ${ids.length} staged location(s)${what ? ` — ${what}` : ""}?`)) return;
+  unstageGeo(ids);
 }
 
 /* ── Proposal banner ──

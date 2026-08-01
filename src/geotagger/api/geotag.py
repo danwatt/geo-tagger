@@ -66,10 +66,14 @@ async def api_geotag_hotspots(
     to_ts: int | None = Query(None, description="window end; required for sort=time"),
     hide_named: bool = Query(True, description="drop hotspots a saved place already covers"),
 ):
-    """Recurring drop points mined from the coordinates already on the photos —
-    the location palette's data. Clustered so drops a few hundred feet apart at
-    the same real place count as one entry, and (by default) with the ones a
-    saved place already covers left out."""
+    """Recurring drop points mined from the coordinates already on the photos.
+    Clustered so drops a few hundred feet apart at the same real place count as
+    one entry, and (by default) with the ones a saved place already covers left
+    out.
+
+    **No caller right now** — this fed the geocode page's location palette, which
+    was pulled while the idea is reconsidered. Kept live and tested on purpose;
+    see services/hotspots_service.py."""
     loop = asyncio.get_running_loop()
     try:
         return await loop.run_in_executor(

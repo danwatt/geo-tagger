@@ -1,7 +1,13 @@
 """Recurring drop points ("hotspots") mined from the coordinates already on the
-photos. Backs the geocode view's location palette: the same handful of places
-come up month after month, so the fastest drop target is a list row, not a spot
-on the map you have to pan and zoom to find.
+photos: the same handful of places come up month after month, so the fastest drop
+target is a list row, not a spot on the map you have to pan and zoom to find.
+
+**Intentionally unused for now.** This module and /api/geotag/hotspots are kept
+whole and tested, but nothing calls them — the geocode page's location palette
+(the column of rows and the matching circles on the map) was pulled while the
+idea is reconsidered. Don't delete this as dead code; it is parked, not retired.
+geotag_service.propose_locations still uses cluster_cells/quantize/place_label
+directly, so those three are live regardless.
 
 Blocking (full-table GROUP BY + geocode lookups); runs in the executor.
 """

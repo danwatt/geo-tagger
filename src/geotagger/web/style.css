@@ -3,12 +3,12 @@
 
 #dir-input { width: 280px; }
 
-/* ── 4-pane main ──
-   map | location palette | grid | detail. The palette is a fixed narrow column
-   so the three flexible panes keep the thirds they had before it existed. */
+/* ── 3-pane main ──
+   map | grid | detail, equal thirds. (A fourth column held the location
+   palette until it was pulled; see app.js.) */
 #main {
   display: grid;
-  grid-template-columns: 1fr 210px 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   grid-auto-rows: minmax(0, 1fr);
   flex: 1;
   overflow: hidden;
@@ -40,98 +40,6 @@
 }
 #map-nav input[type="text"]:focus { border-color: #4a90d9; }
 #map { flex: 1; min-height: 0; }
-
-/* ── Location palette ──
-   Recurring drop points (/api/geotag/hotspots). Every row is a drag-and-drop
-   target and, for the first nine, a number-key shortcut. */
-#palette-pane {
-  display: flex;
-  flex-direction: column;
-  background: var(--surface-2);
-  border-left: 1px solid var(--border);
-  min-height: 0;
-}
-#palette-nav {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-  padding: 5px 6px;
-  background: var(--surface-3);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-#palette-nav select { flex: 1; min-width: 0; }
-#palette-list {
-  flex: 1;
-  overflow-y: auto;
-  min-height: 0;
-  padding: 4px;
-}
-#palette-footer {
-  flex-shrink: 0;
-  padding: 5px 7px;
-  background: var(--surface-3);
-  border-top: 1px solid var(--border);
-  color: var(--text-muted);
-}
-#palette-footer label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
-.palette-hint { display: block; margin-top: 2px; color: var(--warn); font-size: 11px; }
-
-.palette-empty { padding: 12px 8px; color: var(--text-faint); line-height: 1.5; }
-
-.palette-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px;
-  margin-bottom: 3px;
-  border: 2px solid transparent;
-  /* Left edge is tinted per entry (set inline) to match its circle on the map. */
-  border-left-width: 4px;
-  border-radius: var(--radius);
-  background: var(--surface-1);
-  cursor: pointer;
-}
-/* .hovered is the map circle's half of the two-way hover link. */
-.palette-row:hover,
-.palette-row.hovered { background: var(--surface-input); }
-/* Drag-hover and snap-target share one highlight: both mean "this drop lands here". */
-.palette-row.drop-target,
-.palette-row.snap-target { border-color: var(--gold); background: var(--accent-bg-2); }
-
-.palette-thumb {
-  width: 34px;
-  height: 34px;
-  flex-shrink: 0;
-  object-fit: cover;
-  border-radius: var(--radius-sm);
-  background: var(--surface-black);
-}
-.palette-body { flex: 1; min-width: 0; }
-.palette-label {
-  color: var(--text-strong);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.palette-meta { color: var(--text-faint); font-size: 11px; }
-.palette-key {
-  flex-shrink: 0;
-  min-width: 16px;
-  text-align: center;
-  padding: 1px 3px;
-  border: 1px solid var(--border-btn);
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  font-size: 10px;
-}
-.palette-zoom,
-.palette-save {
-  flex-shrink: 0;
-  padding: 2px 5px;
-  font-size: 11px;
-  line-height: 1;
-}
 
 /* ── Proposal banner ── */
 #propose-bar {

@@ -91,29 +91,6 @@
     <div id="map"></div>
   </div>
 
-  <!-- Location palette: the places you tag over and over, mined from the
-       coordinates already on the photos. A drop target that never needs the map
-       panned or zoomed — and the 1-9 keys stage the selection at the top nine. -->
-  <div id="palette-pane">
-    <div id="palette-nav">
-      <select id="palette-sort" title="What the palette ranks by">
-        <option value="count" title="Places you tag most often">Frequent</option>
-        <option value="recent" title="Places you tagged most recently">Recent</option>
-        <option value="near" title="Places closest to the middle of the map, refreshed as you pan and zoom">Nearby (map)</option>
-        <option value="time" title="Places you tagged during the months on screen">Nearby (time)</option>
-      </select>
-      <button id="palette-refresh" title="Rebuild the palette from the current geotags">⟳</button>
-    </div>
-    <div id="palette-list"></div>
-    <div id="palette-footer">
-      <label title="A drop landing inside one of the rings on the map snaps to that place exactly, so repeat visits stop drifting apart. Drops outside every ring land where you put them.">
-        <input type="checkbox" id="snap-toggle" checked/>
-        Snap inside rings
-      </label>
-      <span id="snap-hint" class="palette-hint" style="display:none"></span>
-    </div>
-  </div>
-
   <div id="grid-pane">
     <!-- Sticky header: the filters and the proposal banner ride together, so a
          suggestion raised while scrolled deep into a month stays reachable. -->
