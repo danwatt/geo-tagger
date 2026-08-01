@@ -150,10 +150,46 @@
 }
 .pp-item:hover { background: #3a3a3a; }
 .pp-item.pp-hl { background: #2a4a6e; border-color: #4a90d9; }
-.pp-item .pp-count { color: #9aa; font-size: 11px; }
+.pp-item .pp-count { color: #9aa; font-size: 11px; flex: none; }
 .pp-new { background: #2a4a6e; border-color: #4a90d9; color: #eaf4ff; }
 .pp-new:hover { background: #305686; }
 .pp-empty { color: #888; text-align: center; padding: 14px; font-size: 12px; }
+
+/* Rows carrying a thumbnail and a second line — the geocode page's location
+   picker. The person list uses none of this and is unchanged by it. */
+.pp-modal.pp-wide { width: 340px; }
+.pp-group {
+  color: #9ab;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  padding: 6px 2px 1px;
+}
+.pp-group:first-child { padding-top: 0; }
+.pp-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;          /* let the name ellipsize instead of stretching the row */
+  flex: 1;
+}
+.pp-item .pp-name,
+.pp-item .pp-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pp-item .pp-meta { color: #9aa; font-size: 10px; }
+.pp-thumb {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  object-fit: cover;
+  border-radius: 4px;
+  margin-right: 7px;
+  background: #1a1a1a;
+}
 
 /* ── Face overlay chips (shared by People + Search, which both load this file) ──
  * The name label, the blue "suggested person" chip, and the reject affordance.

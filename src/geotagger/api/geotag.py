@@ -65,20 +65,34 @@ async def api_geotag_hotspots(
     from_ts: int | None = Query(None, description="window start; required for sort=time"),
     to_ts: int | None = Query(None, description="window end; required for sort=time"),
     hide_named: bool = Query(True, description="drop hotspots a saved place already covers"),
+    min_lat: float | None = Query(None, description="viewport filter; all four or none"),
+    max_lat: float | None = Query(None),
+    min_lng: float | None = Query(None),
+    max_lng: float | None = Query(None),
 ):
     """Recurring drop points mined from the coordinates already on the photos.
     Clustered so drops a few hundred feet apart at the same real place count as
     one entry, and (by default) with the ones a saved place already covers left
     out.
 
-    **No caller right now** — this fed the geocode page's location palette, which
-    was pulled while the idea is reconsidered. Kept live and tested on purpose;
-    see services/hotspots_service.py."""
+    The four bounds narrow the answer to a patch of the world — what the Custom
+    Places page sends to ask "what's in view here that I never named?". Give all
+    four or none.
+
+    Feeds the geocode page's location picker (the "Hotspots" section of
+    openLocationPicker in web/app.js) and the Custom Places page's hotspot
+    list — the places you tag at repeatedly but never bothered to save a name
+    for. See services/hotspots_service.py."""
+    bounds = (min_lat, max_lat, min_lng, max_lng)
+    if any(v is None for v in bounds) and not all(v is None for v in bounds):
+        raise HTTPException(400, "min_lat, max_lat, min_lng and max_lng go together")
+    bbox = None if bounds[0] is None else bounds
+
     loop = asyncio.get_running_loop()
     try:
         return await loop.run_in_executor(
             get_executor(), hotspots_service.get_hotspots,
-            limit, merge_meters, sort, lat, lng, from_ts, to_ts, hide_named,
+            limit, merge_meters, sort, lat, lng, from_ts, to_ts, hide_named, bbox,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))

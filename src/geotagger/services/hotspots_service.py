@@ -2,12 +2,12 @@
 photos: the same handful of places come up month after month, so the fastest drop
 target is a list row, not a spot on the map you have to pan and zoom to find.
 
-**Intentionally unused for now.** This module and /api/geotag/hotspots are kept
-whole and tested, but nothing calls them — the geocode page's location palette
-(the column of rows and the matching circles on the map) was pulled while the
-idea is reconsidered. Don't delete this as dead code; it is parked, not retired.
-geotag_service.propose_locations still uses cluster_cells/quantize/place_label
-directly, so those three are live regardless.
+Consumed through /api/geotag/hotspots by the geocode page's location picker
+(openLocationPicker in web/app.js), which lists them under "Hotspots" alongside
+saved places and the browser's recent locations. The earlier always-on palette
+(a column of rows plus matching circles on the map) was pulled in favour of that
+type-to-filter modal. geotag_service.propose_locations also uses
+cluster_cells/quantize/place_label directly.
 
 Blocking (full-table GROUP BY + geocode lookups); runs in the executor.
 """
@@ -311,6 +311,21 @@ def covered_by_place(lat: float, lng: float, radius_m: float, places: list,
     return False
 
 
+def in_bbox(lat: float, lng: float, bbox: tuple[float, float, float, float]) -> bool:
+    """Is the point inside (min_lat, max_lat, min_lng, max_lng)?
+
+    A box whose min_lng is east of its max_lng straddles the antimeridian — what
+    a map panned across the Pacific reports — so the longitude test flips to "east
+    of min OR west of max" rather than a single range.
+    """
+    min_lat, max_lat, min_lng, max_lng = bbox
+    if not (min_lat <= lat <= max_lat):
+        return False
+    if min_lng <= max_lng:
+        return min_lng <= lng <= max_lng
+    return lng >= min_lng or lng <= max_lng
+
+
 def _all_clusters(merge_meters: float) -> list[dict]:
     """The full clustering of every geotagged photo, count-descending. Cached on
     the geotagged-photo count, so a commit rebuilds it on the next request."""
@@ -381,7 +396,8 @@ def get_hotspots(limit: int = 40, merge_meters: float = DEFAULT_MERGE_METERS,
                  sort: str = "count",
                  lat: float | None = None, lng: float | None = None,
                  from_ts: int | None = None, to_ts: int | None = None,
-                 hide_named: bool = True) -> dict:
+                 hide_named: bool = True,
+                 bbox: tuple[float, float, float, float] | None = None) -> dict:
     """Recurring drop points, best-first for the chosen `sort`:
 
     · "count"  — how often you've tagged there. The default.
@@ -403,10 +419,18 @@ def get_hotspots(limit: int = 40, merge_meters: float = DEFAULT_MERGE_METERS,
     request rather than baked into the cached clustering, so naming a place takes
     effect on the next palette refresh.
 
+    `bbox` (min_lat, max_lat, min_lng, max_lng) narrows the answer to one patch of
+    the world — the map's current view, for "what's around here that I never
+    named?". It runs before everything else: the limit slice is meant to be the
+    best `limit` *inside* the box, not whatever survives of a global top-N, and
+    filtering first also keeps the whole-library sorts off the excluded clusters.
+
     Only the `limit` entries actually returned get reverse-geocoded — labelling
     the whole long tail would dominate the request for names nobody sees.
     """
     clusters = _all_clusters(merge_meters)
+    if bbox is not None:
+        clusters = [c for c in clusters if in_bbox(c["lat"], c["lng"], bbox)]
     extra: dict[int, dict] = {}   # per-cluster fields the chosen sort adds
 
     if sort == "recent":

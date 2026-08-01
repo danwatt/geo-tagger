@@ -111,6 +111,16 @@ button.primary:hover { background: var(--accent-bg-2); }
 button.danger { border-color: #a33; color: var(--danger-text); }
 button.danger:hover { background: #500; }
 button.icon-btn { padding: 2px 8px; font-size: 14px; line-height: 1.2; }
+/* Keyboard hint inside a button label, e.g. "📍 Tag as… [L]". */
+button kbd {
+  font: inherit;
+  font-size: 10px;
+  padding: 0 4px;
+  margin-left: 4px;
+  border: 1px solid var(--border-btn);
+  border-radius: 3px;
+  opacity: .75;
+}
 
 /* ── Inputs ── */
 input[type="text"], input[type="date"], input[type="number"] {

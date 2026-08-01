@@ -17,6 +17,22 @@
     <button id="draw-rectangle-btn" title="Draw Rectangle">📐 Rectangle</button>
     <button id="draw-circle-btn" title="Draw Circle">⭕ Circle</button>
   </div>
+  <div class="toolbar-group">
+    <label title="Show the recurring spots mined from your already-geotagged photos, so you can name the ones worth keeping">
+      <input type="checkbox" id="show-hotspots-chk"/>
+      🔥 Hotspots
+    </label>
+    <span id="hotspot-controls" style="display:none">
+      <select id="hotspot-sort" title="How to rank the hotspots">
+        <option value="count">Most tagged</option>
+        <option value="recent">Most recent</option>
+      </select>
+      <label title="Limit the list to hotspots inside the map's current view, and follow it as you pan">
+        <input type="checkbox" id="hotspot-in-view-chk"/>
+        Only in view
+      </label>
+    </span>
+  </div>
 </div>
 
 <div id="main">
@@ -27,11 +43,35 @@
     <div id="place-list">
       <div id="no-places-hint">No places yet — draw a rectangle or circle on the map.</div>
     </div>
+
+    <!-- Hotspots: unnamed spots mined from the photos' own coordinates. Naming
+         one turns it into a place above, at which point it drops off this list. -->
+    <div id="hotspot-section" style="display:none">
+      <div id="hotspot-header">
+        <h3>Hotspots</h3>
+        <span id="hotspot-count"></span>
+      </div>
+      <div id="hotspot-list"></div>
+    </div>
   </div>
   <div id="map"></div>
 </div>
 
 <div id="status-bar"></div>
+
+<!-- Representative photo picker: the photos actually taken inside the place,
+     so choosing the one that best shows it is a matter of looking. -->
+<div id="rep-picker-modal" class="modal" style="display:none">
+  <div class="modal-content" id="rep-picker-content">
+    <span class="modal-close" id="rep-picker-close">&times;</span>
+    <h2 id="rep-picker-title">Representative photo</h2>
+    <div id="rep-picker-grid"></div>
+    <div id="rep-picker-actions">
+      <button id="rep-picker-clear" class="danger" title="Leave this place without a representative photo">Clear photo</button>
+      <button id="rep-picker-done" class="primary">Done</button>
+    </div>
+  </div>
+</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="nav.js"></script>

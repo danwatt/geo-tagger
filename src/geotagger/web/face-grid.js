@@ -343,19 +343,32 @@ function openQuickActions(anchor, face, opts) {
   setTimeout(() => document.addEventListener("click", _qaOutside), 0);
 }
 
-/* ── Person picker modal ──
- * The one typeahead-with-create-new picker for "assign to a person", used by
- * the People toolbar, the People detail pane, and the quick-action popup above
- * (which itself is used by People/Crowd Review/Quick Tag context menus). Small
- * centered modal — deliberately not the Quick Tag bottom sheet, which is sized
- * for touch; this is desktop-density text.
+/* ── Typeahead picker modal ──
+ * The one typeahead picker for "assign this to a named thing", used by the
+ * People toolbar, the People detail pane, the quick-action popup above (which
+ * itself is used by People/Crowd Review/Quick Tag context menus), and the
+ * geocode page's location picker. Small centered modal — deliberately not the
+ * Quick Tag bottom sheet, which is sized for touch; this is desktop-density text.
  *
- * openPersonPicker(persons, {
+ * openEntityPicker(items, {
  *   title,        // header text, e.g. "Assign 3 face(s) to…"
+ *   placeholder,  // search box placeholder
+ *   emptyText,    // shown when there is nothing to pick from at all
+ *   wide,         // widen the modal — for rows carrying a thumbnail + meta line
  *   allowCreate,  // default true — offer "Create “name”" for unmatched text
- *   onPick,       // ({person_id} | {name}, label) => void            REQUIRED
+ *   createLabel,  // (query) => string   label for that create row
+ *   onPick,       // (item, label) => void                            REQUIRED
+ *                 //   item is the caller's own object, or {__new:true, name}
  *   onClose,      // () => void — DISMISSED without picking (Esc, ✕, backdrop)
- * }) */
+ * })
+ *
+ * Item shape: { name, count?, meta?, group?, thumb?, … } — anything else on the
+ * item is the caller's and comes back untouched in onPick. `group` splits the
+ * list into labelled sections, in first-appearance order; `meta` is a second
+ * line under the name and is searched alongside it.
+ *
+ * openPersonPicker(persons, opts) is the person-shaped wrapper — same modal,
+ * with onPick handing back {person_id} | {name} as its callers expect. */
 let _ppBackdrop = null;
 let _ppOnClose = null;
 
@@ -378,6 +391,22 @@ function _ppEscape(e) {
 }
 
 function openPersonPicker(persons, opts) {
+  const items = persons.map((p) => ({
+    id: p.id, name: p.name, count: p.face_count, person: p,
+  }));
+  openEntityPicker(items, {
+    title: opts.title || "Assign to…",
+    placeholder: "Search people, or type a new name…",
+    emptyText: "No people yet — type a name to create one.",
+    allowCreate: opts.allowCreate ?? true,
+    createLabel: (q) => `➕ Create "${q}"`,
+    onClose: opts.onClose,
+    onPick: (item, label) =>
+      opts.onPick(item.__new ? { name: item.name } : { person_id: item.id }, label),
+  });
+}
+
+function openEntityPicker(items, opts) {
   closePersonPicker();
   _ppOnClose = opts.onClose || null;
 
@@ -386,7 +415,7 @@ function openPersonPicker(persons, opts) {
   backdrop.addEventListener("click", (e) => { if (e.target === backdrop) closePersonPicker(); });
 
   const modal = document.createElement("div");
-  modal.className = "pp-modal";
+  modal.className = "pp-modal" + (opts.wide ? " pp-wide" : "");
 
   const head = document.createElement("div");
   head.className = "pp-head";
@@ -405,7 +434,7 @@ function openPersonPicker(persons, opts) {
   search.type = "text";
   search.className = "pp-search";
   search.autocomplete = "off";
-  search.placeholder = "Search people, or type a new name…";
+  search.placeholder = opts.placeholder || "Search…";
   modal.appendChild(search);
 
   const list = document.createElement("div");
@@ -420,46 +449,91 @@ function openPersonPicker(persons, opts) {
     opts.onPick(who, label);
   }
 
+  // Grouped items keep the order the caller gave them — the groups are already
+  // ranked (recent before saved before mined, say), and re-sorting would throw
+  // that away. Ungrouped items sort by name, as the person list always has.
+  const grouped = items.some((it) => it.group);
+
   function renderList(q) {
     list.innerHTML = "";
     const ql = q.trim().toLowerCase();
-    const matches = persons
-      .filter((p) => p.name.toLowerCase().includes(ql))
-      .sort((a, b) => a.name.localeCompare(b.name));
+    const hit = (it) =>
+      it.name.toLowerCase().includes(ql) ||
+      (it.meta || "").toLowerCase().includes(ql);
+    let matches = items.filter(hit);
+    if (!grouped) matches = matches.slice().sort((a, b) => a.name.localeCompare(b.name));
 
-    if (ql && allowCreate && !persons.some((p) => p.name.toLowerCase() === ql)) {
+    const offerCreate = ql && allowCreate && !items.some((it) => it.name.toLowerCase() === ql);
+    if (offerCreate) {
       const row = document.createElement("button");
       row.className = "pp-item pp-new";
-      row.textContent = `➕ Create "${q.trim()}"`;
-      row.addEventListener("click", () => pick({ name: q.trim() }, q.trim()));
+      row.textContent = opts.createLabel ? opts.createLabel(q.trim()) : `➕ Create "${q.trim()}"`;
+      row.addEventListener("click", () => pick({ __new: true, name: q.trim() }, q.trim()));
       list.appendChild(row);
     }
 
-    matches.forEach((p) => {
-      const row = document.createElement("button");
-      row.className = "pp-item";
-      const nameEl = document.createElement("span");
-      nameEl.textContent = p.name;
-      row.appendChild(nameEl);
-      if (p.face_count !== undefined && p.face_count !== null) {
-        const countEl = document.createElement("span");
-        countEl.className = "pp-count";
-        countEl.textContent = p.face_count;
-        row.appendChild(countEl);
+    let lastGroup = null;
+    matches.forEach((it) => {
+      if (grouped && it.group !== lastGroup) {
+        lastGroup = it.group;
+        const head = document.createElement("div");
+        head.className = "pp-group";
+        head.textContent = it.group || "";
+        list.appendChild(head);
       }
-      row.addEventListener("click", () => pick({ person_id: p.id }, p.name));
-      list.appendChild(row);
+      list.appendChild(makeItemRow(it));
     });
 
-    if (!matches.length && !ql) {
+    // The create row is itself an answer to an unmatched query — don't stack a
+    // "no matches" note under it.
+    if (!matches.length && !offerCreate) {
       const empty = document.createElement("div");
       empty.className = "pp-empty";
-      empty.textContent = "No people yet — type a name to create one.";
+      empty.textContent = ql ? "No matches." : (opts.emptyText || "Nothing to pick.");
       list.appendChild(empty);
     }
 
     _ppHighlightIdx = list.querySelectorAll(".pp-item").length ? 0 : -1;
     _ppUpdateHighlight(list);
+  }
+
+  function makeItemRow(it) {
+    const row = document.createElement("button");
+    row.className = "pp-item";
+
+    if (it.thumb) {
+      const img = document.createElement("img");
+      img.className = "pp-thumb";
+      img.src = it.thumb;
+      img.loading = "lazy";
+      img.alt = "";
+      row.appendChild(img);
+    }
+
+    const main = document.createElement("span");
+    main.className = "pp-item-main";
+    const nameEl = document.createElement("span");
+    nameEl.className = "pp-name";
+    nameEl.textContent = it.name;
+    main.appendChild(nameEl);
+    if (it.meta) {
+      const metaEl = document.createElement("span");
+      metaEl.className = "pp-meta";
+      metaEl.textContent = it.meta;
+      main.appendChild(metaEl);
+    }
+    row.appendChild(main);
+
+    if (it.count !== undefined && it.count !== null) {
+      const countEl = document.createElement("span");
+      countEl.className = "pp-count";
+      countEl.textContent = it.count;
+      row.appendChild(countEl);
+    }
+
+    if (it.title) row.title = it.title;
+    row.addEventListener("click", () => pick(it, it.name));
+    return row;
   }
 
   search.addEventListener("input", (e) => renderList(e.target.value));
@@ -468,20 +542,22 @@ function openPersonPicker(persons, opts) {
   // whichever row is highlighted (defaults to the top match) without requiring
   // the mouse — mirrors the up/down + Enter pattern used on the People grid.
   search.addEventListener("keydown", (e) => {
-    const items = Array.from(list.children);
+    // Only the pickable rows — group headers and the empty note are in the list
+    // too, and the highlight must step straight over them.
+    const rows = Array.from(list.querySelectorAll(".pp-item"));
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      if (!items.length) return;
-      _ppHighlightIdx = Math.min(items.length - 1, _ppHighlightIdx + 1);
+      if (!rows.length) return;
+      _ppHighlightIdx = Math.min(rows.length - 1, _ppHighlightIdx + 1);
       _ppUpdateHighlight(list);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      if (!items.length) return;
+      if (!rows.length) return;
       _ppHighlightIdx = Math.max(0, _ppHighlightIdx - 1);
       _ppUpdateHighlight(list);
     } else if (e.key === "Enter") {
       e.preventDefault();
-      const target = items[_ppHighlightIdx] || items[0];
+      const target = rows[_ppHighlightIdx] || rows[0];
       if (target) target.click();
     }
   });
@@ -497,10 +573,10 @@ function openPersonPicker(persons, opts) {
 let _ppHighlightIdx = -1;
 
 function _ppUpdateHighlight(list) {
-  const items = Array.from(list.children);
-  items.forEach((el, i) => el.classList.toggle("pp-hl", i === _ppHighlightIdx));
-  if (_ppHighlightIdx >= 0 && items[_ppHighlightIdx]) {
-    items[_ppHighlightIdx].scrollIntoView({ block: "nearest" });
+  const rows = Array.from(list.querySelectorAll(".pp-item"));
+  rows.forEach((el, i) => el.classList.toggle("pp-hl", i === _ppHighlightIdx));
+  if (_ppHighlightIdx >= 0 && rows[_ppHighlightIdx]) {
+    rows[_ppHighlightIdx].scrollIntoView({ block: "nearest" });
   }
 }
 

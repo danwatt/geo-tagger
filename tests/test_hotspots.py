@@ -183,6 +183,64 @@ class TestSortTime:
             hotspots_service.get_hotspots(sort="time")
 
 
+class TestBoundingBox:
+    """`bbox` narrows the answer to one patch of the world — the Custom Places
+    page's "only in view" filter."""
+
+    def _three_places(self):
+        _upsert("here.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")
+        _upsert("north.jpg", lat=45.0, lng=-75.0, geotag_source="sidecar")
+        _upsert("east.jpg", lat=40.0, lng=-70.0, geotag_source="sidecar")
+
+    def test_only_hotspots_inside_the_box(self, db):
+        self._three_places()
+        hotspots = hotspots_service.get_hotspots(
+            bbox=(39.5, 40.5, -75.5, -74.5))["hotspots"]
+        assert [(round(h["lat"], 2), round(h["lng"], 2)) for h in hotspots] == [(40.0, -75.0)]
+
+    def test_no_box_returns_everything(self, db):
+        self._three_places()
+        assert len(hotspots_service.get_hotspots()["hotspots"]) == 3
+
+    def test_total_counts_only_what_is_in_the_box(self, db):
+        self._three_places()
+        assert hotspots_service.get_hotspots(bbox=(39.5, 40.5, -75.5, -74.5))["total"] == 1
+
+    def test_the_limit_slices_inside_the_box_not_the_world(self, db):
+        # The two busiest places are outside the box. A global top-2 followed by a
+        # box filter would answer nothing; filtering first answers the quiet one.
+        for i in range(5):
+            _upsert(f"busy{i}.jpg", lat=45.0, lng=-75.0, geotag_source="sidecar")
+        for i in range(3):
+            _upsert(f"mid{i}.jpg", lat=46.0, lng=-75.0, geotag_source="sidecar")
+        _upsert("quiet.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")
+
+        hotspots = hotspots_service.get_hotspots(
+            limit=2, bbox=(39.5, 40.5, -75.5, -74.5))["hotspots"]
+        assert [round(h["lat"], 2) for h in hotspots] == [40.0]
+
+    def test_combines_with_a_sort(self, db):
+        self._three_places()
+        _upsert("nearby.jpg", lat=40.2, lng=-75.0, geotag_source="sidecar")
+        hotspots = hotspots_service.get_hotspots(
+            sort="near", lat=40.0, lng=-75.0, bbox=(39.0, 41.0, -76.0, -74.0))["hotspots"]
+        assert [round(h["lat"], 2) for h in hotspots] == [40.0, 40.2]
+
+    def test_a_box_across_the_antimeridian_wraps(self, db):
+        # What Leaflet reports for a view over the Pacific: west edge east of the
+        # east edge, once both are wrapped back into ±180.
+        _upsert("fiji.jpg", lat=-17.7, lng=178.0, geotag_source="sidecar")
+        _upsert("samoa.jpg", lat=-13.8, lng=-172.0, geotag_source="sidecar")
+        _upsert("elsewhere.jpg", lat=-15.0, lng=0.0, geotag_source="sidecar")
+
+        hotspots = hotspots_service.get_hotspots(bbox=(-20.0, -10.0, 175.0, -170.0))["hotspots"]
+        assert sorted(round(h["lng"], 1) for h in hotspots) == [-172.0, 178.0]
+
+    def test_in_bbox_edges_are_inclusive(self, db):
+        assert hotspots_service.in_bbox(40.0, -75.0, (40.0, 41.0, -75.0, -74.0))
+        assert not hotspots_service.in_bbox(39.9, -75.0, (40.0, 41.0, -75.0, -74.0))
+
+
 class TestHotspotCache:
     def test_new_geotag_invalidates_the_cache(self, db):
         _upsert("a.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")

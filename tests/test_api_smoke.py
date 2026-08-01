@@ -134,6 +134,12 @@ def test_geotag_hotspots_and_propose_empty(client):
     assert client.get("/api/geotag/hotspots?sort=near&lat=40&lng=-75").status_code == 200
     assert client.get("/api/geotag/hotspots?sort=time&from_ts=0&to_ts=9").status_code == 200
 
+    # The viewport filter is all four bounds or none.
+    assert client.get("/api/geotag/hotspots?min_lat=39&max_lat=41").status_code == 400
+    assert client.get(
+        "/api/geotag/hotspots?min_lat=39&max_lat=41&min_lng=-76&max_lng=-74"
+    ).status_code == 200
+
     res = client.post("/api/geotag/propose", json={"ids": []})
     assert res.status_code == 200
     assert res.json()["candidates"] == []

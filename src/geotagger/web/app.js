@@ -347,6 +347,25 @@ function bindToolbar() {
 
   bindProposeBar();
 
+  // Location picker — the map-free way to tag a selection at a place that
+  // already exists. "l" is the shortcut; the toolbar button is the discoverable
+  // form of the same thing.
+  document.getElementById("tag-as-btn").addEventListener("click", openLocationPicker);
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "l" && e.key !== "L") return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" ||
+              t.tagName === "SELECT" || t.isContentEditable)) return;
+    if (typeof isPersonPickerOpen === "function" && isPersonPickerOpen()) return;
+    // Don't stack the picker on top of the month/timeline modals.
+    const openModal = [...document.querySelectorAll(".modal")]
+      .some(m => m.style.display !== "none");
+    if (openModal) return;
+    e.preventDefault();
+    openLocationPicker();
+  });
+
   // Modal close handlers
   // Scoped: there is more than one .modal-close on the page now.
   document.querySelector("#month-picker-modal .modal-close")
@@ -674,6 +693,190 @@ function clearPlaceFilter() {
   if (placeFilterRect) { map.removeLayer(placeFilterRect); placeFilterRect = null; }
   const sel = document.getElementById("places-select");
   if (sel) sel.value = "";
+}
+
+/* ── Location picker ──
+ * Most tagging is repeat business: the same house, the same park, the same
+ * relatives' addresses, over and over. Hunting each of them down on the map
+ * again is the slow part, so this is the map-free path — select photos, press
+ * "l", type a few letters, Enter. It picks from the locations that already
+ * exist, in the order they're likely to be wanted:
+ *
+ *   Recent   — what this browser committed lately (localStorage, this machine).
+ *   Places   — saved places from the Custom Places page, at their centre.
+ *   Hotspots — /api/geotag/hotspots, the recurring drop points mined from the
+ *              coordinates already on the photos. Places you use but never
+ *              bothered to name.
+ *
+ * A pick stages, exactly as a map drop does — nothing here writes to a photo
+ * without going through the staging area and Commit. */
+
+const RECENT_LOCATIONS_KEY = "geotagger.recentLocations";
+const RECENT_LOCATIONS_MAX = 12;
+// Hotspots are ranked over the span of photos on screen, widened by a month
+// either side — see the sort="time" note in services/hotspots_service.py.
+const PICKER_SPAN_PAD = 30 * 86400;
+
+// 4 decimals ≈ 11 m: the grid lookupLocation caches on, and close enough that
+// two drops the user thinks of as "the same spot" collapse into one entry.
+function coordKey(lat, lng) {
+  return `${lat.toFixed(4)},${lng.toFixed(4)}`;
+}
+
+function loadRecentLocations() {
+  try {
+    const list = JSON.parse(localStorage.getItem(RECENT_LOCATIONS_KEY) || "[]");
+    return Array.isArray(list)
+      ? list.filter(r => r && typeof r.lat === "number" && typeof r.lng === "number")
+      : [];
+  } catch (err) {
+    return [];   // unreadable or from an older shape — start the history over
+  }
+}
+
+function rememberLocation(lat, lng, accuracy, label) {
+  const key = coordKey(lat, lng);
+  const list = loadRecentLocations().filter(r => coordKey(r.lat, r.lng) !== key);
+  list.unshift({ lat, lng, accuracy: accuracy ?? null, label: label || "", ts: Date.now() });
+  try {
+    localStorage.setItem(RECENT_LOCATIONS_KEY,
+                         JSON.stringify(list.slice(0, RECENT_LOCATIONS_MAX)));
+  } catch (err) {
+    // Quota or private browsing — the picker just loses its history.
+  }
+}
+
+// The single point a saved place stands for. Rectangles collapse to their
+// centre, which is what "tag these as being at this place" has to mean.
+function placeCenter(place) {
+  try {
+    const b = JSON.parse(place.bounds);
+    if (place.type === "circle") return { lat: b.lat, lng: b.lng };
+    return { lat: (b.south + b.north) / 2, lng: (b.west + b.east) / 2 };
+  } catch (err) {
+    return null;
+  }
+}
+
+// Time span the hotspot ranking should answer for: the selection if there is
+// one, else everything loaded. Reduce, not Math.min(...arr) — the argument list
+// of a month with thousands of photos overflows the stack.
+function pickerTimeSpan() {
+  let lo = Infinity, hi = -Infinity;
+  photos.forEach((p) => {
+    if (!(p.photo_datetime > 0)) return;
+    if (selectedIds.size && !selectedIds.has(p.id)) return;
+    if (p.photo_datetime < lo) lo = p.photo_datetime;
+    if (p.photo_datetime > hi) hi = p.photo_datetime;
+  });
+  if (lo === Infinity) return null;
+  return { from: Math.round(lo - PICKER_SPAN_PAD), to: Math.round(hi + PICKER_SPAN_PAD) };
+}
+
+async function fetchPickerHotspots() {
+  const span = pickerTimeSpan();
+  const base = "/api/geotag/hotspots?limit=25&hide_named=true&sort=";
+  const get = async (url) => {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return (await res.json()).hotspots || [];
+  };
+  try {
+    if (!span) return await get(base + "count");
+    // sort=time drops places with nothing in the window, so a span with no
+    // history at all comes back empty — fall back to the all-time favourites
+    // rather than showing the user an empty section.
+    const timed = await get(`${base}time&from_ts=${span.from}&to_ts=${span.to}`);
+    return timed.length ? timed : await get(base + "count");
+  } catch (err) {
+    return [];   // no geotags yet, or no geocode data installed
+  }
+}
+
+function relativeDay(ts) {
+  if (!ts) return "";
+  const days = Math.floor((Date.now() / 1000 - ts) / 86400);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 30) return `${days}d ago`;
+  if (days < 365) return `${Math.round(days / 30)}mo ago`;
+  return `${Math.round(days / 365)}y ago`;
+}
+
+// One de-duplicated, group-ordered list for openEntityPicker. Earlier sources
+// win: a coordinate you used this morning shouldn't also appear as a hotspot.
+async function buildLocationItems() {
+  const items = [];
+  const seen = new Set();
+  const add = (item) => {
+    const k = coordKey(item.lat, item.lng);
+    if (seen.has(k)) return;
+    seen.add(k);
+    items.push(item);
+  };
+
+  loadRecentLocations().forEach((r) => {
+    add({
+      group: "Recent",
+      name: r.label || `📌 ${r.lat.toFixed(5)}, ${r.lng.toFixed(5)}`,
+      meta: relativeDay(Math.round(r.ts / 1000)),
+      lat: r.lat, lng: r.lng, accuracy: r.accuracy,
+    });
+  });
+
+  places.forEach((p) => {
+    const c = placeCenter(p);
+    if (!c) return;
+    add({
+      group: "Saved places",
+      name: p.name,
+      meta: `${c.lat.toFixed(4)}, ${c.lng.toFixed(4)}`,
+      thumb: p.representative_photo_id
+        ? `/api/thumbnail/${p.representative_photo_id}` : null,
+      lat: c.lat, lng: c.lng, accuracy: null,
+    });
+  });
+
+  (await fetchPickerHotspots()).forEach((h) => {
+    add({
+      group: "Hotspots",
+      name: h.label,
+      meta: relativeDay(h.last_ts),
+      count: h.window_count ?? h.count,
+      thumb: h.sample_photo_id ? `/api/thumbnail/${h.sample_photo_id}` : null,
+      lat: h.lat, lng: h.lng, accuracy: null,
+    });
+  });
+
+  return items;
+}
+
+async function openLocationPicker() {
+  const ids = [...selectedIds];
+  if (!ids.length) { setStatus("Select some photos first, then pick a location.", true); return; }
+
+  setStatus("Loading known locations…");
+  const items = await buildLocationItems();
+  if (!items.length) {
+    setStatus("No saved places, recent locations or hotspots yet — " +
+              "drop photos on the map once and they'll show up here.", true);
+    return;
+  }
+  setStatus(`Pick a location for ${ids.length} photo(s).`);
+
+  openEntityPicker(items, {
+    title: `Tag ${ids.length} photo(s) as…`,
+    placeholder: "Search places, recents, hotspots…",
+    emptyText: "No known locations yet.",
+    wide: true,
+    allowCreate: false,          // new locations are made by dropping on the map
+    onClose: () => setStatus(""),
+    onPick: (item) => {
+      // Recents keep the accuracy they were tagged with; anything else follows
+      // whatever the imprecise-drop toggle currently says, like a map drop.
+      stageDrop(ids, item.lat, item.lng, item.accuracy ?? currentDropAccuracy());
+    },
+  });
 }
 
 // Shared by the Area Selection feature below (its onAreaSelectStart records the
@@ -2191,6 +2394,9 @@ async function commitPendingGeo(groups, what) {
         // Only clear what actually landed — a failed point stays staged.
         p.ids.forEach(id => pendingGeo.delete(id));
         saved += p.ids.length;
+        // A committed point is a location the user demonstrably uses — it heads
+        // the location picker's Recent list from here on.
+        rememberLocation(p.lat, p.lng, p.accuracy, g.label);
       } else {
         failures.push(`${g.label} (${p.lat.toFixed(4)}, ${p.lng.toFixed(4)})`);
       }
