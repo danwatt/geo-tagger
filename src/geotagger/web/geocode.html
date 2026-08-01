@@ -115,8 +115,9 @@
         <button id="tag-as-btn" class="primary" title="Tag the selected photos at a place you already use — saved places, recent locations, hotspots (shortcut: L)">📍 Tag as… <kbd>L</kbd></button>
       </div>
       <div class="toolbar-group">
-        <button id="mark-ignored-btn" title="Mark selected photos as not needing a location (e.g. screenshots)">🚫 Ignore location</button>
-        <button id="unmark-ignored-btn" title="Restore selected photos to normal geocoding filtering">↩ Un-ignore</button>
+        <!-- Stages, like a map drop — nothing is written until Commit. Undoing a
+             committed mark is the detail pane's "Ignore for geocoding" checkbox. -->
+        <button id="mark-ignored-btn" title="Stage the selected photos as not needing a location (e.g. screenshots) — review and Commit below">🚫 Ignore location</button>
       </div>
     </div>
 

@@ -438,7 +438,10 @@ function openEntityPicker(items, opts) {
   modal.appendChild(search);
 
   const list = document.createElement("div");
-  list.className = "pp-list";
+  // Cards mode: thumbnail on top, name beneath it, tiled — the location picker
+  // is picked by *looking* at the photo, so the 28px strip on the left was the
+  // wrong emphasis. The person list stays a plain vertical list.
+  list.className = "pp-list" + (opts.cards ? " pp-cards" : "");
   modal.appendChild(list);
 
   const allowCreate = opts.allowCreate ?? true;
@@ -508,6 +511,12 @@ function openEntityPicker(items, opts) {
       img.loading = "lazy";
       img.alt = "";
       row.appendChild(img);
+    } else if (opts.cards) {
+      // Keeps the tile the same height as its neighbours, so names line up.
+      const ph = document.createElement("span");
+      ph.className = "pp-thumb pp-thumb-empty";
+      ph.textContent = "📍";
+      row.appendChild(ph);
     }
 
     const main = document.createElement("span");

@@ -356,6 +356,12 @@ input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
   background: rgba(140, 92, 20, .9);
   color: #ffe2b8;
 }
+/* The "needs no location" group stages alongside the dropped places but isn't
+   one — a grey chip instead of the destination amber says so at a glance. */
+.pending-ignore-group .thumb-cell.pending-cell .pending-label {
+  background: rgba(60, 60, 60, .9);
+  color: var(--text-muted);
+}
 .pending-undo {
   position: absolute;
   top: 2px;

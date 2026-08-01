@@ -11,6 +11,7 @@ let activeBasemap = "street";
 let places = [];            // loaded from /api/places
 let placeShapes = {};       // place_id -> L.Rectangle | L.Circle
 let selectedPlaceId = null; // highlighted in sidebar
+let placeFilter = "all";    // all | with-photo | without-photo — sidebar list only
 
 let drawingMode = null;     // null | "rectangle" | "circle"
 let drawingShape = null;    // temporary shape being drawn
@@ -99,6 +100,12 @@ function bindToolbar() {
   document.getElementById("draw-rectangle-btn").addEventListener("click", () => startDrawing("rectangle"));
   document.getElementById("draw-circle-btn").addEventListener("click", () => startDrawing("circle"));
 
+  const filter = document.getElementById("place-filter");
+  filter.addEventListener("change", () => {
+    placeFilter = filter.value;
+    renderSidebar();
+  });
+
   const chk = document.getElementById("show-hotspots-chk");
   const controls = document.getElementById("hotspot-controls");
   const sort = document.getElementById("hotspot-sort");
@@ -146,6 +153,14 @@ async function loadPlaces() {
 }
 
 /* ── Rendering ── */
+// The filter narrows the sidebar only — the map keeps every place drawn, so
+// hiding a row never hides the shape you are about to drag.
+function filteredPlaces() {
+  if (placeFilter === "with-photo") return places.filter(p => p.representative_photo_id);
+  if (placeFilter === "without-photo") return places.filter(p => !p.representative_photo_id);
+  return places;
+}
+
 function renderSidebar() {
   const list = document.getElementById("place-list");
   // The hint is re-created rather than hidden and kept: it lives *inside* the
@@ -157,7 +172,13 @@ function renderSidebar() {
       or circle on the map.</div>`;
     return;
   }
-  places.forEach(p => {
+  const shown = filteredPlaces();
+  if (!shown.length) {
+    list.innerHTML = `<div id="no-places-hint">No places ${
+      placeFilter === "with-photo" ? "have" : "are missing"} a representative photo.</div>`;
+    return;
+  }
+  shown.forEach(p => {
     const div = document.createElement("div");
     div.className = "place-item" + (p.id === selectedPlaceId ? " selected" : "");
     div.dataset.id = p.id;
@@ -176,7 +197,6 @@ function renderSidebar() {
 
     div.innerHTML = `
       <div class="place-item-name">${escHtml(p.name)}</div>
-      <div class="place-item-meta">${placeMeta(p)}</div>
       ${repThumb}
       <div class="place-item-actions">
         <button class="zoom-btn">Zoom</button>
@@ -293,10 +313,6 @@ function formatRadius(m) {
   return `${Math.round(m)} m`;
 }
 
-function placeMeta(place) {
-  return place.type === "circle"
-    ? `circle · ${formatRadius(circleRadius(place))}` : place.type;
-}
 
 // Due east of the centre at `radius` metres. The cosine is floored so a place
 // near a pole can't divide the offset up to infinity.
@@ -344,20 +360,14 @@ function showCircleHandles(place) {
     const c = shape.getLatLng();
     const r = Math.max(MIN_RADIUS_M, c.distanceTo(radiusHandle.getLatLng()));
     shape.setRadius(r);
+    // The handle tooltip is the only live size readout now — the sidebar row
+    // shows the name and photo, nothing about geometry.
     radiusHandle.setTooltipContent(formatRadius(r));
-    updateRadiusMeta(place, r);
   });
   radiusHandle.on("dragend", async () => {
     radiusHandle.setLatLng(edgeLatLng(shape.getLatLng(), shape.getRadius()));
     await updatePlaceBounds(place);
   });
-}
-
-// Keep the sidebar's size text in step with a drag without re-rendering the
-// list — a re-render on every mousemove would fight the drag.
-function updateRadiusMeta(place, radius) {
-  const meta = document.querySelector(`.place-item[data-id="${place.id}"] .place-item-meta`);
-  if (meta) meta.textContent = `circle · ${formatRadius(radius)}`;
 }
 
 async function updatePlaceBounds(place) {

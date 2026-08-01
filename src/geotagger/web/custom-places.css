@@ -38,10 +38,9 @@
   margin-bottom: 4px;
 }
 
-.place-item-meta {
-  color: var(--text-muted);
+#place-filter {
   font-size: 12px;
-  line-height: 1.5;
+  padding: 3px 6px;
 }
 
 .place-rep-thumb {

@@ -39,6 +39,12 @@
   <div id="sidebar">
     <div id="sidebar-header">
       <h2>Custom Places</h2>
+      <!-- Filters the sidebar list only; every place stays drawn on the map. -->
+      <select id="place-filter" title="Which places to list">
+        <option value="all">All</option>
+        <option value="with-photo">With photo</option>
+        <option value="without-photo">No photo</option>
+      </select>
     </div>
     <div id="place-list">
       <div id="no-places-hint">No places yet — draw a rectangle or circle on the map.</div>
