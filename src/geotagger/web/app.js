@@ -122,10 +122,23 @@ function camColor(camera) {
   return camColorMap[key];
 }
 
+/* ── Photo timestamps are wall clock, not instants ──
+ * photo_datetime is the EXIF datetime read as if it were UTC (sidecar.py's
+ * _parse_exif_datetime → calendar.timegm), so "2007:07:11 20:07:11" is stored
+ * as 20:07 *UTC* no matter which zone the camera was in — there's no offset in
+ * the file to do better. Reading it back with the browser's local getters
+ * therefore shifts every photo by the viewer's own offset: in US Central that
+ * 20:07 photo lands in the 3 PM band, and photos near midnight land on the
+ * wrong day entirely. So every calendar field the UI shows is taken with the
+ * UTC getters, which hand back exactly the wall clock the camera wrote. The
+ * backend already does the same (serializers.photo_to_dict, index.py's
+ * timegm-based date filters, the timeline's strftime(...,'unixepoch')). */
+const UTC = { timeZone: "UTC" };
+
 function dayKey(photo) {
   if (!photo.photo_datetime) return null;
   const d = new Date(photo.photo_datetime * 1000);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
 }
 
 function isolateDay(key) {
@@ -330,6 +343,20 @@ function bindToolbar() {
     applyFilters();
   });
   document.getElementById("window-select").addEventListener("change", reloadCurrentView);
+
+  // Row banding is pure presentation of the loaded photos — re-render the grid,
+  // nothing else. The choice sticks per browser, like the recent-locations list.
+  const bandSelect = document.getElementById("band-select");
+  const savedBand = localStorage.getItem(BAND_SECS_KEY);
+  if (savedBand !== null && [...bandSelect.options].some(o => o.value === savedBand)) {
+    bandSelect.value = savedBand;
+  }
+  bandSecs = Number(bandSelect.value);
+  bandSelect.addEventListener("change", () => {
+    bandSecs = Number(bandSelect.value);
+    localStorage.setItem(BAND_SECS_KEY, bandSelect.value);
+    renderGrid();
+  });
   document.getElementById("place-search-btn").addEventListener("click", doPlaceSearch);
   document.getElementById("place-search").addEventListener("keydown", (e) => {
     if (e.key === "Enter") doPlaceSearch();
@@ -1260,12 +1287,14 @@ function openPhotoContextMenu(e, photo) {
   header.title = photo.filename;
   menu.appendChild(header);
 
-  const add = (label, title, onClick) => {
+  const add = (label, title, onClick, disabled = false) => {
     const item = document.createElement("div");
-    item.className = "photo-ctx-item";
+    item.className = "photo-ctx-item" + (disabled ? " disabled" : "");
     item.textContent = label;
     item.title = title;
-    item.addEventListener("click", () => { closePhotoContextMenu(); onClick(); });
+    if (!disabled) {
+      item.addEventListener("click", () => { closePhotoContextMenu(); onClick(); });
+    }
     menu.appendChild(item);
   };
 
@@ -1278,6 +1307,10 @@ function openPhotoContextMenu(e, photo) {
   add("🗺 Show nearby on map",
       "Put every photo from this photo's day on the map, whatever the Show toggles say",
       () => showDayOnMap(photo));
+
+  // Road Trip mode (roadtrip.js) appends "start/end the trip here" entries. The
+  // page works without that file loaded, so the hook is optional.
+  if (typeof window.roadtripContextItems === "function") window.roadtripContextItems(photo, add);
 
   document.body.appendChild(menu);
   // Position at the cursor, clamped inside the viewport.
@@ -1352,9 +1385,9 @@ function renderGrid() {
     let year = null, month = null, day = null, date = null;
     if (photo.photo_datetime) {
       date = new Date(photo.photo_datetime * 1000);
-      year = date.getFullYear();
-      month = date.getMonth();
-      day = date.getDate();
+      year = date.getUTCFullYear();
+      month = date.getUTCMonth();
+      day = date.getUTCDate();
     }
     if (!curGroup || curGroup.key !== key ||
         curGroup.year !== year || curGroup.month !== month || curGroup.day !== day) {
@@ -1400,7 +1433,7 @@ function renderGrid() {
       sec.className = `face-group-section group-tint-${groupIdx % 6}`;
 
       const title = group.date
-        ? `${DAY_ABBRS[group.date.getDay()]} ${group.day}`
+        ? `${DAY_ABBRS[group.date.getUTCDay()]} ${group.day}`
         : sub.place ? `📍 ${sub.place}` : sub.dir ? `📁 ${sub.dir}` : "Undated";
       const count = sub.photos.length;
       const isIsolated = group.key !== null && dayIsolation === group.key;
@@ -1447,10 +1480,24 @@ function renderGrid() {
         ] : [],
       }));
 
-      const cells = document.createElement("div");
-      cells.className = "face-group-cells";
-      sub.photos.forEach(({ photo, idx }) => cells.appendChild(makeThumbCell(photo, idx)));
-      sec.appendChild(cells);
+      // Inside a dated day the cells break again into time bands (width from the
+      // Rows dropdown): a day on the road is a hundred thumbnails, and "which of
+      // these are the 3pm ones" is the question you're actually asking when
+      // placing them. A day that falls in one band gets no label — it would only
+      // repeat the header. Undated sub-groups have no clock to band by.
+      const bands = group.date ? timeBands(sub.photos) : [{ start: null, photos: sub.photos }];
+      bands.forEach((band, bandIdx) => {
+        if (band.start !== null && bands.length > 1) {
+          const div = document.createElement("div");
+          div.className = "grid-band-divider" + (bandIdx === 0 ? " first-band" : "");
+          div.textContent = `${bandLabel(band.start)} · ${band.photos.length}`;
+          sec.appendChild(div);
+        }
+        const cells = document.createElement("div");
+        cells.className = "face-group-cells";
+        band.photos.forEach(({ photo, idx }) => cells.appendChild(makeThumbCell(photo, idx)));
+        sec.appendChild(cells);
+      });
       grid.appendChild(sec);
       groupIdx++;
     });
@@ -1459,6 +1506,38 @@ function renderGrid() {
   // The grid and the staging area are two views of the same photo list — a
   // staged photo leaves one and appears in the other — so they render together.
   renderPendingGeo();
+}
+
+/* ── Time bands inside a day ──
+ * Band width in seconds, or 0 for "don't split the day at all". Every width on
+ * offer divides an hour evenly, so bucketing on the raw epoch second puts the
+ * boundaries on clock times (:00, :05, :10 …) — that works because
+ * photo_datetime is wall-clock-as-UTC (see the note above dayKey), so epoch
+ * zero is midnight on the same clock the photos were taken by. */
+const BAND_SECS_KEY = "geotagger.gridBandSecs";
+let bandSecs = 3600;
+
+// Consecutive runs of photos that share a band. filteredPhotos is in time
+// order, so a run *is* a band — no sorting or bucketing needed.
+function timeBands(entries) {
+  if (!bandSecs) return [{ start: null, photos: entries }];
+  const bands = [];
+  entries.forEach(entry => {
+    const ts = entry.photo.photo_datetime;
+    const start = ts ? Math.floor(ts / bandSecs) * bandSecs : null;
+    const last = bands[bands.length - 1];
+    if (!last || last.start !== start) bands.push({ start, photos: [entry] });
+    else last.photos.push(entry);
+  });
+  return bands;
+}
+
+// UTC on purpose — see the note above dayKey. Hour bands leave off the ":00"
+// that would otherwise be on every label.
+function bandLabel(startTs) {
+  const opts = { hour: "numeric", timeZone: "UTC" };
+  if (bandSecs < 3600) opts.minute = "2-digit";
+  return new Date(startTs * 1000).toLocaleTimeString(undefined, opts);
 }
 
 // Buckets one day-group's undated photos by resolved location (locationKey,
@@ -2071,13 +2150,13 @@ function bindTimeline() {
     const d = new Date(bucket.ts * 1000);
     let label;
     if (histBucketSecs <= 86400) {
-      label = d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+      label = d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric", ...UTC });
     } else if (histBucketSecs <= 86400 * 7) {
       const end = new Date((bucket.ts + histBucketSecs - 86400) * 1000);
-      label = d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) +
-              " – " + end.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+      label = d.toLocaleDateString(undefined, { month: "short", day: "numeric", ...UTC }) +
+              " – " + end.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric", ...UTC });
     } else {
-      label = d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+      label = d.toLocaleDateString(undefined, { month: "long", year: "numeric", ...UTC });
     }
     if (bucket.count) label += ` · ${bucket.count}`;
 
@@ -2169,7 +2248,7 @@ function updateDateLabels() {
 function fmtDate(ts) {
   if (!ts) return "";
   const d = new Date(ts * 1000);
-  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", ...UTC });
 }
 
 function drawHistogram() {

@@ -34,16 +34,20 @@ function applyBbox(el, bbox) {
 }
 
 /* ── Date-range label for a group of faces ──
- * Both timestamps are epoch seconds. Falls back to "Undated" with no start. */
+ * Both timestamps are epoch seconds. Falls back to "Undated" with no start.
+ * Formatted in UTC: these are photo_datetime values, which hold the camera's
+ * wall clock stored as if it were UTC (see the note above dayKey in app.js), so
+ * local formatting would slide a late-evening photo onto the next/previous day
+ * depending on where the *viewer* is. */
 function formatDateRange(startTs, endTs) {
   if (!startTs) return "Undated";
-  const opts = { year: "numeric", month: "short", day: "numeric" };
+  const opts = { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" };
   const s = new Date(startTs * 1000);
   const e = new Date((endTs || startTs) * 1000);
   const sStr = s.toLocaleDateString(undefined, opts);
   const eStr = e.toLocaleDateString(undefined, opts);
   if (sStr === eStr) return sStr;
-  return `${s.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${eStr}`;
+  return `${s.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" })} – ${eStr}`;
 }
 
 /* ── Location label for a group of faces ──

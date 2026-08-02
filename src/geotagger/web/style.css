@@ -164,6 +164,22 @@
   pointer-events: none;
 }
 
+/* Time band inside a day section (width set by the Rows dropdown) — quieter
+   than the day header above it, since it's a subdivision of that day and not a
+   new group. */
+.grid-band-divider {
+  padding: 3px 6px 1px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .03em;
+  color: var(--text-faint);
+  border-top: 1px solid var(--border-2);
+  user-select: none;
+  pointer-events: none;
+}
+/* The first band sits right under the day header, which already draws a line. */
+.grid-band-divider.first-band { border-top: none; }
+
 /* Camera legend */
 #cam-legend {
   padding: 6px 10px;
@@ -581,3 +597,7 @@
   white-space: nowrap;
 }
 .photo-ctx-item:hover { background: var(--accent-bg); color: var(--on-accent); }
+/* Shown but inert — the action exists, this photo just can't be its target
+   (e.g. a road-trip endpoint needs a location and a timestamp). */
+.photo-ctx-item.disabled { color: var(--text-dim); cursor: default; }
+.photo-ctx-item.disabled:hover { background: none; color: var(--text-dim); }
