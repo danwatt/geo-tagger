@@ -37,3 +37,42 @@ def test_census_job_status_starts_idle(client):
 
 def test_download_history_endpoint_is_empty_on_a_fresh_db(client):
     assert client.get("/api/data/downloads").json() == {"downloads": []}
+
+
+# ── Street search ──
+# The scan itself is covered in tests/test_osm_streets.py; these lock in the HTTP
+# contract the Data Management page's search card depends on.
+
+
+def test_streets_status_reports_no_cached_extracts(client):
+    body = client.get("/api/data/streets/status").json()
+    assert body["available"] is False
+    assert body["files"] == []
+    assert "pbf-cache" in body["cache_dir"]
+
+
+def test_streets_search_job_starts_idle(client):
+    job = client.get("/api/data/streets/search/status").json()
+    assert job["running"] is False
+    assert job["done"] is False
+    assert job["error"] is None
+
+
+def test_streets_search_without_cached_extracts_is_a_400(client):
+    res = client.post("/api/data/streets/search",
+                      json={"bbox": "-96.1,29.9,-95.9,30.1", "query": "main"})
+    assert res.status_code == 400
+    assert "no longer on disk" in res.json()["detail"]
+
+
+def test_streets_search_rejects_a_short_query(client):
+    res = client.post("/api/data/streets/search",
+                      json={"bbox": "-96.1,29.9,-95.9,30.1", "query": "m"})
+    assert res.status_code == 400
+    assert "2 characters" in res.json()["detail"]
+
+
+def test_streets_search_rejects_a_malformed_bbox(client):
+    res = client.post("/api/data/streets/search", json={"bbox": "nope", "query": "main"})
+    assert res.status_code == 400
+    assert "minLng" in res.json()["detail"]

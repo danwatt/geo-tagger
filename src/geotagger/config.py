@@ -159,6 +159,28 @@ def get_osm_db(data_root: Path | None = None) -> Path:
 
 OSM_DB_PATH: Path = get_osm_db()
 
+
+def get_pbf_cache_dir() -> Path:
+    """Where the downloaded GeoFabrik .osm.pbf extracts are kept after the Data
+    Management page has merged them into the places DB. Read at call time (not
+    bound to a constant) because OSM_DB_PATH is re-resolved by resolve_data_paths
+    once the scan root is known. Keeping the raw extracts is what makes the
+    on-demand street search (osm_streets.py) possible without loading every road
+    into a database — delete the directory and only that feature stops working."""
+    return OSM_DB_PATH.parent / "pbf-cache"
+
+
+# ── OSM street search (on-demand, over the cached .osm.pbf extracts) ──
+# Max ways one search returns before it stops scanning and reports "truncated".
+# Each way is a street *segment* (OSM splits a road at every junction/tag change),
+# so a few hundred covers a long road across a city viewport.
+OSM_STREETS_MAX_WAYS = int(os.environ.get("GEOTAGGER_OSM_STREETS_MAX_WAYS", "600"))
+# pyosmium node-location index used while streaming a .pbf. "flex_mem" is the same
+# index osm_builder uses for the merge; it holds every node location in RAM
+# (hundreds of MB for a big state extract) but keeps the scan to a single pass.
+# "sparse_file_array,<path>" would trade speed for memory if that ever matters.
+OSM_STREETS_LOCATION_INDEX = os.environ.get("GEOTAGGER_OSM_STREETS_INDEX", "flex_mem")
+
 # ── US Census places (offline, polygon reverse geocoding) ──
 # SQLite DB of US Census Cartographic Boundary "places" — every incorporated place
 # *plus* every census designated place (CDP), which is what covers the unincorporated

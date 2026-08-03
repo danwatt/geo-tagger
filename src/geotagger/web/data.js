@@ -204,6 +204,8 @@ async function pollOsm() {
       if (job.done) {
         progress.textContent = job.message;
         await loadStatus();
+        // The merge just cached a fresh .osm.pbf — that's a newly searchable region.
+        await loadStreetsStatus();
         break;
       }
       if (!job.running) break;
@@ -362,6 +364,219 @@ async function startFaceModelDownload() {
   }
 }
 
+// ── Street search ──
+//
+// Streets aren't in any database (see osm_streets.py) — a search streams the raw
+// cached .osm.pbf extracts, which takes seconds to a minute, so this drives the
+// same start-job-then-poll loop the downloads above use rather than one long fetch.
+
+let streetsMap = null;
+let streetsLayer = null;
+let streetsPolling = false;
+let streetGroups = [];      // [{name, ref, ways: [{coords, ...}], lines: [L.Polyline]}]
+
+function initStreetsMap(status) {
+  streetsMap = L.map("streets-map").setView([39, -96], 4);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "© OpenStreetMap contributors",
+    maxZoom: 19,
+  }).addTo(streetsMap);
+  streetsLayer = L.layerGroup().addTo(streetsMap);
+  fitStreetsMap(status);
+}
+
+// Open on something searchable: the extents of whatever extracts are cached, since
+// those are the only areas a search can return anything for. With none cached (or
+// none carrying a header bbox), fall back to the library's own photo bounds.
+async function fitStreetsMap(status) {
+  const boxes = (status.files || []).map((f) => f.bbox).filter(Boolean);
+  if (boxes.length) {
+    streetsMap.fitBounds([
+      [Math.min(...boxes.map((b) => b.min_lat)), Math.min(...boxes.map((b) => b.min_lng))],
+      [Math.max(...boxes.map((b) => b.max_lat)), Math.max(...boxes.map((b) => b.max_lng))],
+    ], { padding: [20, 20] });
+    return;
+  }
+  try {
+    const res = await fetch("/api/stats/bounds");
+    const data = await res.json();
+    if (data.has_data) {
+      streetsMap.fitBounds([[data.min_lat, data.min_lng], [data.max_lat, data.max_lng]],
+        { padding: [20, 20] });
+    }
+  } catch (e) {
+    // keep the default view
+  }
+}
+
+async function loadStreetsStatus() {
+  const el = document.getElementById("streets-status");
+  const btn = document.getElementById("streets-search-btn");
+  try {
+    const res = await fetch("/api/data/streets/status");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const status = await res.json();
+    if (!status.available) {
+      el.innerHTML = `
+        <div class="data-file-row">
+          <span>Raw OSM extracts</span>
+          <span class="missing">none cached — street search unavailable</span>
+        </div>
+        <div class="data-file-row data-file-subrow">
+          <span>Expected in ${status.cache_dir}</span>
+        </div>
+      `;
+    } else {
+      el.innerHTML = `
+        <div class="data-file-row">
+          <span>Raw OSM extracts</span>
+          <span class="present">${status.files.length} cached, ${fmtBytes(status.total_size)}</span>
+        </div>
+        ${status.files.map((f) => `
+          <div class="data-file-row data-file-subrow">
+            <span>${f.label}</span>
+            <span>${fmtBytes(f.size)}</span>
+          </div>
+        `).join("")}
+      `;
+    }
+    btn.disabled = !status.available;
+    if (!streetsMap) initStreetsMap(status);
+    return status;
+  } catch (e) {
+    document.getElementById("streets-error").textContent = e.message;
+    return null;
+  }
+}
+
+async function startStreetSearch() {
+  const btn = document.getElementById("streets-search-btn");
+  const errorEl = document.getElementById("streets-error");
+  const query = document.getElementById("streets-query").value.trim();
+  errorEl.textContent = "";
+  if (query.length < 2) {
+    errorEl.textContent = "Type at least 2 characters to search.";
+    return;
+  }
+  const b = streetsMap.getBounds();
+  const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/data/streets/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        bbox,
+        query,
+        include_paths: document.getElementById("streets-paths").checked,
+      }),
+    });
+    if (res.status === 409) { pollStreets(); return; }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `HTTP ${res.status}`);
+    }
+    pollStreets();
+  } catch (e) {
+    errorEl.textContent = e.message;
+    btn.disabled = false;
+  }
+}
+
+async function pollStreets() {
+  if (streetsPolling) return;
+  streetsPolling = true;
+  const btn = document.getElementById("streets-search-btn");
+  const progress = document.getElementById("streets-progress");
+  const errorEl = document.getElementById("streets-error");
+  try {
+    while (true) {
+      const res = await fetch("/api/data/streets/search/status");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const job = await res.json();
+      progress.textContent = job.message || "";
+      if (job.error) { errorEl.textContent = job.error; break; }
+      if (job.done) {
+        renderStreets(job.result);
+        break;
+      }
+      if (!job.running) break;
+      await new Promise((r) => setTimeout(r, 800));
+    }
+  } finally {
+    streetsPolling = false;
+    btn.disabled = false;
+  }
+}
+
+// Segments, not streets: OSM splits a road at every junction and tag change, so a
+// single named road comes back as dozens of ways. Group by name for the list, but
+// keep each way its own polyline so gaps between segments stay honest.
+function renderStreets(result) {
+  streetsLayer.clearLayers();
+  streetGroups = [];
+  const listEl = document.getElementById("streets-results");
+  const streets = (result && result.streets) || [];
+  if (!streets.length) {
+    listEl.innerHTML = "";
+    return;
+  }
+
+  const byName = new Map();
+  streets.forEach((s) => {
+    const key = s.name + (s.ref && s.ref !== s.name ? ` (${s.ref})` : "");
+    if (!byName.has(key)) byName.set(key, { key, ways: [], lines: [] });
+    byName.get(key).ways.push(s);
+  });
+  streetGroups = Array.from(byName.values())
+    .sort((a, b) => b.ways.length - a.ways.length || a.key.localeCompare(b.key));
+
+  streetGroups.forEach((group) => {
+    group.ways.forEach((way) => {
+      const line = L.polyline(way.coords, {
+        color: "#e0a040", weight: 4, opacity: 0.85,
+      }).addTo(streetsLayer);
+      line.bindTooltip(`${way.name}${way.highway ? ` · ${way.highway}` : ""}`, { sticky: true });
+      group.lines.push(line);
+    });
+  });
+
+  listEl.innerHTML = streetGroups.map((group, i) => `
+    <div class="street-row" data-i="${i}">
+      <span>${group.key}</span>
+      <span class="street-meta">${group.ways.length} segment${group.ways.length === 1 ? "" : "s"}</span>
+    </div>
+  `).join("");
+
+  const all = streetGroups.flatMap((g) => g.lines);
+  if (all.length) {
+    streetsMap.fitBounds(L.featureGroup(all).getBounds().pad(0.15));
+  }
+}
+
+function focusStreetGroup(i) {
+  const group = streetGroups[i];
+  if (!group) return;
+  document.querySelectorAll(".street-row").forEach((row) => {
+    row.classList.toggle("active", Number(row.dataset.i) === i);
+  });
+  streetGroups.forEach((g) => g.lines.forEach((line) => {
+    line.setStyle(g === group
+      ? { color: "#7ab8f5", weight: 6, opacity: 1 }
+      : { color: "#e0a040", weight: 4, opacity: 0.35 });
+  }));
+  streetsMap.fitBounds(L.featureGroup(group.lines).getBounds().pad(0.25));
+}
+
+document.getElementById("streets-search-btn").addEventListener("click", startStreetSearch);
+document.getElementById("streets-query").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") startStreetSearch();
+});
+document.getElementById("streets-results").addEventListener("click", (e) => {
+  const row = e.target.closest(".street-row");
+  if (row) focusStreetGroup(Number(row.dataset.i));
+});
+
 document.getElementById("geonames-download-btn").addEventListener("click", startGeonamesDownload);
 document.getElementById("osm-download-btn").addEventListener("click", startOsmDownload);
 document.getElementById("census-download-btn").addEventListener("click", startCensusDownload);
@@ -378,6 +593,7 @@ document.getElementById("osm-state-picker").addEventListener("change", (e) => {
 });
 
 loadStatus().then(() => {
+  loadStreetsStatus();
   // Resume polling if a job was already running when the page loaded (e.g. reload mid-download).
   fetch("/api/data/geonames/download/status").then((r) => r.json()).then((j) => {
     if (j.running) { document.getElementById("geonames-download-btn").disabled = true; pollGeonames(); }
@@ -390,5 +606,8 @@ loadStatus().then(() => {
   });
   fetch("/api/data/face-model/download/status").then((r) => r.json()).then((j) => {
     if (j.running) { document.getElementById("face-model-download-btn").disabled = true; pollFaceModel(); }
+  });
+  fetch("/api/data/streets/search/status").then((r) => r.json()).then((j) => {
+    if (j.running) { document.getElementById("streets-search-btn").disabled = true; pollStreets(); }
   });
 });

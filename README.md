@@ -140,6 +140,15 @@ state/county/country. Skip it and geocoding falls back to GeoNames city names. O
 © OpenStreetMap contributors (ODbL). View the boundaries on the **Places DB** map
 (`/map.html`) via the "OSM places" toggle.
 
+Streets are deliberately *not* part of this database — a road network is far more geometry
+than reverse geocoding needs. Instead, the Data Management page's **Street search** card
+searches the raw `.osm.pbf` extracts directly (the ones the page keeps in its `pbf-cache/`
+folder after a download) and draws the matching roads on a small map: pan to an area, type
+part of a street name or route number, and it streams the extract and returns every matching
+road passing through the visible map area. Scanning a state extract takes a few seconds. If
+those raw downloads have been deleted to reclaim disk, the card says so — re-download a region
+(with "force") to restore them.
+
 ### 5. Install US Census boundaries (optional — fills OSM's gaps in the US)
 
 US unincorporated areas have no OSM city boundary at all, so photos there fall through to

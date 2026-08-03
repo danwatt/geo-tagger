@@ -9,7 +9,8 @@ from pydantic import BaseModel
 
 from geotagger import index
 from geotagger.executor import get_executor
-from geotagger.services import data_service
+from geotagger.geometry import normalize_lng_bbox
+from geotagger.services import data_service, streets_service
 
 router = APIRouter()
 
@@ -21,6 +22,13 @@ class OsmDownloadRequest(BaseModel):
 
 class ForceRequest(BaseModel):
     force: bool = False  # re-download even if already present on disk
+
+
+class StreetSearchRequest(BaseModel):
+    bbox: str            # "minLng,minLat,maxLng,maxLat" — the map viewport
+    query: str           # case-insensitive substring of a street's name or ref
+    limit: int | None = None
+    include_paths: bool = False  # also match footway/path/cycleway/track
 
 
 @router.get("/api/data/status")
@@ -80,6 +88,41 @@ async def api_data_census_download(req: ForceRequest = ForceRequest()):
 @router.get("/api/data/census/download/status")
 async def api_data_census_download_status():
     return data_service.census_job_status()
+
+
+# ── Street search (reads the cached .osm.pbf extracts directly, no DB) ──
+
+@router.get("/api/data/streets/status")
+async def api_data_streets_status():
+    """Which raw GeoFabrik extracts are still cached — the street search only works
+    while they are, since nothing about streets is ingested into a database."""
+    return streets_service.streets_status()
+
+
+@router.post("/api/data/streets/search")
+async def api_data_streets_search(req: StreetSearchRequest):
+    try:
+        min_lng, min_lat, max_lng, max_lat = map(float, req.bbox.split(","))
+    except ValueError:
+        raise HTTPException(400, "bbox must be minLng,minLat,maxLng,maxLat")
+    # Leaflet returns unwrapped longitudes once the map has been panned around the
+    # globe — see geometry.normalize_lng_bbox.
+    min_lng, max_lng = normalize_lng_bbox(min_lng, max_lng)
+    try:
+        started = streets_service.start_search(
+            get_executor(), min_lat, max_lat, min_lng, max_lng,
+            req.query, req.limit, req.include_paths,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not started:
+        raise HTTPException(409, "A street search is already running")
+    return {"started": True}
+
+
+@router.get("/api/data/streets/search/status")
+async def api_data_streets_search_status():
+    return streets_service.search_job_status()
 
 
 @router.post("/api/data/face-model/download")

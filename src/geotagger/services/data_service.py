@@ -130,7 +130,9 @@ def geofabrik_region_groups() -> list[dict]:
 
 
 def _pbf_cache_dir() -> Path:
-    return config.OSM_DB_PATH.parent / "pbf-cache"
+    # Shared with osm_streets.py, which searches these same cached extracts for
+    # street lines on demand — hence the single definition in config.
+    return config.get_pbf_cache_dir()
 
 
 def _count_lines(path: Path) -> int | None:

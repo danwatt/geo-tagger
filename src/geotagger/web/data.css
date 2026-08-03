@@ -122,3 +122,63 @@
   cursor: pointer;
 }
 #osm-state-picker label.state-loaded { color: #5cb85c; }
+
+/* ── Street search ── */
+
+.streets-controls {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+#streets-query {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-input);
+  color: var(--text-strong);
+}
+#streets-query:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+#streets-map {
+  height: 320px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  margin-bottom: 10px;
+  /* Leaflet's own panes/controls are light-themed by default; the dark page
+     around them makes the default white attribution strip glare, so tone it
+     down here rather than page-wide. */
+  background: var(--surface-black);
+}
+#streets-map .leaflet-control-attribution {
+  background: rgba(0, 0, 0, .6);
+  color: var(--text-faint);
+}
+#streets-map .leaflet-control-attribution a { color: var(--text-muted); }
+
+.streets-results {
+  font-size: 12px;
+  color: var(--text);
+  max-height: 180px;
+  overflow-y: auto;
+}
+.street-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 3px 4px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.street-row:last-child { border-bottom: none; }
+.street-row:hover { background: var(--surface-input); }
+.street-row.active { background: var(--accent-bg); color: var(--on-accent); }
+.street-row .street-meta {
+  color: var(--text-faint);
+  font-size: 11px;
+  white-space: nowrap;
+}

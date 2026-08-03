@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Data Management - Geo-Tagger</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="theme.css"/>
 <link rel="stylesheet" href="style.css"/>
 <link rel="stylesheet" href="data.css"/>
@@ -83,8 +84,33 @@
     <div id="osm-progress" class="data-progress"></div>
     <div id="osm-error" class="data-error"></div>
   </div>
+
+  <div class="data-group" id="card-streets">
+    <h2>Street search (roads &amp; lines)</h2>
+    <p class="data-help">
+      Streets are <em>not</em> stored in any database — there are far too many of
+      them to be worth it for reverse geocoding. Instead this searches the raw
+      <code>.osm.pbf</code> downloads still sitting in the cache, live, and draws
+      what it finds on the map below. Pan/zoom to the area you care about, type
+      part of a street name or route number, and search: only roads passing
+      through the visible map area are returned. If the raw downloads have been
+      deleted, this stops working until a region is re-downloaded.
+    </p>
+    <div id="streets-status" class="data-files"></div>
+    <div class="streets-controls">
+      <input type="text" id="streets-query" placeholder="Street name or route number…"
+             autocomplete="off" spellcheck="false">
+      <button id="streets-search-btn">Search this map area</button>
+    </div>
+    <label class="force-label"><input type="checkbox" id="streets-paths"> Include trails, paths &amp; sidewalks</label>
+    <div id="streets-map"></div>
+    <div id="streets-results" class="streets-results"></div>
+    <div id="streets-progress" class="data-progress"></div>
+    <div id="streets-error" class="data-error"></div>
+  </div>
 </div>
 
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="nav.js"></script>
 <script src="data.js"></script>
 </body>
