@@ -45,6 +45,11 @@
 
 .search-field-people { min-width: 220px; }
 
+/* The date range picker brings its own field box, so the form only sizes it.
+   overflow stays visible here — the popover escapes the field. */
+.search-field-dates { width: 260px; max-width: 100%; }
+.search-field-dates .drp { width: 100%; }
+
 #person-chips {
   display: flex;
   flex-wrap: wrap;

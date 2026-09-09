@@ -71,24 +71,31 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("grid-nav").after(actions);
   }
   const scope = document.getElementById("workspace-scope-text");
+  // Both pages render the active range in the date picker's trigger; reuse that
+  // text rather than re-deriving it from the bounds.
+  function dateScopeText() {
+    const value = document.querySelector("#date-range .drp-value");
+    return value && !value.classList.contains("placeholder") ? value.textContent : "All dates";
+  }
   function updateScope() {
     if (mapPane) {
       const area = document.getElementById("selected-area-label").textContent;
       const month = document.getElementById("selected-month-label").textContent;
-      const date = document.getElementById("timeline-range-label").textContent;
       const bounds = !document.getElementById("place-buffer-select").hidden && document.getElementById("place-buffer-select").value === "0" ? "Within bounds" : "";
-      scope.textContent = [area || (month !== "No month selected" ? month : "Choose a location or month"), bounds, date || "All dates"].filter(Boolean).join(" · ");
+      scope.textContent = [area || (month !== "No month selected" ? month : "Choose a location or month"), bounds, dateScopeText()].filter(Boolean).join(" · ");
     } else {
       const location = document.getElementById("location-input").value.trim() || "All locations";
-      const from = document.getElementById("date-from").value;
-      const to = document.getElementById("date-to").value;
       const bounds = document.getElementById("nearby-field").hidden ? "" : document.getElementById("nearby-select").selectedOptions[0].text;
-      scope.textContent = [location, bounds, from || to ? `${from || "Any start date"} – ${to || "Any end date"}` : "All dates"].filter(Boolean).join(" · ");
+      scope.textContent = [location, bounds, dateScopeText()].filter(Boolean).join(" · ");
     }
   }
   if (mapPane) {
     const observer = new MutationObserver(updateScope);
-    ["selected-area-label", "selected-month-label", "timeline-range-label"].forEach(id => observer.observe(document.getElementById(id), { childList: true, subtree: true }));
+    ["selected-area-label", "selected-month-label"].forEach(id => observer.observe(document.getElementById(id), { childList: true, subtree: true }));
+    // The picker rewrites its trigger in place, and toggles .placeholder on it,
+    // so watch attributes as well as the text.
+    const picker = document.getElementById("date-range");
+    if (picker) observer.observe(picker, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["class"] });
   } else {
     document.getElementById("search-form").addEventListener("input", updateScope);
     document.getElementById("search-form").addEventListener("change", updateScope);

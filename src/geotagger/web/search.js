@@ -20,6 +20,15 @@ let focusedPhotoId = null;
 let selectedLocation = null;
 let resetLocationPicker = () => {};
 
+/* Date range control (date-range-picker.js). Applying a range only stages it —
+ * the page keeps its explicit Search button, so nothing re-queries until the
+ * user asks, matching every other filter in this form. */
+let dateRangePicker = null;
+
+function wireDateRangePicker() {
+  dateRangePicker = createDateRangePicker({ root: document.getElementById("date-range") });
+}
+
 function wireLocationPicker() {
   const help = document.getElementById("location-help");
   const picker = createLocationPicker({
@@ -160,8 +169,7 @@ function wirePersonPicker() {
 
 function buildQuery() {
   const params = new URLSearchParams();
-  const dateFrom = document.getElementById("date-from").value;
-  const dateTo = document.getElementById("date-to").value;
+  const { from: dateFrom, to: dateTo } = dateRangePicker.getRange();
   const location = document.getElementById("location-input").value.trim();
   const geotagged = document.getElementById("geotagged-select").value;
   const personMode = document.getElementById("person-mode-select").value;
@@ -786,8 +794,7 @@ async function downloadSelected() {
 }
 
 function clearForm() {
-  document.getElementById("date-from").value = "";
-  document.getElementById("date-to").value = "";
+  dateRangePicker.clear();
   document.getElementById("location-input").value = "";
   resetLocationPicker();
   document.getElementById("geotagged-select").value = "all";
@@ -1027,6 +1034,7 @@ async function applyPlaceIdFromUrl() {
 
 wirePersonPicker();
 wireLocationPicker();
+wireDateRangePicker();
 loadPersons();
 bindTimeline();
 applyPlaceIdFromUrl();

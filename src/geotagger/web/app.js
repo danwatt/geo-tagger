@@ -60,10 +60,8 @@ let placeFilterRect = null;    // L.Rectangle drawn for the (buffered) search bo
 /* ── Date range filter state ── */
 let dateRangeMin = 0;   // Unix ts — absolute min across all photos
 let dateRangeMax = 0;   // Unix ts — absolute max across all photos
-let dateFilterLo = 0;   // current low handle value
-let dateFilterHi = 0;   // current high handle value
-let histBuckets = [];   // [{ts, count}] for drawing
-let histBucketSecs = 86400; // granularity of current histogram
+let dateFilterLo = 0;   // current low bound (inclusive)
+let dateFilterHi = 0;   // current high bound (inclusive)
 
 /* ── Basemap definitions ── */
 const BASEMAPS = {
@@ -1287,7 +1285,7 @@ async function loadPhotos(fitMap = false) {
     photos.forEach(p => camColor(p.camera));
     renderLegend();
     if (undatedMode) {
-      histBuckets = [];  // no dates here — the timeline stays hidden
+      setTimelineAvailable(false);  // no dates here — nothing to narrow
     } else {
       buildHistogram();
     }
@@ -1325,7 +1323,6 @@ function applyFilters(fitMap = false) {
   });
   renderGrid();
   renderMarkers();
-  drawHistogram();
   setStatus(`Showing ${filteredPhotos.length} of ${photos.length} photos`);
   if (fitMap) fitMapToPhotos();
 }
@@ -2227,268 +2224,76 @@ function makeGuessPinIcon() {
   });
 }
 
-/* ── Timeline histogram ──
- * The histogram lives in a modal rather than a permanent strip under the
- * toolbar: it's a once-per-month adjustment that was costing every screen 72px
- * of grid height. The toolbar keeps a button and, once the range is narrowed,
- * the range itself — so a filter hidden behind a modal can't be forgotten. */
+/* ── Date range ──
+ * The shared control (date-range-picker.js) replaces the old histogram modal:
+ * a compact trigger in the toolbar, and a popover holding the presets rail,
+ * typed bounds, monthly scrubber and day calendars.
+ *
+ * It is fed the *loaded scope's* own daily counts, not the library's, so the
+ * bars describe this month or place — the same thing the old canvas did. And it
+ * runs in live mode: this filters photos already in memory, so waiting for an
+ * Apply click would feel broken. */
+
+let dateRangePicker = null;
 
 // Keep the date control discoverable even before dated photos are loaded.
 function setTimelineAvailable(available) {
-  const button = document.getElementById("timeline-btn");
-  button.disabled = !available;
-  button.title = available ? "Filter the loaded photos down to a date range" : "Load dated photos to narrow the date range";
-  if (!available) {
-    document.getElementById("timeline-range-label").textContent = "All dates";
-    hideTimelineModal();
+  dateRangePicker?.setEnabled(available, available
+    ? "Filter the loaded photos down to a date range"
+    : "Load dated photos to narrow the date range");
+  if (!available) dateRangePicker?.setDates([]);
+}
+
+/* Photos are bucketed by UTC day, matching how the rest of this page reads
+   photo_datetime (see the UTC const and the strftime(...,'unixepoch') queries
+   behind it) — bucketing locally would slide photos into the wrong day. */
+function dayCountsFromPhotos() {
+  const byDay = new Map();
+  for (const p of photos) {
+    const ts = p.photo_datetime;
+    if (!ts || ts <= 0) continue;
+    const key = new Date(ts * 1000).toISOString().slice(0, 10);
+    byDay.set(key, (byDay.get(key) || 0) + 1);
   }
-}
-
-function showTimelineModal() {
-  document.getElementById("timeline-modal").style.display = "flex";
-  // The canvas had no layout while the modal was hidden, so offsetWidth was 0
-  // and every draw during that time was a no-op — redraw now that it has size.
-  drawHistogram();
-}
-
-function hideTimelineModal() {
-  document.getElementById("timeline-modal").style.display = "none";
-}
-
-function resetDateFilter() {
-  document.getElementById("range-lo").value = 0;
-  document.getElementById("range-hi").value = 1000;
-  updateDateFilter();
-  applyFilters();
+  return [...byDay].map(([date, count]) => ({ date, count }));
 }
 
 function bindTimeline() {
-  const lo = document.getElementById("range-lo");
-  const hi = document.getElementById("range-hi");
-
-  document.getElementById("timeline-btn").addEventListener("click", showTimelineModal);
-  document.getElementById("timeline-modal-close").addEventListener("click", hideTimelineModal);
-  document.getElementById("timeline-done-btn").addEventListener("click", hideTimelineModal);
-  document.getElementById("timeline-reset-btn").addEventListener("click", resetDateFilter);
-  document.getElementById("timeline-modal").addEventListener("click", (e) => {
-    if (e.target.id === "timeline-modal") hideTimelineModal();
+  dateRangePicker = createDateRangePicker({
+    root: document.getElementById("date-range"),
+    compact: true,
+    live: true,
+    // The scope is already in memory; never go to the network for it.
+    loadDates: async () => dayCountsFromPhotos(),
+    onChange({ from, to }) {
+      // A bound day is inclusive, so the end bound runs to that day's last
+      // second; an unset bound falls back to the scope's own edge.
+      dateFilterLo = from ? Date.parse(`${from}T00:00:00Z`) / 1000 : dateRangeMin;
+      dateFilterHi = to ? Date.parse(`${to}T00:00:00Z`) / 1000 + 86399 : dateRangeMax;
+      applyFilters();
+    },
   });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") hideTimelineModal();
-  });
-
-  function onInput() {
-    // Prevent handles from crossing
-    if (Number(lo.value) > Number(hi.value)) {
-      if (this === lo) lo.value = hi.value;
-      else hi.value = lo.value;
-    }
-    updateDateFilter();
-    applyFilters();
-  }
-
-  lo.addEventListener("input", onInput);
-  hi.addEventListener("input", onInput);
-
-  const canvas = document.getElementById("hist-canvas");
-  const tooltip = document.createElement("div");
-  tooltip.id = "hist-tooltip";
-  document.body.appendChild(tooltip);
-
-  canvas.addEventListener("mousemove", (e) => {
-    if (!histBuckets.length) return;
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const bucketIdx = Math.min(
-      Math.floor((x / rect.width) * histBuckets.length),
-      histBuckets.length - 1
-    );
-    const bucket = histBuckets[bucketIdx];
-    if (!bucket) return;
-
-    const d = new Date(bucket.ts * 1000);
-    let label;
-    if (histBucketSecs <= 86400) {
-      label = d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric", ...UTC });
-    } else if (histBucketSecs <= 86400 * 7) {
-      const end = new Date((bucket.ts + histBucketSecs - 86400) * 1000);
-      label = d.toLocaleDateString(undefined, { month: "short", day: "numeric", ...UTC }) +
-              " – " + end.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric", ...UTC });
-    } else {
-      label = d.toLocaleDateString(undefined, { month: "long", year: "numeric", ...UTC });
-    }
-    if (bucket.count) label += ` · ${bucket.count}`;
-
-    tooltip.textContent = label;
-    tooltip.style.display = "block";
-    // Keep tooltip inside viewport
-    const tipW = tooltip.offsetWidth;
-    const left = Math.min(e.clientX + 12, window.innerWidth - tipW - 8);
-    tooltip.style.left = left + "px";
-    tooltip.style.top = (e.clientY - 32) + "px";
-  });
-
-  canvas.addEventListener("mouseleave", () => {
-    tooltip.style.display = "none";
-  });
+  setTimelineAvailable(false);
 }
 
 function buildHistogram() {
   const tsList = photos.map(p => p.photo_datetime).filter(ts => ts && ts > 0);
   if (tsList.length < 2) {
-    // Hide timeline if there's no date data
     setTimelineAvailable(false);
     dateRangeMin = dateRangeMax = 0;
     dateFilterLo = dateFilterHi = 0;
-    histBuckets = [];
     return;
   }
-  setTimelineAvailable(true);
 
   dateRangeMin = Math.min(...tsList);
   dateRangeMax = Math.max(...tsList);
   dateFilterLo = dateRangeMin;
   dateFilterHi = dateRangeMax;
 
-  // Reset sliders
-  document.getElementById("range-lo").value = 0;
-  document.getElementById("range-hi").value = 1000;
-
-  // Choose bucket granularity
-  const spanDays = (dateRangeMax - dateRangeMin) / 86400;
-  let bucketSecs;
-  if (spanDays <= 90)       bucketSecs = 86400;        // daily
-  else if (spanDays <= 365) bucketSecs = 86400 * 7;    // weekly
-  else                      bucketSecs = 86400 * 30;   // monthly
-  histBucketSecs = bucketSecs;
-
-  const bucketCount = Math.ceil((dateRangeMax - dateRangeMin) / bucketSecs) + 1;
-  const counts = new Array(bucketCount).fill(0);
-  tsList.forEach(ts => {
-    const idx = Math.floor((ts - dateRangeMin) / bucketSecs);
-    if (idx >= 0 && idx < bucketCount) counts[idx]++;
-  });
-
-  histBuckets = counts.map((count, i) => ({
-    ts: dateRangeMin + i * bucketSecs,
-    count,
-  }));
-
-  updateDateLabels();
-  drawHistogram();
+  // setDates drops any previous range — it described the scope we just left.
+  dateRangePicker?.setDates(dayCountsFromPhotos());
+  setTimelineAvailable(true);
 }
-
-function updateDateFilter() {
-  const lo = Number(document.getElementById("range-lo").value) / 1000;
-  const hi = Number(document.getElementById("range-hi").value) / 1000;
-  const span = dateRangeMax - dateRangeMin;
-  dateFilterLo = Math.round(dateRangeMin + lo * span);
-  dateFilterHi = Math.round(dateRangeMin + hi * span);
-  updateDateLabels();
-}
-
-function updateDateLabels() {
-  document.getElementById("hist-label-lo").textContent = fmtDate(dateFilterLo);
-  document.getElementById("hist-label-hi").textContent = fmtDate(dateFilterHi);
-
-  // Mirror the range into the toolbar — with the histogram behind a modal this
-  // is the only place a narrowed range is visible.
-  const label = document.getElementById("timeline-range-label");
-  const narrowed = dateFilterLo > dateRangeMin || dateFilterHi < dateRangeMax;
-  if (!narrowed) {
-    label.textContent = "All dates";
-    label.style.color = "";
-  } else {
-    label.textContent = `${fmtDate(dateFilterLo)} – ${fmtDate(dateFilterHi)}`;
-    label.style.color = "#e0a030";   // an active filter reads as a warning, not chrome
-  }
-}
-
-function fmtDate(ts) {
-  if (!ts) return "";
-  const d = new Date(ts * 1000);
-  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", ...UTC });
-}
-
-function drawHistogram() {
-  const canvas = document.getElementById("hist-canvas");
-  const ctx = canvas.getContext("2d");
-  const dpr = window.devicePixelRatio || 1;
-
-  // Size canvas to its CSS size
-  const cssW = canvas.offsetWidth;
-  const cssH = canvas.offsetHeight;
-  // Modal closed: no layout box, nothing to draw. showTimelineModal redraws.
-  if (!cssW || !cssH) return;
-  if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
-    canvas.width = cssW * dpr;
-    canvas.height = cssH * dpr;
-    ctx.scale(dpr, dpr);
-  }
-  ctx.clearRect(0, 0, cssW, cssH);
-
-  if (!histBuckets.length || dateRangeMin === dateRangeMax) return;
-
-  const n = histBuckets.length;
-  const maxCount = Math.max(...histBuckets.map(b => b.count), 1);
-  const barW = cssW / n;
-  const span = dateRangeMax - dateRangeMin;
-
-  // Bucket the visible photos by camera in one pass. Doing this per bar meant a
-  // full scan of filteredPhotos for every bucket, on every slider tick.
-  const camCountsByBucket = histBuckets.map(() => new Map());
-  filteredPhotos.forEach(p => {
-    const ts = p.photo_datetime;
-    if (!ts || ts <= 0) return;
-    // histBucketSecs, not span/n — buildHistogram sizes the array as
-    // ceil(span / histBucketSecs) + 1, so span/n is a different (wrong) width
-    // and slid every photo into the neighbouring column.
-    const i = Math.floor((ts - dateRangeMin) / histBucketSecs);
-    if (i < 0 || i >= n) return;
-    const cam = p.camera || "Unknown";
-    const m = camCountsByBucket[i];
-    m.set(cam, (m.get(cam) || 0) + 1);
-  });
-
-  histBuckets.forEach((bucket, i) => {
-    const x = i * barW;
-    const inRange = bucket.ts >= dateFilterLo && bucket.ts <= dateFilterHi;
-    const camCounts = camCountsByBucket[i];
-
-    // Every bar is scaled against the scope's busiest day, and the scope is the
-    // whole month regardless of the Show filter — so the shape of the month holds
-    // still while you flip between Geotagged and Not geotagged.
-    if (bucket.count > 0) {
-      const barH = (bucket.count / maxCount) * cssH * 0.92;
-      ctx.fillStyle = inRange ? "#333" : "#262626";
-      ctx.fillRect(x + 0.5, cssH - barH, barW - 1, barH);
-    }
-
-    // Visible photos stack on top of that backing bar in camera colours, so the
-    // unfilled remainder is exactly what the current filter is hiding.
-    if (inRange && camCounts.size) {
-      let yOffset = cssH;
-      camCounts.forEach((cnt, cam) => {
-        const segH = (cnt / maxCount) * cssH * 0.92;
-        yOffset -= segH;
-        ctx.fillStyle = camColor(cam);
-        ctx.fillRect(x + 0.5, yOffset, barW - 1, segH);
-      });
-    }
-  });
-
-  // Draw range boundary lines
-  const loX = ((dateFilterLo - dateRangeMin) / span) * cssW;
-  const hiX = ((dateFilterHi - dateRangeMin) / span) * cssW;
-  ctx.strokeStyle = "rgba(255,255,255,0.2)";
-  ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(loX, 0); ctx.lineTo(loX, cssH); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(hiX, 0); ctx.lineTo(hiX, cssH); ctx.stroke();
-}
-
-window.addEventListener("resize", () => {
-  if (histBuckets.length) drawHistogram();
-});
 
 /* ── Geotag staging ──
  * Dropping photos on the map (or dragging a pin, or the manual lat/lng box)

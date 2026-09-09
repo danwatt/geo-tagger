@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="face-grid.css"/>
 <!-- Road Trip mode disabled for now: <link rel="stylesheet" href="roadtrip.css"/> -->
 <link rel="stylesheet" href="location-picker.css"/>
+<link rel="stylesheet" href="date-range-picker.css"/>
 <link rel="stylesheet" href="geocode-location.css"/>
 <link rel="stylesheet" href="workspace-layout.css"/>
 </head>
@@ -44,8 +45,8 @@
     <span id="selected-month-label">No month selected</span>
   </div>
   <div class="toolbar-group" id="timeline-toolbar-group">
-    <button id="timeline-btn" disabled title="Load dated photos to narrow the date range">📊 Date range</button>
-    <span id="timeline-range-label"></span>
+    <label for="date-range" id="date-range-label">Dates:</label>
+    <div id="date-range" aria-labelledby="date-range-label"></div>
   </div>
   <div class="toolbar-group">
     <button id="select-area-btn">Select Area</button>
@@ -202,34 +203,12 @@
   </div>
 </div>
 
-<!-- Timeline Modal: the histogram + range handles used to sit permanently under
-     the toolbar; it costs 72px of vertical space to answer a question you ask
-     once per month, so it lives here now and the toolbar shows the range. -->
-<div id="timeline-modal" class="modal" style="display:none">
-  <div class="modal-content" id="timeline-modal-content">
-    <span class="modal-close" id="timeline-modal-close">&times;</span>
-    <h2>Date range</h2>
-    <div id="timeline">
-      <canvas id="hist-canvas"></canvas>
-      <input id="range-lo" class="hist-range" type="range" min="0" max="1000" value="0"/>
-      <input id="range-hi" class="hist-range" type="range" min="0" max="1000" value="1000"/>
-      <div id="hist-labels">
-        <span id="hist-label-lo"></span>
-        <span id="hist-label-hi"></span>
-      </div>
-    </div>
-    <div id="timeline-modal-actions">
-      <button id="timeline-reset-btn" title="Widen the range back to every photo loaded">↩ Reset range</button>
-      <button id="timeline-done-btn" class="primary">Done</button>
-    </div>
-  </div>
-</div>
-
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="face-grid.js"></script>
 <script src="photo-fullsize.js"></script>
 <script src="nav.js"></script>
 <script src="location-picker.js"></script>
+<script src="date-range-picker.js"></script>
 <script src="app.js"></script>
 <script src="workspace-layout.js"></script>
 <!-- Road Trip mode disabled for now. When re-enabled, load roadtrip.js after

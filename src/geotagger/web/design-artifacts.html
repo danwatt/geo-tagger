@@ -423,6 +423,158 @@ kbd {
 .suggest-static { position: relative; width: 310px; max-width: 100%; }
 .suggest-static .location-suggestions { position: static; box-shadow: none; }
 
+/* ══ Date range picker (proposed) ═══════════════════════════════════
+   Replaces the three date UIs in use today: the raw <input type="date">
+   pair on the Search page, the histogram range-slider modal on Geocode /
+   Timesync, and the "Select month" drill-down. One trigger field, one
+   popover: presets rail + typed bounds + histogram scrubber + calendars.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Trigger field ── */
+.drp { position: relative; width: 300px; max-width: 100%; }
+.drp-trigger {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 5px 8px; font-size: 12px; text-align: left;
+  background: #333; border: 1px solid #444; border-radius: 4px; color: #eee; cursor: pointer;
+}
+.drp-trigger:hover { background: #3a3a3a; border-color: #4a90d9; }
+.drp-trigger[aria-expanded="true"] { background: #2a4a6e; border-color: #4a90d9; color: #cfe6ff; }
+.drp-trigger .drp-value { flex: 1; min-width: 0; font-variant-numeric: tabular-nums; }
+.drp-trigger .drp-value.placeholder { color: #777; }
+.drp-trigger .drp-caret { color: #999; font-size: 9px; }
+.drp-trigger:focus-visible { outline: 2px solid #4a90d9; outline-offset: 2px; }
+.drp-clear {
+  padding: 0 4px; font-size: 13px; line-height: 1; color: #999;
+  background: transparent; border: none; border-radius: 3px; cursor: pointer;
+}
+.drp-clear:hover { background: #4a4a4a; color: #f88; }
+.drp-compact { width: 210px; }
+
+/* ── Popover panel ── */
+.drp-panel {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 70;
+  display: flex; align-items: stretch;
+  background: #232323; border: 1px solid #4a90d9; border-radius: 6px;
+  box-shadow: 0 8px 26px rgba(0,0,0,.65); overflow: hidden;
+}
+.drp-panel[hidden] { display: none; }
+
+/* Presets rail */
+.drp-presets {
+  flex: 0 0 148px; padding: 6px; background: #1e1e1e; border-right: 1px solid #333;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.drp-preset {
+  display: block; width: 100%; padding: 5px 8px; text-align: left; font-size: 12px;
+  color: #ccc; background: transparent; border: 1px solid transparent; border-radius: 4px; cursor: pointer;
+}
+.drp-preset:hover { background: #333; color: #fff; }
+.drp-preset.active { background: #2a4a6e; border-color: #4a90d9; color: #7ab8f5; font-weight: 600; }
+.drp-preset .n { float: right; color: #777; font-weight: 400; font-size: 11px; }
+.drp-preset-sep { height: 1px; margin: 5px 2px; background: #333; }
+
+/* Main column */
+.drp-main { padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.drp-fields { display: flex; align-items: flex-end; gap: 8px; }
+.drp-field { display: flex; flex-direction: column; gap: 3px; }
+.drp-field label { font-size: 11px; color: #999; }
+.drp-field input {
+  width: 112px; padding: 5px 8px; font-size: 12px; font-variant-numeric: tabular-nums;
+  background: #333; border: 1px solid #444; border-radius: 4px; color: #eee;
+}
+.drp-field input:focus { border-color: #4a90d9; outline: none; }
+.drp-field.invalid input { border-color: #a33; color: #f88; }
+.drp-dash { padding-bottom: 6px; color: #777; }
+.drp-hint { font-size: 11px; color: #999; padding-bottom: 6px; }
+.drp-hint.error { color: #f88; }
+
+/* Histogram scrubber — monthly buckets across the whole library */
+.drp-hist {
+  position: relative; height: 90px; padding: 8px 8px 24px;
+  background: #1d1d1d; border: 1px solid #333; border-radius: 4px; user-select: none;
+}
+/* Inset track so band/handle percentages line up with the bars, not the padding. */
+.drp-track { position: relative; height: 100%; }
+.drp-bars { display: flex; align-items: flex-end; gap: 1px; height: 100%; }
+.drp-bars i { flex: 1; min-width: 0; background: #3a3a3a; border-radius: 1px 1px 0 0; }
+.drp-bars i.in { background: #4a90d9; }
+.drp-band {
+  position: absolute; top: 0; bottom: 0;
+  background: rgba(74,144,217,.13);
+  border-left: 1px solid #4a90d9; border-right: 1px solid #4a90d9;
+  pointer-events: none;
+}
+.drp-handle {
+  position: absolute; bottom: -7px; width: 14px; height: 14px; margin-left: -7px;
+  background: #e0e0e0; border: 2px solid #888; border-radius: 50%;
+  box-shadow: 0 1px 4px rgba(0,0,0,.6); cursor: ew-resize;
+}
+.drp-handle:hover { background: #fff; border-color: #bbb; }
+.drp-ticks {
+  position: absolute; left: 8px; right: 8px; bottom: 3px;
+  display: flex; font-size: 10px; color: #777; pointer-events: none;
+}
+.drp-ticks span { flex: 1; text-align: center; border-left: 1px solid #2f2f2f; }
+
+/* Twin month calendars */
+.drp-cals { display: flex; gap: 16px; }
+.drp-cal { flex: 0 0 196px; min-width: 0; }
+.drp-cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.drp-cal-title { font-size: 12px; font-weight: 600; color: #eee; }
+.drp-nav {
+  padding: 1px 7px; font-size: 11px; color: #ccc;
+  background: transparent; border: 1px solid #444; border-radius: 4px; cursor: pointer;
+}
+.drp-nav:hover { background: #3a3a3a; color: #fff; }
+.drp-nav[disabled] { opacity: .3; cursor: default; }
+.drp-nav[disabled]:hover { background: transparent; color: #ccc; }
+.drp-dow, .drp-week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px 0; }
+.drp-dow span { padding: 2px 0; text-align: center; font-size: 10px; color: #777; }
+
+.drp-day {
+  position: relative; height: 24px; min-width: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-variant-numeric: tabular-nums; color: #ddd;
+  background: transparent; border: none; border-radius: 3px; cursor: pointer;
+}
+.drp-day:hover { background: #3a3a3a; color: #fff; }
+.drp-day.blank { visibility: hidden; }
+/* No photos that day: still selectable as a bound, but visibly dead weight. */
+.drp-day.empty { color: #555; }
+.drp-day.in-range { background: #233a52; border-radius: 0; }
+.drp-day.in-range.empty { color: #6d7d8c; }
+.drp-day.in-range:hover { background: #2f4b68; }
+.drp-day.edge { background: #4a90d9; color: #10202e; font-weight: 700; }
+.drp-day.edge:hover { background: #5b9ee2; color: #10202e; }
+.drp-day.edge.start { border-radius: 3px 0 0 3px; }
+.drp-day.edge.end { border-radius: 0 3px 3px 0; }
+.drp-day.today { box-shadow: inset 0 0 0 1px #7ab8f5; }
+/* Density dot — present only on days that actually hold photos. */
+.drp-dot {
+  position: absolute; bottom: 2px; left: 50%; transform: translateX(-50%);
+  width: 3px; height: 3px; border-radius: 50%; background: #4a90d9;
+}
+.drp-day.in-range .drp-dot { background: #7ab8f5; }
+.drp-day.edge .drp-dot { background: #10202e; }
+
+/* Footer */
+.drp-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding-top: 9px; border-top: 1px solid #333;
+}
+.drp-count { font-size: 11px; color: #999; }
+.drp-count b { color: #eee; font-weight: 600; }
+.drp-foot-btns { display: flex; gap: 6px; }
+
+/* Legend chips (doc only) */
+.drp-legend { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
+.drp-legend-item { display: flex; align-items: center; gap: 7px; font-size: 11px; color: #999; }
+.drp-legend-item .drp-day { width: 26px; height: 24px; flex: 0 0 26px; cursor: default; }
+
+/* Doc-only frame: renders the popover inline instead of overlapping the page. */
+.drp-static { position: relative; width: max-content; max-width: 100%; }
+.drp-static .drp-panel { position: static; box-shadow: none; }
+
 /* ── Basemap control ── */
 .basemap-control {
   width: 130px; background: rgba(30,30,30,0.92); border: 1px solid #444; border-radius: 6px;
@@ -646,6 +798,360 @@ kbd {
         <code>aria-expanded</code>, <code>aria-controls</code>, <code>aria-activedescendant</code>, and
         <code>aria-describedby</code> pointing at the help line. Editing the text clears the selection and
         resets the help line.
+      </p>
+    </div>
+  </section>
+
+  <!-- ── Date range picker (proposed) ── -->
+  <section class="doc-section">
+    <h2>Date range picker <span style="font-size:11px;color:#5cb85c;font-weight:400">— live on Search and Geocode</span></h2>
+    <p class="doc-sub" style="margin-top:0">
+      Built as <code>date-range-picker.js</code> + <code>date-range-picker.css</code>. On <b>Search</b> it
+      replaced a bare <code>&lt;input type="date"&gt;</code> pair (native OS picker, ignored the dark theme,
+      gave no idea where photos actually are); on <b>Geocode</b> it replaced the
+      <code>📊 Date range</code> button and its canvas histogram modal. Timesync keeps its own inline strip —
+      it scrubs a working set rather than filtering, and is left alone. One trigger field, one popover carrying
+      <b>presets</b>, <b>typed bounds</b>, the <b>histogram scrubber</b>, and <b>day-precision calendars</b> —
+      coarse and fine selection in the same surface, no modal.
+    </p>
+    <p class="doc-sub">
+      Volume is a list of <code>{date, count}</code> rows: the whole library from
+      <code>/api/stats/dates</code> by default (Search), or the caller's own loaded scope (Geocode passes the
+      photos already in memory and pushes a new set on every scope change). Daily counts drive the density
+      dots, the exact in-range total, and — bucketed — the histogram bars, so nothing is fetched while the
+      panel is open.
+    </p>
+    <p class="doc-sub">
+      <b>Two commit modes.</b> Search runs in <i>draft</i> mode: the panel edits a copy and only <b>Apply</b>
+      calls back, matching a page with its own Search button. Geocode runs in <i>live</i> mode: every edit
+      filters the loaded photos immediately and the footer button is just <b>Done</b>, because waiting for
+      Apply to filter photos already on screen would feel broken.
+    </p>
+
+    <p class="doc-sub">Trigger field — states</p>
+    <div class="doc-panel">
+      <div class="doc-row" style="align-items:flex-end;gap:18px;flex-wrap:wrap">
+        <div class="search-field">
+          <label>Unset</label>
+          <div class="drp">
+            <button class="drp-trigger" aria-expanded="false" aria-haspopup="dialog">
+              <span>📅</span><span class="drp-value placeholder">Any date</span><span class="drp-caret">▾</span>
+            </button>
+          </div>
+        </div>
+        <div class="search-field">
+          <label>Range set</label>
+          <div class="drp">
+            <button class="drp-trigger" aria-expanded="false" aria-haspopup="dialog">
+              <span>📅</span><span class="drp-value">Jun 12 – Jul 28, 2024</span>
+              <span class="drp-clear" role="button" title="Clear date range">×</span><span class="drp-caret">▾</span>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="doc-row" style="align-items:flex-end;gap:18px;flex-wrap:wrap;margin-top:12px">
+        <div class="search-field">
+          <label>Open</label>
+          <div class="drp">
+            <button class="drp-trigger" aria-expanded="true" aria-haspopup="dialog">
+              <span>📅</span><span class="drp-value">Jun 12 – Jul 28, 2024</span>
+              <span class="drp-clear" role="button" title="Clear date range">×</span><span class="drp-caret">▴</span>
+            </button>
+          </div>
+        </div>
+        <div class="search-field">
+          <label>Preset shorthand</label>
+          <div class="drp">
+            <button class="drp-trigger" aria-expanded="false" aria-haspopup="dialog">
+              <span>📅</span><span class="drp-value">2024</span>
+              <span class="drp-clear" role="button" title="Clear date range">×</span><span class="drp-caret">▾</span>
+            </button>
+          </div>
+        </div>
+        <div class="search-field">
+          <label>Compact (toolbar)</label>
+          <div class="drp drp-compact">
+            <button class="drp-trigger" aria-expanded="false" aria-haspopup="dialog">
+              <span>📅</span><span class="drp-value">Last 30 days</span><span class="drp-caret">▾</span>
+            </button>
+          </div>
+        </div>
+      </div>
+      <p class="doc-sub">
+        The trigger renders the resolved range, but keeps the preset's own wording (“2024”, “Last 30 days”)
+        when one is active — shorter to read and it says <i>why</i> the range is what it is.
+      </p>
+    </div>
+
+    <p class="doc-sub" style="margin-top:16px">Open panel</p>
+    <div class="doc-panel">
+      <div class="drp-static">
+        <div class="drp-panel" role="dialog" aria-label="Choose a date range">
+
+          <!-- Presets rail -->
+          <div class="drp-presets">
+            <button class="drp-preset">Any date <span class="n">18,204</span></button>
+            <button class="drp-preset">Last 30 days <span class="n">96</span></button>
+            <button class="drp-preset">Last 12 months <span class="n">2,317</span></button>
+            <button class="drp-preset">This year <span class="n">1,842</span></button>
+            <div class="drp-preset-sep"></div>
+            <button class="drp-preset">2025 <span class="n">3,104</span></button>
+            <button class="drp-preset">2024 <span class="n">4,466</span></button>
+            <button class="drp-preset">2023 <span class="n">3,988</span></button>
+            <div class="drp-preset-sep"></div>
+            <button class="drp-preset active">Custom range</button>
+          </div>
+
+          <div class="drp-main">
+            <!-- Typed bounds -->
+            <div class="drp-fields">
+              <div class="drp-field">
+                <label for="da-drp-from">From</label>
+                <input type="text" id="da-drp-from" value="2024-06-12" inputmode="numeric" placeholder="YYYY-MM-DD">
+              </div>
+              <span class="drp-dash">–</span>
+              <div class="drp-field">
+                <label for="da-drp-to">To</label>
+                <input type="text" id="da-drp-to" value="2024-07-28" inputmode="numeric" placeholder="YYYY-MM-DD">
+              </div>
+              <span class="drp-hint">47 days</span>
+            </div>
+
+            <!-- Histogram scrubber: one bar per month across the whole library -->
+            <div class="drp-hist" role="group" aria-label="Photo volume by month; drag the handles to set the range">
+              <div class="drp-track">
+              <div class="drp-bars">
+                <i style="height:20%"></i><i style="height:15%"></i><i style="height:25%"></i>
+                <i style="height:35%"></i><i style="height:50%"></i><i style="height:70%"></i>
+                <i style="height:85%"></i><i style="height:65%"></i><i style="height:40%"></i>
+                <i style="height:45%"></i><i style="height:30%"></i><i style="height:55%"></i>
+                <i style="height:18%"></i><i style="height:22%"></i><i style="height:30%"></i>
+                <i style="height:42%"></i><i style="height:60%"></i><i style="height:78%" class="in"></i>
+                <i style="height:95%" class="in"></i><i style="height:72%"></i><i style="height:48%"></i>
+                <i style="height:38%"></i><i style="height:28%"></i><i style="height:62%"></i>
+              </div>
+              <div class="drp-band" style="left:70.83%;width:8.34%"></div>
+              <span class="drp-handle" style="left:70.83%" role="slider" tabindex="0"
+                aria-label="Range start" aria-valuetext="12 June 2024"></span>
+              <span class="drp-handle" style="left:79.17%" role="slider" tabindex="0"
+                aria-label="Range end" aria-valuetext="28 July 2024"></span>
+              </div>
+              <div class="drp-ticks"><span>2023</span><span>2024</span></div>
+            </div>
+
+            <!-- Twin calendars -->
+            <div class="drp-cals">
+              <div class="drp-cal">
+                <div class="drp-cal-head">
+                  <button class="drp-nav" aria-label="Previous month">‹</button>
+                  <span class="drp-cal-title">June 2024</span>
+                  <button class="drp-nav" disabled aria-label="Next month">›</button>
+                </div>
+                <div class="drp-dow"><span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span></div>
+                <div class="drp-week">
+                  <button class="drp-day blank"></button><button class="drp-day blank"></button>
+                  <button class="drp-day blank"></button><button class="drp-day blank"></button>
+                  <button class="drp-day blank"></button><button class="drp-day blank"></button>
+                  <button class="drp-day">1<span class="drp-dot"></span></button>
+                </div>
+                <div class="drp-week">
+                  <button class="drp-day">2<span class="drp-dot"></span></button>
+                  <button class="drp-day empty">3</button>
+                  <button class="drp-day empty">4</button>
+                  <button class="drp-day">5<span class="drp-dot"></span></button>
+                  <button class="drp-day">6<span class="drp-dot"></span></button>
+                  <button class="drp-day empty">7</button>
+                  <button class="drp-day">8<span class="drp-dot"></span></button>
+                </div>
+                <div class="drp-week">
+                  <button class="drp-day">9<span class="drp-dot"></span></button>
+                  <button class="drp-day empty">10</button>
+                  <button class="drp-day">11<span class="drp-dot"></span></button>
+                  <button class="drp-day edge start" aria-label="12 June 2024, range start">12<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">13<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">14<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range empty">15</button>
+                </div>
+                <div class="drp-week">
+                  <button class="drp-day in-range">16<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">17<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range empty">18</button>
+                  <button class="drp-day in-range">19<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">20<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">21<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">22<span class="drp-dot"></span></button>
+                </div>
+                <div class="drp-week">
+                  <button class="drp-day in-range">23<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range empty">24</button>
+                  <button class="drp-day in-range">25<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">26<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">27<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">28<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">29<span class="drp-dot"></span></button>
+                </div>
+                <div class="drp-week">
+                  <button class="drp-day in-range">30<span class="drp-dot"></span></button>
+                  <button class="drp-day blank"></button><button class="drp-day blank"></button>
+                  <button class="drp-day blank"></button><button class="drp-day blank"></button>
+                  <button class="drp-day blank"></button><button class="drp-day blank"></button>
+                </div>
+              </div>
+
+              <div class="drp-cal">
+                <div class="drp-cal-head">
+                  <button class="drp-nav" disabled aria-label="Previous month">‹</button>
+                  <span class="drp-cal-title">July 2024</span>
+                  <button class="drp-nav" aria-label="Next month">›</button>
+                </div>
+                <div class="drp-dow"><span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span></div>
+                <div class="drp-week">
+                  <button class="drp-day blank"></button>
+                  <button class="drp-day in-range">1<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">2<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range empty">3</button>
+                  <button class="drp-day in-range">4<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">5<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">6<span class="drp-dot"></span></button>
+                </div>
+                <div class="drp-week">
+                  <button class="drp-day in-range">7<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">8<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range empty">9</button>
+                  <button class="drp-day in-range">10<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">11<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">12<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">13<span class="drp-dot"></span></button>
+                </div>
+                <div class="drp-week">
+                  <button class="drp-day in-range">14<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range empty">15</button>
+                  <button class="drp-day in-range">16<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">17<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">18<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">19<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">20<span class="drp-dot"></span></button>
+                </div>
+                <div class="drp-week">
+                  <button class="drp-day in-range">21<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">22<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range empty">23</button>
+                  <button class="drp-day in-range">24<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">25<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">26<span class="drp-dot"></span></button>
+                  <button class="drp-day in-range">27<span class="drp-dot"></span></button>
+                </div>
+                <div class="drp-week">
+                  <button class="drp-day edge end" aria-label="28 July 2024, range end">28<span class="drp-dot"></span></button>
+                  <button class="drp-day">29<span class="drp-dot"></span></button>
+                  <button class="drp-day empty">30</button>
+                  <button class="drp-day">31<span class="drp-dot"></span></button>
+                  <button class="drp-day blank"></button><button class="drp-day blank"></button>
+                  <button class="drp-day blank"></button>
+                </div>
+              </div>
+            </div>
+
+            <div class="drp-foot">
+              <span class="drp-count"><b>1,204</b> photos in range · <b>312</b> not geotagged</span>
+              <div class="drp-foot-btns">
+                <button>↩ Reset</button>
+                <button class="primary">Apply</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p class="doc-sub" style="margin-top:16px">Day cell states</p>
+    <div class="doc-panel">
+      <div class="drp-legend">
+        <span class="drp-legend-item"><span class="drp-day">14<span class="drp-dot"></span></span> Has photos</span>
+        <span class="drp-legend-item"><span class="drp-day empty">15</span> No photos</span>
+        <span class="drp-legend-item"><span class="drp-day in-range">16<span class="drp-dot"></span></span> In range</span>
+        <span class="drp-legend-item"><span class="drp-day edge start">12<span class="drp-dot"></span></span> Range start</span>
+        <span class="drp-legend-item"><span class="drp-day edge end">28<span class="drp-dot"></span></span> Range end</span>
+        <span class="drp-legend-item"><span class="drp-day today">9<span class="drp-dot"></span></span> Today</span>
+        <span class="drp-legend-item"><span class="drp-day" style="background:#3a3a3a;color:#fff">21<span class="drp-dot"></span></span> Hover / focus</span>
+      </div>
+      <p class="doc-sub">
+        Days with no photos stay clickable — they are legitimate bounds — but drop to <code>#555</code> and lose
+        the dot, so an empty stretch reads as empty at a glance. Inside a range they shift to
+        <code>#6d7d8c</code> to stay legible on the <code>#233a52</code> band.
+      </p>
+    </div>
+
+    <p class="doc-sub" style="margin-top:16px">Error state</p>
+    <div class="doc-panel">
+      <div class="drp-fields">
+        <div class="drp-field">
+          <label for="da-drp-bad-from">From</label>
+          <input type="text" id="da-drp-bad-from" value="2024-08-30">
+        </div>
+        <span class="drp-dash">–</span>
+        <div class="drp-field invalid">
+          <label for="da-drp-bad-to">To</label>
+          <input type="text" id="da-drp-bad-to" value="2024-06-12">
+        </div>
+        <span class="drp-hint error">End is before start</span>
+      </div>
+      <p class="doc-sub">
+        Typed bounds validate on blur. An inverted or unparseable range marks the offending field and blocks
+        <b>Apply</b>; it never silently swaps the two, since which one the user meant is a guess.
+      </p>
+    </div>
+
+    <p class="doc-sub" style="margin-top:16px">Behavior</p>
+    <div class="doc-panel">
+      <p class="doc-sub" style="margin-top:0">
+        <b>Three ways in, one state.</b> Preset, scrubber drag, and calendar click all write the same
+        <code>{from, to}</code>; every surface re-renders from it. Picking a preset highlights it in the rail;
+        dragging or clicking a day switches the rail to <b>Custom range</b>.
+      </p>
+      <p class="doc-sub">
+        <b>Calendars follow the scrubber.</b> The twin months track the range start, so a coarse drag lands you
+        on the right month and the fine click is one move away. Nav arrows disable where the pair would overlap.
+      </p>
+      <p class="doc-sub">
+        <b>Counts are exact.</b> Preset counts and the footer total are binary searches over the daily counts
+        loaded once at startup, so they are real totals rather than month-rounded estimates — and cost nothing
+        per interaction.
+      </p>
+      <p class="doc-sub">
+        <b>Applied on Apply.</b> The panel is a draft; <code>Apply</code> (or <code>Enter</code> in a bound
+        field) commits it, and <code>Esc</code> or a click outside closes and discards. On Search that commit
+        only stages the range — the page keeps its explicit Search button, like every other filter in the form.
+        A page that filters live would re-query on the same event.
+      </p>
+      <p class="doc-sub">
+        <b>Keyboard.</b> Trigger is a <code>button</code> with <code>aria-haspopup="dialog"</code>;
+        the panel is a focus-trapped <code>role="dialog"</code>. In the calendar, arrows move by day,
+        <code>PageUp/PageDown</code> by month, <code>Enter</code> sets the near bound. Scrubber handles are
+        <code>role="slider"</code> with <code>aria-valuetext</code> carrying the readable date, so they are
+        usable without a mouse — the one thing the current double-slider cannot do.
+      </p>
+      <p class="doc-sub">
+        <b>Calendars follow the edited bound.</b> An end date parks on the <i>right</i> calendar and a start
+        date on the left, so editing one bound rarely scrolls the other out of view.
+      </p>
+      <p class="doc-sub">
+        <b>The histogram adapts to the scope.</b> Three months or less — a loaded month on Geocode — gets one
+        bar per day, since a single month-wide bar says nothing. Anything longer gets one bar per month, so a
+        20-year library doesn't try to draw 7,000 bars into 400px. Bars are flex-weighted by their day count,
+        so the axis stays linear in time across months of different lengths, and ticks label months or years to
+        match, thinned to at most eight labels.
+      </p>
+      <p class="doc-sub">
+        <b>The rail earns its place or leaves.</b> Presets that would match nothing are dropped rather than
+        shown at zero, and a scope left with only “Any date” loses the rail entirely — Reset already does that
+        job. A one-month Geocode scope therefore shows just the main column.
+      </p>
+      <p class="doc-sub">
+        <b>Known gaps.</b> The old Geocode canvas stacked each bar in camera colours, showing what the Show
+        filter was hiding; the shared histogram plots scope volume only, so that breakdown is gone. An
+        “Undated only” preset is not offered either — <code>/api/search</code> has no way to ask for photos
+        with no timestamp. Timesync could still adopt the handle and band styling for its inline strip.
       </p>
     </div>
   </section>

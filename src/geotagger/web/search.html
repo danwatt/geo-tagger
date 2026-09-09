@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="face-grid.css"/>
 <link rel="stylesheet" href="search.css"/>
 <link rel="stylesheet" href="location-picker.css"/>
+<link rel="stylesheet" href="date-range-picker.css"/>
 <link rel="stylesheet" href="workspace-layout.css"/>
 </head>
 <body>
@@ -37,13 +38,9 @@
       <option value="10">+10 miles</option>
     </select>
   </div>
-  <div class="search-field">
-    <label for="date-from">From</label>
-    <input type="date" id="date-from"/>
-  </div>
-  <div class="search-field">
-    <label for="date-to">To</label>
-    <input type="date" id="date-to"/>
+  <div class="search-field search-field-dates">
+    <label id="date-range-label">Date range</label>
+    <div id="date-range" aria-labelledby="date-range-label"></div>
   </div>
   <div class="search-field">
     <label for="geotagged-select">Geotagged</label>
@@ -121,6 +118,7 @@
 <script src="photo-fullsize.js"></script>
 <script src="nav.js"></script>
 <script src="location-picker.js"></script>
+<script src="date-range-picker.js"></script>
 <script src="search.js"></script>
 <script src="workspace-layout.js"></script>
 </body>
