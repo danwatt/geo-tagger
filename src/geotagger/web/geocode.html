@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="theme.css"/>
 <link rel="stylesheet" href="style.css"/>
 <link rel="stylesheet" href="face-grid.css"/>
-<link rel="stylesheet" href="roadtrip.css"/>
+<!-- Road Trip mode disabled for now: <link rel="stylesheet" href="roadtrip.css"/> -->
 <link rel="stylesheet" href="location-picker.css"/>
 <link rel="stylesheet" href="geocode-location.css"/>
 <link rel="stylesheet" href="workspace-layout.css"/>
@@ -232,8 +232,9 @@
 <script src="location-picker.js"></script>
 <script src="app.js"></script>
 <script src="workspace-layout.js"></script>
-<!-- After app.js: Road Trip mode reads its globals (map, photos, stageDrop …)
-     and registers its own DOMContentLoaded handler, which must run second. -->
-<script src="roadtrip.js"></script>
+<!-- Road Trip mode disabled for now. When re-enabled, load roadtrip.js after
+     app.js: it reads app.js globals (map, photos, stageDrop …) and registers its
+     own DOMContentLoaded handler, which must run second.
+<script src="roadtrip.js"></script> -->
 </body>
 </html>
