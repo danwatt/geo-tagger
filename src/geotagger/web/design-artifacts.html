@@ -386,6 +386,43 @@ kbd {
 /* ── Status bar ── */
 .status-bar { padding: 4px 10px; font-size: 11px; background: #1d1d1d; border: 1px solid #333; border-radius: 4px; color: #888; }
 
+/* ── Location search control (location-picker.css, geocode-location.css, search.css) ── */
+.search-field { display: flex; flex-direction: column; gap: 3px; position: relative; }
+.search-field label { font-size: 11px; color: #999; }
+.search-field input[type="text"], .search-field select {
+  padding: 5px 8px; border: 1px solid #444; border-radius: 4px;
+  background: #333; color: #eee; font-size: 12px;
+}
+.search-field-location { width: 310px; max-width: 100%; }
+.search-field-location input[type="text"] { width: 100%; box-sizing: border-box; }
+.search-field-location .loc-help { font-size: 11px; color: #aaa; max-width: 310px; }
+.search-field-location .location-suggestions { top: 48px; }
+.search-field input[type="text"]:focus-visible { outline: 2px solid #4a90d9; outline-offset: 2px; }
+
+/* Suggestion dropdown — shared by both variants */
+.location-suggestions {
+  position: absolute; top: calc(100% + 3px); left: 0; width: 100%; box-sizing: border-box;
+  max-height: 300px; overflow-y: auto; z-index: 60;
+  background: #2a2a2a; border: 1px solid #4a90d9; border-radius: 5px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.6);
+  font-size: 12px; color: #ccc; padding: 4px;
+}
+.location-option { padding: 9px 8px; cursor: pointer; overflow-wrap: anywhere; }
+.location-option strong { display: block; color: #eee; font-weight: 500; }
+.location-option span { display: block; margin-top: 3px; font-size: 11px; color: #aaa; }
+.location-option:hover, .location-option[aria-selected="true"] { background: #2a4a6e; }
+
+/* Toolbar variant (geocode page) */
+.geocode-location-group { flex-wrap: wrap; width: 100%; min-width: 0; }
+.geocode-location-picker { position: relative; flex: 1 1 190px; min-width: 0; }
+.geocode-location-picker input[type="text"] { width: 100%; box-sizing: border-box; }
+.geocode-location-picker input[type="text"]:focus-visible { outline: 2px solid #4a90d9; outline-offset: 1px; }
+.geocode-location-group .loc-help { flex-basis: 100%; font-size: 11px; color: #aaa; }
+
+/* Static frame used to show the dropdown without absolute overlap in this doc */
+.suggest-static { position: relative; width: 310px; max-width: 100%; }
+.suggest-static .location-suggestions { position: static; box-shadow: none; }
+
 /* ── Basemap control ── */
 .basemap-control {
   width: 130px; background: rgba(30,30,30,0.92); border: 1px solid #444; border-radius: 6px;
@@ -508,6 +545,108 @@ kbd {
         <div class="toolbar-spacer"></div>
         <div class="toolbar-group"><button class="primary">Save</button></div>
       </div>
+    </div>
+  </section>
+
+  <!-- ── Location search control ── -->
+  <section class="doc-section">
+    <h2>Location search control</h2>
+    <p class="doc-sub" style="margin-top:0">
+      Shared autocomplete (<code>location-picker.js</code> + <code>location-picker.css</code>) backed by
+      <code>/api/search/locations</code>. One combobox mixes two result kinds: <b>saved places</b>
+      (GPS-boundary match) and <b>photo locations</b> from metadata (city / county / state, with photo counts).
+      Used on the Search page (stacked field) and the Geocode page (toolbar group).
+    </p>
+
+    <p class="doc-sub">Stacked variant — Search page</p>
+    <div class="doc-panel">
+      <div class="doc-row" style="align-items:flex-start">
+        <div class="search-field search-field-location">
+          <label for="da-loc-input">Location</label>
+          <input type="text" id="da-loc-input" placeholder="Search saved places, cities, counties…" autocomplete="off"
+            role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="da-loc-suggest">
+          <span class="loc-help">Choose a place or search photo location text.</span>
+        </div>
+        <div class="search-field" style="width:150px">
+          <label for="da-nearby">Search area</label>
+          <select id="da-nearby">
+            <option>Within bounds</option>
+            <option>+0.25 miles</option>
+            <option>+1 mile</option>
+          </select>
+        </div>
+      </div>
+      <p class="doc-sub">The “Search area” buffer select appears only after a <b>saved place</b> is chosen.</p>
+    </div>
+
+    <p class="doc-sub" style="margin-top:16px">Toolbar variant — Geocode page</p>
+    <div class="doc-panel">
+      <div id="toolbar">
+        <div class="toolbar-group geocode-location-group">
+          <label for="da-geo-input">Location:</label>
+          <div class="geocode-location-picker">
+            <input type="text" id="da-geo-input" value="Yellowstone National Park" autocomplete="off"
+              role="combobox" aria-autocomplete="list" aria-expanded="false">
+          </div>
+          <select aria-label="Search area">
+            <option>Within bounds</option>
+            <option>+0.5 miles</option>
+            <option>+2 miles</option>
+          </select>
+          <a class="button" href="#">✏️ Edit places</a>
+          <span class="loc-help">Matches saved bounds; includes untagged candidates within the time window.</span>
+        </div>
+      </div>
+    </div>
+
+    <p class="doc-sub" style="margin-top:16px">Suggestion list</p>
+    <div class="doc-panel">
+      <div class="doc-row" style="align-items:flex-start;gap:20px;flex-wrap:wrap">
+        <div>
+          <p class="doc-sub" style="margin-top:0">Results — mixed kinds, keyboard cursor on row 2</p>
+          <div class="suggest-static">
+            <div id="da-loc-suggest" class="location-suggestions" role="listbox">
+              <div class="location-option" role="option" aria-selected="false">
+                <strong>Yellowstone National Park</strong>
+                <span>Saved place · GPS boundary</span>
+              </div>
+              <div class="location-option" role="option" aria-selected="true">
+                <strong>Bozeman</strong>
+                <span>Photo location · city · 1,204 photos</span>
+              </div>
+              <div class="location-option" role="option" aria-selected="false">
+                <strong>Gallatin County</strong>
+                <span>Photo location · county · 3,918 photos</span>
+              </div>
+              <div class="location-option" role="option" aria-selected="false">
+                <strong>Montana</strong>
+                <span>Photo location · state · 12,077 photos</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <p class="doc-sub" style="margin-top:0">Loading / empty / error</p>
+          <div class="suggest-static" style="width:280px">
+            <div class="location-suggestions">Loading locations…</div>
+          </div>
+          <div class="suggest-static" style="width:280px;margin-top:8px">
+            <div class="location-suggestions">No saved or recorded locations match. Search will use your text.</div>
+          </div>
+          <div class="suggest-static" style="width:280px;margin-top:8px">
+            <div class="location-suggestions">Could not load locations. Type to retry, or search photo location text.</div>
+          </div>
+        </div>
+      </div>
+      <p class="doc-sub" style="margin-top:14px">
+        Behavior: opens on focus, refetches 180 ms after each keystroke (stale responses discarded by
+        request version). Keys — <code>↑ / ↓</code> move the cursor, <code>Enter</code> selects,
+        <code>Esc</code> closes. Options use <code>role="option"</code> with
+        <code>aria-selected</code>; the input carries <code>role="combobox"</code>,
+        <code>aria-expanded</code>, <code>aria-controls</code>, <code>aria-activedescendant</code>, and
+        <code>aria-describedby</code> pointing at the help line. Editing the text clears the selection and
+        resets the help line.
+      </p>
     </div>
   </section>
 
