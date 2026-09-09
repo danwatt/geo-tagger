@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="style.css"/>
 <link rel="stylesheet" href="face-grid.css"/>
 <link rel="stylesheet" href="roadtrip.css"/>
+<link rel="stylesheet" href="location-picker.css"/>
+<link rel="stylesheet" href="geocode-location.css"/>
 </head>
 <body>
 <div id="toolbar">
@@ -51,12 +53,14 @@
 <div id="main">
   <div id="map-pane">
     <div id="map-nav">
-      <div class="toolbar-group">
-        <label>Places:</label>
-        <select id="places-select">
-          <option value="">Select a place...</option>
-        </select>
-        <select id="place-buffer-select" title="Grow the place's bounds outward before filtering photos">
+      <div class="toolbar-group geocode-location-group">
+        <label for="geocode-location-input">Location:</label>
+        <div class="geocode-location-picker">
+          <input id="geocode-location-input" type="text" placeholder="Saved places, cities, counties…" autocomplete="off"
+            role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="geocode-location-suggest" aria-describedby="geocode-location-help"/>
+          <div id="geocode-location-suggest" class="location-suggestions" role="listbox" hidden></div>
+        </div>
+        <select id="place-buffer-select" aria-label="Search area" title="Grow the place's bounds outward before filtering photos" hidden>
           <option value="0" selected>Within bounds</option>
           <option value="0.1">+0.1 miles</option>
           <option value="0.25">+0.25 miles</option>
@@ -67,6 +71,7 @@
           <option value="10">+10 miles</option>
         </select>
         <a class="button" href="/custom-places.html" title="Add or edit custom places">✏️ Edit places</a>
+        <span id="geocode-location-help">Choose a location to load photos and nearby untagged candidates.</span>
       </div>
       <div class="toolbar-group imprecise-control-group">
         <label title="Drop photos with a specified uncertainty radius">
@@ -219,6 +224,7 @@
 <script src="face-grid.js"></script>
 <script src="photo-fullsize.js"></script>
 <script src="nav.js"></script>
+<script src="location-picker.js"></script>
 <script src="app.js"></script>
 <!-- After app.js: Road Trip mode reads its globals (map, photos, stageDrop …)
      and registers its own DOMContentLoaded handler, which must run second. -->

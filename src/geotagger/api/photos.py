@@ -129,6 +129,25 @@ async def api_photos_by_area(
     return result
 
 
+@router.get("/api/photos/by-location")
+async def api_photos_by_location(
+    location_fields: str = Query(...),
+    geotagged: str = Query("all", pattern="^(all|yes|no)$"),
+    window: int = Query(900, ge=0),
+):
+    """Recorded location matches plus temporally adjacent geotag candidates."""
+    from geotagger.search_locations import parse_fields
+
+    try:
+        parse_fields(location_fields)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid location selection")
+    rows = index.search_photos(location_fields=location_fields, limit=10_000_000)
+    located = [r for r in rows if r["lat"] is not None and r["lng"] is not None]
+    return [serializers.photo_to_dict(r)
+            for r in _augment_and_filter(located, geotagged, window)]
+
+
 @router.get("/api/photos/by-bounds")
 async def api_photos_by_bounds(
     min_lat: float = Query(...),

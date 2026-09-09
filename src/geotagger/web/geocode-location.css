@@ -1,0 +1,6 @@
+.geocode-location-group { flex-wrap: wrap; width: 100%; min-width: 0; }
+.geocode-location-picker { position: relative; flex: 1 1 190px; min-width: 0; }
+#map-nav #geocode-location-input { width: 100%; box-sizing: border-box; }
+#geocode-location-input:focus-visible { outline: 2px solid #4a90d9; outline-offset: 1px; }
+#geocode-location-help { flex-basis: 100%; font-size: 11px; color: #aaa; }
+#place-buffer-select[hidden] { display: none; }

@@ -556,6 +556,140 @@
   font-weight: 600;
 }
 
+/* ── Year/month drill-down picker (Geotagging page "Select month") ──
+   Year cards first, month grid on drill-in. Wider than the default modal so a
+   3-across year grid fits without scrolling for a typical library. */
+#month-picker-modal .modal-content {
+  max-width: 820px;
+  width: 92vw;
+}
+#month-picker-list { max-height: 62vh; overflow-y: auto; }
+
+.yp-year-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 10px;
+}
+
+.yp-year-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.yp-year-card:hover { background: #2f2f2f; border-color: var(--accent); }
+
+.yp-year-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.yp-year-num {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--accent-text);
+}
+.yp-all-btn {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+.yp-bar {
+  height: 5px;
+  background: var(--danger);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+.yp-bar-fill { height: 100%; background: var(--success); }
+
+/* 12-cell volume/coverage strip on each year card. Height = volume, green
+   portion = geotagged share; clicking a cell jumps straight to that month. */
+.yp-spark {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 2px;
+  align-items: end;
+  height: 34px;
+  margin-top: 8px;
+}
+.yp-spark-cell {
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  cursor: pointer;
+  border-radius: 2px;
+}
+.yp-spark-cell:hover { background: #3a3a3a; }
+.yp-spark-cell.empty { cursor: default; }
+.yp-spark-cell.empty:hover { background: none; }
+.yp-spark-bar {
+  width: 100%;
+  background: var(--danger);
+  border-radius: 2px 2px 0 0;
+  display: flex;
+  align-items: flex-end;
+}
+.yp-spark-geo {
+  width: 100%;
+  background: var(--success);
+  border-radius: 0 0 2px 2px;
+}
+
+.yp-crumb {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.yp-month-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+.yp-month-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.yp-month-card:hover { background: #2f2f2f; border-color: var(--accent); }
+.yp-month-card.empty {
+  opacity: .35;
+  cursor: default;
+  background: none;
+}
+.yp-month-card.empty:hover { background: none; border-color: var(--border-strong); }
+
+.yp-month-name { font-weight: 500; color: var(--text); }
+.yp-month-total {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-strong);
+  margin: 2px 0 6px;
+}
+.yp-month-none { color: var(--text-dim); }
+
+.yp-undated {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.yp-undated:hover { background: #2f2f2f; border-color: var(--accent); }
+.yp-undated-name { font-weight: 500; color: var(--text); }
+
 /* Day group sections (.face-group-section / .face-group-cells / .group-tint-*)
    now live in theme.css, shared with the faces pages. */
 

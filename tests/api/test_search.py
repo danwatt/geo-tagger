@@ -1,6 +1,7 @@
 """Endpoint tests for geotagger.api.search (flexible multi-criteria photo search)."""
 
 from geotagger import index
+import json
 
 
 def _add(path, lat=None, lng=None, dt=1000, loc_city=None, loc_state=None, loc_country=None):
@@ -117,3 +118,48 @@ def test_search_combines_criteria_with_and(client):
     _add_face(p2, alice)
     r = client.get(f"/api/search?location=Paris&person_ids={alice}&person_mode=any").json()
     assert [p["filename"] for p in r["photos"]] == ["match.jpg"]
+
+
+def test_location_suggestions_and_exact_county(client):
+    ranch = index.create_place("Family Kat-El Ranch", "circle", json.dumps({"lat": 30, "lng": -96, "radius": 100}))
+    for state in ("Texas", "Oregon"):
+        pid = _add(f"{state}.jpg", lat=30, lng=-96, loc_state=state, loc_country="USA")
+        index.get_db().execute("UPDATE photos SET loc_county='Washington County' WHERE id=?", (pid,))
+    index.get_db().commit()
+    choices = client.get("/api/search/locations", params={"q": "Washington County, Texas"}).json()["locations"]
+    assert len(choices) == 1
+    result = client.get("/api/search", params={"location_fields": json.dumps(choices[0]["fields"])}).json()
+    assert [p["filename"] for p in result["photos"]] == ["Texas.jpg"]
+    choices = client.get("/api/search/locations?q=kat-el").json()["locations"]
+    assert choices[0]["id"] == ranch
+
+
+def test_saved_circle_nearby_date_and_limit(client):
+    place = index.create_place("Ranch", "circle", json.dumps({"lat": 30, "lng": -96, "radius": 1000}))
+    _add("outside.jpg", lat=30.009, lng=-95.990, dt=946684800)  # bbox corner, outside circle
+    _add("inside.jpg", lat=30, lng=-96, dt=946684801)
+    _add("old.jpg", lat=30, lng=-96, dt=1000)
+    _add("no-gps.jpg", dt=946684802)
+    params = {"place_id": place, "date_from": "2000-01-01", "date_to": "2000-01-01", "limit": 1}
+    result = client.get("/api/search", params=params).json()
+    assert [p["filename"] for p in result["photos"]] == ["inside.jpg"]
+    params.update(nearby_m=500, limit=20)
+    result = client.get("/api/search", params=params).json()
+    assert {p["filename"] for p in result["photos"]} == {"inside.jpg", "outside.jpg"}
+
+
+def test_saved_rectangle_boundary_and_nearby(client):
+    place = index.create_place("Ranch", "rectangle", json.dumps({"south": 30, "north": 31, "west": -97, "east": -96}))
+    _add("edge.jpg", lat=30, lng=-97)
+    _add("near.jpg", lat=29.999, lng=-97)
+    _add("far.jpg", lat=29, lng=-97)
+    assert client.get("/api/search", params={"place_id": place}).json()["total"] == 1
+    assert client.get("/api/search", params={"place_id": place, "nearby_m": 200}).json()["total"] == 2
+
+
+def test_invalid_location_selection(client):
+    assert client.get("/api/search?place_id=999").status_code == 404
+    assert client.get("/api/search?nearby_m=500").status_code == 400
+    assert client.get("/api/search?nearby_m=-1").status_code == 422
+    for value in ('{}', '[]', 'null', '{"id": "1"}', 'bad'):
+        assert client.get("/api/search", params={"location_fields": value}).status_code == 400

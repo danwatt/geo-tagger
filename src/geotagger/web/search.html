@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="style.css"/>
 <link rel="stylesheet" href="face-grid.css"/>
 <link rel="stylesheet" href="search.css"/>
+<link rel="stylesheet" href="location-picker.css"/>
 </head>
 <body>
 <div id="toolbar">
@@ -23,9 +24,25 @@
     <label for="date-to">To</label>
     <input type="date" id="date-to"/>
   </div>
-  <div class="search-field">
+  <div class="search-field search-field-location">
     <label for="location-input">Location</label>
-    <input type="text" id="location-input" placeholder="City, state, country…"/>
+    <input type="text" id="location-input" placeholder="Search saved places, cities, counties…" autocomplete="off"
+      role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="location-suggest" aria-describedby="location-help"/>
+    <div id="location-suggest" class="location-suggestions" role="listbox" hidden></div>
+    <span id="location-help">Choose a place or search photo location text.</span>
+  </div>
+  <div class="search-field" id="nearby-field" hidden>
+    <label for="nearby-select">Search area</label>
+    <select id="nearby-select" title="Grow the place's bounds outward before filtering photos">
+      <option value="0">Within bounds</option>
+      <option value="0.1">+0.1 miles</option>
+      <option value="0.25">+0.25 miles</option>
+      <option value="0.5">+0.5 miles</option>
+      <option value="1">+1 mile</option>
+      <option value="2">+2 miles</option>
+      <option value="5">+5 miles</option>
+      <option value="10">+10 miles</option>
+    </select>
   </div>
   <div class="search-field">
     <label for="geotagged-select">Geotagged</label>
@@ -100,6 +117,7 @@
 <script src="face-grid.js"></script>
 <script src="photo-fullsize.js"></script>
 <script src="nav.js"></script>
+<script src="location-picker.js"></script>
 <script src="search.js"></script>
 </body>
 </html>

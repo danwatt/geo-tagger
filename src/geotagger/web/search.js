@@ -17,6 +17,34 @@ let filteredPhotos = [];  // resultPhotos narrowed by the timeline's date range
 let selectedIds = new Set();
 let lastClickedIndex = -1;
 let focusedPhotoId = null;
+let selectedLocation = null;
+let resetLocationPicker = () => {};
+
+function wireLocationPicker() {
+  const help = document.getElementById("location-help");
+  const picker = createLocationPicker({
+    input: document.getElementById("location-input"),
+    box: document.getElementById("location-suggest"),
+    emptyMessage: "No saved or recorded locations match. Search will use your text.",
+    errorMessage: "Could not load locations. Type to retry, or search photo location text.",
+    onSelect(item) {
+      selectedLocation = item;
+      document.getElementById("nearby-field").hidden = item.kind !== "place";
+      document.getElementById("nearby-select").value = "0";
+      help.textContent = item.kind === "place"
+        ? "Matches photo GPS coordinates within this saved area."
+        : "Matches this location and its region in photo metadata.";
+    },
+    onEdit() { resetLocationPicker(); },
+  });
+  resetLocationPicker = () => {
+    selectedLocation = null;
+    document.getElementById("nearby-field").hidden = true;
+    document.getElementById("nearby-select").value = "0";
+    help.textContent = "Choose a place or search photo location text.";
+    picker.close();
+  };
+}
 
 let resultsMode = "photos";     // "photos" (plain grid) | "untagged" (candidate cards)
 let untaggedCandidates = [];    // last /api/search/untagged-faces candidates
@@ -140,7 +168,14 @@ function buildQuery() {
 
   if (dateFrom) params.set("date_from", dateFrom);
   if (dateTo) params.set("date_to", dateTo);
-  if (location) params.set("location", location);
+  if (dateFrom && dateTo && dateFrom > dateTo) throw new Error("From date must be on or before To date.");
+  if (selectedLocation?.kind === "place") {
+    params.set("place_id", selectedLocation.id);
+    const nearbyMiles = Number(document.getElementById("nearby-select").value);
+    params.set("nearby_m", nearbyMiles * 1609.34);
+  } else if (selectedLocation?.kind === "metadata") {
+    params.set("location_fields", JSON.stringify(selectedLocation.fields));
+  } else if (location) params.set("location", location);
   if (geotagged !== "all") params.set("geotagged", geotagged);
   if (selectedPersons.length > 0) {
     params.set("person_ids", selectedPersons.map((p) => p.id).join(","));
@@ -754,6 +789,7 @@ function clearForm() {
   document.getElementById("date-from").value = "";
   document.getElementById("date-to").value = "";
   document.getElementById("location-input").value = "";
+  resetLocationPicker();
   document.getElementById("geotagged-select").value = "all";
   document.getElementById("person-mode-select").value = "all";
   selectedPersons = [];
@@ -965,5 +1001,6 @@ document.addEventListener("keydown", (e) => {
 });
 
 wirePersonPicker();
+wireLocationPicker();
 loadPersons();
 bindTimeline();

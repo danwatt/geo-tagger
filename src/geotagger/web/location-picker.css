@@ -1,0 +1,23 @@
+.location-suggestions {
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 0;
+  width: 100%;
+  box-sizing: border-box;
+  max-height: 300px;
+  overflow-y: auto;
+  z-index: 60;
+  background: #2a2a2a;
+  border: 1px solid #4a90d9;
+  border-radius: 5px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.6);
+  font-size: 12px;
+  color: #ccc;
+  padding: 4px;
+}
+.location-option { padding: 9px 8px; cursor: pointer; overflow-wrap: anywhere; }
+.location-option strong { display: block; color: #eee; font-weight: 500; }
+.location-option span { display: block; margin-top: 3px; font-size: 11px; color: #aaa; }
+.location-option:hover, .location-option[aria-selected="true"] { background: #2a4a6e; }
+
+.location-suggestions[hidden] { display: none; }

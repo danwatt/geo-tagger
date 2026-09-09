@@ -5,7 +5,7 @@
 #search-form {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: flex-start;
   gap: 14px;
   padding: 10px 12px;
   background: #202020;
@@ -36,7 +36,12 @@
   font-size: 12px;
 }
 
-#location-input { width: 180px; }
+.search-field-location { width: 310px; max-width: 100%; }
+#location-input { width: 100%; box-sizing: border-box; }
+#location-help { font-size: 11px; color: #aaa; max-width: 310px; }
+#nearby-field[hidden] { display: none; }
+#location-suggest { top: 48px; }
+#location-input:focus-visible { outline: 2px solid #4a90d9; outline-offset: 2px; }
 
 .search-field-people { min-width: 220px; }
 
@@ -99,6 +104,7 @@
 .search-field-actions {
   flex-direction: row;
   gap: 6px;
+  padding-top: 17px;
 }
 
 /* ── Two-column results: 66% grid / 33% preview ── */

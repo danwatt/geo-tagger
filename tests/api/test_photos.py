@@ -55,6 +55,32 @@ def test_by_bounds_folds_in_untagged_within_window(client):
     assert names == {"geo.jpg", "untagged_near.jpg"}
 
 
+def test_by_location_region_and_time_candidates(client):
+    for state in ("Texas", "Oregon"):
+        pid = _add(f"{state}.jpg", lat=30, lng=-96, dt=1000)
+        index.get_db().execute(
+            "UPDATE photos SET loc_county='Washington County', loc_state=? WHERE id=?",
+            (state, pid),
+        )
+    index.get_db().commit()
+    _add("untagged_near.jpg", dt=1300)
+    _add("untagged_far.jpg", dt=9999)
+    params = {"location_fields": json.dumps({"loc_county": "Washington County", "loc_state": "Texas"})}
+    result = client.get("/api/photos/by-location", params=params)
+    assert result.status_code == 200
+    assert {p["filename"] for p in result.json()} == {"Texas.jpg", "untagged_near.jpg"}
+    params["window"] = 0
+    assert [p["filename"] for p in client.get("/api/photos/by-location", params=params).json()] == ["Texas.jpg"]
+    params.update(window=900, geotagged="no")
+    assert [p["filename"] for p in client.get("/api/photos/by-location", params=params).json()] == ["untagged_near.jpg"]
+
+
+def test_by_location_invalid_or_empty(client):
+    assert client.get("/api/photos/by-location", params={"location_fields": '{"loc_city":"Missing"}'}).json() == []
+    for value in ('{}', '[]', 'null', '{"id":"1"}', 'bad'):
+        assert client.get("/api/photos/by-location", params={"location_fields": value}).status_code == 400
+
+
 def test_missing_ids_404(client):
     assert client.get("/api/thumbnail/999").status_code == 404
     assert client.get("/api/preview/999").status_code == 404

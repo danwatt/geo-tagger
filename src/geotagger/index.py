@@ -653,7 +653,9 @@ def get_photo(photo_id: int) -> sqlite3.Row | None:
 def search_photos(date_from: str | None = None, date_to: str | None = None,
                   bbox: str | None = None, location: str | None = None,
                   person_ids: list[int] | None = None, person_mode: str = "all",
-                  geotagged: str = "all", limit: int = 2000) -> list[sqlite3.Row]:
+                  geotagged: str = "all", limit: int = 2000,
+                  place_id: int | None = None, nearby_m: float = 0,
+                  location_fields: str | None = None) -> list[sqlite3.Row]:
     """Flexible multi-criteria photo search: date range, location (bbox and/or a
     free-text match against the reverse-geocoded place columns), and people.
 
@@ -705,6 +707,16 @@ def search_photos(date_from: str | None = None, date_to: str | None = None,
             params += [min_lat, max_lat, min_lng, max_lng]
         except ValueError:
             pass
+
+    from geotagger.search_locations import parse_fields, place_distance
+    for field, value in parse_fields(location_fields).items():
+        clauses.append(f"COALESCE({field}, '') = ? COLLATE NOCASE")
+        params.append(value)
+    if place_id is not None:
+        db.create_function("search_place_distance", 4, place_distance, deterministic=True)
+        clauses.append("EXISTS (SELECT 1 FROM places WHERE places.id = ? "
+                       "AND search_place_distance(photos.lat, photos.lng, places.type, places.bounds) <= ?)")
+        params.extend([place_id, nearby_m])
 
     if location and location.strip():
         like = f"%{location.strip()}%"

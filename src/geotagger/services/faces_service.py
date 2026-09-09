@@ -202,7 +202,9 @@ def _bbox_for_row(row) -> list[float]:
 
 def find_untagged_face_photos(pids: list[int], date_from: str | None, date_to: str | None,
                               bbox: str | None, location: str | None, geotagged: str,
-                              threshold: float | None, limit: int) -> dict:
+                              threshold: float | None, limit: int,
+                              place_id: int | None = None, nearby_m: float = 0,
+                              location_fields: str | None = None) -> dict:
     """Photos where the searched people appear but at least one is only an
     untagged near-match, not yet confirmed. Single person -> exhaustive
     "suggested for them" scan; two+ -> "together, some/none tagged" bipartite
@@ -213,7 +215,8 @@ def find_untagged_face_photos(pids: list[int], date_from: str | None, date_to: s
 
     allowed_rows = index.search_photos(
         date_from=date_from, date_to=date_to, bbox=bbox, location=location,
-        person_ids=None, geotagged=geotagged, limit=10_000_000)
+        person_ids=None, geotagged=geotagged, limit=10_000_000,
+        place_id=place_id, nearby_m=nearby_m, location_fields=location_fields)
     allowed_ids = {r["id"] for r in allowed_rows}
     allowed_photo = {r["id"]: r for r in allowed_rows}
 

@@ -52,7 +52,9 @@ let areaSelectCircle = null;
 let areaSelectParams = null;  // { lat, lng, radius }
 
 /* ── Place filter state ── */
-let placeFilterParams = null;  // { placeId } — active saved-place bounds filter
+let placeFilterParams = null;  // { placeId } or { location } — active location filter
+let geocodeLocationPicker = null;
+let locationLoadVersion = 0;
 let placeFilterRect = null;    // L.Rectangle drawn for the (buffered) search bounds
 
 /* ── Date range filter state ── */
@@ -328,8 +330,12 @@ function bindToolbar() {
     } else if (areaSelectParams) {
       loadPhotosByArea(areaSelectParams.lat, areaSelectParams.lng, areaSelectParams.radius);
     } else if (placeFilterParams) {
-      const place = places.find(p => p.id === placeFilterParams.placeId);
-      if (place) filterPhotosByPlace(place);
+      if (placeFilterParams.location) {
+        filterPhotosByRecordedLocation(placeFilterParams.location);
+      } else {
+        const place = places.find(p => p.id === placeFilterParams.placeId);
+        if (place) filterPhotosByPlace(place);
+      }
     }
   }
   // Show is a pure client-side view of the already-loaded scope — no reload.
@@ -379,7 +385,7 @@ function bindToolbar() {
 
   // Places — dropdown selects a saved place to jump to. Creating/editing places
   // lives on the Custom Places page (custom-places.html).
-  document.getElementById("places-select").addEventListener("change", onPlaceSelected);
+  wireGeocodeLocationPicker();
   // Changing the buffer re-runs the active place filter with the new bounds.
   document.getElementById("place-buffer-select").addEventListener("change", () => {
     if (placeFilterParams) reloadCurrentView();
@@ -436,90 +442,24 @@ function bindToolbar() {
   });
 }
 
-/* ── Month Picker ── */
+/* ── Month Picker ──
+ * Two levels: a year grid first (one card per year, with a 12-cell strip that
+ * shows each month's volume + geotag coverage at a glance), then drill into a
+ * single year for the full month grid. The old flat year-headed list meant
+ * scrolling past ~12 rows per year to reach anything older. */
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
                      "July", "August", "September", "October", "November", "December"];
+const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+let monthStats = null;   // cached /api/stats/months payload, reused by both picker views
 
 async function showMonthPicker() {
   try {
     const res = await fetch("/api/stats/months");
-    const data = await res.json();
-
-    const list = document.getElementById("month-picker-list");
-    list.innerHTML = "";
-
-    if (data.undated && data.undated.total > 0) {
-      const item = document.createElement("div");
-      item.className = "month-item";
-      item.innerHTML = `
-        <div class="month-name">📁 Undated</div>
-        <div class="month-counts">
-          <span class="count-badge count-total">${data.undated.total} total</span>
-          <span class="count-badge count-geotagged">${data.undated.geotagged} geotagged</span>
-          <span class="count-badge count-not-geotagged">${data.undated.not_geotagged} not geotagged</span>
-        </div>
-      `;
-      item.addEventListener("click", selectUndated);
-      list.appendChild(item);
-    }
-
-    if (!data.months || data.months.length === 0) {
-      if (!data.undated || data.undated.total === 0) {
-        list.innerHTML = "<p>No photos found with timestamps.</p>";
-      }
-      document.getElementById("month-picker-modal").style.display = "flex";
-      return;
-    }
-
-    // Group by year
-    const byYear = {};
-    data.months.forEach(m => {
-      if (!byYear[m.year]) byYear[m.year] = [];
-      byYear[m.year].push(m);
-    });
-
-    // Render years (most recent first)
-    const years = Object.keys(byYear).map(Number).sort((a, b) => b - a);
-    years.forEach(year => {
-      const yearSection = document.createElement("div");
-      yearSection.className = "month-year-section";
-
-      const yearHeader = document.createElement("div");
-      yearHeader.className = "month-year-header";
-      yearHeader.innerHTML = `${year} <span class="year-browse-all">Browse all</span>`;
-      yearHeader.title = `Load all photos from ${year}`;
-      yearHeader.addEventListener("click", () => selectYear(year));
-      yearSection.appendChild(yearHeader);
-
-      // Render months (most recent first)
-      byYear[year].sort((a, b) => b.month - a.month).forEach(m => {
-        const item = document.createElement("div");
-        item.className = "month-item";
-        item.dataset.year = m.year;
-        item.dataset.month = m.month;
-
-        const monthName = document.createElement("div");
-        monthName.className = "month-name";
-        monthName.textContent = MONTH_NAMES[m.month - 1];
-
-        const counts = document.createElement("div");
-        counts.className = "month-counts";
-        counts.innerHTML = `
-          <span class="count-badge count-total">${m.total} total</span>
-          <span class="count-badge count-geotagged">${m.geotagged} geotagged</span>
-          <span class="count-badge count-not-geotagged">${m.not_geotagged} not geotagged</span>
-        `;
-
-        item.appendChild(monthName);
-        item.appendChild(counts);
-        item.addEventListener("click", () => selectMonth(m.year, m.month));
-
-        yearSection.appendChild(item);
-      });
-
-      list.appendChild(yearSection);
-    });
-
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    monthStats = await res.json();
+    renderPickerYears();
     document.getElementById("month-picker-modal").style.display = "flex";
   } catch (e) {
     console.error("Failed to load month stats:", e);
@@ -529,6 +469,165 @@ async function showMonthPicker() {
 
 function hideMonthPicker() {
   document.getElementById("month-picker-modal").style.display = "none";
+}
+
+function pickerTitle(text) {
+  document.querySelector("#month-picker-modal h2").textContent = text;
+}
+
+function fmtCount(n) {
+  return (n || 0).toLocaleString();
+}
+
+// Geotagged share of a bucket, as a slim two-tone bar.
+function coverageBarHtml(geotagged, total) {
+  const pct = total ? Math.round((geotagged / total) * 100) : 0;
+  return `<div class="yp-bar" title="${pct}% geotagged"><div class="yp-bar-fill" style="width:${pct}%"></div></div>`;
+}
+
+function countsHtml(m) {
+  return `<span class="count-badge count-total">${fmtCount(m.total)} total</span>
+          <span class="count-badge count-geotagged">${fmtCount(m.geotagged)} geotagged</span>
+          <span class="count-badge count-not-geotagged">${fmtCount(m.not_geotagged)} not geotagged</span>`;
+}
+
+function pickerMonthsByYear() {
+  const byYear = {};
+  (monthStats.months || []).forEach(m => {
+    if (!byYear[m.year]) byYear[m.year] = [];
+    byYear[m.year].push(m);
+  });
+  return byYear;
+}
+
+function renderPickerYears() {
+  const list = document.getElementById("month-picker-list");
+  list.innerHTML = "";
+  pickerTitle("Select Year");
+
+  if (monthStats.undated && monthStats.undated.total > 0) {
+    const u = monthStats.undated;
+    const item = document.createElement("div");
+    item.className = "yp-undated";
+    item.innerHTML = `<div class="yp-undated-name">📁 Undated</div>
+                      <div class="month-counts">${countsHtml(u)}</div>`;
+    item.addEventListener("click", selectUndated);
+    list.appendChild(item);
+  }
+
+  if (!monthStats.months || monthStats.months.length === 0) {
+    if (!monthStats.undated || monthStats.undated.total === 0) {
+      list.innerHTML = "<p>No photos found with timestamps.</p>";
+    }
+    return;
+  }
+
+  const byYear = pickerMonthsByYear();
+  const years = Object.keys(byYear).map(Number).sort((a, b) => b - a);
+
+  // Month cells are scaled against the busiest month in the whole library, so
+  // the strips are comparable across years rather than each year self-scaling.
+  const peak = Math.max(...monthStats.months.map(m => m.total), 1);
+
+  const grid = document.createElement("div");
+  grid.className = "yp-year-grid";
+
+  years.forEach(year => {
+    const months = byYear[year];
+    const tot = months.reduce((a, m) => a + m.total, 0);
+    const geo = months.reduce((a, m) => a + m.geotagged, 0);
+    const nogeo = months.reduce((a, m) => a + m.not_geotagged, 0);
+    const byMonth = {};
+    months.forEach(m => { byMonth[m.month] = m; });
+
+    const card = document.createElement("div");
+    card.className = "yp-year-card";
+    card.innerHTML = `
+      <div class="yp-year-top">
+        <span class="yp-year-num">${year}</span>
+        <button type="button" class="yp-all-btn" title="Load every photo from ${year}">All year</button>
+      </div>
+      ${coverageBarHtml(geo, tot)}
+      <div class="month-counts">
+        <span class="count-badge count-total">${fmtCount(tot)} total</span>
+        <span class="count-badge count-geotagged">${fmtCount(geo)}</span>
+        <span class="count-badge count-not-geotagged">${fmtCount(nogeo)}</span>
+      </div>
+      <div class="yp-spark"></div>
+    `;
+
+    const spark = card.querySelector(".yp-spark");
+    for (let mo = 1; mo <= 12; mo++) {
+      const m = byMonth[mo];
+      const cell = document.createElement("div");
+      cell.className = m ? "yp-spark-cell" : "yp-spark-cell empty";
+      if (m) {
+        // Height encodes volume (sqrt so a single huge month doesn't flatten
+        // the rest), fill color encodes geotag coverage.
+        const h = Math.max(0.12, Math.sqrt(m.total / peak));
+        const pct = m.total ? Math.round((m.geotagged / m.total) * 100) : 0;
+        cell.innerHTML = `<div class="yp-spark-bar" style="height:${(h * 100).toFixed(0)}%"><div class="yp-spark-geo" style="height:${pct}%"></div></div>`;
+        cell.title = `${MONTH_NAMES[mo - 1]} ${year} — ${fmtCount(m.total)} photos, ${pct}% geotagged`;
+        cell.addEventListener("click", (e) => { e.stopPropagation(); selectMonth(year, mo); });
+      }
+      spark.appendChild(cell);
+    }
+
+    card.querySelector(".yp-all-btn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      selectYear(year);
+    });
+    card.addEventListener("click", () => renderPickerMonths(year));
+    grid.appendChild(card);
+  });
+
+  list.appendChild(grid);
+  list.scrollTop = 0;
+}
+
+function renderPickerMonths(year) {
+  const list = document.getElementById("month-picker-list");
+  const byYear = pickerMonthsByYear();
+  const months = byYear[year] || [];
+  const byMonth = {};
+  months.forEach(m => { byMonth[m.month] = m; });
+
+  list.innerHTML = "";
+  pickerTitle(`Select Month — ${year}`);
+
+  const bar = document.createElement("div");
+  bar.className = "yp-crumb";
+  bar.innerHTML = `<button type="button" class="yp-back">← All years</button>
+                   <button type="button" class="yp-all-btn">Browse all ${year}</button>`;
+  bar.querySelector(".yp-back").addEventListener("click", renderPickerYears);
+  bar.querySelector(".yp-all-btn").addEventListener("click", () => selectYear(year));
+  list.appendChild(bar);
+
+  const grid = document.createElement("div");
+  grid.className = "yp-month-grid";
+  for (let mo = 1; mo <= 12; mo++) {
+    const m = byMonth[mo];
+    const cell = document.createElement("div");
+    cell.className = m ? "yp-month-card" : "yp-month-card empty";
+    if (!m) {
+      cell.innerHTML = `<div class="yp-month-name">${MONTH_ABBR[mo - 1]}</div>
+                        <div class="yp-month-none">—</div>`;
+    } else {
+      cell.innerHTML = `
+        <div class="yp-month-name">${MONTH_NAMES[mo - 1]}</div>
+        <div class="yp-month-total">${fmtCount(m.total)}</div>
+        ${coverageBarHtml(m.geotagged, m.total)}
+        <div class="month-counts">
+          <span class="count-badge count-geotagged">${fmtCount(m.geotagged)}</span>
+          <span class="count-badge count-not-geotagged">${fmtCount(m.not_geotagged)}</span>
+        </div>
+      `;
+      cell.addEventListener("click", () => selectMonth(year, mo));
+    }
+    grid.appendChild(cell);
+  }
+  list.appendChild(grid);
+  list.scrollTop = 0;
 }
 
 async function selectMonth(year, month) {
@@ -612,16 +711,6 @@ async function loadPlaces() {
     const res = await fetch("/api/places");
     places = await res.json();
 
-    // Update dropdown
-    const select = document.getElementById("places-select");
-    select.innerHTML = '<option value="">Select a place...</option>';
-    places.forEach(p => {
-      const option = document.createElement("option");
-      option.value = p.id;
-      option.textContent = p.name;
-      select.appendChild(option);
-    });
-
     // Display all places on map
     renderPlaces();
   } catch (e) {
@@ -664,14 +753,66 @@ function renderPlaces() {
   });
 }
 
-function onPlaceSelected(e) {
-  const placeId = parseInt(e.target.value);
-  if (!placeId) { clearPlaceFilter(); return; }
+function wireGeocodeLocationPicker() {
+  const help = document.getElementById("geocode-location-help");
+  geocodeLocationPicker = createLocationPicker({
+    input: document.getElementById("geocode-location-input"),
+    box: document.getElementById("geocode-location-suggest"),
+    emptyMessage: "No saved or recorded locations match. Try a city, county, or saved place name.",
+    errorMessage: "Could not load locations. Type to retry.",
+    async onSelect(item) {
+      document.getElementById("place-buffer-select").value = "0";
+      if (item.kind === "place") {
+        // Refresh shapes as well: saved places may have changed in another tab.
+        await loadPlaces();
+        if (document.getElementById("geocode-location-input").value !== item.label) return;
+        const place = places.find(p => p.id === item.id);
+        if (!place) { setStatus("Saved place is unavailable. Choose another location.", true); return; }
+        filterPhotosByPlace(place);
+      } else {
+        filterPhotosByRecordedLocation(item);
+      }
+    },
+    onEdit() {
+      help.textContent = "Choose a suggestion to change the loaded location.";
+    },
+  });
+}
 
-  const place = places.find(p => p.id === placeId);
-  if (!place) return;
-
-  filterPhotosByPlace(place);
+async function filterPhotosByRecordedLocation(location) {
+  const request = ++locationLoadVersion;
+  selectedYear = selectedMonth = null;
+  undatedMode = false;
+  areaSelectParams = null;
+  if (areaSelectCircle) { map.removeLayer(areaSelectCircle); areaSelectCircle = null; }
+  if (placeFilterRect) { map.removeLayer(placeFilterRect); placeFilterRect = null; }
+  placeFilterParams = { location };
+  document.getElementById("selected-month-label").textContent = "No month selected";
+  document.getElementById("selected-area-label").textContent = location.label;
+  document.getElementById("geocode-location-input").value = location.label;
+  document.getElementById("place-buffer-select").hidden = true;
+  document.getElementById("geocode-location-help").textContent = "Matches recorded photo locations; includes untagged candidates within the time window.";
+  dayIsolation = null;
+  mapDayOverride = null;
+  const params = new URLSearchParams({
+    location_fields: JSON.stringify(location.fields),
+    window: document.getElementById("window-select").value,
+  });
+  try {
+    setStatus(`Loading photos in ${location.label}…`);
+    const res = await fetch(`/api/photos/by-location?${params}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (request !== locationLoadVersion) return;
+    photos = data;
+    photos.forEach(p => camColor(p.camera));
+    renderLegend();
+    buildHistogram();
+    applyFilters(true);
+    setStatus(`Loaded ${photos.length} photos in ${location.label}`);
+  } catch (err) {
+    if (request === locationLoadVersion) setStatus("Load error: " + err.message, true);
+  }
 }
 
 // Bounding box of a saved place, grown outward by `bufferMiles` on every side.
@@ -703,6 +844,9 @@ function placeBboxWithBuffer(place, bufferMiles) {
 // over as the active view, clearing month/area selections like the other
 // selectors do.
 async function filterPhotosByPlace(place) {
+  document.getElementById("geocode-location-input").value = place.name;
+  document.getElementById("place-buffer-select").hidden = false;
+  document.getElementById("geocode-location-help").textContent = "Matches saved bounds; includes untagged candidates within the time window.";
   // Clear the other view modes
   selectedYear = null;
   selectedMonth = null;
@@ -730,6 +874,7 @@ async function filterPhotosByPlace(place) {
 }
 
 async function loadPhotosByBounds(box, label) {
+  const request = ++locationLoadVersion;
   dayIsolation = null;
   mapDayOverride = null;   // new scope, so the "show this day" map override is stale
   const window = document.getElementById("window-select").value;
@@ -741,7 +886,9 @@ async function loadPhotosByBounds(box, label) {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-    photos = await res.json();
+    const data = await res.json();
+    if (request !== locationLoadVersion) return;
+    photos = data;
     photos.forEach(p => camColor(p.camera));
     renderLegend();
     buildHistogram();
@@ -749,15 +896,18 @@ async function loadPhotosByBounds(box, label) {
 
     setStatus(`Loaded ${photos.length} photos in ${label}`);
   } catch (err) {
-    setStatus("Load error: " + err.message, true);
+    if (request === locationLoadVersion) setStatus("Load error: " + err.message, true);
   }
 }
 
 function clearPlaceFilter() {
+  locationLoadVersion++;
   placeFilterParams = null;
   if (placeFilterRect) { map.removeLayer(placeFilterRect); placeFilterRect = null; }
-  const sel = document.getElementById("places-select");
-  if (sel) sel.value = "";
+  geocodeLocationPicker?.close();
+  document.getElementById("geocode-location-input").value = "";
+  document.getElementById("place-buffer-select").hidden = true;
+  document.getElementById("geocode-location-help").textContent = "Choose a location to load photos and nearby untagged candidates.";
 }
 
 /* ── Location picker ──
