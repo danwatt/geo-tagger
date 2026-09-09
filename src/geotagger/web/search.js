@@ -1000,7 +1000,33 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+/* ── Deep link: ?place_id=N ──
+ * The Custom Places page links here to answer "show me the photos this place
+ * stands for". Filling the picker's state by hand rather than driving the
+ * autocomplete: the place is already chosen, and typing into the box would just
+ * reopen a suggestion list over the results. */
+async function applyPlaceIdFromUrl() {
+  const placeId = Number(new URLSearchParams(location.search).get("place_id"));
+  if (!placeId) return;
+  try {
+    const res = await fetch("/api/places");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const place = (await res.json()).find(p => p.id === placeId);
+    if (!place) { setStatus("That saved place no longer exists.", true); return; }
+    selectedLocation = { kind: "place", id: place.id, label: place.name };
+    document.getElementById("location-input").value = place.name;
+    document.getElementById("nearby-field").hidden = false;
+    document.getElementById("nearby-select").value = "0";
+    document.getElementById("location-help").textContent =
+      "Matches photo GPS coordinates within this saved area.";
+    runSearch();
+  } catch (e) {
+    setStatus("Could not open that saved place: " + e.message, true);
+  }
+}
+
 wirePersonPicker();
 wireLocationPicker();
 loadPersons();
 bindTimeline();
+applyPlaceIdFromUrl();

@@ -45,6 +45,7 @@ const BASEMAPS = {
 document.addEventListener("DOMContentLoaded", () => {
   initMap();
   bindToolbar();
+  bindDialogs();
   loadPlaces();
 });
 
@@ -57,6 +58,7 @@ function initMap() {
   map.on("moveend", correctWorldWrap);
   map.on("moveend", onMapMovedForHotspots);
   map.on("moveend", saveView);
+  map.on("zoomend", () => applyPlaceLabels());
   restoreView();
 }
 
@@ -207,8 +209,13 @@ function bindToolbar() {
     closeRepPicker();
     if (place) clearRepresentative(place);
   });
+  // One Escape handler for every layer. Innermost first, and only one closes per
+  // press, so Escape out of a dialog opened over the picker doesn't shut both.
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeRepPicker();
+    if (e.key !== "Escape") return;
+    if (placeDialogDone) closePlaceDialog(null);
+    else if (confirmDialogDone) closeConfirmDialog(false);
+    else closeRepPicker();
   });
 }
 
@@ -316,6 +323,14 @@ function renderSidebar() {
     const clearRepBtn = p.representative_photo_id
       ? `<button class="clear-rep-btn" title="Remove representative photo">Clear photo</button>`
       : "";
+    // A place is a search filter (Search's "nearby a saved place"), but until now
+    // there was no way from here to the photos it stands for. Anchor, not a
+    // button, so middle-click and "open in new tab" work.
+    const photosLink = p.photo_count
+      ? `<a class="photos-btn" href="/search.html?place_id=${p.id}"
+            title="Search the photos taken inside this place">View ${p.photo_count} photo${
+              p.photo_count === 1 ? "" : "s"}</a>`
+      : "";
 
     div.innerHTML = `
       <div class="place-item-main">
@@ -326,6 +341,7 @@ function renderSidebar() {
         </div>
       </div>
       <div class="place-item-actions">
+        ${photosLink}
         <button class="zoom-btn">Zoom</button>
         <button class="rename-btn">Rename</button>
         ${clearRepBtn}
@@ -355,8 +371,33 @@ function renderSidebar() {
       e.stopPropagation();
       clearRepresentative(p);
     });
+    // Row ↔ shape hover, so a row can be matched to its area without clicking —
+    // the sidebar is a list of names and the map is a field of identical blue
+    // rings, and neither alone says which is which.
+    div.addEventListener("mouseenter", () => highlightPlace(p.id, true));
+    div.addEventListener("mouseleave", () => highlightPlace(p.id, false));
+
     div.addEventListener("click", () => selectPlace(p.id));
     list.appendChild(div);
+  });
+}
+
+/* ── Row ↔ shape highlight ── */
+
+const PLACE_STYLE = { color: "#4a90d9", weight: 2, fillOpacity: 0.1 };
+const PLACE_STYLE_HOVER = { color: "#7ab8f5", weight: 4, fillOpacity: 0.3 };
+
+// `fromMap` distinguishes the two directions: hovering a row must not re-enter
+// through the shape's own handler and hovering a shape must not fight the row's.
+function highlightPlace(placeId, on, fromMap = false) {
+  const shape = placeShapes[placeId];
+  if (shape) {
+    shape.setStyle(on ? PLACE_STYLE_HOVER : PLACE_STYLE);
+    if (on && shape.bringToFront) shape.bringToFront();
+  }
+  if (!fromMap) return;
+  document.querySelectorAll(".place-item").forEach(el => {
+    if (parseInt(el.dataset.id) === placeId) el.classList.toggle("hover", on);
   });
 }
 
@@ -371,28 +412,54 @@ function renderPlaces() {
     // No `draggable` here: core Leaflet ignores it on a path. Circles are moved
     // and resized by the handles below; rectangles are on their way out.
     if (p.type === "rectangle") {
-      shape = L.rectangle([[bounds.south, bounds.west], [bounds.north, bounds.east]], {
-        color: "#4a90d9", weight: 2, fillOpacity: 0.1,
-      });
+      shape = L.rectangle([[bounds.south, bounds.west], [bounds.north, bounds.east]],
+                          { ...PLACE_STYLE });
     } else if (p.type === "circle") {
-      shape = L.circle([bounds.lat, bounds.lng], {
-        radius: bounds.radius, color: "#4a90d9", weight: 2, fillOpacity: 0.1,
-      });
+      shape = L.circle([bounds.lat, bounds.lng], { radius: bounds.radius, ...PLACE_STYLE });
     }
 
     if (shape) {
-      shape.bindTooltip(p.name, { permanent: false, direction: "top" });
       shape.on("click", () => selectPlace(p.id));
+      shape.on("mouseover", () => highlightPlace(p.id, true, true));
+      shape.on("mouseout", () => highlightPlace(p.id, false, true));
       shape.addTo(map);
       placeShapes[p.id] = shape;
     }
   });
+
+  // Forced: the shapes are new and carry no tooltip yet, so the "permanence
+  // hasn't changed" shortcut would leave every one of them unlabelled.
+  applyPlaceLabels(true);
 
   // The shapes were just rebuilt, so the old handles point at layers that are
   // no longer on the map.
   clearCircleHandles();
   const selected = places.find(p => p.id === selectedPlaceId);
   if (selected) showCircleHandles(selected);
+}
+
+/* ── Map labels ──
+ * Zoomed out, a name on every place is a wall of text over the tiles — and the
+ * shapes are specks anyway. Zoomed in, the shapes are what you're working with
+ * and the hover tooltip means the map can't be read without the mouse. So the
+ * same tooltip is permanent past LABEL_ZOOM and hover-only below it; Leaflet
+ * fixes permanence at bind time, hence the rebind. */
+
+const LABEL_ZOOM = 12;
+let labelsArePermanent = null;    // null = nothing bound yet
+
+function applyPlaceLabels(force = false) {
+  const permanent = map.getZoom() >= LABEL_ZOOM;
+  if (!force && permanent === labelsArePermanent) return;
+  labelsArePermanent = permanent;
+  places.forEach(p => {
+    const shape = placeShapes[p.id];
+    if (!shape) return;
+    shape.unbindTooltip();
+    shape.bindTooltip(p.name, {
+      permanent, direction: "top", className: "place-label",
+    });
+  });
 }
 
 function selectPlace(placeId) {
@@ -547,10 +614,15 @@ async function updatePlaceBounds(place) {
 }
 
 async function renamePlace(place) {
-  const name = prompt(`Rename "${place.name}" to:`, place.name);
-  if (name === null) return;               // cancelled
-  const trimmed = name.trim();
-  if (!trimmed || trimmed === place.name) return;
+  const answer = await openPlaceDialog({
+    title: `Rename “${place.name}”`,
+    name: place.name,
+    submitLabel: "Rename",
+    excludeId: place.id,          // its own name is not a clash
+  });
+  if (!answer) return;                     // cancelled
+  const trimmed = answer.name;
+  if (trimmed === place.name) return;
 
   try {
     const res = await fetch(`/api/places/${place.id}`, {
@@ -692,7 +764,15 @@ async function clearRepresentative(place) {
 }
 
 async function confirmDeletePlace(place) {
-  if (!confirm(`Delete place "${place.name}"?`)) return;
+  const ok = await confirmDialog({
+    title: `Delete “${place.name}”?`,
+    message: typeof place.photo_count === "number" && place.photo_count
+      ? `The ${place.photo_count} photo${place.photo_count === 1 ? "" : "s"} taken here keep `
+        + "their coordinates — only the name and the shape go."
+      : "Only the name and the shape go; no photo is changed.",
+    confirmLabel: "Delete place",
+  });
+  if (!ok) return;
   try {
     const res = await fetch(`/api/places/${place.id}`, { method: "DELETE" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -931,15 +1011,21 @@ function markSelectedHotspot() {
 }
 
 // The geocoded label is only a suggestion — it names the neighbourhood, not the
-// place ("Elm St, Springfield" for what you'd call "Mom's house"), so the prompt
-// starts there and expects to be typed over.
+// place ("Elm St, Springfield" for what you'd call "Mom's house"), so the dialog
+// starts there, selected, and expects to be typed over.
 async function savePlaceFromHotspot(h) {
-  const name = prompt("Name this place:", h.label);
-  if (name === null) return;                 // cancelled
-  const trimmed = name.trim();
-  if (!trimmed) { setStatus("A place needs a name.", true); return; }
+  const answer = await openPlaceDialog({
+    title: "Name this place",
+    name: h.label,
+    // Offered rather than imposed: the merge radius is the smallest circle that
+    // covers the cluster, but a driveway and a state park are both one hotspot.
+    radius: hotspotRadius,
+    submitLabel: "Save place",
+  });
+  if (!answer) return;                       // cancelled
+  const trimmed = answer.name;
 
-  const bounds = { lat: h.lat, lng: h.lng, radius: hotspotRadius };
+  const bounds = { lat: h.lat, lng: h.lng, radius: answer.radius };
   try {
     const res = await fetch("/api/places", {
       method: "POST",
@@ -957,10 +1043,119 @@ async function savePlaceFromHotspot(h) {
       hotspotTotal = Math.max(hotspots.length, hotspotTotal - 1);
       renderHotspots();
     }
-    setStatus(`Saved "${trimmed}" as a place (${Math.round(hotspotRadius)} m radius).`);
+    setStatus(`Saved "${trimmed}" as a place (${Math.round(answer.radius)} m radius).`);
   } catch (err) {
     setStatus("Could not save place: " + err.message, true);
   }
+}
+
+/* ── Dialogs ──
+ * window.prompt/confirm can only ask one question and can't answer back, so a
+ * place had to be named blind and resized afterwards, and a clashing name went
+ * unnoticed until the list showed two rows with the same label. These take the
+ * name and the radius together and check the name against the existing places
+ * while it's being typed.
+ *
+ * Both return a promise that settles when the user chooses, so the call sites
+ * stay in the same straight-line shape they had around prompt(). */
+
+let placeDialogDone = null;      // resolver for the open place dialog, if any
+let confirmDialogDone = null;
+let placeDialogExcludeId = null; // the place being renamed, exempt from the clash check
+
+// `radius` null hides that field — renaming has the map's drag handles for
+// geometry, so only creation asks for a size.
+function openPlaceDialog({ title, name = "", radius = null, submitLabel = "Save", excludeId = null }) {
+  const modal = document.getElementById("place-dialog");
+  const nameInput = document.getElementById("place-dialog-name");
+  const radiusField = document.getElementById("place-dialog-radius-field");
+  const radiusInput = document.getElementById("place-dialog-radius");
+  const hint = document.getElementById("place-dialog-hint");
+
+  document.getElementById("place-dialog-title").textContent = title;
+  document.getElementById("place-dialog-save").textContent = submitLabel;
+  nameInput.value = name;
+  radiusField.hidden = radius === null;
+  if (radius !== null) radiusInput.value = String(Math.round(radius));
+  hint.textContent = radius === null
+    ? "" : "Photos inside this radius count as taken here.";
+  placeDialogExcludeId = excludeId;
+  checkDuplicateName();
+
+  modal.style.display = "";
+  nameInput.focus();
+  nameInput.select();
+
+  return new Promise(resolve => { placeDialogDone = resolve; });
+}
+
+// A warning, not a block: two houses called "Home" in different towns is a
+// reasonable thing to want, and only the user knows whether this is that.
+function checkDuplicateName() {
+  const value = document.getElementById("place-dialog-name").value.trim().toLowerCase();
+  const dupe = document.getElementById("place-dialog-dupe");
+  const clash = value && places.some(p =>
+    p.id !== placeDialogExcludeId && p.name.trim().toLowerCase() === value);
+  dupe.hidden = !clash;
+  if (clash) dupe.textContent = `Another place is already called “${
+    document.getElementById("place-dialog-name").value.trim()}”.`;
+  document.getElementById("place-dialog-save").disabled = !value;
+}
+
+function closePlaceDialog(result) {
+  document.getElementById("place-dialog").style.display = "none";
+  const done = placeDialogDone;
+  placeDialogDone = null;
+  if (done) done(result);
+}
+
+function submitPlaceDialog() {
+  const name = document.getElementById("place-dialog-name").value.trim();
+  if (!name) return;                                  // Save is disabled anyway
+  const radiusField = document.getElementById("place-dialog-radius-field");
+  let radius = null;
+  if (!radiusField.hidden) {
+    radius = Number(document.getElementById("place-dialog-radius").value);
+    if (!isFinite(radius) || radius < MIN_RADIUS_M) radius = MIN_RADIUS_M;
+  }
+  closePlaceDialog({ name, radius });
+}
+
+function confirmDialog({ title, message, confirmLabel = "Delete" }) {
+  document.getElementById("confirm-dialog-title").textContent = title;
+  document.getElementById("confirm-dialog-body").textContent = message;
+  document.getElementById("confirm-dialog-ok").textContent = confirmLabel;
+  document.getElementById("confirm-dialog").style.display = "";
+  document.getElementById("confirm-dialog-ok").focus();
+  return new Promise(resolve => { confirmDialogDone = resolve; });
+}
+
+function closeConfirmDialog(result) {
+  document.getElementById("confirm-dialog").style.display = "none";
+  const done = confirmDialogDone;
+  confirmDialogDone = null;
+  if (done) done(result);
+}
+
+function bindDialogs() {
+  const nameInput = document.getElementById("place-dialog-name");
+  nameInput.addEventListener("input", checkDuplicateName);
+  // Enter anywhere in the form saves; the dialog has no <form>, so this is the
+  // keyboard path a form would have given for free.
+  document.getElementById("place-dialog-content").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); submitPlaceDialog(); }
+  });
+  document.getElementById("place-dialog-save").addEventListener("click", submitPlaceDialog);
+  document.getElementById("place-dialog-cancel").addEventListener("click", () => closePlaceDialog(null));
+  document.getElementById("place-dialog").addEventListener("click", (e) => {
+    if (e.target.id === "place-dialog") closePlaceDialog(null);
+  });
+
+  document.getElementById("confirm-dialog-ok").addEventListener("click", () => closeConfirmDialog(true));
+  document.getElementById("confirm-dialog-cancel").addEventListener("click", () => closeConfirmDialog(false));
+  document.getElementById("confirm-dialog").addEventListener("click", (e) => {
+    if (e.target.id === "confirm-dialog") closeConfirmDialog(false);
+  });
 }
 
 /* ── Drawing (click-drag rectangle/circle) ── */
@@ -1027,24 +1222,35 @@ async function onDrawEnd(e) {
     tooSmall = drawingShape.getRadius() < 2;  // 2m minimum
   }
   if (tooSmall) {
-    alert("Shape is too small. Please drag to create a larger shape.");
+    // A status line, not an alert(): nothing was created, so there is nothing to
+    // acknowledge — the drag just didn't take.
+    setStatus("That shape is too small — drag further to set its size.", true);
     stopDrawing();
     return;
   }
 
-  const name = prompt(`Name this ${drawingMode}:`);
-  if (!name) { stopDrawing(); return; }
+  const type = drawingMode;  // stopDrawing() clears drawingMode
+  // The shape stays on the map behind the dialog, so the name is chosen with the
+  // area in sight.
+  const answer = await openPlaceDialog({
+    title: `Name this ${type}`,
+    radius: type === "circle" ? drawingShape.getRadius() : null,
+    submitLabel: "Save place",
+  });
+  if (!answer) { stopDrawing(); return; }
+  const name = answer.name;
 
   let boundsData;
-  if (drawingMode === "rectangle") {
+  if (type === "rectangle") {
     const b = drawingShape.getBounds();
     boundsData = { north: b.getNorth(), south: b.getSouth(), east: b.getEast(), west: b.getWest() };
-  } else if (drawingMode === "circle") {
+  } else {
     const c = drawingShape.getLatLng();
-    boundsData = { lat: c.lat, lng: c.lng, radius: drawingShape.getRadius() };
+    // The dialog's radius wins over the drag: it's the later, more deliberate
+    // number, and it is what the field showed when Save was pressed.
+    boundsData = { lat: c.lat, lng: c.lng, radius: answer.radius };
   }
 
-  const type = drawingMode;  // stopDrawing() clears drawingMode
   try {
     const res = await fetch("/api/places", {
       method: "POST",
