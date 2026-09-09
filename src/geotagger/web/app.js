@@ -1730,6 +1730,11 @@ function handleThumbClick(e, id, idx) {
 }
 
 function refreshSelectionUI() {
+  const selectionActions = document.getElementById("photo-selection-actions");
+  if (selectionActions) {
+    selectionActions.hidden = selectedIds.size === 0;
+    document.getElementById("workspace-selection-count").textContent = `${selectedIds.size} selected`;
+  }
   document.querySelectorAll(".thumb-cell").forEach((cell) => {
     const id = Number(cell.dataset.id);
     cell.classList.toggle("selected", selectedIds.has(id));
@@ -2228,11 +2233,15 @@ function makeGuessPinIcon() {
  * of grid height. The toolbar keeps a button and, once the range is narrowed,
  * the range itself — so a filter hidden behind a modal can't be forgotten. */
 
-// Whether the loaded photos carry enough dates to filter on. Hides the toolbar
-// entry (and closes the modal) when they don't.
+// Keep the date control discoverable even before dated photos are loaded.
 function setTimelineAvailable(available) {
-  document.getElementById("timeline-toolbar-group").style.display = available ? "" : "none";
-  if (!available) hideTimelineModal();
+  const button = document.getElementById("timeline-btn");
+  button.disabled = !available;
+  button.title = available ? "Filter the loaded photos down to a date range" : "Load dated photos to narrow the date range";
+  if (!available) {
+    document.getElementById("timeline-range-label").textContent = "All dates";
+    hideTimelineModal();
+  }
 }
 
 function showTimelineModal() {

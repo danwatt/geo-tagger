@@ -11,48 +11,14 @@
 <link rel="stylesheet" href="roadtrip.css"/>
 <link rel="stylesheet" href="location-picker.css"/>
 <link rel="stylesheet" href="geocode-location.css"/>
+<link rel="stylesheet" href="workspace-layout.css"/>
 </head>
 <body>
 <div id="toolbar">
   <div class="toolbar-group" id="app-nav" data-active="geocode"></div>
-  <div class="toolbar-spacer"></div>
-  <div class="toolbar-group">
-    <button id="select-month-btn">Select Month</button>
-    <span id="selected-month-label">No month selected</span>
-  </div>
-  <div class="toolbar-group" id="timeline-toolbar-group" style="display:none">
-    <button id="timeline-btn" title="Filter the loaded photos down to a date range">📊 Date range</button>
-    <span id="timeline-range-label"></span>
-  </div>
-  <div class="toolbar-group">
-    <button id="select-area-btn">Select Area</button>
-    <select id="window-select">
-      <option value="900">Window: 15 min</option>
-      <option value="1800">Window: 30 min</option>
-      <option value="3600">Window: 1 hr</option>
-      <option value="7200">Window: 2 hr</option>
-      <option value="43200">Window: 12 hr</option>
-      <option value="86400">Window: 24 hr</option>
-      <option value="604800">Window: 1 week</option>
-    </select>
-    <span id="selected-area-label"></span>
-  </div>
 </div>
 
-<!-- Hidden controls kept for JS compatibility -->
-<div style="display:none">
-  <input id="lat-input" type="text"/>
-  <input id="lng-input" type="text"/>
-  <button id="apply-latlng-btn"></button>
-  <button id="copy-location-btn"></button>
-  <button id="remove-geotag-btn"></button>
-</div>
-
-<div id="cam-legend"></div>
-
-<div id="main">
-  <div id="map-pane">
-    <div id="map-nav">
+<div id="workspace-filters">
       <div class="toolbar-group geocode-location-group">
         <label for="geocode-location-input">Location:</label>
         <div class="geocode-location-picker">
@@ -73,6 +39,45 @@
         <a class="button" href="/custom-places.html" title="Add or edit custom places">✏️ Edit places</a>
         <span id="geocode-location-help">Choose a location to load photos and nearby untagged candidates.</span>
       </div>
+<div class="scope-date-controls">  <div class="toolbar-group">
+    <button id="select-month-btn">Select Month</button>
+    <span id="selected-month-label">No month selected</span>
+  </div>
+  <div class="toolbar-group" id="timeline-toolbar-group">
+    <button id="timeline-btn" disabled title="Load dated photos to narrow the date range">📊 Date range</button>
+    <span id="timeline-range-label"></span>
+  </div>
+  <div class="toolbar-group">
+    <button id="select-area-btn">Select Area</button>
+    <label for="window-select">Include untagged within</label>
+    <select id="window-select">
+      <option value="900">15 min</option>
+      <option value="1800">30 min</option>
+      <option value="3600">1 hr</option>
+      <option value="7200">2 hr</option>
+      <option value="43200">12 hr</option>
+      <option value="86400">24 hr</option>
+      <option value="604800">1 week</option>
+    </select>
+    <span id="selected-area-label"></span>
+  </div>
+</div>
+</div>
+<div class="workspace-scope"><span id="workspace-scope-text">Choose a location or month to begin</span><button id="preview-toggle" aria-expanded="true">Hide preview</button></div>
+<!-- Hidden controls kept for JS compatibility -->
+<div style="display:none">
+  <input id="lat-input" type="text"/>
+  <input id="lng-input" type="text"/>
+  <button id="apply-latlng-btn"></button>
+  <button id="copy-location-btn"></button>
+  <button id="remove-geotag-btn"></button>
+</div>
+
+<div id="cam-legend"></div>
+
+<div id="main">
+  <div id="map-pane">
+    <div id="map-nav">
       <div class="toolbar-group imprecise-control-group">
         <label title="Drop photos with a specified uncertainty radius">
           <input type="checkbox" id="imprecise-toggle" />
@@ -90,7 +95,7 @@
         </select>
       </div>
       <div class="toolbar-group">
-        <input id="place-search" type="text" placeholder="Search place…" />
+        <input id="place-search" type="text" placeholder="Jump to map location…" aria-label="Jump to map location" />
         <button id="place-search-btn">Go</button>
       </div>
     </div>
@@ -226,6 +231,7 @@
 <script src="nav.js"></script>
 <script src="location-picker.js"></script>
 <script src="app.js"></script>
+<script src="workspace-layout.js"></script>
 <!-- After app.js: Road Trip mode reads its globals (map, photos, stageDrop …)
      and registers its own DOMContentLoaded handler, which must run second. -->
 <script src="roadtrip.js"></script>

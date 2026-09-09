@@ -1,0 +1,38 @@
+/* Shared photo workspace: scope above, flexible working panes below. */
+#toolbar { flex-wrap: wrap; }
+#app-nav { flex-wrap: wrap; }
+#workspace-filters, #search-form {
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+#workspace-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; position: relative; z-index: 600; }
+#workspace-filters .geocode-location-group { width: auto; flex: 1 1 420px; gap: 6px; }
+#workspace-filters .geocode-location-picker { flex: 1 1 230px; }
+#workspace-filters input { width: 100%; padding: 6px 8px; }
+#geocode-location-help { display: none; }
+.scope-date-controls { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.scope-date-controls .toolbar-group { flex-wrap: wrap; }
+#selected-month-label, #selected-area-label, #timeline-range-label { display: none; }
+.workspace-scope { display: flex; align-items: center; gap: 12px; padding: 6px 12px; flex-shrink: 0; background: var(--surface-1); }
+#workspace-scope-text { flex: 1; color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
+#preview-toggle { white-space: nowrap; }
+#main.workspace-panes { gap: 0; }
+.workspace-panes > #map-pane, .workspace-panes > #grid-pane, .workspace-panes > #detail-pane { min-width: 0; }
+.workspace-panes #grid-nav { flex-wrap: wrap; gap: 6px; }
+.workspace-panes #grid-nav .toolbar-group { flex-wrap: wrap; }
+.workspace-panes #grid-nav button { white-space: nowrap; }
+.workspace-panes #map-nav .toolbar-group { flex-wrap: wrap; }
+.workspace-panes #map-nav input { min-width: 0; max-width: 100%; }
+.pane-divider { cursor: col-resize; touch-action: none; background: var(--border); position: relative; }
+.pane-divider:hover, .pane-divider:focus-visible { background: var(--accent); outline: none; }
+.pane-divider::after { content: ''; position: absolute; inset: 0 -3px; }
+#photo-selection-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 7px 8px; background: var(--accent-bg-2); border-bottom: 1px solid var(--border); }
+#photo-selection-actions button { white-space: nowrap; }
+#search-form .search-field-location { width: 290px; }
+@media (max-width: 850px) {
+  #workspace-filters { gap: 8px; }
+  .workspace-scope { align-items: flex-start; }
+  #search-form { gap: 8px; }
+}

@@ -52,10 +52,15 @@ if (!GROUP_SORT_MODES.includes(gridSort)) gridSort = "date";
 
 // Unlabeled queue: which level nests inside which. "date" = month → location →
 // person (computeMonthLocationGroups, default); "person" = suggested person →
-// date-range chunks within that person (computeUnlabeledPersonGroups). Persisted
-// so the choice survives a reload.
+// date-range chunks within that person (computeUnlabeledPersonGroups); "photo" =
+// one group per source photo; "directory" = one group per containing folder
+// (computeUnlabeledDirGroups — the only useful axis for scanned/undated batches,
+// which have neither a timestamp nor GPS). Persisted so the choice survives a
+// reload.
+const UNLABELED_HIERARCHIES = ["date", "person", "photo", "directory"];
 const UNLABELED_HIERARCHY_LS_KEY = "geotagger.people.unlabeledHierarchy";
 let unlabeledHierarchy = localStorage.getItem(UNLABELED_HIERARCHY_LS_KEY) || "date";
+if (!UNLABELED_HIERARCHIES.includes(unlabeledHierarchy)) unlabeledHierarchy = "date";
 
 // Focus: narrows the tagging/discovery surfaces (people list, Unlabeled,
 // suggestions, Discover, Crowds) to one Year's time window. null = all time.
@@ -161,7 +166,9 @@ function bindToolbar() {
     unlabeledHierarchy = e.target.value;
     localStorage.setItem(UNLABELED_HIERARCHY_LS_KEY, unlabeledHierarchy);
     // Person-first hierarchy has no sortable groups — refresh the nav bar too.
-    if (scope === "unlabeled") { updateGridNavVisibility(); renderGrid(); }
+    updateGridNavVisibility();
+    renderGrid();
+    if (scope === "unlabeled") updateUnlabeledStatus();
   });
 
   document.getElementById("assign-btn").addEventListener("click", openAssignPickerForSelection);
@@ -578,12 +585,15 @@ function updateGridNavVisibility() {
   const showSelection = scope !== "discover" && scope !== "crowds";
   // Sort applies to the group-rendering grids only. The Unlabeled queue's
   // person-first hierarchy orders its own groups by person name, so it opts out
-  // (date and photo hierarchies both sort their groups).
+  // (date, photo and directory hierarchies all sort their groups).
   const showSort = scope === "discover" || scope === "crowds" || scope === "suggested" ||
     (scope === "unlabeled" && unlabeledHierarchy !== "person");
   document.getElementById("grid-nav-person").style.display = showPerson ? "" : "none";
   document.getElementById("grid-nav-crowds").style.display = showCrowds ? "" : "none";
   document.getElementById("grid-nav-unlabeled").style.display = showUnlabeled ? "" : "none";
+  // "Group by" only drives the Unlabeled queue's render — every other scope has
+  // its own fixed grouping, so the dropdown would be a dead control there.
+  document.getElementById("grid-nav-hierarchy").style.display = showUnlabeled ? "" : "none";
   document.getElementById("grid-nav-selection").style.display = showSelection ? "" : "none";
   document.getElementById("grid-nav-sort").style.display = showSort ? "" : "none";
   document.getElementById("grid-nav").style.display =
@@ -739,7 +749,14 @@ function applyUnlabeledView() {
   updateActionButtons();
   renderGrid();
   updateDetail();
+  updateUnlabeledStatus();
+}
 
+// Status line for the Unlabeled queue. Split out of applyUnlabeledView because a
+// hierarchy change re-renders without refetching or reselecting, and still has to
+// restate how the queue is grouped.
+function updateUnlabeledStatus() {
+  const pid = suggestFilterPersonId;
   const { total, returned } = unlabeledMeta;
   const preselNote = selectedIds.size
     ? `. ${selectedIds.size} confident guess(es) pre-selected.` : "";
@@ -760,6 +777,7 @@ function applyUnlabeledView() {
   const noun = suggestedOnly ? "suggested face(s)" : "unlabeled face(s)";
   const groupedBy = unlabeledHierarchy === "person" ? "person then date"
     : unlabeledHierarchy === "photo" ? "photo"
+    : unlabeledHierarchy === "directory" ? "folder"
     : "month then place";
   let msg = `${returned} of ${total} ${noun}, grouped by ${groupedBy}`;
   if (total > returned) msg += ` (showing first ${returned})`;
@@ -813,6 +831,21 @@ function sortFaceGroups(groups) {
 function renderGrid() {
   renderGridInner();
   renderPending();
+}
+
+// Repaint selection *in place*, for the actions that only move the selection or
+// the focus (click, arrow keys, group select/deselect). Selection is one CSS
+// class on the cell — nothing about the grid's contents or order changes — so
+// going through renderGrid() here would tear down and rebuild every cell,
+// dropping hundreds of <img> elements the browser then has to re-lay-out and
+// re-decode. That reads as the whole grid blanking and reloading on each click,
+// and it gets worse the more faces a group holds. Only call this when the face
+// list itself is untouched; anything that adds, removes, stages or relabels a
+// face still needs a full renderGrid().
+function paintSelection() {
+  document.querySelectorAll("#grid .thumb-cell").forEach(cell => {
+    cell.classList.toggle("selected", selectedIds.has(parseInt(cell.dataset.id, 10)));
+  });
 }
 
 function renderGridInner() {
@@ -904,6 +937,11 @@ function renderGridInner() {
     return;
   }
 
+  if (scope === "unlabeled" && unlabeledHierarchy === "directory") {
+    renderUnlabeledDirFirst(grid, list);
+    return;
+  }
+
   if (scope === "unlabeled") {
     let groupIdx = 0, curYear, curMonth;
     // Year/month dividers only read correctly while the buckets are chronological;
@@ -936,25 +974,7 @@ function renderGridInner() {
         meta: `· ${facesDateRange(group.faces)} · ${photoCountLabel(group.faces)}`,
         ignoreAll: true,
       }));
-      const cells = document.createElement("div");
-      cells.className = "person-runs";
-      // Faces are already clustered by suggested person (sortBucketBySuggestion).
-      // Each run of same-suggestion faces gets its own wrapping flex row
-      // (.person-run) instead of being flattened into one grid, so the whole
-      // run can get a continuous hover background — same idea as search.js's
-      // .photo-row, just one row per suggested person instead of per photo.
-      let prevSug, run;   // prevSug undefined before the first cell; null = "unknown" block
-      group.faces.forEach(face => {
-        const sug = face.suggestion ? face.suggestion.person_id : null;
-        if (prevSug === undefined || sug !== prevSug) {
-          run = document.createElement("div");
-          run.className = "person-run";
-          cells.appendChild(run);
-        }
-        run.appendChild(makeFaceCell(face));
-        prevSug = sug;
-      });
-      sec.appendChild(cells);
+      sec.appendChild(makePersonRuns(group.faces));
       grid.appendChild(sec);
     });
     return;
@@ -1172,6 +1192,83 @@ function renderUnlabeledPhotoFirst(grid, list) {
   });
 }
 
+// Cells for one bucket, laid out as person runs. Faces are already clustered by
+// suggested person (sortBucketBySuggestion); each run of same-suggestion faces
+// gets its own wrapping flex row (.person-run) instead of being flattened into
+// one grid, so the whole run can get a continuous hover background — same idea
+// as search.js's .photo-row, just one row per suggested person instead of per
+// photo. Shared by the month→location and directory grids.
+function makePersonRuns(faceList) {
+  const cells = document.createElement("div");
+  cells.className = "person-runs";
+  let prevSug, run;   // prevSug undefined before the first cell; null = "unknown" block
+  faceList.forEach(face => {
+    const sug = face.suggestion ? face.suggestion.person_id : null;
+    if (prevSug === undefined || sug !== prevSug) {
+      run = document.createElement("div");
+      run.className = "person-run";
+      cells.appendChild(run);
+    }
+    run.appendChild(makeFaceCell(face));
+    prevSug = sug;
+  });
+  return cells;
+}
+
+// Directory hierarchy for the Unlabeled queue: one group per containing folder,
+// keyed on the photo's full `dir` so sibling folders that share a leaf name
+// (…/1985/Scans and …/1990/Scans) stay apart. This is the axis that works for
+// scanned photos — no timestamp, no GPS, so the month→location grid piles them
+// all into one "Undated / No location" heap, while the folder is usually the
+// only surviving hint of what the batch is. Groups come out alphabetical by
+// path; sortGroups is stable, so folders that tie on the active sort key (every
+// one of them, when undated) keep that A→Z order.
+function computeUnlabeledDirGroups(list) {
+  const buckets = new Map();   // full dir path ("" when unknown) → group
+  list.forEach(f => {
+    const key = f.dir || "";
+    let b = buckets.get(key);
+    if (!b) {
+      b = { dir: f.dir || null, name: dirLabel(f), faces: [] };
+      buckets.set(key, b);
+    }
+    b.faces.push(f);
+  });
+  const groups = [...buckets.values()]
+    .sort((a, b) => (a.dir || "").localeCompare(b.dir || ""));
+  groups.forEach(g => { g.faces = sortBucketBySuggestion(g.faces, `dir:${g.dir}`); });
+  return groups;
+}
+
+// "…/Scans/1985 Box" — the last two segments of a full path. Enough to tell
+// sibling folders apart in a header without spilling an absolute path across it.
+function shortDirPath(dir) {
+  if (!dir) return "Unknown folder";
+  const parts = dir.replace(/[\\/]+$/, "").split(/[\\/]/).filter(Boolean);
+  if (parts.length <= 2) return parts.join("/");
+  return "…/" + parts.slice(-2).join("/");
+}
+
+function renderUnlabeledDirFirst(grid, list) {
+  let groupIdx = 0;
+  // No year/month dividers here: a folder isn't a chronological unit — a scanned
+  // batch routinely spans decades — so each header carries its own date range.
+  sortFaceGroups(computeUnlabeledDirGroups(list)).forEach(group => {
+    const sec = makeGroupSection(groupIdx++);
+    const place = locationLabel(group.faces);
+    const n = group.faces.length;
+    sec.appendChild(makeGroupHeader(group, {
+      title: `📁 ${shortDirPath(group.dir)}`,
+      label: group.name,
+      meta: `· ${facesDateRange(group.faces)} · ${photoCountLabel(group.faces)} · ` +
+            `${n} face${n === 1 ? "" : "s"}` + (place ? ` · 📍 ${place}` : ""),
+      ignoreAll: true,
+    }));
+    sec.appendChild(makePersonRuns(group.faces));
+    grid.appendChild(sec);
+  });
+}
+
 function renderUnlabeledPersonFirst(grid, list) {
   let groupIdx = 0;
   computeUnlabeledPersonGroups(list).forEach(person => {
@@ -1379,7 +1476,7 @@ function makeIgnoreBatchHeader(group) {
     buttons: [
       { label: "Select all",
         title: "Add every face in this batch to the current selection",
-        onClick: () => { group.faces.forEach(f => selectedIds.add(f.id)); renderGrid(); updateDetail(); } },
+        onClick: () => { group.faces.forEach(f => selectedIds.add(f.id)); paintSelection(); updateDetail(); } },
       { label: `Restore all (${group.faces.length})`, kind: "primary",
         title: "Un-ignore every face in this batch (returns them to the Unlabeled queue)",
         onClick: () => ignoreSelected_ids(group.faces.map(f => f.id), false) },
@@ -1408,7 +1505,7 @@ function makeComeBackBatchHeader(group) {
     buttons: [
       { label: "Select all",
         title: "Add every face in this batch to the current selection",
-        onClick: () => { group.faces.forEach(f => selectedIds.add(f.id)); renderGrid(); updateDetail(); } },
+        onClick: () => { group.faces.forEach(f => selectedIds.add(f.id)); paintSelection(); updateDetail(); } },
       { label: `Restore all (${group.faces.length})`, kind: "primary",
         title: "Move every face in this batch back to the Unlabeled queue",
         onClick: () => comeBackSelected_ids(group.faces.map(f => f.id), false) },
@@ -1548,7 +1645,7 @@ function makeGroupHeader(group, { title, meta = "", label = title, ignoreAll = f
         title: "Remove every face in this group from the current selection",
         onClick: () => {
           group.faces.forEach(f => selectedIds.delete(f.id));
-          renderGrid();
+          paintSelection();
           updateDetail();
           setStatus(`Deselected ${group.faces.length} face(s) from ${label}.`);
         } },
@@ -1561,7 +1658,7 @@ function selectGroupFaces(group, additive, label) {
   if (!additive) selectedIds.clear();
   group.faces.forEach(f => selectedIds.add(f.id));
   focusedFaceId = group.faces[0] ? group.faces[0].id : focusedFaceId;
-  renderGrid();
+  paintSelection();
   updateDetail();
   const verb = additive ? "Added" : "Selected only";
   const where = label || facesDateRange(group.faces);
@@ -1572,7 +1669,7 @@ function selectGroupFaces(group, additive, label) {
 function deselectAll() {
   selectedIds.clear();
   lastClickedIndex = -1;
-  renderGrid();
+  paintSelection();
   updateDetail();
   setStatus("Deselected all faces.");
 }
@@ -1593,7 +1690,7 @@ function handleCellClick(e, face, idx) {
   }
   focusedFaceId = face.id;
   lastClickedIndex = idx;
-  renderGrid();
+  paintSelection();
   updateDetail();
 }
 
@@ -1623,7 +1720,7 @@ function moveFocus(delta) {
   selectedIds.add(renderOrder[idx].id);
   focusedFaceId = renderOrder[idx].id;
   lastClickedIndex = idx;
-  renderGrid();
+  paintSelection();
   updateDetail();
   scrollFaceIntoView(focusedFaceId);
 }
@@ -1642,7 +1739,7 @@ function extendFocus(delta) {
   for (let i = start; i <= end; i++) selectedIds.add(renderOrder[i].id);
   focusedFaceId = renderOrder[idx].id;
   lastClickedIndex = idx;
-  renderGrid();
+  paintSelection();
   updateDetail();
   scrollFaceIntoView(focusedFaceId);
 }
@@ -1650,7 +1747,7 @@ function extendFocus(delta) {
 function toggleFocusedSelection() {
   if (!focusedFaceId) return;
   selectedIds.has(focusedFaceId) ? selectedIds.delete(focusedFaceId) : selectedIds.add(focusedFaceId);
-  renderGrid();
+  paintSelection();
   updateDetail();
 }
 
@@ -1658,7 +1755,7 @@ function selectAllFaces() {
   const visible = gridFaces();
   if (!visible.length) return;
   selectedIds = new Set(visible.map(f => f.id));
-  renderGrid();
+  paintSelection();
   updateDetail();
   setStatus(`Selected all ${visible.length} face(s).`);
 }
@@ -2865,7 +2962,9 @@ function makePendingCell(e) {
 
   // Left-click previews in the detail pane; right-click re-targets (which just
   // re-stages the face into another group).
-  cell.addEventListener("click", () => { focusedFaceId = face.id; renderGrid(); updateDetail(); });
+  // Focus isn't drawn on a cell, so previewing one needs no repaint at all —
+  // same as the contextmenu handler right below.
+  cell.addEventListener("click", () => { focusedFaceId = face.id; updateDetail(); });
   cell.addEventListener("contextmenu", (ev) => {
     ev.preventDefault();
     focusedFaceId = face.id;

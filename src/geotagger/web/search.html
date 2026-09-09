@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="face-grid.css"/>
 <link rel="stylesheet" href="search.css"/>
 <link rel="stylesheet" href="location-picker.css"/>
+<link rel="stylesheet" href="workspace-layout.css"/>
 </head>
 <body>
 <div id="toolbar">
@@ -16,14 +17,6 @@
 </div>
 
 <div id="search-form">
-  <div class="search-field">
-    <label for="date-from">From</label>
-    <input type="date" id="date-from"/>
-  </div>
-  <div class="search-field">
-    <label for="date-to">To</label>
-    <input type="date" id="date-to"/>
-  </div>
   <div class="search-field search-field-location">
     <label for="location-input">Location</label>
     <input type="text" id="location-input" placeholder="Search saved places, cities, counties…" autocomplete="off"
@@ -43,6 +36,14 @@
       <option value="5">+5 miles</option>
       <option value="10">+10 miles</option>
     </select>
+  </div>
+  <div class="search-field">
+    <label for="date-from">From</label>
+    <input type="date" id="date-from"/>
+  </div>
+  <div class="search-field">
+    <label for="date-to">To</label>
+    <input type="date" id="date-to"/>
   </div>
   <div class="search-field">
     <label for="geotagged-select">Geotagged</label>
@@ -74,6 +75,8 @@
     <button id="clear-btn">Clear</button>
   </div>
 </div>
+
+<div class="workspace-scope"><span id="workspace-scope-text">Choose filters to find photos</span><button id="preview-toggle" aria-expanded="true">Hide preview</button></div>
 
 <div id="timeline" style="display:none">
   <canvas id="hist-canvas"></canvas>
@@ -119,5 +122,6 @@
 <script src="nav.js"></script>
 <script src="location-picker.js"></script>
 <script src="search.js"></script>
+<script src="workspace-layout.js"></script>
 </body>
 </html>

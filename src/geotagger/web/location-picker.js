@@ -14,6 +14,7 @@ function createLocationPicker({ input, box, onSelect, onEdit, emptyMessage, erro
     input.value = item.label;
     close();
     onSelect(item);
+    input.dispatchEvent(new Event("change", { bubbles: true }));
   }
   async function suggest() {
     const request = ++version;
