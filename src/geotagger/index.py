@@ -925,6 +925,43 @@ def get_places() -> list[sqlite3.Row]:
     return get_db().execute("SELECT * FROM places ORDER BY name").fetchall()
 
 
+def get_place_stats() -> dict[int, dict]:
+    """Photo count and newest photo timestamp per saved place, keyed by place id.
+
+    One R*Tree bbox prefilter per place, narrowed by the same exact predicate
+    Search uses (place_distance == 0 means "inside"). Without that second pass a
+    circle would count the ~27% of its bounding box lying outside the ring, which
+    at a 5 km place is a lot of photos from down the road.
+
+    A place whose box straddles the antimeridian (min_lng > max_lng) reads as an
+    empty R*Tree range and counts zero — the same blind spot the rest of the
+    saved-place code has, not a new one.
+    """
+    from geotagger.search_locations import place_bbox, place_distance
+    db = get_db()
+    db.create_function("search_place_distance", 4, place_distance, deterministic=True)
+
+    stats: dict[int, dict] = {}
+    for p in db.execute("SELECT id, type, bounds FROM places").fetchall():
+        box = place_bbox(p["type"], p["bounds"])
+        if box is None:                      # unparseable bounds — report, don't raise
+            stats[p["id"]] = {"photo_count": 0, "last_ts": None}
+            continue
+        min_lat, max_lat, min_lng, max_lng = box
+        row = db.execute("""
+            SELECT COUNT(*) AS n, MAX(photos.photo_datetime) AS last_ts
+            FROM photos
+            INNER JOIN photos_spatial ON photos_spatial.id = photos.id
+            WHERE photos_spatial.max_lat >= ?
+              AND photos_spatial.min_lat <= ?
+              AND photos_spatial.max_lng >= ?
+              AND photos_spatial.min_lng <= ?
+              AND search_place_distance(photos.lat, photos.lng, ?, ?) = 0
+        """, (min_lat, max_lat, min_lng, max_lng, p["type"], p["bounds"])).fetchone()
+        stats[p["id"]] = {"photo_count": row["n"], "last_ts": row["last_ts"]}
+    return stats
+
+
 def create_place(name: str, place_type: str, bounds: str) -> int:
     """Create a new place and return its ID."""
     db = get_db()

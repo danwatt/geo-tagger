@@ -68,3 +68,21 @@ def place_distance(lat, lng, kind, raw):
     near_lng = max(west, min(east, lng))
     return math.hypot((lat - near_lat) * 111195,
                       (lng - near_lng) * 111195 * math.cos(math.radians(near_lat)))
+
+
+def place_bbox(kind, raw) -> tuple[float, float, float, float] | None:
+    """(min_lat, max_lat, min_lng, max_lng) enclosing a saved place, for an
+    R*Tree prefilter. A circle's box overshoots its corners by ~27% of area, so
+    callers pair this with place_distance() == 0 for the exact test."""
+    try:
+        b = _bounds(raw)
+        if kind == "circle":
+            lat_off = b["radius"] / 111320
+            lng_off = b["radius"] / (111320 * max(1e-6, math.cos(math.radians(b["lat"]))))
+            return (b["lat"] - lat_off, b["lat"] + lat_off,
+                    b["lng"] - lng_off, b["lng"] + lng_off)
+        if kind == "rectangle":
+            return (b["south"], b["north"], b["west"], b["east"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        pass
+    return None

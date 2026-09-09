@@ -1,9 +1,12 @@
 """Saved places (rectangles/circles) CRUD."""
 
-from fastapi import APIRouter, HTTPException
+import asyncio
+
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from geotagger import index
+from geotagger.executor import get_executor
 
 router = APIRouter()
 
@@ -15,9 +18,21 @@ class CreatePlaceRequest(BaseModel):
 
 
 @router.get("/api/places")
-async def api_get_places():
-    """Get all saved places."""
+async def api_get_places(
+    stats: bool = Query(False, description="include photo_count and last_ts per place"),
+):
+    """Get all saved places.
+
+    `stats` is opt-in because it costs a spatial query per place: the Custom
+    Places sidebar wants the counts, the geocode page's jump-target dropdown
+    doesn't and shouldn't pay for them.
+    """
     places = index.get_places()
+    per_place = {}
+    if stats:
+        loop = asyncio.get_running_loop()
+        per_place = await loop.run_in_executor(get_executor(), index.get_place_stats)
+
     return [
         {
             "id": p["id"],
@@ -26,6 +41,7 @@ async def api_get_places():
             "bounds": p["bounds"],
             "created_at": p["created_at"],
             "representative_photo_id": p["representative_photo_id"],
+            **per_place.get(p["id"], {}),
         }
         for p in places
     ]

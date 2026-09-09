@@ -183,6 +183,39 @@ class TestSortTime:
             hotspots_service.get_hotspots(sort="time")
 
 
+class TestPaging:
+    """`offset` walks the ranked list a page at a time — the Custom Places
+    page's "Load more", for a library with more hotspots than one slice."""
+
+    def _ranked(self):
+        # Three clusters, distinct counts, so "count" order is unambiguous.
+        for i in range(5):
+            _upsert(f"a{i}.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")
+        for i in range(3):
+            _upsert(f"b{i}.jpg", lat=45.0, lng=-75.0, geotag_source="sidecar")
+        _upsert("c0.jpg", lat=50.0, lng=-75.0, geotag_source="sidecar")
+
+    def test_pages_do_not_overlap_or_skip(self, db):
+        self._ranked()
+        page1 = hotspots_service.get_hotspots(limit=2, offset=0)["hotspots"]
+        page2 = hotspots_service.get_hotspots(limit=2, offset=2)["hotspots"]
+        assert [h["count"] for h in page1] == [5, 3]
+        assert [h["count"] for h in page2] == [1]
+
+    def test_total_is_the_whole_list_not_the_page(self, db):
+        self._ranked()
+        assert hotspots_service.get_hotspots(limit=2, offset=2)["total"] == 3
+
+    def test_offset_past_the_end_is_empty_not_an_error(self, db):
+        self._ranked()
+        result = hotspots_service.get_hotspots(limit=2, offset=99)
+        assert result["hotspots"] == [] and result["total"] == 3
+
+    def test_offset_defaults_to_the_first_page(self, db):
+        self._ranked()
+        assert hotspots_service.get_hotspots(limit=1)["hotspots"][0]["count"] == 5
+
+
 class TestBoundingBox:
     """`bbox` narrows the answer to one patch of the world — the Custom Places
     page's "only in view" filter."""

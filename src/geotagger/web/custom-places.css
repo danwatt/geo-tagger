@@ -11,6 +11,39 @@
 /* ── Sidebar ── */
 #sidebar { width: 320px; }
 
+#place-count { color: var(--text-muted); font-size: 12px; }
+
+/* Search / sort / filter, on their own rows under the header so the 320px
+   sidebar doesn't squeeze them into unreadable stubs. */
+#place-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+#place-controls-row { display: flex; gap: 6px; }
+#place-controls-row select { flex: 1; min-width: 0; }
+
+#place-search {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-input);
+  color: var(--text);
+  font-size: 12px;
+}
+#place-search:focus { border-color: var(--accent); outline: none; }
+#place-search::placeholder { color: var(--text-dim); }
+
+#place-sort,
+#place-filter {
+  font-size: 12px;
+  padding: 3px 6px;
+}
+
 /* Both lists share the sidebar's height when hotspots are showing; with the
    section hidden, places take all of it. */
 #place-list {
@@ -32,15 +65,23 @@
 .place-item:hover { border-color: var(--accent); }
 .place-item.selected { border-color: var(--accent); background: #1e2f42; }
 
+/* Gallery rows: name and facts above a full-width photo. The thumbnail comes
+   first in the markup so the compact rules below can just switch the axis;
+   column-reverse puts the text back on top here. */
+.place-item-main {
+  display: flex;
+  flex-direction: column-reverse;
+}
+.place-item-body { min-width: 0; }
+
 .place-item-name {
   font-weight: bold;
   font-size: 14px;
-  margin-bottom: 4px;
 }
-
-#place-filter {
-  font-size: 12px;
-  padding: 3px 6px;
+.place-item-meta {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-top: 2px;
 }
 
 .place-rep-thumb {
@@ -53,9 +94,47 @@
   background: var(--surface-black);
 }
 
+/* ── Compact rows ──
+   Same markup, thumbnail shrunk to the hotspot rows' 46px and moved beside the
+   text, so a long list is scannable eight rows at a time instead of two. */
+#place-list.compact .place-item { padding: 8px; }
+#place-list.compact .place-item-main {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+#place-list.compact .place-item-body { flex: 1; }
+#place-list.compact .place-item-name {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#place-list.compact .place-rep-thumb,
+#place-list.compact .rep-empty {
+  width: 46px;
+  height: 46px;
+  flex-shrink: 0;
+  margin-top: 0;
+  padding: 0;
+}
+#place-list.compact .rep-empty-text { display: none; }
+
+/* Actions on the selected row only. Revealing them on hover would resize every
+   row the cursor crosses and shuffle the list out from under it; selection is
+   deliberate, and clicking a row is already how you pick one. */
+#place-list.compact .place-item-actions { display: none; }
+#place-list.compact .place-item.selected .place-item-actions {
+  display: flex;
+  margin-top: 6px;
+}
+
 /* ── Representative photo ── */
 .rep-empty {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   width: 100%;
   margin-top: 8px;
   padding: 14px 8px;
@@ -232,6 +311,20 @@
   flex-wrap: wrap;
 }
 .hotspot-actions button { font-size: 11px; padding: 2px 7px; }
+
+#hotspot-more-btn {
+  display: block;
+  width: 100%;
+  margin: 2px 0 6px;
+  padding: 6px;
+  font-size: 12px;
+  border: 1px dashed var(--warn);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--warn);
+}
+#hotspot-more-btn:hover:not(:disabled) { background: #3a2f1c; }
+#hotspot-more-btn:disabled { border-style: solid; color: var(--text-muted); cursor: default; }
 
 .hotspot-empty {
   color: var(--text-muted);

@@ -12,6 +12,11 @@ let places = [];            // loaded from /api/places
 let placeShapes = {};       // place_id -> L.Rectangle | L.Circle
 let selectedPlaceId = null; // highlighted in sidebar
 let placeFilter = "all";    // all | with-photo | without-photo — sidebar list only
+let placeQuery = "";        // free-text name filter, sidebar list only
+let placeSort = "name";     // name | count | recent | created
+// Compact by default: a 320px sidebar fits two gallery cards and eight compact
+// rows, and finding the place you meant is the common task, not admiring it.
+let placeDense = localStorage.getItem("placeDense") !== "gallery";
 
 let drawingMode = null;     // null | "rectangle" | "circle"
 let drawingShape = null;    // temporary shape being drawn
@@ -44,11 +49,57 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 function initMap() {
+  // World view is only the starting point; restoreView() (or the first place
+  // load) moves off it as soon as we know where this library's places are.
   map = L.map("map").setView([20, 0], 2);
   setBasemap("street");
   addBasemapControl();
   map.on("moveend", correctWorldWrap);
   map.on("moveend", onMapMovedForHotspots);
+  map.on("moveend", saveView);
+  restoreView();
+}
+
+/* ── Where the map opens ──
+ * Opening on the whole world means panning to your own places every visit. So:
+ * the view you left last, else a fit around every place you have, else world.
+ * Remembered per browser, not on the server — it's a scroll position, not data. */
+
+const VIEW_KEY = "customPlacesView";
+let viewRestored = false;        // a saved view outranks the auto-fit below
+
+function saveView() {
+  const c = map.getCenter();
+  localStorage.setItem(VIEW_KEY, JSON.stringify({
+    lat: c.lat, lng: c.lng, zoom: map.getZoom(),
+  }));
+}
+
+function restoreView() {
+  try {
+    const v = JSON.parse(localStorage.getItem(VIEW_KEY) || "null");
+    if (!v || typeof v.lat !== "number" || typeof v.lng !== "number") return;
+    map.setView([v.lat, v.lng], v.zoom ?? 13, { animate: false });
+    viewRestored = true;
+  } catch (err) {
+    // A corrupt entry is not worth a broken page — fall through to the auto-fit.
+  }
+}
+
+// Frames every place so a new library opens on its own contents instead of the
+// mid-Atlantic. Runs on the first load only — every later loadPlaces() is a
+// rename, a delete or a shape you just drew, and re-framing the map under any of
+// those would be a jump you didn't ask for.
+let initialViewDone = false;
+
+function fitToPlaces() {
+  if (initialViewDone) return;
+  initialViewDone = true;
+  if (viewRestored) return;
+  const shapes = Object.values(placeShapes);
+  if (!shapes.length) return;
+  const bounds = shapes.reduce((acc, s) => acc.extend(s.getBounds()), L.latLngBounds([]));
+  if (bounds.isValid()) map.fitBounds(bounds.pad(0.15), { maxZoom: 14 });
 }
 
 // See map.js — keeps the map's own center from drifting past ±180 when
@@ -106,6 +157,28 @@ function bindToolbar() {
     renderSidebar();
   });
 
+  const search = document.getElementById("place-search");
+  // "input", not "change": the list is already in memory, so filtering keystroke
+  // by keystroke costs nothing and beats waiting for Enter.
+  search.addEventListener("input", () => {
+    placeQuery = search.value.trim().toLowerCase();
+    renderSidebar();
+  });
+
+  // Named apart from the hotspot `sort`/`chk` locals further down — same scope.
+  const placeSortSel = document.getElementById("place-sort");
+  placeSortSel.addEventListener("change", () => {
+    placeSort = placeSortSel.value;
+    renderSidebar();
+  });
+
+  const density = document.getElementById("place-density-btn");
+  density.addEventListener("click", () => {
+    placeDense = !placeDense;
+    localStorage.setItem("placeDense", placeDense ? "compact" : "gallery");
+    renderSidebar();
+  });
+
   const chk = document.getElementById("show-hotspots-chk");
   const controls = document.getElementById("hotspot-controls");
   const sort = document.getElementById("hotspot-sort");
@@ -142,40 +215,88 @@ function bindToolbar() {
 /* ── API ── */
 async function loadPlaces() {
   try {
-    const res = await fetch("/api/places");
+    // stats=true adds photo_count and last_ts — a spatial query per place, so
+    // only this page asks for them.
+    const res = await fetch("/api/places?stats=true");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     places = await res.json();
     renderSidebar();
     renderPlaces();
+    fitToPlaces();
   } catch (e) {
     setStatus("Failed to load places: " + e.message, true);
   }
 }
 
 /* ── Rendering ── */
-// The filter narrows the sidebar only — the map keeps every place drawn, so
-// hiding a row never hides the shape you are about to drag.
+// The filter, search and sort narrow and order the sidebar only — the map keeps
+// every place drawn in `places` order, so hiding a row never hides the shape you
+// are about to drag.
 function filteredPlaces() {
-  if (placeFilter === "with-photo") return places.filter(p => p.representative_photo_id);
-  if (placeFilter === "without-photo") return places.filter(p => !p.representative_photo_id);
-  return places;
+  let out = places;
+  if (placeFilter === "with-photo") out = out.filter(p => p.representative_photo_id);
+  else if (placeFilter === "without-photo") out = out.filter(p => !p.representative_photo_id);
+  if (placeQuery) out = out.filter(p => p.name.toLowerCase().includes(placeQuery));
+  return sortPlaces(out);
+}
+
+// Sorts a copy: `places` is what renderPlaces() walks, so reordering it in place
+// would reshuffle map layers for a sidebar-only choice. Name breaks every tie so
+// the order is stable when counts or dates match (or are missing).
+function sortPlaces(list) {
+  const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+  const desc = (key) => (a, b) => ((b[key] || 0) - (a[key] || 0)) || byName(a, b);
+  const cmp = {
+    name: byName,
+    count: desc("photo_count"),
+    recent: desc("last_ts"),
+    created: desc("created_at"),
+  }[placeSort] || byName;
+  return [...list].sort(cmp);
+}
+
+// "12 photos · last 3/2/2019 · 250 m" — the same facts a hotspot row carries, so
+// a named place can be judged against the unnamed ones below it. photo_count is
+// absent only if the stats query failed; the row then just says less.
+function placeMeta(p) {
+  const bits = [];
+  if (typeof p.photo_count === "number") {
+    bits.push(p.photo_count === 1 ? "1 photo" : `${p.photo_count} photos`);
+  }
+  if (p.last_ts) bits.push(`last ${new Date(p.last_ts * 1000).toLocaleDateString()}`);
+  bits.push(p.type === "circle" ? formatRadius(circleRadius(p)) : "rectangle");
+  return bits.join(" · ");
 }
 
 function renderSidebar() {
   const list = document.getElementById("place-list");
+  const countEl = document.getElementById("place-count");
+  const densityBtn = document.getElementById("place-density-btn");
+  list.classList.toggle("compact", placeDense);
+  densityBtn.textContent = placeDense ? "▤" : "▥";
+  densityBtn.title = placeDense ? "Switch to gallery rows" : "Switch to compact rows";
+
   // The hint is re-created rather than hidden and kept: it lives *inside* the
   // list, so the innerHTML reset below destroys it, and a second render would
   // otherwise reach for a node that no longer exists.
   list.innerHTML = "";
   if (!places.length) {
+    countEl.textContent = "";
     list.innerHTML = `<div id="no-places-hint">No places yet — draw a rectangle
       or circle on the map.</div>`;
     return;
   }
   const shown = filteredPlaces();
+  // "8 of 63" only while something is narrowing the list, so the plain count
+  // isn't dressed up as a filtered one.
+  countEl.textContent = shown.length < places.length
+    ? `${shown.length} of ${places.length}` : `${places.length}`;
+
   if (!shown.length) {
-    list.innerHTML = `<div id="no-places-hint">No places ${
-      placeFilter === "with-photo" ? "have" : "are missing"} a representative photo.</div>`;
+    list.innerHTML = placeQuery
+      ? `<div id="no-places-hint">No place name matches “${escHtml(placeQuery)}”.</div>`
+      : `<div id="no-places-hint">No places ${
+          placeFilter === "with-photo" ? "have" : "are missing"} a representative photo.</div>`;
     return;
   }
   shown.forEach(p => {
@@ -190,15 +311,20 @@ function renderSidebar() {
       ? `<img class="place-rep-thumb" src="/api/thumbnail/${p.representative_photo_id}"
              alt="Representative photo" title="Click to choose a different photo"/>`
       : `<button class="rep-empty" title="Choose a representative photo from the photos taken here">
-           🖼 Choose a photo
+           <span class="rep-empty-icon">🖼</span><span class="rep-empty-text">Choose a photo</span>
          </button>`;
     const clearRepBtn = p.representative_photo_id
       ? `<button class="clear-rep-btn" title="Remove representative photo">Clear photo</button>`
       : "";
 
     div.innerHTML = `
-      <div class="place-item-name">${escHtml(p.name)}</div>
-      ${repThumb}
+      <div class="place-item-main">
+        ${repThumb}
+        <div class="place-item-body">
+          <div class="place-item-name">${escHtml(p.name)}</div>
+          <div class="place-item-meta">${escHtml(placeMeta(p))}</div>
+        </div>
+      </div>
       <div class="place-item-actions">
         <button class="zoom-btn">Zoom</button>
         <button class="rename-btn">Rename</button>
@@ -272,12 +398,15 @@ function renderPlaces() {
 function selectPlace(placeId) {
   selectedPlaceId = placeId;
   // Clicking a shape on the map is a request to work on that place, so its row
-  // has to be reachable — if the sidebar filter is hiding it, drop back to All
-  // rather than silently selecting something the user can't see or edit.
-  if (placeFilter !== "all" && !filteredPlaces().some(p => p.id === placeId)) {
+  // has to be reachable — if the filter or the search box is hiding it, clear
+  // both rather than silently selecting something the user can't see or edit.
+  if (!filteredPlaces().some(p => p.id === placeId)) {
     placeFilter = "all";
+    placeQuery = "";
     const sel = document.getElementById("place-filter");
     if (sel) sel.value = "all";
+    const search = document.getElementById("place-search");
+    if (search) search.value = "";
     renderSidebar();
   }
   let row = null;
@@ -600,6 +729,7 @@ let hotspotInView = false;    // narrow the list to the map's current view
 let hotspotTotal = 0;         // how many matched before the server's limit slice
 let hotspotMoveTimer = null;
 let selectedHotspotKey = null;   // highlighted row, identified by its coordinate
+let hotspotLoading = false;      // guards the Load-more button against double-fire
 
 const hotspotKey = (h) => `${h.lat.toFixed(5)},${h.lng.toFixed(5)}`;
 // Overwritten from the API's own merge_meters, so the drawn shape can't drift
@@ -624,31 +754,50 @@ function viewBbox() {
   };
 }
 
-async function loadHotspots() {
+// `append` asks the server for the page after what's already loaded instead of
+// the first one — the list is a queue to work through, and 2000 hotspots at 60
+// a go is otherwise unreachable past the first screen.
+async function loadHotspots({ append = false } = {}) {
   const list = document.getElementById("hotspot-list");
   document.getElementById("hotspot-section").style.display = "";
-  if (!hotspots.length) list.innerHTML = `<div class="hotspot-empty">Loading…</div>`;
+  if (!append && !hotspots.length) list.innerHTML = `<div class="hotspot-empty">Loading…</div>`;
 
   const params = new URLSearchParams({
     limit: String(HOTSPOT_LIMIT), hide_named: "true", sort: hotspotSort,
+    offset: String(append ? hotspots.length : 0),
   });
   const box = hotspotInView ? viewBbox() : null;
   if (box) Object.entries(box).forEach(([k, v]) => params.set(k, v));
 
+  hotspotLoading = true;
+  let failure = null;
   try {
     const res = await fetch(`/api/geotag/hotspots?${params}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    hotspots = data.hotspots || [];
+    const page = data.hotspots || [];
+    hotspots = append ? hotspots.concat(page) : page;
     hotspotTotal = data.total ?? hotspots.length;
     if (data.merge_meters) hotspotRadius = data.merge_meters;
-    renderHotspots();
   } catch (err) {
-    hotspots = [];
-    renderHotspotShapes();
-    list.innerHTML = `<div class="hotspot-empty">Couldn't load hotspots: ${escHtml(err.message)}</div>`;
-    document.getElementById("hotspot-count").textContent = "";
+    failure = err;
   }
+  // Cleared before rendering, not in a `finally` after it: the Load-more button
+  // reads this flag to decide whether it draws itself disabled.
+  hotspotLoading = false;
+
+  if (!failure) { renderHotspots(); return; }
+  // A failed *next* page leaves what's already loaded alone — losing the rows
+  // you were working through would be a worse answer than a missing page.
+  if (append) {
+    setStatus("Couldn't load more hotspots: " + failure.message, true);
+    renderHotspots();
+    return;
+  }
+  hotspots = [];
+  renderHotspotShapes();
+  list.innerHTML = `<div class="hotspot-empty">Couldn't load hotspots: ${escHtml(failure.message)}</div>`;
+  document.getElementById("hotspot-count").textContent = "";
 }
 
 // Panning is continuous and the query is a full clustering pass, so the refresh
@@ -743,6 +892,24 @@ function renderHotspotSidebar() {
     list.appendChild(div);
   });
 
+  // The tail of a long list. Appends the next page rather than replacing the
+  // list, so rows already scrolled past stay where they were.
+  if (hotspots.length < hotspotTotal) {
+    const more = document.createElement("button");
+    more.id = "hotspot-more-btn";
+    more.textContent = hotspotLoading
+      ? "Loading…"
+      : `Load ${Math.min(HOTSPOT_LIMIT, hotspotTotal - hotspots.length)} more`;
+    more.disabled = hotspotLoading;
+    more.addEventListener("click", () => {
+      if (hotspotLoading) return;
+      more.disabled = true;
+      more.textContent = "Loading…";
+      loadHotspots({ append: true });
+    });
+    list.appendChild(more);
+  }
+
   markSelectedHotspot();
 }
 
@@ -781,7 +948,15 @@ async function savePlaceFromHotspot(h) {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     await loadPlaces();
-    if (showHotspots) await loadHotspots();  // this hotspot is covered now — it goes
+    // Dropped locally rather than by refetching: a refetch would restart at page
+    // one and throw away however many pages you had loaded to get here. The
+    // server would suppress this hotspot anyway on the next real load.
+    if (showHotspots) {
+      const key = hotspotKey(h);
+      hotspots = hotspots.filter(x => hotspotKey(x) !== key);
+      hotspotTotal = Math.max(hotspots.length, hotspotTotal - 1);
+      renderHotspots();
+    }
     setStatus(`Saved "${trimmed}" as a place (${Math.round(hotspotRadius)} m radius).`);
   } catch (err) {
     setStatus("Could not save place: " + err.message, true);

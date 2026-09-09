@@ -397,7 +397,8 @@ def get_hotspots(limit: int = 40, merge_meters: float = DEFAULT_MERGE_METERS,
                  lat: float | None = None, lng: float | None = None,
                  from_ts: int | None = None, to_ts: int | None = None,
                  hide_named: bool = True,
-                 bbox: tuple[float, float, float, float] | None = None) -> dict:
+                 bbox: tuple[float, float, float, float] | None = None,
+                 offset: int = 0) -> dict:
     """Recurring drop points, best-first for the chosen `sort`:
 
     · "count"  — how often you've tagged there. The default.
@@ -425,8 +426,15 @@ def get_hotspots(limit: int = 40, merge_meters: float = DEFAULT_MERGE_METERS,
     best `limit` *inside* the box, not whatever survives of a global top-N, and
     filtering first also keeps the whole-library sorts off the excluded clusters.
 
-    Only the `limit` entries actually returned get reverse-geocoded — labelling
-    the whole long tail would dominate the request for names nobody sees.
+    `offset` skips that many entries of the ordered, filtered list, so a caller
+    working through a long tail can ask for the next page instead of raising
+    `limit` and paying to reverse-geocode everything again. `total` is the length
+    before the slice, so the caller knows when it has reached the end. Naming a
+    place between pages shifts the list under the offset (that hotspot leaves it),
+    which can skip a neighbour — a refresh re-syncs.
+
+    Only the entries actually returned get reverse-geocoded — labelling the whole
+    long tail would dominate the request for names nobody sees.
     """
     clusters = _all_clusters(merge_meters)
     if bbox is not None:
@@ -465,7 +473,8 @@ def get_hotspots(limit: int = 40, merge_meters: float = DEFAULT_MERGE_METERS,
                             f"suppressed by saved places")
 
     out = []
-    for c in ordered[:max(1, limit)]:
+    start = max(0, offset)
+    for c in ordered[start:start + max(1, limit)]:
         loc = geocode.lookup(c["lat"], c["lng"])   # None when no geocode data is installed
         out.append({
             "lat": c["lat"], "lng": c["lng"],
@@ -476,7 +485,8 @@ def get_hotspots(limit: int = 40, merge_meters: float = DEFAULT_MERGE_METERS,
             "label": place_label(loc, c["lat"], c["lng"]),
             **extra.get(id(c), {}),
         })
-    return {"hotspots": out, "total": len(ordered), "merge_meters": merge_meters}
+    return {"hotspots": out, "total": len(ordered), "offset": start,
+            "merge_meters": merge_meters}
 
 
 def invalidate():

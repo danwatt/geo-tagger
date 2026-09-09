@@ -52,6 +52,47 @@ def test_place_representative_set_and_clear(client):
     assert place["representative_photo_id"] is None
 
 
+def _add_photo(name, lat, lng, ts):
+    index.upsert_photo(
+        filename=name, dir_=".", ext=".jpg", media_type="image",
+        mtime=1.0, size=1, lat=lat, lng=lng, geotag_source="sidecar",
+        sidecar_path=None, sidecar_mtime=None, camera="c",
+        photo_datetime=ts, gps_accuracy=None, orientation=1,
+    )
+
+
+def test_places_stats_counts_only_photos_inside(client):
+    # 1 km circle at the equator, where 0.009° of latitude is ~1000 m.
+    bounds = '{"lat": 0.0, "lng": 0.0, "radius": 1000}'
+    pid = client.post("/api/places",
+                      json={"name": "Ring", "type": "circle", "bounds": bounds}).json()["id"]
+
+    _add_photo("centre.jpg", 0.0, 0.0, 1000)
+    _add_photo("edge.jpg", 0.005, 0.0, 5000)          # ~556 m out — inside
+    _add_photo("corner.jpg", 0.008, 0.008, 9000)      # in the bbox, ~1258 m out
+    _add_photo("far.jpg", 10.0, 10.0, 9999)           # nowhere near
+
+    place = next(p for p in client.get("/api/places?stats=true").json() if p["id"] == pid)
+    # corner.jpg is the point of this test: it survives the R*Tree bbox and must
+    # be dropped by the exact distance pass.
+    assert place["photo_count"] == 2
+    assert place["last_ts"] == 5000
+
+
+def test_places_stats_are_opt_in(client):
+    client.post("/api/places", json={"name": "Q", "type": "circle",
+                                     "bounds": '{"lat": 0, "lng": 0, "radius": 10}'})
+    plain = client.get("/api/places").json()[0]
+    assert "photo_count" not in plain and "last_ts" not in plain
+
+
+def test_places_stats_survive_unparseable_bounds(client):
+    pid = client.post("/api/places",
+                      json={"name": "Broken", "type": "circle", "bounds": "{}"}).json()["id"]
+    place = next(p for p in client.get("/api/places?stats=true").json() if p["id"] == pid)
+    assert place["photo_count"] == 0 and place["last_ts"] is None
+
+
 def test_place_representative_unknown_photo_404(client):
     pid = client.post("/api/places", json={"name": "X", "type": "circle", "bounds": "{}"}).json()["id"]
     assert client.put(f"/api/places/{pid}/representative", json={"photo_id": 999999}).status_code == 404

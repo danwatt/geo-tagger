@@ -58,6 +58,7 @@ async def api_geotag_ignore(req: SetGeocodeIgnoredRequest):
 @router.get("/api/geotag/hotspots")
 async def api_geotag_hotspots(
     limit: int = Query(40, ge=1, le=200),
+    offset: int = Query(0, ge=0, description="skip this many ranked hotspots — paging"),
     merge_meters: float = Query(hotspots_service.DEFAULT_MERGE_METERS, ge=10, le=20000),
     sort: str = Query("count", pattern="^(count|recent|near|time)$"),
     lat: float | None = Query(None, description="map centre latitude; required for sort=near"),
@@ -93,6 +94,7 @@ async def api_geotag_hotspots(
         return await loop.run_in_executor(
             get_executor(), hotspots_service.get_hotspots,
             limit, merge_meters, sort, lat, lng, from_ts, to_ts, hide_named, bbox,
+            offset,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
