@@ -5,12 +5,48 @@
 /* ── Face crop image ──
  * The single source for the per-face thumbnail <img>. */
 function faceCropImg(face, opts = {}) {
+  const alt = opts.alt || face.filename || "face";
+
+  // opts.reuse: hand back the same <img> node this face had last render. A
+  // fresh lazy <img> re-enters the whole loading pipeline (intersection check,
+  // fetch — cached or not — then decode) and paints empty until it lands, so a
+  // full grid rebuild reads as every face flashing white and coming back. An
+  // already-decoded node paints the instant it is re-parented. Only safe for
+  // callers that treat the image as inert: reused nodes keep any class or
+  // listener a caller put on them, so anything that decorates the <img> itself
+  // must keep building fresh ones.
+  if (opts.reuse) {
+    const hit = _cropImgCache.get(face.id);
+    // Still in the document = in use by another view; moving it would tear it
+    // out of there, so fall through and build a second one.
+    if (hit && !hit.isConnected) {
+      hit.alt = alt;
+      if (opts.title) hit.title = opts.title;
+      return hit;
+    }
+  }
+
   const img = document.createElement("img");
   img.src = `/api/faces/${face.id}/crop`;
   img.loading = "lazy";
-  img.alt = opts.alt || face.filename || "face";
+  img.alt = alt;
   if (opts.title) img.title = opts.title;
+  if (opts.reuse) _cropImgCacheSet(face.id, img);
   return img;
+}
+
+// Detached <img> nodes held for reuse, keyed by face id. Bounded: a long people
+// session can walk through far more faces than any one view shows, and each
+// entry pins a decoded bitmap.
+const _cropImgCache = new Map();
+const CROP_IMG_CACHE_MAX = 3000;
+
+function _cropImgCacheSet(id, img) {
+  _cropImgCache.delete(id);   // re-insert so Map order stays least-recent-first
+  _cropImgCache.set(id, img);
+  while (_cropImgCache.size > CROP_IMG_CACHE_MAX) {
+    _cropImgCache.delete(_cropImgCache.keys().next().value);
+  }
 }
 
 /* ── Bbox overlay geometry ──
@@ -90,6 +126,18 @@ function locationLabel(faces) {
 // The single most common place among a group of faces (or crowd photos), or
 // null when none of them is geocoded. Unlike locationLabel() this returns a raw
 // key suitable for sorting/comparing rather than a display string.
+// The single directory a group of faces shares, or the most common one when
+// they straddle folders — null only when nothing in the group has a dir. The
+// counterpart to primaryLocationKey for the "Folder" sort.
+function primaryDirKey(items) {
+  const counts = new Map();
+  for (const it of items) {
+    if (it.dir) counts.set(it.dir, (counts.get(it.dir) || 0) + 1);
+  }
+  if (!counts.size) return null;
+  return [...counts.keys()].sort((a, b) => counts.get(b) - counts.get(a))[0];
+}
+
 function primaryLocationKey(items) {
   const counts = new Map();
   for (const it of items) {
@@ -103,16 +151,18 @@ function primaryLocationKey(items) {
 /* ── Group sorting ──
  * Shared by every grid that renders *groups* of faces/photos (Discover clusters,
  * Crowd groups, the Unlabeled month→location buckets, the guesses event groups).
- * The caller supplies `keyFn(group)` returning { date, count, place }:
+ * The caller supplies `keyFn(group)` returning { date, count, place, dir }:
  *   date  — epoch seconds, or null/0 when undated
  *   count — number of photos in the group
  *   place — location string, or null when the group has no geocoded photo
+ *   dir   — full directory path, or null when the group has no folder in common
  * Modes:
  *   "date"     — chronological, undated last (every grid's original order)
  *   "count"    — most photos first, ties chronological
  *   "location" — place name A→Z with un-located groups last, ties chronological
+ *   "dir"      — folder path A→Z with folderless groups last, ties chronological
  * Returns a new array; the input is left alone. */
-const GROUP_SORT_MODES = ["date", "count", "location"];
+const GROUP_SORT_MODES = ["date", "count", "location", "dir"];
 
 function sortGroups(groups, mode, keyFn) {
   const keys = new Map(groups.map(g => [g, keyFn(g)]));
@@ -127,6 +177,15 @@ function sortGroups(groups, mode, keyFn) {
       if (pa && pb && pa !== pb) return pa.localeCompare(pb);
       if (pa !== pb) return pa ? -1 : 1;   // un-located groups last
       return byDate(a, b);                 // same place (or both unknown) → by date
+    },
+    // Sorted on the full path, not the leaf name, so sibling folders of a
+    // scanned batch ("…/Scans/1985 Box", "…/Scans/1986 Box") stay adjacent
+    // instead of scattering among same-named leaves under other parents.
+    dir: (a, b) => {
+      const da = keys.get(a).dir, db = keys.get(b).dir;
+      if (da && db && da !== db) return da.localeCompare(db);
+      if (da !== db) return da ? -1 : 1;   // groups with no common folder last
+      return byDate(a, b);
     },
   }[mode] || byDate;
   return [...groups].sort(cmp);
@@ -146,7 +205,11 @@ function sortGroups(groups, mode, keyFn) {
  *   extraClass — optional tint variant ("green"|"blue"|"grey"|"amber") or any
  *                page-specific class.
  * Returns a .face-group-header element (styled in face-grid.css). */
-function faceGroupHeader({ title, meta, buttons = [], extraClass = "" }) {
+// `scopeLabel` (optional) prefixes the button row with a small static chip
+// ("this group:"). It exists so a header's buttons can't be mistaken for the
+// page's selection toolbar when the two end up side by side — see the People
+// page, where a sticky selection bar sits directly above these headers.
+function faceGroupHeader({ title, meta, buttons = [], extraClass = "", scopeLabel = "" }) {
   const header = document.createElement("div");
   header.className = "face-group-header" + (extraClass ? " " + extraClass : "");
 
@@ -165,6 +228,12 @@ function faceGroupHeader({ title, meta, buttons = [], extraClass = "" }) {
   if (visible.length) {
     const btns = document.createElement("div");
     btns.className = "face-group-btns";
+    if (scopeLabel) {
+      const scope = document.createElement("span");
+      scope.className = "face-group-scope";
+      scope.textContent = scopeLabel;
+      btns.appendChild(scope);
+    }
     visible.forEach((b) => {
       const btn = document.createElement("button");
       if (b.kind) btn.classList.add(b.kind);
@@ -471,13 +540,6 @@ function openEntityPicker(items, opts) {
     if (!grouped) matches = matches.slice().sort((a, b) => a.name.localeCompare(b.name));
 
     const offerCreate = ql && allowCreate && !items.some((it) => it.name.toLowerCase() === ql);
-    if (offerCreate) {
-      const row = document.createElement("button");
-      row.className = "pp-item pp-new";
-      row.textContent = opts.createLabel ? opts.createLabel(q.trim()) : `➕ Create "${q.trim()}"`;
-      row.addEventListener("click", () => pick({ __new: true, name: q.trim() }, q.trim()));
-      list.appendChild(row);
-    }
 
     let lastGroup = null;
     matches.forEach((it) => {
@@ -490,6 +552,17 @@ function openEntityPicker(items, opts) {
       }
       list.appendChild(makeItemRow(it));
     });
+
+    // Create goes at the *end* of the list so the keyboard highlight lands on
+    // the first real match — Enter should tag an existing person, not silently
+    // mint a new one that differs from it by a typo.
+    if (offerCreate) {
+      const row = document.createElement("button");
+      row.className = "pp-item pp-new";
+      row.textContent = opts.createLabel ? opts.createLabel(q.trim()) : `➕ Create "${q.trim()}"`;
+      row.addEventListener("click", () => pick({ __new: true, name: q.trim() }, q.trim()));
+      list.appendChild(row);
+    }
 
     // The create row is itself an answer to an unmatched query — don't stack a
     // "no matches" note under it.

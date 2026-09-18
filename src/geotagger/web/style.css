@@ -41,6 +41,42 @@
 #map-nav input[type="text"]:focus { border-color: #4a90d9; }
 #map { flex: 1; min-height: 0; }
 
+/* ── Batch banner ──
+   Sits above the proposal banner inside the sticky grid header: what the work
+   queue loaded, and the two keys that move through it. Deliberately quieter than
+   the proposal bar below it — the proposal is the decision, this is just context. */
+#batch-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 6px 8px;
+  background: var(--surface-3);
+  border-bottom: 1px solid var(--border-strong);
+  color: var(--text);
+}
+#batch-banner-pos, #batch-banner-count {
+  flex-shrink: 0;
+  color: var(--text-strong);
+}
+/* The grid pane is narrow enough that position + count + three buttons already
+   fill a line, so the title takes its own: squeezing it into the same row just
+   collapsed it to nothing. */
+#batch-banner-title {
+  order: 3;
+  flex: 1 1 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+.batch-banner-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
 /* ── Proposal banner ── */
 #propose-bar {
   display: flex;

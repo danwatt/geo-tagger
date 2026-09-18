@@ -210,6 +210,14 @@ input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
 }
 #sidebar-header h2 { margin: 0; font-size: 15px; flex: 1; }
 
+/* ── Pane divider (drag handle between resizable columns) ──
+ * A thin column in the parent grid. The ::after bleeds the grab area a few px
+ * past the visible line so the handle is catchable without making the seam
+ * itself thick. */
+.pane-divider { cursor: col-resize; touch-action: none; background: var(--border); position: relative; }
+.pane-divider:hover, .pane-divider:focus-visible { background: var(--accent); outline: none; }
+.pane-divider::after { content: ''; position: absolute; inset: 0 -3px; }
+
 /* ── Basemap switcher (Leaflet overlay control) ── */
 .basemap-control {
   background: rgba(30, 30, 30, 0.92);

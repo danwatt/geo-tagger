@@ -1,10 +1,19 @@
 /* ── People page layout (mirrors the 3-pane #main of the geo page) ── */
+/* Left list | faces grid | drag handle | detail pane. The detail width is a
+   variable so the handle can widen the preview (people.js persists it); the
+   grid takes whatever is left, hence 1fr in the middle. */
 #people-main {
   display: grid;
-  grid-template-columns: 220px 1fr 340px;
+  grid-template-columns: 220px 1fr 6px var(--detail-pane-w, 340px);
   flex: 1;
   overflow: hidden;
 }
+/* The grid pane must be allowed to shrink below its content width, or dragging
+   the handle right just pushes the detail pane off the viewport. */
+#grid-pane { min-width: 0; }
+/* While dragging, kill text selection and let the pointer keep the resize
+   cursor even as it outruns the 6px handle. */
+#people-main.pane-resizing { cursor: col-resize; user-select: none; }
 
 #suggested-only-label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
 #suggested-only-chk { cursor: pointer; margin: 0; }
@@ -115,11 +124,55 @@
 }
 #grid-nav-unlabeled select { max-width: 240px; }
 /* Push the selection-action bar to the right edge of #grid-nav, after whichever
- * scope sub-bar is showing (or on its own when none is). */
-#grid-nav-selection { margin-left: auto; }
+ * scope sub-bar is showing (or on its own when none is).
+ *
+ * ── Selection bar vs. group headers ──
+ * These buttons act on the *selection*; the near-identical buttons in each
+ * .face-group-header act on *that group*. The two rows sit a few pixels apart
+ * and share icons (✓ 🚫), so they're deliberately styled as opposites: this one
+ * is a raised, bordered pill of solid buttons carrying a live selection count,
+ * the group rows below are left-packed ghost buttons behind a "this group:"
+ * chip (see #grid .face-group-header further down). */
+#grid-nav-selection {
+  margin-left: auto;
+  gap: 6px;
+  padding: 3px 4px 3px 8px;
+  background: #2f3540;
+  border: 1px solid #3f4a5c;
+  border-radius: 7px;
+}
+/* Live count — names what the buttons act on, and reads "Nothing selected"
+ * (with the buttons disabled) when there's no selection at all. */
+#selection-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: #9fb4cc;
+  white-space: nowrap;
+}
+#grid-nav-selection.empty #selection-count { color: #6b7684; font-weight: 400; }
+#grid-nav-selection button:disabled { opacity: .4; cursor: default; }
 /* Icon-only selection actions, matching the detail-pane and group-header icon
  * buttons (× unassign · ✓ accept suggestions · 🚫 ignore). */
 #grid-nav-selection button.icon-btn { padding: 2px 8px; font-size: 14px; line-height: 1.2; }
+
+/* Group-header actions in the faces grid: left-packed against the title they
+ * belong to (so they can never line up under the selection pill above) and
+ * drawn as flat ghost buttons that read as part of the header band rather than
+ * as page chrome. Scoped to #grid — other pages have no competing toolbar. */
+#grid .face-group-header { justify-content: flex-start; }
+#grid .face-group-header .face-group-btns { margin-left: 4px; }
+#grid .face-group-header button {
+  background: transparent;
+  border-color: rgba(255, 255, 255, .16);
+}
+#grid .face-group-header button:hover { background: rgba(255, 255, 255, .1); }
+#grid .face-group-header button.primary {
+  background: transparent;
+  border-color: var(--accent);
+  color: #8fb6e0;
+}
+#grid .face-group-header button.primary:hover { background: var(--accent-bg-2); }
+#grid .face-group-header button.danger { background: transparent; }
 
 /* .face-label / .face-suggest / .sug-check / .sug-name / .sug-reject are shared
  * from face-grid.css. The .face-alt chip below is People-specific. */

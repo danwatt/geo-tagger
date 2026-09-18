@@ -68,6 +68,7 @@
           <option value="date" selected>Date</option>
           <option value="count">Number of photos</option>
           <option value="location">Location, then date</option>
+          <option value="dir">Folder, then date</option>
         </select>
       </div>
       <div id="grid-nav-person" style="display:none">
@@ -104,6 +105,7 @@
            current grid. Shown in every scope except Discover/Crowds, which use
            cluster/photo cards with their own buttons. -->
       <div id="grid-nav-selection" style="display:none">
+        <span id="selection-count" title="These buttons act on the faces you have selected, anywhere in the grid">Nothing selected</span>
         <button id="assign-btn" class="primary" title="Assign selected faces to a person">Assign…</button>
         <button id="unassign-btn" class="danger icon-btn" title="Unassign" aria-label="Unassign">×</button>
         <button id="confirm-suggested-btn" class="icon-btn" title="Confirm the suggested name for every selected face" aria-label="Accept suggestions">✓</button>
@@ -128,6 +130,11 @@
       </div>
     </div>
   </div>
+
+  <!-- Drag handle: widens the detail pane at the grid's expense. -->
+  <div id="detail-resizer" class="pane-divider" role="separator" tabindex="0"
+       aria-orientation="vertical" aria-label="Resize faces grid and preview"
+       title="Drag to resize the preview — double-click to reset"></div>
 
   <!-- Right: detail -->
   <div id="detail-pane">

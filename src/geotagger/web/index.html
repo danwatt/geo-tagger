@@ -14,22 +14,40 @@
 </div>
 
 <div id="dashboard">
-  <div class="card" id="card-library">
-    <h2>Library</h2>
-    <div class="big-number" id="library-total">—</div>
-    <div class="sub-line" id="library-breakdown"></div>
-  </div>
-
-  <div class="card" id="card-geotag">
+  <div class="card card-full" id="card-geotag">
     <h2>Geotagging</h2>
     <div class="progress-bar"><div class="progress-fill" id="geotag-progress-fill"></div></div>
     <div class="progress-label" id="geotag-progress-label"></div>
     <div class="stat-line" id="geotag-stats"></div>
     <div class="stat-line highlight" id="geotag-guessable"></div>
+
+    <div id="work-queue">
+      <div class="wq-header">
+        <span class="wq-label">Work queue</span>
+        <span class="wq-totals" id="wq-totals"></span>
+        <div class="wq-kinds" id="wq-kinds">
+          <button class="active" data-kind="all">All</button>
+          <button data-kind="session">Sessions</button>
+          <button data-kind="folder">Folders</button>
+        </div>
+      </div>
+      <div id="wq-list"></div>
+      <div class="wq-footer">
+        <button id="wq-more" style="display:none">Show more</button>
+        <button id="wq-clear-skipped" style="display:none"
+                title="Batches passed over with Skip are hidden from Next batch until this is cleared"></button>
+      </div>
+    </div>
+
     <div class="card-actions">
-      <a class="button" href="/quick-geocode.html">⚡ Quick Geocode</a>
       <a class="button" href="/geocode.html">📍 Open Geocode view</a>
     </div>
+  </div>
+
+  <div class="card" id="card-library">
+    <h2>Library</h2>
+    <div class="big-number" id="library-total">—</div>
+    <div class="sub-line" id="library-breakdown"></div>
   </div>
 
   <div class="card" id="card-reverse-geocode">

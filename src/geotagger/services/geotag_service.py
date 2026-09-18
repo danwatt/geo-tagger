@@ -54,6 +54,9 @@ def write_geotag(photo_ids: list[int], lat: float, lng: float,
     # New coordinates shift the palette. The cache key only tracks how many photos
     # are geotagged, which doesn't move when an already-tagged photo is re-dropped.
     hotspots_service.invalidate()
+    # Local import: work_queue_service imports this module for its proposals.
+    from geotagger.services import work_queue_service
+    work_queue_service.invalidate()
     return results
 
 
@@ -72,6 +75,9 @@ def remove_geotag(photo_ids: list[int]) -> list[dict]:
         index.update_geotag(photo_id, None, None, "none", str(sc), sc_mtime)
         results.append({"id": photo_id, "geotag_source": "none"})
     hotspots_service.invalidate()
+    # Local import: work_queue_service imports this module for its proposals.
+    from geotagger.services import work_queue_service
+    work_queue_service.invalidate()
     return results
 
 
@@ -81,6 +87,34 @@ def remove_geotag(photo_ids: list[int]) -> list[dict]:
 # photo to copy from. One hour covers "same outing" without reaching into the
 # next stop of the day.
 DEFAULT_PROPOSE_WINDOW = 3600
+
+
+def cluster_votes(votes: list[tuple[float, float, float | None, int | None]],
+                  limit: int = 3) -> list[dict]:
+    """Turn per-photo location votes into ranked candidates, richest first.
+
+    Factored out of propose_locations so work_queue_service can label a batch
+    with exactly what the propose bar will say when the user lands on it — the
+    two must not drift.
+    """
+    if not votes:
+        return []
+    clusters = hotspots_service.cluster_cells(
+        hotspots_service.quantize(votes), hotspots_service.DEFAULT_MERGE_METERS
+    )
+    clusters.sort(key=lambda c: -c["count"])
+
+    candidates = []
+    for c in clusters[:max(1, limit)]:
+        loc = geocode.lookup(c["lat"], c["lng"])   # None when no geocode data is installed
+        candidates.append({
+            "lat": c["lat"], "lng": c["lng"],
+            "votes": c["count"],
+            "sample_photo_id": c["sample_photo_id"],
+            "location": loc,
+            "label": hotspots_service.place_label(loc, c["lat"], c["lng"]),
+        })
+    return candidates
 
 
 def propose_locations(photo_ids: list[int], window: int = DEFAULT_PROPOSE_WINDOW,
@@ -150,21 +184,7 @@ def propose_locations(photo_ids: list[int], window: int = DEFAULT_PROPOSE_WINDOW
     if not votes:
         return empty(len(targets))
 
-    clusters = hotspots_service.cluster_cells(
-        hotspots_service.quantize(votes), hotspots_service.DEFAULT_MERGE_METERS
-    )
-    clusters.sort(key=lambda c: -c["count"])
-
-    candidates = []
-    for c in clusters[:max(1, limit)]:
-        loc = geocode.lookup(c["lat"], c["lng"])   # None when no geocode data is installed
-        candidates.append({
-            "lat": c["lat"], "lng": c["lng"],
-            "votes": c["count"],
-            "sample_photo_id": c["sample_photo_id"],
-            "location": loc,
-            "label": hotspots_service.place_label(loc, c["lat"], c["lng"]),
-        })
+    candidates = cluster_votes(votes, limit)
     return {
         "candidates": candidates,
         "selected": len(targets),

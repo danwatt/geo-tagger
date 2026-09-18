@@ -298,15 +298,6 @@ function renderPickerList(q) {
     .filter((p) => p.name.toLowerCase().includes(ql))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  // Offer to create a new person when the typed text isn't an exact existing name.
-  if (ql && !persons.some((p) => p.name.toLowerCase() === ql)) {
-    const row = document.createElement("button");
-    row.className = "picker-item picker-new";
-    row.textContent = `➕ Create “${q.trim()}”`;
-    row.addEventListener("click", () => pickAssign({ name: q.trim() }, q.trim()));
-    list.appendChild(row);
-  }
-
   matches.forEach((p) => {
     const row = document.createElement("button");
     row.className = "picker-item";
@@ -314,6 +305,16 @@ function renderPickerList(q) {
     row.addEventListener("click", () => pickAssign({ person_id: p.id }, p.name));
     list.appendChild(row);
   });
+
+  // Offer to create a new person when the typed text isn't an exact existing
+  // name — last in the list, so existing matches are the first thing offered.
+  if (ql && !persons.some((p) => p.name.toLowerCase() === ql)) {
+    const row = document.createElement("button");
+    row.className = "picker-item picker-new";
+    row.textContent = `➕ Create “${q.trim()}”`;
+    row.addEventListener("click", () => pickAssign({ name: q.trim() }, q.trim()));
+    list.appendChild(row);
+  }
 
   if (!matches.length && !ql) {
     const empty = document.createElement("div");

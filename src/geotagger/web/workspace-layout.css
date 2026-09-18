@@ -29,9 +29,6 @@
 .workspace-panes #grid-nav button { white-space: nowrap; }
 .workspace-panes #map-nav .toolbar-group { flex-wrap: wrap; }
 .workspace-panes #map-nav input { min-width: 0; max-width: 100%; }
-.pane-divider { cursor: col-resize; touch-action: none; background: var(--border); position: relative; }
-.pane-divider:hover, .pane-divider:focus-visible { background: var(--accent); outline: none; }
-.pane-divider::after { content: ''; position: absolute; inset: 0 -3px; }
 #photo-selection-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 7px 8px; background: var(--accent-bg-2); border-bottom: 1px solid var(--border); }
 #photo-selection-actions button { white-space: nowrap; }
 #search-form .search-field-location { width: 290px; }

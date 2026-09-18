@@ -26,15 +26,25 @@ async def api_photos(
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     undated: bool = Query(False),
+    dir: str | None = Query(None, description="exact directory match (folder batches)"),
 ):
-    """Get photos, optionally filtered by date range or (undated=true) photos with no
-    timestamp at all — mutually exclusive with date_from/date_to, which are
-    meaningless without a photo_datetime."""
+    """Get photos, optionally filtered by date range, by exact directory, or
+    (undated=true) photos with no timestamp at all — the latter mutually exclusive
+    with date_from/date_to, which are meaningless without a photo_datetime."""
     rows = index.get_photos(
         geotagged=geotagged, bbox=bbox,
-        date_from=date_from, date_to=date_to, undated=undated,
+        date_from=date_from, date_to=date_to, undated=undated, dir=dir,
     )
     return [serializers.photo_to_dict(r) for r in rows]
+
+
+@router.get("/api/photos/dirs")
+async def api_photo_dirs(limit: int = Query(500, ge=1, le=5000)):
+    """Directories in the library, most-untagged first. Feeds the Geocode folder
+    picker, which loads one of them through /api/photos?dir=."""
+    loop = asyncio.get_running_loop()
+    rows = await loop.run_in_executor(get_executor(), index.get_dir_counts, limit)
+    return [{"dir": r["dir"], "total": r["total"], "untagged": r["untagged"]} for r in rows]
 
 
 def _augment_and_filter(photos_in_area: list, geotagged: str, window: int) -> list:

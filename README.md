@@ -297,10 +297,9 @@ before exporting loses any geotagging/face work that hasn't been written out yet
 
 | Page | Purpose |
 |---|---|
-| **Home** (`/`) | Library health dashboard — scan status, counts, links into every tool |
+| **Home** (`/`) | Library health dashboard — scan status, counts, links into every tool, and the **work queue**: untagged photos ranked into batches, each one decision |
 | **Search** (`/search.html`) | Multi-criteria photo search: date range, location text, geotag status, people (including "two+ people together") |
-| **Geocode** (`/geocode.html`) | Main map/grid view — drag photos onto the map to geotag them (see [Usage](#usage)) |
-| **Quick Geocode** (`/quick-geocode.html`) | Fast-path geotagging for a burst of nearby, time-clustered ungeotagged photos: set one location for the whole group |
+| **Geocode** (`/geocode.html`) | Main map/grid view — drag photos onto the map to geotag them, or work the queue batch by batch with ⚡ Next batch (see [Usage](#usage)) |
 | **Places DB** (`/map.html`) | Visualize the imported OSM place-boundary polygons |
 | **Time Sync** (`/timesync.html`) | Correct a camera's clock drift/timezone by matching known-time photos, then batch-adjust that camera's timestamps |
 | **People** (`/people.html`) | Face tagging: label detected faces, review suggested matches, manage the unlabeled queue |
@@ -311,6 +310,7 @@ Reachable but not in the top nav:
 
 | Page | Purpose |
 |---|---|
+| **Quick Geocode** (`/quick-geocode.html`) | Retired — replaced by the work queue and Geocode's batch mode. Off the nav, still answers by URL, will be removed |
 | **Quick Tag** (`/tag.html`) | Mobile-friendly face triage: walks the face-clustering queue one group at a time |
 | **Photo Faces** (`/photo-faces.html`) | View and edit every detected face in one photo; with `&mode=crowd` it walks the crowd-photo playlist |
 | **People Manager** (`/people-manage.html`) | Edit names, birth dates, and family groupings for tagged people in one list |
@@ -325,6 +325,39 @@ Reachable but not in the top nav:
 6. **Copy location:** focus a photo in the right pane, select others, click "Copy location to selection"
 7. **Edit:** drag an existing pushpin to a new position
 8. **Remove:** select photos, click "Remove geotag"
+
+### Working the queue
+
+"33,109 remaining" is not a task, so Home rolls the untagged photos into **batches**, each of
+which is one decision:
+
+- **Session** — untagged photos from one camera with no gap longer than 4 hours between
+  consecutive shots: one camera, one outing.
+- **Folder** — untagged photos sharing a directory that is at least 80% untagged: scans and
+  imports arrive by folder ("1985 Box"), and the folder *is* the event.
+
+Batches are ranked by `count × (1 + confidence)`, where confidence is the fraction of members
+with a geotagged photo within an hour of them — so a batch that already knows where it was
+beats a bigger one that doesn't. Nothing is stored: a batch is a view over untagged photos and
+disappears once they are tagged or ignored. Batches below 5 photos are left to the month
+picker; Home reports how many photos that is so the numbers still add up.
+
+Clicking a batch opens Geocode with its photos loaded and selected, the **Not tagged** filter
+on, and the proposal bar already showing the place its members vote for. From there:
+
+- **Commit** the proposal (or drag to the map, or press `L` for a named place). When the batch
+  is fully handled, the next one loads automatically.
+- **`N` / Next batch** moves on without finishing this one; **`S` / Skip** passes it over and
+  remembers that in this browser. **Exit** stops the queue driving and leaves the photos loaded.
+- **⚡ Next batch** in Geocode's toolbar enters the queue without going via Home.
+
+The knobs (session gap, folder threshold, minimum batch size) live in the **Work queue** group
+on the Settings page and apply live; as env vars they are `GEOTAGGER_WORKQUEUE_*` — see
+[Configuration](#configuration).
+
+Geocode's toolbar also carries a **folder picker** (directories ordered by how much work is
+left in them), which loads one directory through the same `dir` filter the folder batches use —
+the way to reach an undated scan folder, which no month can.
 
 ## Reverse geocoding (place names)
 
@@ -458,8 +491,8 @@ crowd size, age penalties, etc.) are listed with explanations in the **Settings*
 If a camera's clock was wrong (wrong timezone, drifted, never set), match a few of its
 photos against another source of ground truth (e.g. a phone photo of the same moment, or a
 known event time), compute the offset, and batch-apply it to correct that camera's
-timestamps across the library — useful since accurate timestamps also drive Quick Geocode's
-time-clustering and age-aware face matching.
+timestamps across the library — useful since accurate timestamps also drive the work queue's
+session grouping, its location guesses, and age-aware face matching.
 
 ## Sidecar naming
 
@@ -501,6 +534,9 @@ live from the Settings page):
 | `GEOTAGGER_CENSUS_ZCTA_YEAR` | `2020` | ZCTA vintage — published once per decennial census, not yearly like the place file |
 | `GEOTAGGER_ZCTA_CITY_FALLBACK` | `1` | `0` = never use a ZIP's mailing city as the city (the ZIP code is still stored) |
 | `GEOTAGGER_WRITE_XMP_ON_GEOTAG` | `0` | `1` = write GPS to the XMP sidecar immediately on every geotag edit |
+| `GEOTAGGER_WORKQUEUE_SESSION_GAP` | `14400` | Seconds between consecutive shots that still count as one session (4 h) |
+| `GEOTAGGER_WORKQUEUE_FOLDER_MIN_FRAC` | `0.8` | Fraction of a directory that must still be untagged for it to become a folder batch |
+| `GEOTAGGER_WORKQUEUE_MIN_SIZE` | `5` | Batches smaller than this are counted but never listed |
 | `GEOTAGGER_RAW_FULL_DECODE` | `0` | `1` = fully demosaic RAW files via LibRaw instead of using the embedded preview |
 | `GEOTAGGER_THUMB_FORMAT` | `webp` | Format for cached thumbnails/previews/face crops: `webp` (smaller) or `jpeg` |
 | `GEOTAGGER_THUMB_QUALITY` | `80` webp / `85` jpeg | Encoder quality for cached renditions |

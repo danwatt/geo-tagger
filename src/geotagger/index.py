@@ -456,6 +456,13 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     # WHERE media_type='image' AND faces_scanned_at IS NOT NULL before joining
     # faces — lets that filter use an index seek instead of a full photos scan.
     _db.execute("CREATE INDEX IF NOT EXISTS idx_photos_facescan ON photos(media_type, faces_scanned_at)")
+    # Partial index over exactly the rows the work queue scans (untagged, not
+    # ignored), in the (camera, time) order it groups sessions by — so building
+    # the queue is an index scan of ~30K rows instead of a full-table sweep.
+    _db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_photos_untagged ON photos(camera, photo_datetime) "
+        "WHERE lat IS NULL AND geocode_ignored = 0"
+    )
 
     # History of offline reference-dataset downloads (GeoNames files, GeoFabrik
     # OSM extracts, the InsightFace model pack) triggered from the Data
@@ -592,10 +599,16 @@ def set_geocode_ignored(photo_ids: list[int], ignored: bool):
 
 
 def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str | None = None,
-               date_to: str | None = None, undated: bool = False) -> list[sqlite3.Row]:
+               date_to: str | None = None, undated: bool = False,
+               dir: str | None = None) -> list[sqlite3.Row]:
     db = get_db()
     clauses = []
     params: list = []
+    if dir is not None:
+        # Exact match, not a prefix: a folder batch is one directory, and
+        # LIKE 'x%' would swallow a sibling named "x-extra".
+        clauses.append("dir = ?")
+        params.append(dir)
     if geotagged == "yes":
         clauses.append("(lat IS NOT NULL OR geocode_ignored = 1)")
     elif geotagged == "no":
@@ -644,6 +657,21 @@ def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str |
             pass
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     return db.execute(f"SELECT * FROM photos {where} ORDER BY photo_datetime, filename", params).fetchall()
+
+
+def get_dir_counts(limit: int = 500) -> list[sqlite3.Row]:
+    """Directories with their photo counts, most-untagged first — the folder facet
+    behind /api/photos?dir=. Capped because a big library has thousands of
+    directories and the picker only exists to reach the ones with work left."""
+    return get_db().execute("""
+        SELECT dir,
+               COUNT(*) AS total,
+               SUM(CASE WHEN lat IS NULL AND geocode_ignored = 0 THEN 1 ELSE 0 END) AS untagged
+        FROM photos
+        GROUP BY dir
+        ORDER BY untagged DESC, dir
+        LIMIT ?
+    """, (limit,)).fetchall()
 
 
 def get_photo(photo_id: int) -> sqlite3.Row | None:
@@ -1697,7 +1725,7 @@ def get_crowd_photos(min_faces: int = 50, start_ts: int | None = None,
         params.append(end_ts)
     params.append(min_faces)
     return get_db().execute(
-        f"""SELECT ph.id, ph.filename, ph.photo_datetime, ph.orientation,
+        f"""SELECT ph.id, ph.filename, ph.dir, ph.photo_datetime, ph.orientation,
                   ph.loc_city, ph.loc_sublocation, ph.loc_state, ph.loc_country,
                   COUNT(f.id)                                          AS total_faces,
                   COUNT(CASE WHEN f.person_id IS NOT NULL THEN 1 END) AS labeled_faces,

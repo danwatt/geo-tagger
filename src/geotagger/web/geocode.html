@@ -42,6 +42,11 @@
       </div>
 <div class="scope-date-controls">  <div class="toolbar-group">
     <button id="select-month-btn">Select Month</button>
+    <!-- Folder facet: scans and imports arrive by directory, and an undated one
+         can't be reached by month at all. Loads through /api/photos?dir=. -->
+    <select id="dir-select" title="Load every photo in one directory">
+      <option value="">Folder: any</option>
+    </select>
     <span id="selected-month-label">No month selected</span>
   </div>
   <div class="toolbar-group" id="timeline-toolbar-group">
@@ -107,6 +112,18 @@
     <!-- Sticky header: the filters and the proposal banner ride together, so a
          suggestion raised while scrolled deep into a month stays reachable. -->
     <div id="grid-header">
+    <!-- Batch banner: what the work queue loaded, and the two keys that drive it.
+         Hidden unless a batch is active (app.js's activeBatch). -->
+    <div id="batch-banner" hidden>
+      <span id="batch-banner-pos"></span>
+      <span id="batch-banner-title"></span>
+      <span id="batch-banner-count"></span>
+      <div class="batch-banner-actions">
+        <button id="batch-skip-btn" title="Pass over this batch for now (remembered in this browser)">Skip <kbd>S</kbd></button>
+        <button id="batch-next-btn" class="primary" title="Load the next batch in the queue">Next batch ▸ <kbd>N</kbd></button>
+        <button id="batch-exit-btn" title="Stop working the queue; leaves these photos loaded">✕ Exit</button>
+      </div>
+    </div>
     <div id="grid-nav">
       <!-- Show filter: four independent toggles, not a dropdown. Each photo falls
            in exactly one of geotagged / not tagged / ignored; Screenshots cuts
@@ -133,6 +150,10 @@
           <option value="1800">Rows: 30 min</option>
           <option value="3600" selected>Rows: 1 hour</option>
         </select>
+      </div>
+      <div class="toolbar-group">
+        <!-- Entry point into the work queue without going via Home. -->
+        <button id="next-batch-btn" title="Load the next batch of untagged photos from the work queue">⚡ Next batch</button>
       </div>
       <div class="toolbar-group">
         <button id="tag-as-btn" class="primary" title="Tag the selected photos at a place you already use — saved places, recent locations, hotspots (shortcut: L)">📍 Tag as… <kbd>L</kbd></button>

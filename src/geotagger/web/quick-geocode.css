@@ -82,3 +82,14 @@ h2 {
     color: #9ab;
     margin: 0 0 5px 0;
 }
+
+/* Retirement notice — the page is off the nav and will be deleted; anyone who
+   still has the URL bookmarked should be told where the work went. */
+#deprecated-note {
+  padding: 6px 10px;
+  background: var(--accent-bg-2);
+  border-bottom: 1px solid var(--accent);
+  color: var(--on-accent);
+  font-size: 12px;
+}
+#deprecated-note a { color: var(--accent-text); }

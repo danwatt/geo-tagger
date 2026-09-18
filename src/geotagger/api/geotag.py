@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from geotagger import index
 from geotagger.executor import get_executor
-from geotagger.services import geotag_service, hotspots_service
+from geotagger.services import geotag_service, hotspots_service, work_queue_service
 
 router = APIRouter()
 
@@ -50,6 +50,7 @@ async def api_geotag_ignore(req: SetGeocodeIgnoredRequest):
     DB-only — no EXIF/sidecar write. Ignored photos still appear in the grid
     but count as geotagged for the Show filter and geotagged/not-geotagged stats."""
     index.set_geocode_ignored(req.ids, req.ignored)
+    work_queue_service.invalidate()
     return {"ids": req.ids, "geocode_ignored": req.ignored}
 
 

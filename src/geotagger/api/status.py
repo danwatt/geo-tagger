@@ -49,6 +49,15 @@ async def api_get_settings():
         raise HTTPException(500, str(e))
 
 
+def _invalidate_for(keys) -> None:
+    """Drop caches whose *contents* a changed setting invalidates. The work queue's
+    grouping and ranking are computed from these knobs, so a cached build made
+    under the old ones is wrong, not merely stale."""
+    if any(k.startswith("WORKQUEUE_") for k in keys):
+        from geotagger.services import work_queue_service
+        work_queue_service.invalidate()
+
+
 @router.patch("/api/settings")
 async def api_update_settings(req: UpdateSettingsRequest):
     """Validate + persist one or more settings, applying them live (no restart)."""
@@ -61,6 +70,7 @@ async def api_update_settings(req: UpdateSettingsRequest):
             value = config.apply_setting_override(key, raw)
             index.set_setting(key, str(value))
             updated[key] = value
+        _invalidate_for(updated.keys())
         return {"updated": updated}
     except HTTPException:
         raise
@@ -80,6 +90,7 @@ async def api_reset_settings(req: ResetSettingsRequest):
                 raise HTTPException(400, f"Unknown setting: {key}")
             config.reset_setting(key)
             index.delete_setting(key)
+        _invalidate_for(req.keys)
         return {"reset": req.keys}
     except HTTPException:
         raise

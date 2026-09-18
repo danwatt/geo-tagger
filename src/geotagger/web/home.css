@@ -91,10 +91,10 @@
 }
 .coverage-bar > div { height: 100%; transition: width 0.3s; }
 /* Segment colors double as legend swatches (.sw + same class). */
-.cov-full    { background: #5cb85c; }  /* green  — fully labeled */
-.cov-partial { background: #d9a441; }  /* amber  — some labeled */
-.cov-none    { background: #d9534f; }  /* red    — none labeled */
-.cov-noface  { background: #4a4a4a; }  /* grey   — no faces detected */
+.cov-full    { background: var(--success); }             /* green  — fully labeled */
+.cov-partial { background: var(--warn); }                /* amber  — some labeled */
+.cov-none    { background: var(--danger); }              /* red    — none labeled */
+.cov-noface  { background: var(--surface-btn-hover); }   /* grey   — no faces detected */
 
 .coverage-legend {
   display: flex;
@@ -129,40 +129,165 @@
 .mode-toggle button + button { border-left: 1px solid #444; }
 .mode-toggle button.active { background: #3a5f8a; color: #fff; }
 
-/* ── Coverage-by-month bars ── */
+/* ── Coverage-by-month bars ──
+   Framed like the other timelines in the app (the date-range picker's
+   .drp-hist scrubber, the geocode/search #timeline): an inset panel, bars
+   flexed to fill its width rather than a fixed-width scrolling strip, and a
+   year-tick strip along the bottom. Unlike those, these bars are *stacked* —
+   each month splits into its coverage segments — so the segment colors stay
+   semantic (they double as the legend swatches above) instead of collapsing
+   to the accent/track pair a single-series histogram uses. */
 .months-bar-container {
+  position: relative;
   display: flex;
   align-items: flex-end;
   gap: 1px;
-  height: 80px;
-  overflow-x: auto;
-  padding: 18px 4px 0;
-  position: relative;
+  height: 90px;
+  padding: 8px 8px 22px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  user-select: none;
+  overflow: hidden;
 }
 .month-bar {
-  flex: 0 0 4px;
+  flex: 1 1 0;
+  min-width: 0;
   height: 100%;
   display: flex;
   flex-direction: column;
   position: relative;
+  border-radius: 1px 1px 0 0;
+  overflow: hidden;   /* rounds whichever segment lands on top */
   cursor: pointer;
 }
-.month-bar:hover { outline: 1px solid #888; outline-offset: 1px; }
+/* The year label has to escape the bar's clip to sit in the tick strip. */
+.month-bar:has(> .month-year-label) { overflow: visible; }
+.month-bar:hover { outline: 1px solid var(--border-btn); outline-offset: 1px; }
 .undated-link {
   display: block;
   margin-top: 6px;
   font-size: 12px;
-  color: #7ab8f5;
+  color: var(--accent-text);
   text-decoration: none;
 }
 .undated-link:hover { text-decoration: underline; }
-.month-bar .bar-untagged { width: 100%; background: #4a4a4a; }
-.month-bar .bar-tagged { width: 100%; background: #5cb85c; }
+/* Coverage-by-month: binary tagged/untagged, same green as the progress bars. */
+.month-bar .bar-untagged { width: 100%; background: var(--surface-btn-hover); }
+.month-bar .bar-tagged { width: 100%; background: var(--success); }
+/* Year ticks sit *below* the bars, matching .drp-ticks. Bars are bottom-aligned,
+   so anchoring to the bar's bottom edge keeps the ticks on one line even in
+   "Count" mode, where the bars themselves are all different heights. */
 .month-year-label {
   position: absolute;
-  top: -16px;
+  bottom: -18px;
   left: 0;
-  font-size: 9px;
-  color: #777;
+  padding-left: 3px;
+  border-left: 1px solid #2f2f2f;
+  font-size: 10px;
+  color: var(--text-faint);
   white-space: nowrap;
+  pointer-events: none;
 }
+
+/* ── Work queue ──
+   The ranked list of untagged batches inside the Geotagging card. Rows are
+   thumbnails + one line of identity + one button: the whole point is that a row
+   is recognisable at a glance and takes exactly one decision. */
+#work-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.wq-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.wq-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+.wq-totals {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+/* Kind filter sits hard right so the row reads label → totals → filter. */
+.wq-kinds {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+.wq-kinds button { font-size: 11px; padding: 2px 8px; }
+
+/* Capped so the card can't push the rest of the dashboard off the screen —
+   142 batches is a scroll list, not a page. */
+#wq-list {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+}
+
+.wq-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-2);
+}
+.wq-row:last-child { border-bottom: none; }
+.wq-row:hover { background: var(--surface-3); }
+
+.wq-thumbs { display: flex; gap: 2px; flex: none; }
+.wq-thumbs img {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  background: var(--surface-black);
+}
+
+/* min-width:0 lets a long path/place name ellipsize instead of stretching the row. */
+.wq-body { flex: 1; min-width: 0; }
+.wq-row-title {
+  font-size: 12px;
+  color: var(--text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wq-row-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wq-noguess { color: var(--text-faint); }
+
+.wq-conf { margin-left: 8px; }
+.wq-conf.good { color: var(--success); }
+.wq-conf.fair { color: var(--warn); }
+.wq-conf.weak { color: var(--text-faint); }
+
+.wq-count {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: right;
+  min-width: 78px;
+}
+.wq-row .button { flex: none; }
+
+.wq-status {
+  padding: 10px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.wq-footer { display: flex; gap: 6px; }
+#wq-more, #wq-clear-skipped { font-size: 11px; }

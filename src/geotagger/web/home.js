@@ -372,7 +372,146 @@ document.getElementById("detect-faces-stop-btn").addEventListener("click", () =>
   facesScanStopRequested = true;
 });
 
+/* ── Work queue ──
+   "33,109 remaining" is not a task; a batch is. Read-only card: every row links
+   into Geocode with the batch preloaded, nothing here writes. */
+const WQ_PAGE = 20;
+let wqKind = "all";
+let wqOffset = 0;
+let wqTotal = 0;
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// Green when nearly every member has a time-neighbour vote, amber when it's a
+// coin flip — the chip is what tells the user whether to expect one click or a
+// map drag.
+function confClass(confidence) {
+  if (confidence >= 0.8) return "wq-conf good";
+  if (confidence >= 0.4) return "wq-conf fair";
+  return "wq-conf weak";
+}
+
+function makeBatchRow(b) {
+  const row = document.createElement("div");
+  row.className = "wq-row";
+
+  const thumbs = b.sample_photo_ids
+    .map((id) => `<img src="/api/thumbnail/${id}" loading="lazy" alt="">`)
+    .join("");
+
+  // A batch with votes promises a place; folders and undated runs say so plainly
+  // rather than pretending the map step isn't coming.
+  const meta = b.proposal
+    ? `📍 ${escHtml(b.proposal.label)}` +
+      `<span class="${confClass(b.confidence)}">● ${Math.round(b.confidence * 100)}% have a guess</span>`
+    : `<span class="wq-noguess">${b.start_ts ? "no guess" : "no date · no guess"}</span>`;
+
+  row.innerHTML =
+    `<div class="wq-thumbs">${thumbs}</div>` +
+    `<div class="wq-body">` +
+      `<div class="wq-row-title">${escHtml(b.title)}</div>` +
+      `<div class="wq-row-meta">${meta}</div>` +
+    `</div>` +
+    `<div class="wq-count">${b.count.toLocaleString()} photo${b.count === 1 ? "" : "s"}</div>` +
+    `<a class="button primary" href="/geocode.html?batch=${encodeURIComponent(b.id)}">Open in Geocode</a>`;
+  return row;
+}
+
+function renderWorkQueueTotals(data) {
+  // batched_photos counts what the *listed* batches cover (a union, so a photo in
+  // both a session and a folder isn't double-counted); the tail is called out so
+  // this and "N remaining" above still add up.
+  const tail = data.tail_photos
+    ? `  (${data.tail_photos.toLocaleString()} more not worth batching)`
+    : "";
+  document.getElementById("wq-totals").textContent =
+    `${data.total_batches.toLocaleString()} batch${data.total_batches === 1 ? "" : "es"} · ` +
+    `${data.batched_photos.toLocaleString()} photos${tail}`;
+}
+
+async function loadWorkQueue(append = false) {
+  const list = document.getElementById("wq-list");
+  const more = document.getElementById("wq-more");
+  if (!append) {
+    wqOffset = 0;
+    // The first build on a cold cache sweeps the whole library, so say so.
+    list.innerHTML = '<div class="wq-status">Building the queue…</div>';
+  }
+  try {
+    const res = await fetch(`/api/work-queue?limit=${WQ_PAGE}&offset=${wqOffset}&kind=${wqKind}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    clearError("card-geotag");
+    if (!append) list.innerHTML = "";
+    wqTotal = data.total_batches;
+    data.batches.forEach((b) => list.appendChild(makeBatchRow(b)));
+    wqOffset += data.batches.length;
+
+    if (!wqOffset) {
+      list.innerHTML = `<div class="wq-status">${
+        data.total_photos ? "Nothing big enough to batch — use the month bars below."
+                          : "Everything is tagged. 🎉"}</div>`;
+    }
+    renderWorkQueueTotals(data);
+    more.style.display = wqOffset < wqTotal ? "" : "none";
+    more.textContent = `Show ${Math.min(WQ_PAGE, wqTotal - wqOffset)} more`;
+  } catch (e) {
+    if (!append) list.innerHTML = "";
+    showError("card-geotag", e.message);
+  }
+}
+
+document.getElementById("wq-kinds").addEventListener("click", (e) => {
+  const btn = e.target.closest("button");
+  if (!btn || btn.classList.contains("active")) return;
+  document.getElementById("wq-kinds").querySelectorAll("button")
+    .forEach((b) => b.classList.toggle("active", b === btn));
+  wqKind = btn.dataset.kind;
+  loadWorkQueue();
+});
+
+document.getElementById("wq-more").addEventListener("click", () => loadWorkQueue(true));
+
+/* Skipped batches — the list Geocode's Skip button writes. It lives in this
+   browser's localStorage, so Home is the only place that can show how big it has
+   grown and offer to forget it. */
+const SKIPPED_BATCHES_KEY = "geotagger.workqueue.skipped";
+
+function skippedBatchCount() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SKIPPED_BATCHES_KEY) || "[]");
+    return Array.isArray(raw) ? raw.length : 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+function renderClearSkipped() {
+  const btn = document.getElementById("wq-clear-skipped");
+  const n = skippedBatchCount();
+  btn.style.display = n ? "" : "none";
+  btn.textContent = `Clear skipped (${n})`;
+}
+
+document.getElementById("wq-clear-skipped").addEventListener("click", () => {
+  try {
+    localStorage.removeItem(SKIPPED_BATCHES_KEY);
+  } catch (e) {
+    // Nothing to do — the list is a convenience, not state anything depends on.
+  }
+  renderClearSkipped();
+});
+
+renderClearSkipped();
+
 loadSummary();
+loadWorkQueue();
 loadFaceCoverage();
 loadMonths();
 loadFacesMonths();

@@ -367,6 +367,18 @@ FACE_PROVIDERS = [
     if p.strip()
 ]
 
+# ── Work queue (Home's ranked list of untagged batches) ──
+# Biggest gap between consecutive shots from one camera that still counts as the
+# same outing. 4 h splits a wedding from a reception at another venue (wanted)
+# but also splits a long road-trip day (see docs/work-queue.md §9).
+WORKQUEUE_SESSION_GAP = int(os.environ.get("GEOTAGGER_WORKQUEUE_SESSION_GAP", str(4 * 3600)))
+# A directory becomes a folder batch only when at least this fraction of the
+# photos in it are still untagged — a folder that's mostly done is not one decision.
+WORKQUEUE_FOLDER_MIN_FRAC = float(os.environ.get("GEOTAGGER_WORKQUEUE_FOLDER_MIN_FRAC", "0.8"))
+# Batches smaller than this never reach the queue; the long tail stays the month
+# picker's job. Home reports how many photos fell into that tail so the numbers add up.
+WORKQUEUE_MIN_SIZE = int(os.environ.get("GEOTAGGER_WORKQUEUE_MIN_SIZE", "5"))
+
 # ── Runtime-tunable settings (in-app Settings page) ──
 # The subset of knobs above that are safe to change without a restart: pure
 # post-hoc math over already-computed embeddings/scores, not baked into a
@@ -381,6 +393,15 @@ SETTINGS_SPEC = [
     {"key": "WRITE_XMP_ON_GEOTAG", "type": "bool",
      "group": "Geotagging", "label": "Write GPS to XMP sidecar immediately",
      "help": "When on, placing/editing a geotag writes GPS coordinates into the XMP sidecar right away. When off (default), geotags are stored in the database only — use the sidecar export action to catch sidecars up on demand."},
+    {"key": "WORKQUEUE_SESSION_GAP", "type": "int", "min": 600, "max": 172800, "step": 600,
+     "group": "Work queue", "label": "Session gap (seconds)",
+     "help": "Longest gap between consecutive shots from one camera that still counts as the same outing (14400 = 4 hours). Shorter splits a wedding from the reception at another venue; longer keeps a whole road-trip day together."},
+    {"key": "WORKQUEUE_FOLDER_MIN_FRAC", "type": "float", "min": 0.1, "max": 1.0, "step": 0.05,
+     "group": "Work queue", "label": "Folder batch threshold",
+     "help": "How much of a directory must still be untagged before the folder itself becomes a batch. 0.8 keeps a scanned folder with a few phone photos mixed in; 1.0 means only wholly untagged folders."},
+    {"key": "WORKQUEUE_MIN_SIZE", "type": "int", "min": 1, "max": 500, "step": 1,
+     "group": "Work queue", "label": "Minimum batch size",
+     "help": "Batches smaller than this never reach the queue — the long tail stays the month picker's job. Home still counts those photos so the numbers add up."},
     {"key": "RAW_FULL_DECODE", "type": "bool",
      "group": "RAW photos", "label": "Full RAW decode",
      "help": "Fully demosaic RAW files (NEF/DNG) to a JPEG via LibRaw for the served preview and face detection, instead of the embedded preview. Higher quality but much slower; off uses the fast embedded preview."},

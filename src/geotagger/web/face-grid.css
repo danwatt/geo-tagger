@@ -21,7 +21,16 @@
 }
 .face-group-label { font-size: 12px; font-weight: 600; color: #9ab8d8; }
 .face-group-meta  { color: #567; font-weight: 400; }
-.face-group-btns  { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; }
+.face-group-btns  { display: flex; align-items: center; gap: 6px; flex-shrink: 0; flex-wrap: wrap; }
+/* Static "this group:" chip owning the buttons that follow it (opt-in via the
+   scopeLabel option), so the row can't be read as a page-level toolbar. */
+.face-group-scope {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  opacity: .65;
+  padding-right: 1px;
+}
 .face-group-header button { padding: 3px 10px; font-size: 11px; flex-shrink: 0; }
 .face-group-header button.icon-btn {
   padding: 2px 7px;

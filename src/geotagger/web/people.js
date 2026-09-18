@@ -44,7 +44,8 @@ let pending = new Map();
 let groupGapSeconds = 86400;    // event grouping gap in the guesses view (1 day)
 
 // How the group-rendering grids (Discover / Crowds / Unlabeled / guesses) order
-// their groups: "date" | "count" | "location" — see sortGroups() in face-grid.js.
+// their groups: "date" | "count" | "location" | "dir" — see sortGroups() in
+// face-grid.js.
 // Purely a render-time concern (no refetch), and persisted across reloads.
 const GRID_SORT_LS_KEY = "geotagger.people.gridSort";
 let gridSort = localStorage.getItem(GRID_SORT_LS_KEY) || "date";
@@ -97,6 +98,7 @@ const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
 /* ── Init ── */
 document.addEventListener("DOMContentLoaded", async () => {
   bindToolbar();
+  bindDetailResizer();
   bindKeyboardShortcuts();
   await loadLiveSettings();  // before loadFaces, so the first render pre-selects correctly
   await loadFocusYears();      // restores any saved Focus before the first load
@@ -136,6 +138,92 @@ function setStatus(msg, isError = false) {
   const bar = document.getElementById("status-bar");
   bar.textContent = msg;
   bar.style.color = isError ? "#f88" : "#888";
+}
+
+/* ── Detail-pane resizer ──
+ * The preview is the one pane whose useful width depends on the monitor and on
+ * the photo: a wide desktop can spare far more than the 340px default, and a
+ * face is much easier to judge large. The handle moves the grid/detail seam and
+ * nothing else — the people list keeps its fixed column — and the width is
+ * persisted, since this is a per-display preference, not a per-visit one. */
+const DETAIL_W_LS_KEY = "geotagger.people.detailWidth";
+const DETAIL_W_DEFAULT = 340;
+const DETAIL_W_MIN = 240;
+
+// The grid has to stay a grid, so the ceiling is "whatever is left after the
+// people list, the handle, and room for a couple of columns of faces" rather
+// than a flat percentage — a percentage that looks sane at 2560px starves the
+// grid at 1280. DETAIL_W_MIN still wins on a window too narrow for even that.
+// Re-clamped on resize so a width saved on a wide monitor doesn't swallow a
+// narrow one. Returns the width actually applied.
+const PEOPLE_LIST_W = 220;   // matches the fixed first column in people.css
+const RESIZER_W = 6;
+const GRID_MIN_W = 320;      // ~2 columns of face cells
+
+function setDetailWidth(px, persist = true) {
+  const max = Math.max(
+    DETAIL_W_MIN,
+    window.innerWidth - PEOPLE_LIST_W - RESIZER_W - GRID_MIN_W);
+  const w = Math.round(Math.max(DETAIL_W_MIN, Math.min(max, px)));
+  document.getElementById("people-main").style.setProperty("--detail-pane-w", `${w}px`);
+  const handle = document.getElementById("detail-resizer");
+  if (handle) handle.setAttribute("aria-valuenow", String(w));
+  if (persist) localStorage.setItem(DETAIL_W_LS_KEY, String(w));
+  return w;
+}
+
+function bindDetailResizer() {
+  const handle = document.getElementById("detail-resizer");
+  const pane = document.getElementById("detail-pane");
+  const main = document.getElementById("people-main");
+  if (!handle || !pane || !main) return;
+
+  const saved = parseInt(localStorage.getItem(DETAIL_W_LS_KEY) || "", 10);
+  setDetailWidth(Number.isFinite(saved) ? saved : DETAIL_W_DEFAULT, false);
+  handle.setAttribute("aria-valuemin", String(DETAIL_W_MIN));
+
+  // Pointer capture keeps the drag alive over the grid's cells and past the
+  // window edge; without it the first cell the pointer crosses eats the moves.
+  let dragging = false;
+  handle.addEventListener("pointerdown", e => {
+    dragging = true;
+    handle.setPointerCapture(e.pointerId);
+    main.classList.add("pane-resizing");
+    e.preventDefault();   // no text selection / native image drag mid-resize
+  });
+  handle.addEventListener("pointermove", e => {
+    if (!dragging) return;
+    // Width measured from the pointer to the window's right edge, so the seam
+    // tracks the cursor exactly however far the drag has wandered.
+    setDetailWidth(window.innerWidth - e.clientX);
+  });
+  const stop = () => {
+    if (!dragging) return;
+    dragging = false;
+    main.classList.remove("pane-resizing");
+  };
+  handle.addEventListener("pointerup", stop);
+  handle.addEventListener("lostpointercapture", stop);
+
+  handle.addEventListener("dblclick", () => setDetailWidth(DETAIL_W_DEFAULT));
+
+  // Keyboard equivalent — the handle is a focusable separator, so arrows nudge
+  // it and Home returns to the default.
+  handle.addEventListener("keydown", e => {
+    const step = e.shiftKey ? 50 : 10;
+    if (e.key === "ArrowLeft")       setDetailWidth(pane.offsetWidth + step);
+    else if (e.key === "ArrowRight") setDetailWidth(pane.offsetWidth - step);
+    else if (e.key === "Home")       setDetailWidth(DETAIL_W_DEFAULT);
+    else return;
+    e.preventDefault();
+  });
+
+  // Re-clamp against the new viewport, but keep the stored preference: a width
+  // that doesn't fit today's window should come back when the window grows.
+  window.addEventListener("resize", () => {
+    const stored = parseInt(localStorage.getItem(DETAIL_W_LS_KEY) || "", 10);
+    setDetailWidth(Number.isFinite(stored) ? stored : DETAIL_W_DEFAULT, false);
+  });
 }
 
 /* ── Toolbar ── */
@@ -595,6 +683,7 @@ function updateGridNavVisibility() {
   // its own fixed grouping, so the dropdown would be a dead control there.
   document.getElementById("grid-nav-hierarchy").style.display = showUnlabeled ? "" : "none";
   document.getElementById("grid-nav-selection").style.display = showSelection ? "" : "none";
+  if (showSelection) paintSelectionCount();
   document.getElementById("grid-nav-sort").style.display = showSort ? "" : "none";
   document.getElementById("grid-nav").style.display =
     (showPerson || showCrowds || showUnlabeled || showSelection || showSort) ? "" : "none";
@@ -822,6 +911,7 @@ function sortFaceGroups(groups) {
     date: Math.min(...g.faces.map(f => f.photo_datetime || Infinity)),
     count: new Set(g.faces.map(f => f.photo_id)).size,
     place: g.place ?? primaryLocationKey(g.faces),
+    dir: g.dir ?? primaryDirKey(g.faces),
   }));
 }
 
@@ -831,6 +921,10 @@ function sortFaceGroups(groups) {
 function renderGrid() {
   renderGridInner();
   renderPending();
+  // Full rebuilds paint each cell's selected class as it's created, so they skip
+  // paintSelection() — but the count in the selection bar still has to follow
+  // (staging an assignment empties the selection without any click).
+  paintSelectionCount();
 }
 
 // Repaint selection *in place*, for the actions that only move the selection or
@@ -846,6 +940,20 @@ function paintSelection() {
   document.querySelectorAll("#grid .thumb-cell").forEach(cell => {
     cell.classList.toggle("selected", selectedIds.has(parseInt(cell.dataset.id, 10)));
   });
+  paintSelectionCount();
+}
+
+// Keep the selection bar honest about its scope: a live count, and every action
+// disabled while nothing is selected (the group headers below have their own
+// buttons, and an empty selection bar is exactly when the two get confused).
+function paintSelectionCount() {
+  const bar = document.getElementById("grid-nav-selection");
+  if (!bar) return;
+  const n = selectedIds.size;
+  bar.classList.toggle("empty", n === 0);
+  document.getElementById("selection-count").textContent =
+    n === 0 ? "Nothing selected" : `${n} selected`;
+  bar.querySelectorAll("button").forEach(b => { b.disabled = n === 0; });
 }
 
 function renderGridInner() {
@@ -1352,7 +1460,9 @@ function makeFaceCell(face) {
     (face.come_back ? " come-back" : "");
   cell.dataset.id = face.id;
 
-  cell.appendChild(faceCropImg(face));
+  // reuse: staging/committing rebuilds the whole grid, and rebuilding the <img>
+  // nodes with it is what makes the faces visibly blank and reload.
+  cell.appendChild(faceCropImg(face, { reuse: true }));
 
   const score = document.createElement("div");
   score.className = "face-score";
@@ -1473,6 +1583,7 @@ function makeIgnoreBatchHeader(group) {
   return faceGroupHeader({
     title: `Ignored ${when}`,
     meta: `· ${group.faces.length} face(s)`,
+    scopeLabel: "this batch:",
     buttons: [
       { label: "Select all",
         title: "Add every face in this batch to the current selection",
@@ -1502,6 +1613,7 @@ function makeComeBackBatchHeader(group) {
   return faceGroupHeader({
     title: `Come back ${when}`,
     meta: `· ${group.faces.length} face(s)`,
+    scopeLabel: "this batch:",
     buttons: [
       { label: "Select all",
         title: "Add every face in this batch to the current selection",
@@ -1543,6 +1655,7 @@ function makeTagBatchHeader(group) {
   return faceGroupHeader({
     title: who,
     meta: `· ${formatRelativeTime(group.ts)} · ${group.faces.length} face(s)`,
+    scopeLabel: "this batch:",
     buttons: [
       { label: `Untag all (${group.faces.length})`, kind: "danger",
         title: "Un-tag every face tagged in this batch (returns them to Unlabeled)",
@@ -1628,6 +1741,7 @@ function makeGroupHeader(group, { title, meta = "", label = title, ignoreAll = f
   return faceGroupHeader({
     title,
     meta,
+    scopeLabel: "this group:",
     buttons: [
       ...extraButtons,
       acceptable.length > 0 && {
@@ -1777,6 +1891,8 @@ function bindKeyboardShortcuts() {
     // Let text inputs/selects and the person-picker modal handle their own keys.
     const tag = document.activeElement?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    // Same for the focused pane divider: its arrows resize, they don't navigate.
+    if (document.activeElement?.id === "detail-resizer") return;
     if (typeof isPersonPickerOpen === "function" && isPersonPickerOpen()) return;
 
     if (isShortcutsHelpOpen()) {
@@ -1880,6 +1996,7 @@ function renderClusters() {
     date: Math.min(...cl.sample.map(f => f.photo_datetime || Infinity)),
     count: Math.max(cl.size, new Set(cl.sample.map(f => f.photo_id)).size),
     place: primaryLocationKey(cl.sample),
+    dir: primaryDirKey(cl.sample),
   })).forEach(cl => grid.appendChild(makeClusterCard(cl)));
 }
 
@@ -2038,6 +2155,7 @@ function renderCrowds() {
     date: Math.min(...g.photos.map(p => p.photo_datetime || Infinity)),
     count: g.photos.length,
     place: primaryLocationKey(g.photos),
+    dir: primaryDirKey(g.photos),
   })).forEach(g => grid.appendChild(makeCrowdGroupCard(g)));
 }
 
@@ -2942,7 +3060,9 @@ function makePendingCell(e) {
   cell.className = "thumb-cell pending-cell" +
     (face.id === focusedFaceId ? " focused" : "");
   cell.dataset.id = face.id;
-  cell.appendChild(faceCropImg(face));
+  // Same node the grid cell was using — a staged face moves from grid to
+  // staging area without its thumbnail reloading.
+  cell.appendChild(faceCropImg(face, { reuse: true }));
 
   const chip = document.createElement("div");
   chip.className = "face-label pending-label";

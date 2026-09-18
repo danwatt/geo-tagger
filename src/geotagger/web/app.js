@@ -154,13 +154,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindTimeline();
   await checkStatus();
   await loadPlaces();
+  await loadDirFacet();
   await fitMapToAllLocations();
 
   // A "?month=YYYY-MM" URL argument (e.g. from the homepage month charts)
   // jumps straight to that month, same as picking it from the Month Picker.
   // "?month=undated" (from the homepage's Undated link) jumps to the Undated
   // queue instead.
-  const monthArg = new URLSearchParams(window.location.search).get("month");
+  const params = new URLSearchParams(window.location.search);
+  // "?batch=<id>" (from the Home work queue) loads that batch and selects it.
+  const batchArg = params.get("batch");
+  if (batchArg) {
+    await enterBatch(batchArg);
+    return;
+  }
+  const monthArg = params.get("month");
   const monthMatch = monthArg && monthArg.match(/^(\d{4})-(\d{2})$/);
   if (monthMatch) {
     await selectMonth(parseInt(monthMatch[1], 10), parseInt(monthMatch[2], 10));
@@ -323,7 +331,9 @@ function bindToolbar() {
   document.getElementById("select-month-btn").addEventListener("click", showMonthPicker);
   document.getElementById("select-area-btn").addEventListener("click", startAreaSelection);
   function reloadCurrentView() {
-    if (selectedYear) {
+    if (batchScope) {
+      loadPhotoScope(batchScope.url, batchScope.label, { timeline: batchScope.timeline });
+    } else if (selectedYear) {
       loadPhotos();
     } else if (areaSelectParams) {
       loadPhotosByArea(areaSelectParams.lat, areaSelectParams.lng, areaSelectParams.radius);
@@ -399,6 +409,7 @@ function bindToolbar() {
   }
 
   bindProposeBar();
+  bindBatchMode();
 
   // Location picker — the map-free way to tag a selection at a place that
   // already exists. "l" is the shortcut; the toolbar button is the discoverable
@@ -1278,21 +1289,123 @@ async function loadPhotos(fitMap = false) {
     url = `/api/photos?geotagged=all&date_from=${dateFrom}&date_to=${dateTo}`;
   }
 
+  await loadPhotoScope(url, null, { timeline: !undatedMode, fitMap });
+}
+
+/* Load one scope's photos and render everything that hangs off them. Shared by
+ * the month/year/undated views and by batch mode, which loads a date range or a
+ * single directory instead. `label` (when given) replaces the scope label in the
+ * toolbar; `timeline` false means the scope has no usable dates. */
+async function loadPhotoScope(url, label = null, { timeline = true, fitMap = false } = {}) {
   try {
     const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     photos = await res.json();
     // Pre-assign colors so the legend order is stable
     photos.forEach(p => camColor(p.camera));
     renderLegend();
-    if (undatedMode) {
-      setTimelineAvailable(false);  // no dates here — nothing to narrow
-    } else {
+    if (timeline) {
       buildHistogram();
+    } else {
+      setTimelineAvailable(false);  // no dates here — nothing to narrow
+    }
+    if (label !== null) {
+      document.getElementById("selected-month-label").textContent = label;
     }
     applyFilters(fitMap);
   } catch (err) {
     setStatus("Load error: " + err.message, true);
   }
+}
+
+/* ── Folder facet ──
+ * The month picker can't reach an undated scan folder at all, and even a dated
+ * one is a folder first — so directories are their own way into a scope, sharing
+ * the `dir` filter the work queue's folder batches use. */
+async function loadDirFacet() {
+  const select = document.getElementById("dir-select");
+  if (!select) return;
+  let dirs;
+  try {
+    const res = await fetch("/api/photos/dirs");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    dirs = await res.json();
+  } catch (err) {
+    return;   // the facet is a shortcut; the month picker still works without it
+  }
+  dirs.forEach((d) => {
+    const opt = document.createElement("option");
+    opt.value = d.dir;
+    // Untagged first in the label as well as the order — that's what says whether
+    // a folder is worth opening.
+    opt.textContent = d.untagged
+      ? `${shortDir(d.dir)} — ${d.untagged.toLocaleString()} untagged of ${d.total.toLocaleString()}`
+      : `${shortDir(d.dir)} — all ${d.total.toLocaleString()} done`;
+    opt.title = d.dir;
+    select.appendChild(opt);
+  });
+  select.addEventListener("change", async () => {
+    const dir = select.value;
+    if (!dir) return;
+    // Choosing a scope by hand means the user has stopped being driven by the
+    // queue; leaving the banner up would lie about what is loaded.
+    if (activeBatch) exitBatch();
+    await loadPhotosByDir(dir, shortDir(dir));
+  });
+}
+
+// Last two path components: a full path is unreadable in a dropdown and the tail
+// is what identifies the folder. Mirrors work_queue_service.short_dir.
+function shortDir(dir) {
+  const parts = dir.replace(/\\/g, "/").split("/").filter(Boolean);
+  if (parts.length <= 2) return dir;
+  const sep = dir.includes("\\") ? "\\" : "/";
+  return "…" + sep + parts.slice(-2).join(sep);
+}
+
+/* ── Batch scopes ──
+ * A batch straddles months (and a folder has no dates at all), so neither
+ * selectMonth nor selectUndated can express one — these load the scope directly
+ * and clear the month/area/place state those views leave behind. */
+function clearScopeSelections() {
+  const dirSelect = document.getElementById("dir-select");
+  if (dirSelect) dirSelect.value = "";
+  selectedYear = null;
+  selectedMonth = null;
+  undatedMode = false;
+  dayIsolation = null;
+  mapDayOverride = null;
+  areaSelectParams = null;
+  if (areaSelectCircle) {
+    map.removeLayer(areaSelectCircle);
+    areaSelectCircle = null;
+  }
+  document.getElementById("selected-area-label").textContent = "";
+  clearPlaceFilter();
+  hideMonthPicker();
+}
+
+async function loadPhotosByDateRange(from, to, label) {
+  clearScopeSelections();
+  setTimelineAvailable(true);
+  batchScope = { url: `/api/photos?geotagged=all&date_from=${from}&date_to=${to}`, label,
+                 timeline: true };
+  await loadPhotoScope(batchScope.url, label, { timeline: true });
+}
+
+async function loadPhotosByDir(dir, label) {
+  clearScopeSelections();
+  const select = document.getElementById("dir-select");
+  // A folder batch arriving from the queue should show up in the picker too.
+  if (select && select.value !== dir) {
+    select.value = [...select.options].some(o => o.value === dir) ? dir : "";
+  }
+  // A scanned folder is usually undated, and even a dated one is a folder first —
+  // the histogram would describe a span the user isn't working in.
+  setTimelineAvailable(false);
+  batchScope = { url: `/api/photos?geotagged=all&dir=${encodeURIComponent(dir)}`, label,
+                 timeline: false };
+  await loadPhotoScope(batchScope.url, label, { timeline: false });
 }
 
 // Which of the three mutually exclusive buckets a photo is in. Ignored wins over
@@ -1739,6 +1852,7 @@ function refreshSelectionUI() {
   // Every selection change is a chance to answer "where was this?" up front —
   // this is the single funnel every selection path goes through.
   scheduleProposal();
+  renderBatchBanner();
 }
 
 /* ── Drag ── */
@@ -1939,6 +2053,7 @@ function stageIgnore(ids = [...selectedIds]) {
   lastClickedIndex = -1;   // the grid's index run shifts under the removed cells
   hideProposal();
   renderGrid();
+  refreshSelectionUI();    // same reason as stageDrop: the selection just shrank
   setStatus(`Staged ${staged} photo(s) as needing no location. Nothing saved yet — ` +
             `review at the bottom of the grid, then Commit.`);
 }
@@ -2352,6 +2467,9 @@ async function stageDrop(ids, lat, lng, accuracy = null, note = "") {
   lastClickedIndex = -1;   // the grid's index run shifts under the removed cells
   hideProposal();          // the photos it was about have left the grid
   renderGrid();            // also renders the staging area + provisional pins
+  // Staging empties (or shrinks) the selection, so the "N selected" readouts —
+  // the workspace chip and the batch banner — have to follow it down.
+  refreshSelectionUI();
   const accNote = accuracy ? ` (±${accuracy}m)` : "";
   setStatus(`Staged ${staged} photo(s) → ${label}${accNote}.${note} Nothing saved yet — ` +
             `review at the bottom of the grid, then Commit.`);
@@ -2587,6 +2705,8 @@ async function commitPendingGeo(groups, what) {
   } else {
     setStatus(`Committed ${saved} change(s).`);
   }
+  // In batch mode a clean sweep means the batch is done — roll on.
+  if (!failures.length) maybeAdvanceBatch();
 }
 
 // The imprecise-drop toggle applies wherever a drop happens.
@@ -2684,6 +2804,230 @@ function bindProposeBar() {
   document.getElementById("propose-dismiss").addEventListener("click", () => {
     proposeDismissedFor = selectionSignature();
     hideProposal();
+  });
+}
+
+
+/* ── Batch mode (the Home work queue, driven from here) ──
+ * A batch is one outing or one scanned folder: the queue picks it, this loads its
+ * scope, selects its still-untagged members and lets the propose bar fire. The
+ * queue itself is computed server-side and never stored, so nothing here has to
+ * be kept in sync — a batch that gets tagged simply stops being returned. */
+let activeBatch = null;          // the /api/work-queue/batch record being worked
+let batchScope = null;           // { url, label } so reloads re-run the batch, not a month
+let batchAdvanceTimer = null;    // pending auto-advance after a batch is finished
+// Batches passed over with "Next" this session. Separate from the skip list: the
+// user said "not this one, now", not "not this one, ever" — so it lives in memory
+// and is forgotten on reload. Without it, Next on an untouched batch would fetch
+// the same queue head straight back and look broken.
+let passedOverBatches = new Set();
+
+const SKIPPED_BATCHES_KEY = "geotagger.workqueue.skipped";
+
+function loadSkippedBatches() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SKIPPED_BATCHES_KEY) || "[]");
+    return Array.isArray(raw) ? raw.filter(x => typeof x === "string") : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveSkippedBatches(ids) {
+  try {
+    localStorage.setItem(SKIPPED_BATCHES_KEY, JSON.stringify(ids));
+  } catch (e) {
+    // A full/blocked localStorage costs the skip list, not the tagging pass.
+  }
+}
+
+// photo_datetime is stored wall-clock-as-UTC and /api/photos parses date_from /
+// date_to as UTC days, so the batch's span has to be formatted in UTC too — a
+// local-time conversion would clip the first or last photos of the outing.
+function utcDay(ts) {
+  return new Date(ts * 1000).toISOString().slice(0, 10);
+}
+
+async function enterBatch(id) {
+  setStatus("Loading batch…");
+  let res;
+  try {
+    res = await fetch(`/api/work-queue/batch/${encodeURIComponent(id)}`);
+  } catch (err) {
+    setStatus("Batch load error: " + err.message, true);
+    return;
+  }
+  if (res.status === 404) {
+    // Tagged (or ignored) since the link was made — go straight to what's next.
+    setStatus("That batch is already done — loading the next one…");
+    await loadNextBatch();
+    return;
+  }
+  if (!res.ok) { setStatus(`Batch load failed: HTTP ${res.status}`, true); return; }
+  await openBatch(await res.json());
+}
+
+async function loadNextBatch() {
+  cancelBatchAdvance();
+  // Move past whatever is on screen. A finished batch is already gone from the
+  // queue; an unfinished one has to be stepped over explicitly.
+  if (activeBatch) passedOverBatches.add(activeBatch.id);
+  setStatus("Finding the next batch…");
+
+  const skip = [...new Set([...loadSkippedBatches(), ...passedOverBatches])].join(",");
+  let res;
+  try {
+    res = await fetch(`/api/work-queue/next?skip=${encodeURIComponent(skip)}`);
+  } catch (err) {
+    setStatus("Work queue error: " + err.message, true);
+    return;
+  }
+  if (res.status === 404) {
+    // Everything left was passed over rather than skipped — wrap to the top
+    // instead of pretending the queue is empty.
+    if (passedOverBatches.size) {
+      passedOverBatches = new Set();
+      activeBatch = null;          // don't re-add it on the way round
+      setStatus("Back to the top of the queue.");
+      await loadNextBatch();
+      return;
+    }
+    exitBatch();
+    setStatus("No batches left — everything is either tagged or too small to batch.");
+    return;
+  }
+  if (!res.ok) { setStatus(`Work queue failed: HTTP ${res.status}`, true); return; }
+  await openBatch(await res.json());
+}
+
+async function openBatch(batch) {
+  cancelBatchAdvance();
+  activeBatch = batch;
+  // Keep the URL honest so a reload (or the back button) lands on this batch and
+  // not on whatever the page was showing before it.
+  history.replaceState(null, "", `?batch=${encodeURIComponent(batch.id)}`);
+
+  if (batch.kind === "folder") {
+    await loadPhotosByDir(batch.dir, batch.title);
+  } else {
+    await loadPhotosByDateRange(utcDay(batch.start_ts), utcDay(batch.end_ts), batch.title);
+  }
+
+  // The batch is untagged photos by definition; anything else on screen is
+  // context, so the one filter that must be on is "Not tagged".
+  setFilterToggle("untagged", true);
+
+  // Only what actually loaded — a member tagged between the queue build and now
+  // would otherwise sit in the selection invisibly.
+  const loaded = new Set(photos.map(p => p.id));
+  selectedIds = new Set(batch.photo_ids.filter(id => loaded.has(id)));
+  lastClickedIndex = -1;
+  proposeDismissedFor = "";      // a new batch is a new question
+  refreshSelectionUI();          // → scheduleProposal(), which raises the propose bar
+
+  if (batch.proposal) {
+    map.setView([batch.proposal.lat, batch.proposal.lng], 14);
+  } else {
+    fitMapToPhotos();            // no guess: the tagged photos in the span are the clue
+  }
+  renderBatchBanner();
+}
+
+function skipBatch() {
+  if (!activeBatch) return;
+  const skipped = loadSkippedBatches();
+  if (!skipped.includes(activeBatch.id)) skipped.push(activeBatch.id);
+  saveSkippedBatches(skipped);
+  loadNextBatch();
+}
+
+// Leaves the photos loaded — the user asked to stop being driven, not to lose
+// the scope they were looking at.
+function exitBatch() {
+  cancelBatchAdvance();
+  activeBatch = null;
+  selectedIds.clear();
+  refreshSelectionUI();
+  renderBatchBanner();
+  history.replaceState(null, "", window.location.pathname);
+}
+
+function setFilterToggle(key, on) {
+  if (FILTER_TOGGLES[key] === on) return;
+  FILTER_TOGGLES[key] = on;
+  const btn = document.querySelector(`#filter-toggles .filter-toggle[data-filter="${key}"]`);
+  if (btn) {
+    btn.classList.toggle("on", on);
+    btn.setAttribute("aria-pressed", String(on));
+  }
+  applyFilters();
+}
+
+function renderBatchBanner() {
+  const banner = document.getElementById("batch-banner");
+  if (!banner) return;
+  banner.hidden = !activeBatch;
+  if (!activeBatch) return;
+  const b = activeBatch;
+  // Three spans, not one string: the grid pane is narrow, and the position and
+  // the live count are the parts that must never be the ones ellipsized away.
+  document.getElementById("batch-banner-pos").textContent =
+    `⚡ Batch ${b.position + 1} of ${b.total_batches}`;
+  const title = document.getElementById("batch-banner-title");
+  title.textContent = b.title + (b.start_ts ? "" : " · no dates");
+  title.title = b.title;
+  document.getElementById("batch-banner-count").textContent =
+    `${selectedIds.size.toLocaleString()} selected`;
+}
+
+// How many of the batch's members still need a decision. Staged-but-uncommitted
+// ones count as done — the user has made the call, Commit just writes it.
+function batchRemaining() {
+  if (!activeBatch) return 0;
+  return activeBatch.photo_ids.filter((id) => {
+    if (pendingGeo.has(id)) return false;
+    const p = photos.find(x => x.id === id);
+    return p ? (p.lat == null && !p.geocode_ignored) : false;
+  }).length;
+}
+
+function cancelBatchAdvance() {
+  if (batchAdvanceTimer) { clearTimeout(batchAdvanceTimer); batchAdvanceTimer = null; }
+}
+
+// Called after a commit: when nothing in the batch is left, roll on. The delay is
+// there to be interrupted — any click cancels it, so "one more look" always wins.
+function maybeAdvanceBatch() {
+  if (!activeBatch || batchRemaining() > 0) return;
+  setStatus("Batch done — loading the next one…");
+  cancelBatchAdvance();
+  batchAdvanceTimer = setTimeout(() => { batchAdvanceTimer = null; loadNextBatch(); }, 2000);
+}
+
+function bindBatchMode() {
+  document.getElementById("batch-next-btn").addEventListener("click", loadNextBatch);
+  document.getElementById("batch-skip-btn").addEventListener("click", skipBatch);
+  document.getElementById("batch-exit-btn").addEventListener("click", exitBatch);
+  document.getElementById("next-batch-btn").addEventListener("click", loadNextBatch);
+  // Any click is "I'm still looking at this" — it stops the auto-advance.
+  document.addEventListener("click", cancelBatchAdvance, true);
+
+  document.addEventListener("keydown", (e) => {
+    if (!activeBatch) return;
+    const key = e.key.toLowerCase();
+    if (key !== "n" && key !== "s") return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // Same guards as the "l" shortcut: never steal a keystroke from a field or
+    // from whatever is stacked on top of the grid.
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" ||
+              t.tagName === "SELECT" || t.isContentEditable)) return;
+    if (typeof isPersonPickerOpen === "function" && isPersonPickerOpen()) return;
+    const openModal = [...document.querySelectorAll(".modal")]
+      .some(m => m.style.display !== "none");
+    if (openModal) return;
+    e.preventDefault();
+    key === "n" ? loadNextBatch() : skipBatch();
   });
 }
 
