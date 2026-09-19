@@ -195,27 +195,6 @@ async def api_geocode_export_sidecars():
     return await loop.run_in_executor(get_executor(), geocode_service.export_to_sidecars)
 
 
-@router.get("/api/geocode/next-group")
-async def api_geocode_next_group(
-    start_year: int = Query(2000),
-    after_ts: int = Query(None),
-    group_window_days: int = Query(1),
-    context_window_days: int = Query(1)
-):
-    from geotagger import geotag_groups
-
-    loop = asyncio.get_running_loop()
-    groups = await loop.run_in_executor(
-        get_executor(),
-        geotag_groups.get_next_geotag_group,
-        start_year,
-        after_ts,
-        group_window_days,
-        context_window_days
-    )
-
-    if not groups:
-        return None
 
     return {
         "before": [serializers.photo_geocode_dict(p) for p in groups["before"]],

@@ -310,7 +310,6 @@ Reachable but not in the top nav:
 
 | Page | Purpose |
 |---|---|
-| **Quick Geocode** (`/quick-geocode.html`) | Retired — replaced by the work queue and Geocode's batch mode. Off the nav, still answers by URL, will be removed |
 | **Quick Tag** (`/tag.html`) | Mobile-friendly face triage: walks the face-clustering queue one group at a time |
 | **Photo Faces** (`/photo-faces.html`) | View and edit every detected face in one photo; with `&mode=crowd` it walks the crowd-photo playlist |
 | **People Manager** (`/people-manage.html`) | Edit names, birth dates, and family groupings for tagged people in one list |

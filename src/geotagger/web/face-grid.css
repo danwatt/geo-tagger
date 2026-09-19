@@ -281,7 +281,7 @@
 .thumb-cell .sug-reject { flex-shrink: 0; font-weight: bold; color: #f0a3a3; padding: 0 2px; }
 .thumb-cell .sug-reject:hover { color: #ff6b6b; }
 
-/* ── Imprecise-drop control (geocode + quick-geocode toolbars) ── */
+/* ── Imprecise-drop control (geocode toolbar) ── */
 .imprecise-control-group {
   display: flex;
   align-items: center;

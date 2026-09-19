@@ -1,8 +1,5 @@
 /* Shared top nav, rendered into <div id="app-nav" data-active="..."></div>. */
 (function () {
-  // Quick Geocode (/quick-geocode.html) is deliberately absent: the Home work
-  // queue plus Geocode's batch mode replace it. The page still answers by URL
-  // for one release — see docs/work-queue.md §6.3 for what goes when it drops.
   const ITEMS = [
     { key: "home", label: "🏠 Home", href: "/" },
     { key: "search", label: "🔎 Search", href: "/search.html" },

@@ -710,8 +710,7 @@
 /* Day group sections (.face-group-section / .face-group-cells / .group-tint-*)
    now live in theme.css, shared with the faces pages. */
 
-/* .imprecise-control-group now lives in face-grid.css (shared with
-   quick-geocode, which does not load this file). */
+/* .imprecise-control-group now lives in face-grid.css. */
 
 /* Photo right-click menu (geo page) — set a photo as a named place's
    representative. Positioned at the cursor in JS (see openPhotoContextMenu). */

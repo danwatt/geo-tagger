@@ -29,12 +29,6 @@ def test_backfill_503_without_data(client, geonames_dir):
     assert client.post("/api/geocode/backfill", json={"limit": 10}).status_code == 503
 
 
-def test_next_group_none_when_library_empty(client):
-    r = client.get("/api/geocode/next-group")
-    assert r.status_code == 200
-    assert r.json() is None
-
-
 def test_places_returns_geonames_within_bbox(client, geonames_dir):
     _write_geonames(geonames_dir)
     r = client.get("/api/geocode/places?bbox=-180,-90,180,90")

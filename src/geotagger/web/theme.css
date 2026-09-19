@@ -312,7 +312,7 @@ input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
   color: var(--accent-text);
 }
 
-/* ── Mobile flow chrome (shared by the tag + quick-geocode phone pages) ──
+/* ── Mobile flow chrome (shared by phone-sized tag pages) ──
    Top #bar, bottom #actions button row, and the big .act tap targets. */
 #app { display: flex; flex-direction: column; height: 100dvh; }
 #bar {
