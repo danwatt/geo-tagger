@@ -161,7 +161,11 @@
       <div class="toolbar-group">
         <!-- Stages, like a map drop — nothing is written until Commit. Undoing a
              committed mark is the detail pane's "Ignore for geocoding" checkbox. -->
-        <button id="mark-ignored-btn" title="Stage the selected photos as not needing a location (e.g. screenshots) — review and Commit below">🚫 Ignore location</button>
+        <button id="mark-ignored-btn" title="Stage the selected photos as not needing a location (e.g. screenshots) — review and Commit below">🚫 Ignore location <kbd>I</kbd></button>
+      </div>
+      <div class="toolbar-spacer"></div>
+      <div class="toolbar-group">
+        <button id="shortcuts-help-btn" class="icon-btn" title="Keyboard shortcuts" aria-label="Keyboard shortcuts">?</button>
       </div>
     </div>
 
@@ -214,6 +218,26 @@
 </div>
 
 <div id="status-bar"></div>
+
+<div id="shortcuts-help-backdrop" style="display:none">
+  <div id="shortcuts-help-modal">
+    <div class="sh-head">
+      <span>Keyboard shortcuts</span>
+      <button id="shortcuts-help-close" class="sh-close" aria-label="Close">✕</button>
+    </div>
+    <table class="sh-table">
+      <tr><td><kbd>↑</kbd> <kbd>↓</kbd> / <kbd>k</kbd> <kbd>j</kbd></td><td>Move focus to prev/next photo</td></tr>
+      <tr><td><kbd>Shift</kbd>+<kbd>↑</kbd>/<kbd>↓</kbd></td><td>Extend selection range</td></tr>
+      <tr><td><kbd>Space</kbd></td><td>Toggle selection of focused photo</td></tr>
+      <tr><td><kbd>l</kbd></td><td>Tag selection as… (saved places, recents, hotspots)</td></tr>
+      <tr><td><kbd>i</kbd></td><td>Stage selection as needing no location</td></tr>
+      <tr><td><kbd>g</kbd></td><td>Guess location for the focused photo</td></tr>
+      <tr><td><kbd>Enter</kbd></td><td>Commit all staged locations</td></tr>
+      <tr><td><kbd>?</kbd></td><td>Show this help</td></tr>
+    </table>
+    <div class="sh-foot">Shortcuts are ignored while typing in a text field.</div>
+  </div>
+</div>
 
 <!-- Month Picker Modal -->
 <div id="month-picker-modal" class="modal" style="display:none">

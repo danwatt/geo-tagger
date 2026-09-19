@@ -410,6 +410,12 @@ function bindToolbar() {
 
   bindProposeBar();
   bindBatchMode();
+  bindGridKeyboardShortcuts();
+  document.getElementById("shortcuts-help-btn").addEventListener("click", openShortcutsHelp);
+  document.getElementById("shortcuts-help-close").addEventListener("click", closeShortcutsHelp);
+  document.getElementById("shortcuts-help-backdrop").addEventListener("click", (e) => {
+    if (e.target.id === "shortcuts-help-backdrop") closeShortcutsHelp();
+  });
 
   // Location picker — the map-free way to tag a selection at a place that
   // already exists. "l" is the shortcut; the toolbar button is the discoverable
@@ -1831,12 +1837,56 @@ function handleThumbClick(e, id, idx) {
     selectedIds.clear();
     selectedIds.add(id);
   }
+  focusPhotoAt(idx);
+}
+
+// Shared tail of a click or keyboard-nav move: park the grid's keyboard/detail
+// focus on filteredPhotos[idx] and give it the same treatment a click gets
+// (detail pane, accuracy circle, map fly-to, scrolled into view).
+function focusPhotoAt(idx) {
   lastClickedIndex = idx;
   refreshSelectionUI();
-  showDetail(id);
   const photo = filteredPhotos[idx];
+  if (!photo) return;
+  showDetail(photo.id);
   showAccuracyCircle(photo);
-  if (photo?.lat != null) map.flyTo([photo.lat, photo.lng], Math.max(map.getZoom(), 14), { duration: 0.6 });
+  if (photo.lat != null) map.flyTo([photo.lat, photo.lng], Math.max(map.getZoom(), 14), { duration: 0.6 });
+  document.querySelector(`.thumb-cell[data-id="${photo.id}"]`)?.scrollIntoView({ block: "nearest" });
+}
+
+// j/k (or arrow keys): move keyboard focus by `delta` photos, collapsing the
+// selection to just that one — mirrors a plain click on the destination cell.
+function moveGridFocus(delta) {
+  if (!filteredPhotos.length) return;
+  let idx = filteredPhotos.findIndex(p => p.id === focusedPhotoId);
+  idx = idx === -1 ? (delta > 0 ? -1 : 0) : idx;
+  idx = Math.max(0, Math.min(filteredPhotos.length - 1, idx + delta));
+  selectedIds.clear();
+  selectedIds.add(filteredPhotos[idx].id);
+  focusPhotoAt(idx);
+}
+
+// Shift+j/k: extends the selection from the last click/nav position to `delta`
+// photos past the current focus — mirrors shift-click's range select.
+function extendGridFocus(delta) {
+  if (!filteredPhotos.length) return;
+  const anchor = lastClickedIndex >= 0 ? lastClickedIndex :
+    Math.max(0, filteredPhotos.findIndex(p => p.id === focusedPhotoId));
+  let idx = filteredPhotos.findIndex(p => p.id === focusedPhotoId);
+  idx = idx === -1 ? anchor : idx;
+  idx = Math.max(0, Math.min(filteredPhotos.length - 1, idx + delta));
+  const lo = Math.min(anchor, idx);
+  const hi = Math.max(anchor, idx);
+  for (let i = lo; i <= hi; i++) {
+    if (!pendingGeo.has(filteredPhotos[i].id)) selectedIds.add(filteredPhotos[i].id);
+  }
+  focusPhotoAt(idx);
+}
+
+function toggleGridFocusSelection() {
+  if (!focusedPhotoId) return;
+  selectedIds.has(focusedPhotoId) ? selectedIds.delete(focusedPhotoId) : selectedIds.add(focusedPhotoId);
+  refreshSelectionUI();
 }
 
 function refreshSelectionUI() {
@@ -3002,6 +3052,67 @@ function maybeAdvanceBatch() {
   setStatus("Batch done — loading the next one…");
   cancelBatchAdvance();
   batchAdvanceTimer = setTimeout(() => { batchAdvanceTimer = null; loadNextBatch(); }, 2000);
+}
+
+/* ── Keyboard shortcuts help ── */
+function openShortcutsHelp() {
+  document.getElementById("shortcuts-help-backdrop").style.display = "flex";
+}
+function closeShortcutsHelp() {
+  document.getElementById("shortcuts-help-backdrop").style.display = "none";
+}
+function isShortcutsHelpOpen() {
+  return document.getElementById("shortcuts-help-backdrop").style.display !== "none";
+}
+
+// Grid keyboard nav — j/k move, space select, shift extends, l tag-as (bound
+// separately above), i ignore, g guess, Enter commits staged. Ported from
+// People's shortcut set (see people.js's bindKeyboardShortcuts).
+function bindGridKeyboardShortcuts() {
+  document.addEventListener("keydown", (e) => {
+    if (isShortcutsHelpOpen()) {
+      if (e.key === "Escape" || e.key === "?") { e.preventDefault(); closeShortcutsHelp(); }
+      return;
+    }
+    if (e.key === "?") { e.preventDefault(); openShortcutsHelp(); return; }
+
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" ||
+              t.tagName === "SELECT" || t.tagName === "BUTTON" || t.isContentEditable)) return;
+    if (typeof isPersonPickerOpen === "function" && isPersonPickerOpen()) return;
+    const openModal = [...document.querySelectorAll(".modal")]
+      .some(m => m.style.display !== "none");
+    if (openModal) return;
+
+    switch (e.key) {
+      case "ArrowDown": case "j":
+        e.preventDefault();
+        e.shiftKey ? extendGridFocus(1) : moveGridFocus(1);
+        break;
+      case "ArrowUp": case "k":
+        e.preventDefault();
+        e.shiftKey ? extendGridFocus(-1) : moveGridFocus(-1);
+        break;
+      case " ":
+        e.preventDefault();
+        toggleGridFocusSelection();
+        break;
+      case "g":
+        if (document.getElementById("guess-bar").style.display !== "none") {
+          e.preventDefault();
+          doGuess();
+        }
+        break;
+      case "i":
+        e.preventDefault();
+        stageIgnore();
+        break;
+      case "Enter":
+        if (pendingGeo.size) { e.preventDefault(); commitPendingGeo(groupPendingGeo()); }
+        break;
+    }
+  });
 }
 
 function bindBatchMode() {
