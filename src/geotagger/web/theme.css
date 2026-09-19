@@ -176,6 +176,26 @@ input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
 .toolbar-group { display: flex; align-items: center; gap: 4px; }
 .toolbar-spacer { flex: 1; }
 
+/* ── Top nav dropdown groups (nav.js) ── */
+.nav-group { position: relative; }
+.nav-group-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-popup);
+  z-index: 50;
+  min-width: max-content;
+}
+.nav-group.open .nav-group-menu { display: flex; }
+.nav-group-item { white-space: nowrap; }
+
 /* ── Status bar (shared across photo + map pages) ── */
 #status-bar {
   height: 22px;
