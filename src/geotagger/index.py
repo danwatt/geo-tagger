@@ -953,8 +953,44 @@ def get_places() -> list[sqlite3.Row]:
     return get_db().execute("SELECT * FROM places ORDER BY name").fetchall()
 
 
+# Same window the propose bar votes with (geotag_service.DEFAULT_PROPOSE_WINDOW):
+# an untagged photo counts as "likely here" when it falls within an hour of one
+# of the place's own geotagged photos, same time-neighbour test /api/geotag/guess
+# and the propose bar use.
+_PLACE_NEARBY_WINDOW_SEC = 3600
+
+
+def _count_nearby_untagged(tagged_times: list[int], untagged_sorted: list[int],
+                           window: int) -> int:
+    """How many of `untagged_sorted` fall within `window` seconds of any of
+    `tagged_times`.
+
+    The per-place tagged times are turned into windows and merged first, so a
+    place with a whole day of back-to-back photos doesn't count the same
+    untagged neighbour once per tagged photo it happens to be near. Each merged
+    span is then resolved against the sorted untagged array with two bisects
+    instead of a per-photo scan.
+    """
+    import bisect
+
+    if not tagged_times or not untagged_sorted:
+        return 0
+    spans = sorted((t - window, t + window) for t in tagged_times)
+    merged = [spans[0]]
+    for lo, hi in spans[1:]:
+        if lo <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+        else:
+            merged.append((lo, hi))
+    count = 0
+    for lo, hi in merged:
+        count += bisect.bisect_right(untagged_sorted, hi) - bisect.bisect_left(untagged_sorted, lo)
+    return count
+
+
 def get_place_stats() -> dict[int, dict]:
-    """Photo count and newest photo timestamp per saved place, keyed by place id.
+    """Photo count, newest photo timestamp, and untagged-nearby count per saved
+    place, keyed by place id.
 
     One R*Tree bbox prefilter per place, narrowed by the same exact predicate
     Search uses (place_distance == 0 means "inside"). Without that second pass a
@@ -964,20 +1000,33 @@ def get_place_stats() -> dict[int, dict]:
     A place whose box straddles the antimeridian (min_lng > max_lng) reads as an
     empty R*Tree range and counts zero — the same blind spot the rest of the
     saved-place code has, not a new one.
+
+    `untagged_nearby_count` is not a spatial figure — an untagged photo has no
+    lat/lng to test against the place's shape — it is time-neighbour inference:
+    how many undated-by-location photos fall within _PLACE_NEARBY_WINDOW_SEC of a
+    photo already tagged inside this place, the same guess the propose bar and
+    /api/geotag/guess make one photo at a time. The untagged timestamp array is
+    fetched once and reused across every place rather than requeried per place.
     """
     from geotagger.search_locations import place_bbox, place_distance
     db = get_db()
     db.create_function("search_place_distance", 4, place_distance, deterministic=True)
 
+    untagged_times = [r["photo_datetime"] for r in db.execute("""
+        SELECT photo_datetime FROM photos
+        WHERE lat IS NULL AND geocode_ignored = 0 AND photo_datetime IS NOT NULL
+        ORDER BY photo_datetime
+    """).fetchall()]
+
     stats: dict[int, dict] = {}
     for p in db.execute("SELECT id, type, bounds FROM places").fetchall():
         box = place_bbox(p["type"], p["bounds"])
         if box is None:                      # unparseable bounds — report, don't raise
-            stats[p["id"]] = {"photo_count": 0, "last_ts": None}
+            stats[p["id"]] = {"photo_count": 0, "last_ts": None, "untagged_nearby_count": 0}
             continue
         min_lat, max_lat, min_lng, max_lng = box
-        row = db.execute("""
-            SELECT COUNT(*) AS n, MAX(photos.photo_datetime) AS last_ts
+        rows = db.execute("""
+            SELECT photos.photo_datetime AS ts
             FROM photos
             INNER JOIN photos_spatial ON photos_spatial.id = photos.id
             WHERE photos_spatial.max_lat >= ?
@@ -985,8 +1034,14 @@ def get_place_stats() -> dict[int, dict]:
               AND photos_spatial.max_lng >= ?
               AND photos_spatial.min_lng <= ?
               AND search_place_distance(photos.lat, photos.lng, ?, ?) = 0
-        """, (min_lat, max_lat, min_lng, max_lng, p["type"], p["bounds"])).fetchone()
-        stats[p["id"]] = {"photo_count": row["n"], "last_ts": row["last_ts"]}
+        """, (min_lat, max_lat, min_lng, max_lng, p["type"], p["bounds"])).fetchall()
+        times = [r["ts"] for r in rows if r["ts"]]
+        stats[p["id"]] = {
+            "photo_count": len(rows),
+            "last_ts": max(times) if times else None,
+            "untagged_nearby_count": _count_nearby_untagged(
+                times, untagged_times, _PLACE_NEARBY_WINDOW_SEC),
+        }
     return stats
 
 
