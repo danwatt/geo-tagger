@@ -47,6 +47,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindToolbar();
   bindDialogs();
   loadPlaces();
+  loadSuggestion();
 });
 
 function initMap() {
@@ -199,6 +200,18 @@ function bindToolbar() {
     if (showHotspots) loadHotspots();
   });
 
+  document.getElementById("suggest-place-zoom-btn").addEventListener("click", () => {
+    if (suggestedPlace) zoomToSuggestion();
+  });
+  document.getElementById("suggest-place-name-btn").addEventListener("click", () => {
+    if (suggestedPlace) savePlaceFromHotspot(suggestedPlace);
+  });
+  document.getElementById("suggest-place-dismiss-btn").addEventListener("click", () => {
+    if (suggestedPlace) dismissSuggestion(hotspotKey(suggestedPlace));
+    suggestedPlace = null;
+    renderSuggestion();
+  });
+
   document.getElementById("rep-picker-close").addEventListener("click", closeRepPicker);
   document.getElementById("rep-picker-done").addEventListener("click", closeRepPicker);
   document.getElementById("rep-picker-modal").addEventListener("click", (e) => {
@@ -272,6 +285,11 @@ function placeMeta(p) {
   }
   if (p.last_ts) bits.push(`last ${new Date(p.last_ts * 1000).toLocaleDateString()}`);
   bits.push(p.type === "circle" ? formatRadius(circleRadius(p)) : "rectangle");
+  // Time-neighbour inference, not a spatial count — see index.get_place_stats.
+  // Worth a callout because it's the backlog this place could clear in one sitting.
+  if (p.untagged_nearby_count) {
+    bits.push(`~${p.untagged_nearby_count} untagged nearby`);
+  }
   return bits.join(" · ");
 }
 
@@ -321,15 +339,15 @@ function renderSidebar() {
            <span class="rep-empty-icon">🖼</span><span class="rep-empty-text">Choose a photo</span>
          </button>`;
     const clearRepBtn = p.representative_photo_id
-      ? `<button class="clear-rep-btn" title="Remove representative photo">Clear photo</button>`
+      ? `<button class="icon-btn clear-rep-btn" title="Remove representative photo">🚫</button>`
       : "";
     // A place is a search filter (Search's "nearby a saved place"), but until now
     // there was no way from here to the photos it stands for. Anchor, not a
-    // button, so middle-click and "open in new tab" work.
+    // button, so middle-click and "open in new tab" work. The count is already in
+    // placeMeta above, so this is just the way there, not a second place to read it.
     const photosLink = p.photo_count
-      ? `<a class="photos-btn" href="/search.html?place_id=${p.id}"
-            title="Search the photos taken inside this place">View ${p.photo_count} photo${
-              p.photo_count === 1 ? "" : "s"}</a>`
+      ? `<a class="icon-btn photos-btn" href="/search.html?place_id=${p.id}"
+            title="Search the ${p.photo_count} photo${p.photo_count === 1 ? "" : "s"} taken here">📷</a>`
       : "";
 
     div.innerHTML = `
@@ -342,10 +360,10 @@ function renderSidebar() {
       </div>
       <div class="place-item-actions">
         ${photosLink}
-        <button class="zoom-btn">Zoom</button>
-        <button class="rename-btn">Rename</button>
+        <button class="icon-btn zoom-btn" title="Zoom to this place">🔍</button>
+        <button class="icon-btn rename-btn" title="Rename">✏️</button>
         ${clearRepBtn}
-        <button class="delete-btn">Delete</button>
+        <button class="icon-btn delete-btn" title="Delete">🗑️</button>
       </div>`;
 
     // The thumbnail (or its placeholder button) is the way into the picker.
@@ -409,8 +427,8 @@ function renderPlaces() {
     const bounds = JSON.parse(p.bounds);
     let shape;
 
-    // No `draggable` here: core Leaflet ignores it on a path. Circles are moved
-    // and resized by the handles below; rectangles are on their way out.
+    // No `draggable` here: core Leaflet ignores it on a path. Both shapes are
+    // moved/resized by the marker handles below instead.
     if (p.type === "rectangle") {
       shape = L.rectangle([[bounds.south, bounds.west], [bounds.north, bounds.east]],
                           { ...PLACE_STYLE });
@@ -433,9 +451,9 @@ function renderPlaces() {
 
   // The shapes were just rebuilt, so the old handles point at layers that are
   // no longer on the map.
-  clearCircleHandles();
+  clearShapeHandles();
   const selected = places.find(p => p.id === selectedPlaceId);
-  if (selected) showCircleHandles(selected);
+  if (selected) showShapeHandles(selected);
 }
 
 /* ── Map labels ──
@@ -491,26 +509,25 @@ function selectPlace(placeId) {
   if (shape.getBounds) {
     map.fitBounds(shape.getBounds().pad(0.2), { maxZoom: 15 });
   }
-  showCircleHandles(places.find(p => p.id === placeId));
+  showShapeHandles(places.find(p => p.id === placeId));
 }
 
-/* ── Moving and resizing a circle ──
- * The selected circle gets two draggable markers: a round one on the centre that
- * moves it, and a square one on the eastern edge whose distance from that centre
- * *is* the radius. Markers, not the path itself — core Leaflet only drags
- * markers; `draggable: true` on an L.circle needs the Leaflet.Path.Drag plugin,
- * which this app doesn't load.
+/* ── Moving and resizing a place shape ──
+ * The selected shape gets draggable markers — core Leaflet only drags markers;
+ * `draggable: true` on a path needs the Leaflet.Path.Drag plugin, which this app
+ * doesn't load. A circle gets a centre (move) and an east-edge (radius) handle;
+ * a rectangle gets one handle per corner, each dragging that corner while its
+ * diagonal opposite stays put.
  *
- * Both handles write through updatePlaceBounds, which reads the live shape, so
- * there's one save path however the shape got where it is.
- *
- * Rectangles are deliberately left alone — they're being phased out. */
+ * Every handle writes through updatePlaceBounds, which reads the live shape, so
+ * there's one save path however the shape got where it is. */
 
 const MIN_RADIUS_M = 2;          // same floor the draw tool enforces
 const METERS_PER_DEG_LAT = 111320;
 
 let moveHandle = null;
 let radiusHandle = null;
+let rectHandles = {};   // corner key ("nw"/"ne"/"se"/"sw") -> marker
 
 function circleRadius(place) {
   try {
@@ -534,6 +551,17 @@ function edgeLatLng(center, radius) {
   return L.latLng(center.lat, center.lng + radius / (METERS_PER_DEG_LAT * cos));
 }
 
+function clearShapeHandles() {
+  clearCircleHandles();
+  clearRectHandles();
+}
+
+function showShapeHandles(place) {
+  if (!place) return;
+  if (place.type === "circle") showCircleHandles(place);
+  else if (place.type === "rectangle") showRectangleHandles(place);
+}
+
 function clearCircleHandles() {
   [moveHandle, radiusHandle].forEach(h => { if (h) map.removeLayer(h); });
   moveHandle = null;
@@ -541,7 +569,7 @@ function clearCircleHandles() {
 }
 
 function showCircleHandles(place) {
-  clearCircleHandles();
+  clearShapeHandles();
   if (!place || place.type !== "circle") return;
   const shape = placeShapes[place.id];
   if (!shape || !shape.getRadius) return;
@@ -580,6 +608,64 @@ function showCircleHandles(place) {
   radiusHandle.on("dragend", async () => {
     radiusHandle.setLatLng(edgeLatLng(shape.getLatLng(), shape.getRadius()));
     await updatePlaceBounds(place);
+  });
+}
+
+// Corner key -> opposite corner key. Dragging a corner resizes around the one
+// diagonally across from it, same as the browser's own resize handles.
+const RECT_OPPOSITE_CORNER = { nw: "se", ne: "sw", se: "nw", sw: "ne" };
+
+// Same floor onDrawEnd uses for a freshly-drawn rectangle (~3.3m at the equator).
+const MIN_RECT_DEG = 0.00003;
+
+function rectCorner(bounds, key) {
+  return L.latLng(
+    key[0] === "n" ? bounds.getNorth() : bounds.getSouth(),
+    key[1] === "e" ? bounds.getEast() : bounds.getWest(),
+  );
+}
+
+function clearRectHandles() {
+  Object.values(rectHandles).forEach(h => { if (h) map.removeLayer(h); });
+  rectHandles = {};
+}
+
+function showRectangleHandles(place) {
+  clearShapeHandles();
+  if (!place || place.type !== "rectangle") return;
+  const shape = placeShapes[place.id];
+  if (!shape || !shape.getBounds) return;
+
+  Object.keys(RECT_OPPOSITE_CORNER).forEach(key => {
+    const marker = L.marker(rectCorner(shape.getBounds(), key), {
+      draggable: true,
+      icon: L.divIcon({ className: "rect-handle", html: "", iconSize: [14, 14], iconAnchor: [7, 7] }),
+      zIndexOffset: 1000,
+    }).addTo(map).bindTooltip("Drag to resize", { direction: "top" });
+
+    // The dragged corner and its fixed diagonal opposite define the new
+    // rectangle; the other two corners (and their handles) follow along.
+    marker.on("drag", () => {
+      const fixed = rectCorner(shape.getBounds(), RECT_OPPOSITE_CORNER[key]);
+      let dragged = marker.getLatLng();
+      if (Math.abs(dragged.lat - fixed.lat) < MIN_RECT_DEG) {
+        dragged = L.latLng(fixed.lat + Math.sign(dragged.lat - fixed.lat || 1) * MIN_RECT_DEG, dragged.lng);
+      }
+      if (Math.abs(dragged.lng - fixed.lng) < MIN_RECT_DEG) {
+        dragged = L.latLng(dragged.lat, fixed.lng + Math.sign(dragged.lng - fixed.lng || 1) * MIN_RECT_DEG);
+      }
+      shape.setBounds(L.latLngBounds(fixed, dragged));
+      const b = shape.getBounds();
+      Object.entries(rectHandles).forEach(([k, m]) => m.setLatLng(rectCorner(b, k)));
+    });
+    marker.on("dragend", async () => {
+      // Snap every handle back onto the saved shape's actual corners, same as
+      // the circle's radius handle does after a drag that hit the size floor.
+      const b = shape.getBounds();
+      Object.entries(rectHandles).forEach(([k, m]) => m.setLatLng(rectCorner(b, k)));
+      await updatePlaceBounds(place);
+    });
+    rectHandles[key] = marker;
   });
 }
 
@@ -818,6 +904,79 @@ let hotspotRadius = 100;
 
 const HOTSPOT_LIMIT = 60;
 
+/* ── Suggest a new place ──
+ * The Hotspots list above is opt-in — accurate, but easy to never look at. This
+ * is the same data (/api/geotag/hotspots, hide_named=true) surfaced without
+ * asking: the single busiest coordinate the propose bar keeps landing on that
+ * still has no name, shown as a standing banner once it clears a minimum photo
+ * count. Dismissing one is remembered per browser by coordinate, same as
+ * placeDense — it comes back only if that hotspot keeps growing after a refresh
+ * and a fresh candidate takes its place, since a genuinely dismissed spot stays
+ * hidden until it's named or a bigger one displaces it in the API's own order. */
+
+const SUGGEST_MIN_COUNT = 10;
+const SUGGEST_DISMISS_KEY = "dismissedPlaceSuggestions";
+
+let suggestedPlace = null;
+
+function dismissedSuggestions() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(SUGGEST_DISMISS_KEY) || "[]"));
+  } catch (err) {
+    return new Set();
+  }
+}
+
+function dismissSuggestion(key) {
+  const set = dismissedSuggestions();
+  set.add(key);
+  try {
+    localStorage.setItem(SUGGEST_DISMISS_KEY, JSON.stringify([...set]));
+  } catch (err) {
+    // Private-mode/blocked storage: the dismiss just won't stick across reloads.
+  }
+}
+
+async function loadSuggestion() {
+  try {
+    // A handful of candidates, not just one — the top hit might be a dismissed
+    // spot, and the next one down is still worth surfacing.
+    const params = new URLSearchParams({ limit: "5", hide_named: "true", sort: "count" });
+    const res = await fetch(`/api/geotag/hotspots?${params}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const dismissed = dismissedSuggestions();
+    suggestedPlace = (data.hotspots || []).find(
+      h => h.count >= SUGGEST_MIN_COUNT && !dismissed.has(hotspotKey(h))) || null;
+    // Shared with the Hotspots overlay's own circles — same clustering, same radius.
+    if (data.merge_meters) hotspotRadius = data.merge_meters;
+  } catch (err) {
+    suggestedPlace = null;
+  }
+  renderSuggestion();
+}
+
+function zoomToSuggestion() {
+  if (!suggestedPlace) return;
+  // getBounds() needs the circle on the map to know its projection — added and
+  // immediately removed, since this is a one-shot fit, not a drawn shape.
+  const circle = L.circle([suggestedPlace.lat, suggestedPlace.lng], { radius: hotspotRadius }).addTo(map);
+  map.fitBounds(circle.getBounds().pad(0.6), { maxZoom: 17 });
+  map.removeLayer(circle);
+}
+
+function renderSuggestion() {
+  const banner = document.getElementById("suggest-place-banner");
+  if (!suggestedPlace) {
+    banner.style.display = "none";
+    return;
+  }
+  banner.style.display = "";
+  document.getElementById("suggest-place-label").textContent = suggestedPlace.label;
+  document.getElementById("suggest-place-meta").textContent =
+    `${suggestedPlace.count} photos here — no place named yet`;
+}
+
 // The map's view as the API's four bounds, or null for "don't filter". Leaflet
 // reports longitudes outside ±180 once you pan past the antimeridian, so they're
 // wrapped back — a view straddling it then arrives as min_lng > max_lng, which
@@ -1043,6 +1202,9 @@ async function savePlaceFromHotspot(h) {
       hotspotTotal = Math.max(hotspots.length, hotspotTotal - 1);
       renderHotspots();
     }
+    // The just-named spot no longer qualifies (hide_named drops it server-side);
+    // a smaller one might now be the top candidate.
+    await loadSuggestion();
     setStatus(`Saved "${trimmed}" as a place (${Math.round(answer.radius)} m radius).`);
   } catch (err) {
     setStatus("Could not save place: " + err.message, true);

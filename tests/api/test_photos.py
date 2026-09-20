@@ -32,6 +32,24 @@ def test_photo_list_shape(client):
                       "dir", "location"}
 
 
+def test_ids_filter(client):
+    a = _add("a.jpg", dt=1000)
+    _add("b.jpg", dt=2000)
+    c = _add("c.jpg", dt=3000)
+    r = client.get(f"/api/photos?ids={a},{c}").json()
+    assert {p["filename"] for p in r} == {"a.jpg", "c.jpg"}
+
+
+def test_ids_filter_overrides_other_filters(client):
+    a = _add("a.jpg", lat=10, lng=20, dt=1000)
+    r = client.get(f"/api/photos?ids={a}&geotagged=no").json()
+    assert [p["filename"] for p in r] == ["a.jpg"]
+
+
+def test_ids_filter_invalid_400(client):
+    assert client.get("/api/photos?ids=abc").status_code == 400
+
+
 def test_by_area_radius(client):
     _add("near.jpg", lat=10.0, lng=20.0, dt=1000)
     _add("far.jpg", lat=11.0, lng=21.0, dt=1000)

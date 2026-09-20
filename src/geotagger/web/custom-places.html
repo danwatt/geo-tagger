@@ -44,6 +44,21 @@
            long list is scannable instead of two cards to a screen. -->
       <button id="place-density-btn" class="icon-btn" title="Switch between compact and gallery rows">▤</button>
     </div>
+    <!-- Proactive nudge: the busiest unnamed hotspot, shown without asking the
+         user to flip on the Hotspots overlay first. Hidden until a candidate
+         clears the minimum photo count (see SUGGEST_MIN_COUNT in custom-places.js). -->
+    <div id="suggest-place-banner" class="hotspot-item" style="display:none">
+      <div class="hotspot-body">
+        <div class="hotspot-label" id="suggest-place-label"></div>
+        <div class="hotspot-meta" id="suggest-place-meta"></div>
+        <div class="hotspot-actions">
+          <button id="suggest-place-zoom-btn">Zoom</button>
+          <button id="suggest-place-name-btn" class="name-btn primary">✏️ Name it…</button>
+          <button id="suggest-place-dismiss-btn">Dismiss</button>
+        </div>
+      </div>
+    </div>
+
     <!-- These narrow the sidebar list only; every place stays drawn on the map. -->
     <div id="place-controls">
       <input type="search" id="place-search" placeholder="Search places…" autocomplete="off"/>

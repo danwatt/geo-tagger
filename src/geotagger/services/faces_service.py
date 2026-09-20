@@ -26,9 +26,13 @@ def scan_faces_batch(photo_ids: list[int]) -> dict:
             continue
         try:
             total_faces += faces.detect_and_store(row)
-            processed += 1
         except Exception as e:
             errors.append(f"{row['filename']}: {e}")
+            # Unreadable/corrupt file (truncated HEIC, broken JPEG, missing file
+            # since last scan, …) — mark it scanned with zero faces so it doesn't
+            # get retried forever and block the batch loop from ever finishing.
+            index.replace_faces(pid, [])
+        processed += 1
     return {"processed": processed, "faces_found": total_faces, "errors": errors}
 
 

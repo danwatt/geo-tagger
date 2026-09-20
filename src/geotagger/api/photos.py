@@ -27,13 +27,22 @@ async def api_photos(
     date_to: str | None = Query(None),
     undated: bool = Query(False),
     dir: str | None = Query(None, description="exact directory match (folder batches)"),
+    ids: str | None = Query(None, description="comma-separated photo ids — an explicit "
+                             "selection (e.g. handed off from Search), overrides every other filter"),
 ):
-    """Get photos, optionally filtered by date range, by exact directory, or
-    (undated=true) photos with no timestamp at all — the latter mutually exclusive
-    with date_from/date_to, which are meaningless without a photo_datetime."""
+    """Get photos, optionally filtered by date range, by exact directory, by an
+    explicit id list, or (undated=true) photos with no timestamp at all — the
+    latter mutually exclusive with date_from/date_to, which are meaningless
+    without a photo_datetime."""
+    id_list: list[int] | None = None
+    if ids is not None:
+        try:
+            id_list = [int(x) for x in ids.split(",") if x.strip()]
+        except ValueError:
+            raise HTTPException(400, "ids must be a comma-separated list of integers")
     rows = index.get_photos(
         geotagged=geotagged, bbox=bbox,
-        date_from=date_from, date_to=date_to, undated=undated, dir=dir,
+        date_from=date_from, date_to=date_to, undated=undated, dir=dir, ids=id_list,
     )
     return [serializers.photo_to_dict(r) for r in rows]
 

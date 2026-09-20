@@ -37,13 +37,6 @@ The app is, in short, tuned for a phase that is over. The recommendations below 
 
 ## 2. Screen-by-screen notes
 
-### Home
-
-Strong "mission control": progress bars, coverage-by-month histograms, deep links. What it
-does not do is *tell the user what to do next*. It reports "1,972 photos have a
-nearby-in-time guess" and "33,109 remaining" but offers no ranked list of batches. See
-[Work queue](#31-work-queue-on-home).
-
 ### Geocode (main tool)
 
 ![Geocode, October 2024](img/geocode-oct2024.png)
@@ -54,14 +47,8 @@ picker, imprecise drops with an accuracy radius, per-day pins — all good decis
 
 Gaps:
 
-- **No keyboard grid navigation.** People has `j`/`k`/space/`a`/`x` with a `?` help
-  overlay; Geocode has only `l` and Esc. The grid is a keyboard job.
 - **Tagged and untagged photos mix in the grid.** When the goal is tagging, tagged photos
-  are noise. The "Not tagged" filter exists but is not remembered.
-- **No folder facet.** Scanned photos cluster by folder ("1985 Box"), not by time. The
-  uncommitted diff adds a "Folder, then date" sort to *People*; Geocode has nothing
-  equivalent. "Tag this whole folder at Grandma's house" is the single most valuable move
-  for the pre-GPS backlog.
+  are noise. The "Not tagged" filter exists but is not remembered outside of batch mode.
 - **Detail pane** has no prev/next, and faces are hidden behind a button to another page.
   Who is in the photo is a location hint ("Grandma → Grandma's house").
 - **Street search lives on the Data page**, not here. Typing "Elm St" into "Jump to map
@@ -69,49 +56,25 @@ Gaps:
 - Selecting a photo zooms the map to it. Right for tagged photos; for untagged ones the
   more useful view is its time-neighbours (which `showDayOnMap` does, but only on demand).
 
-### Quick Geocode
-
-![Quick Geocode](img/quick-geocode.png)
-
-The right idea — "here is the next untagged group, with tagged photos before and after
-it" — but the execution undercuts it. On this library it opens on a single 2003 dashboard
-photo with no before/after context and a world map at zoom 2. Specifically:
-
-- Starts at the oldest photo, where context is thinnest, rather than at the biggest or
-  easiest batch.
-- "Skip" is not persisted, so every visit replays the same skips from the top.
-- No ignore, no propose bar, no named-places picker, no staging, no keyboard.
-- `get_next_geotag_group` fetches *every* ungeotagged photo on each call and walks it
-  in Python; fine at 33K, but the grouping (1-day window) is also the crudest in the app.
-
-This page and Geocode are two tools for one job, with Geocode strictly better except for
-the "give me the next group" button. Recommendation: fold that button into Geocode and
-retire this page (or, if a mobile-friendly stripped page is wanted, rebuild it on
-Geocode's staging/propose code paths).
-
 ### Search
 
 ![Search](img/search.png)
 
-Good multi-facet search (saved places, date range, geotag status, people incl. "together").
-Missing facets that matter for *tagging* work: camera, folder, GPS accuracy, has-faces.
-No sort control. No handoff: "Open these in Geocode" or "Open these in People" would turn
-Search into the selection tool for every other page.
+Good multi-facet search (saved places, date range, geotag status, people incl. "together",
+camera, folder, GPS accuracy, has-faces), a sort control, and handoff buttons into Geocode
+(an explicit id selection) and People (single-person scope).
 
 ### Named Places
 
 ![Named Places](img/named-places.png)
 
 153 saved places with radius, representative thumbnail, count and last-used date. Solid.
-Two additions would make it earn its nav slot: an *untagged photos likely here* count per
-place (photos within the radius by time-neighbour inference), and *suggest a new place*
-when the propose bar keeps landing on a coordinate that has no name yet.
 
 ### Time Sync
 
 Does one thing (apply a fixed offset to a camera's clock) and does it clearly. But 9,266
 undated photos need a *date assignment* tool, not an *offset* tool — see
-[Undated photos](#34-undated-photos-need-a-date-tool).
+[Undated photos](#32-undated-photos-need-a-date-tool).
 
 ### People
 
@@ -134,13 +97,12 @@ at zero, what is missing is the *post-labeling* toolset:
 ### Representatives
 
 Diagnostic: lets you inspect the medoid dedup that feeds matching. Useful for tuning,
-not for tagging. Should live under an Admin/Advanced grouping rather than top nav.
+not for tagging.
 
 ### Geo Data (Places DB map)
 
 Diagnostic overlay of OSM/Census/ZCTA polygons plus the click-to-probe popup. Excellent
-for debugging *why* a photo got a city name; not a tagging tool. Same treatment as
-Representatives.
+for debugging *why* a photo got a city name; not a tagging tool.
 
 ### Data
 
@@ -166,34 +128,7 @@ action above.
 
 Ordered by impact on the actual remaining work.
 
-### 3.1 Work queue on Home
-
-Replace "33,109 remaining" with a ranked list of *batches* the user can knock out in one
-decision each. Ranking = photos per decision, using data the app already has:
-
-```mermaid
-flowchart LR
-    U[Untagged photos] --> C{Cluster by}
-    C -->|same camera, same day| D[Day batches]
-    C -->|same folder| F[Folder batches]
-    C -->|time-neighbour guess| G[Guess batches]
-    D & F & G --> R[Rank by size × confidence]
-    R --> Q[Home: Work queue]
-    Q -->|click| GEO[Geocode, pre-filtered,\nbatch selected,\npropose bar showing]
-```
-
-A card would read like: *"Oct 12 2024 · Nikon D300 · 1,060 photos · 3 tagged neighbours
-at Alpine Park Wedding Venue"*. On this library that single row is 3% of the backlog.
-Biggest-first turns 33K photos into a few hundred decisions.
-
-### 3.2 Fold Quick Geocode into Geocode
-
-Add a **Next untagged batch** button to Geocode that loads the top work-queue item. It
-inherits staging, propose, named places, ignore, `l`, and (after 3.5) keyboard nav for
-free. Retire `quick-geocode.html`. If a phone-sized page is still wanted, build it on the
-same code, not a parallel implementation.
-
-### 3.3 Batch guess review
+### 3.1 Batch guess review
 
 `GET /api/guess/{photo_id}` is one photo at a time from the detail pane. 1,972 photos
 already have a guess. Give them the same treatment faces got:
@@ -211,21 +146,14 @@ flowchart LR
 Same accept / accept-all / reject shape the user already knows from the face suggestion
 queue.
 
-### 3.4 Undated photos need a date tool
+### 3.2 Undated photos need a date tool
 
 Time Sync applies an offset; 9,266 photos have nothing to offset. Scans arrive by folder
 with no EXIF date. Add **Assign approximate date** to a folder or selection: year or
 month precision, stored with a precision flag so the histogram and age-aware face
-matching can treat it honestly. Pair it with a folder facet on Geocode so the same
-selection can be geotagged in the same sitting.
+matching can treat it honestly.
 
-### 3.5 Keyboard parity on Geocode
-
-Port the People shortcut set: `j`/`k` move, space select, shift-extend, `l` tag as,
-`i` ignore, `g` guess, Enter commit staged, `?` help. Remember the "Not tagged" filter
-per session so the grid opens in tagging mode.
-
-### 3.6 Export state tracking
+### 3.3 Export state tracking
 
 Today `POST /api/geocode/export-sidecars` rewrites every geocoded photo's sidecar (74K)
 because nothing records what changed since the last export. The DB stores
@@ -247,7 +175,7 @@ more: 0 unlabeled, 60K labels. Writing `Iptc4xmpExt:PersonInImage` plus MWG face
 is now the single biggest step in getting value *out* of the app — it is what Lightroom,
 digiKam and Immich read. Worth re-deciding.
 
-### 3.7 Trust and audit views
+### 3.4 Trust and audit views
 
 Nothing checks work already done. Two cheap views on existing indexes:
 
@@ -258,14 +186,14 @@ Nothing checks work already done. Two cheap views on existing indexes:
 
 Plus **Merge people** with a fuzzy duplicate-name check in People Manager.
 
-### 3.8 Undo history
+### 3.5 Undo history
 
 Staging protects against mistakes *before* commit. After commit there is nothing: one
 "Stage all at X" on a thousand photos, committed, has no way back. Add a `geotag_history`
 table (photo, old lat/lng, new lat/lng, source, timestamp) and a **Recent changes** view
 with revert. Faces already carry `assigned_at`; surface it the same way.
 
-### 3.9 Steady-state intake
+### 3.6 Steady-state intake
 
 Scanning runs only at startup. The recurring workflow after import is:
 import → geotag the photos without GPS → confirm face suggestions. Today that is three
@@ -282,46 +210,21 @@ flowchart LR
 A "new since last scan" scope on both Geocode and People, and a scan button that does not
 need a restart.
 
-### 3.10 Navigation
-
-Eleven top-nav items plus three hidden pages; the bar wraps to two lines below about
-1,000 px. Four of the eleven are diagnostics or admin.
-
-```mermaid
-flowchart TB
-    subgraph Today
-        direction LR
-        h1[Home] --- s1[Search] --- g1[Geocode] --- q1[Quick Geocode] --- n1[Named Places] --- t1[Time Sync] --- p1[People] --- r1[Representatives] --- m1[Geo Data] --- d1[Data] --- x1[Settings]
-    end
-    subgraph Proposed
-        direction LR
-        H[Home] --- TAG[Tag ▾\nGeocode · People] --- BR[Browse ▾\nSearch · Named Places] --- FIX[Fix ▾\nTime Sync · Dates · Audit] --- ADM[Admin ▾\nData · Geo Data · Representatives · Settings]
-    end
-```
-
-Quick Geocode disappears into Geocode (3.2). Photo Faces becomes an inline panel.
-
 ## 4. Remove or de-emphasise
 
 | Item | Action | Why |
 |---|---|---|
-| Quick Geocode page | Fold into Geocode | Weaker duplicate of the main tool |
-| Representatives (top nav) | Move to Admin | Tuning diagnostic, not a tagging task |
-| Geo Data (top nav) | Move to Admin | Debugging aid for place-name resolution |
 | Settings: 19 threshold knobs | Collapse under Advanced | One toggle matters day to day |
 | Road Trip | Keep off nav (already disabled) | Right idea for pre-GPS trips; ship when propose-along-route works |
 | Quick Tag | Keep hidden | Done its job; still useful for intake on a phone |
 
 ## 5. Suggested order
 
-1. Work queue on Home (3.1) and Next-batch button in Geocode (3.2) — same feature, two
-   entry points. Changes how every session starts.
-2. Batch guess review (3.3) — 1,972 photos, mostly one-click.
-3. Keyboard parity and remembered filters on Geocode (3.5) — small, felt every minute.
-4. Folder facet plus approximate-date tool (3.4) — unlocks the scans.
-5. Dirty-flag export (3.6) — then re-decide person-name export.
-6. Audit views and undo history (3.7, 3.8).
-7. Intake scope and scan button (3.9), nav regroup (3.10).
+1. Batch guess review (3.1) — 1,972 photos, mostly one-click.
+2. Approximate-date tool (3.2) — unlocks the undated scans.
+3. Dirty-flag export (3.3) — then re-decide person-name export.
+4. Audit views and undo history (3.4, 3.5).
+5. Intake scope and scan button (3.6).
 
 ## Appendix: remaining screenshots
 

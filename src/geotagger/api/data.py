@@ -3,14 +3,19 @@ GeoFabrik/OSM and US Census offline dataset downloads. Actual work runs on the s
 executor via services/data_service.py's background jobs; routes just start a
 job and report its polled state (no request stays open for the download)."""
 
+import asyncio
+import json
+import time
+
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 
 from pydantic import BaseModel
 
 from geotagger import index
 from geotagger.executor import get_executor
 from geotagger.geometry import normalize_lng_bbox
-from geotagger.services import data_service, streets_service
+from geotagger.services import backup_service, data_service, streets_service
 
 router = APIRouter()
 
@@ -136,3 +141,20 @@ async def api_data_face_model_download(req: ForceRequest = ForceRequest()):
 @router.get("/api/data/face-model/download/status")
 async def api_data_face_model_download_status():
     return data_service.face_model_job_status()
+
+
+# ── Backup (user data export) ──
+
+@router.get("/api/data/backup")
+async def api_data_backup():
+    """Download a compact JSON backup of the user-authored data (places,
+    people/families, face labels, settings) — see backup_service for exactly
+    what's included/excluded and why."""
+    loop = asyncio.get_running_loop()
+    backup = await loop.run_in_executor(get_executor(), backup_service.build_backup)
+    body = json.dumps(backup, indent=2).encode("utf-8")
+    filename = f"geotagger-backup-{time.strftime('%Y%m%d-%H%M%S')}.json"
+    return Response(
+        content=body, media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

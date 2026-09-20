@@ -600,10 +600,21 @@ def set_geocode_ignored(photo_ids: list[int], ignored: bool):
 
 def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str | None = None,
                date_to: str | None = None, undated: bool = False,
-               dir: str | None = None) -> list[sqlite3.Row]:
+               dir: str | None = None, ids: list[int] | None = None) -> list[sqlite3.Row]:
     db = get_db()
     clauses = []
     params: list = []
+    if ids is not None:
+        # An explicit id set (e.g. handed off from Search) stands alone — every
+        # other filter here narrows a scan of the library, but the caller already
+        # picked exactly these photos.
+        if not ids:
+            return []
+        placeholders = ",".join("?" * len(ids))
+        return db.execute(
+            f"SELECT * FROM photos WHERE id IN ({placeholders}) ORDER BY photo_datetime, filename",
+            ids,
+        ).fetchall()
     if dir is not None:
         # Exact match, not a prefix: a folder batch is one directory, and
         # LIKE 'x%' would swallow a sibling named "x-extra".
@@ -678,14 +689,35 @@ def get_photo(photo_id: int) -> sqlite3.Row | None:
     return get_db().execute("SELECT * FROM photos WHERE id=?", (photo_id,)).fetchone()
 
 
+SEARCH_SORTS = {
+    "date_asc": "photo_datetime IS NULL, photo_datetime, filename",
+    "date_desc": "photo_datetime IS NULL, photo_datetime DESC, filename",
+    "filename": "filename",
+    "camera": "camera IS NULL, camera, photo_datetime",
+}
+
+
+def get_distinct_cameras() -> list[str]:
+    """Cameras seen in the library, for the Search page's camera facet."""
+    rows = get_db().execute(
+        "SELECT DISTINCT camera FROM photos WHERE camera IS NOT NULL AND camera != '' "
+        "ORDER BY camera"
+    ).fetchall()
+    return [r["camera"] for r in rows]
+
+
 def search_photos(date_from: str | None = None, date_to: str | None = None,
                   bbox: str | None = None, location: str | None = None,
                   person_ids: list[int] | None = None, person_mode: str = "all",
                   geotagged: str = "all", limit: int = 2000,
                   place_id: int | None = None, nearby_m: float = 0,
-                  location_fields: str | None = None) -> list[sqlite3.Row]:
+                  location_fields: str | None = None,
+                  camera: str | None = None, dir: str | None = None,
+                  has_faces: str = "all", gps_accuracy: str = "all",
+                  sort: str = "date_asc") -> list[sqlite3.Row]:
     """Flexible multi-criteria photo search: date range, location (bbox and/or a
-    free-text match against the reverse-geocoded place columns), and people.
+    free-text match against the reverse-geocoded place columns), people, camera,
+    folder, GPS accuracy, and whether any face was detected.
 
     ``person_ids``/``person_mode`` answers "find photos with these people" —
     person_mode='all' requires every listed person to have an (assigned,
@@ -773,8 +805,28 @@ def search_photos(date_from: str | None = None, date_to: str | None = None,
             )
             params += [ids_json, len(set(person_ids))]
 
+    if camera:
+        clauses.append("camera = ?")
+        params.append(camera)
+
+    if dir:
+        # Exact match, same convention as get_photos' folder batches.
+        clauses.append("dir = ?")
+        params.append(dir)
+
+    if has_faces == "yes":
+        clauses.append("id IN (SELECT DISTINCT photo_id FROM faces)")
+    elif has_faces == "no":
+        clauses.append("id NOT IN (SELECT DISTINCT photo_id FROM faces)")
+
+    if gps_accuracy == "precise":
+        clauses.append("lat IS NOT NULL AND (gps_accuracy IS NULL OR gps_accuracy <= 0)")
+    elif gps_accuracy == "imprecise":
+        clauses.append("gps_accuracy IS NOT NULL AND gps_accuracy > 0")
+
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-    sql = f"SELECT * FROM photos {where} ORDER BY photo_datetime, filename LIMIT ?"
+    order = SEARCH_SORTS.get(sort, SEARCH_SORTS["date_asc"])
+    sql = f"SELECT * FROM photos {where} ORDER BY {order} LIMIT ?"
     params.append(limit)
     return db.execute(sql, params).fetchall()
 

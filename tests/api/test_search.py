@@ -4,13 +4,14 @@ from geotagger import index
 import json
 
 
-def _add(path, lat=None, lng=None, dt=1000, loc_city=None, loc_state=None, loc_country=None):
+def _add(path, lat=None, lng=None, dt=1000, loc_city=None, loc_state=None, loc_country=None,
+         camera="c", dir_=".", gps_accuracy=None):
     index.upsert_photo(
-        filename=path, dir_=".", ext=".jpg", media_type="image",
+        filename=path, dir_=dir_, ext=".jpg", media_type="image",
         mtime=1.0, size=1, lat=lat, lng=lng,
         geotag_source="sidecar" if lat is not None else "none",
-        sidecar_path=None, sidecar_mtime=None, camera="c",
-        photo_datetime=dt, gps_accuracy=None, orientation=1,
+        sidecar_path=None, sidecar_mtime=None, camera=camera,
+        photo_datetime=dt, gps_accuracy=gps_accuracy, orientation=1,
     )
     pid = index.get_db().execute("SELECT id FROM photos WHERE filename=?", (path,)).fetchone()[0]
     if loc_city or loc_state or loc_country:
@@ -155,6 +156,51 @@ def test_saved_rectangle_boundary_and_nearby(client):
     _add("far.jpg", lat=29, lng=-97)
     assert client.get("/api/search", params={"place_id": place}).json()["total"] == 1
     assert client.get("/api/search", params={"place_id": place, "nearby_m": 200}).json()["total"] == 2
+
+
+def test_search_camera_filter(client):
+    _add("nikon.jpg", dt=1000, camera="Nikon D300")
+    _add("phone.jpg", dt=1000, camera="iPhone")
+    r = client.get("/api/search?camera=Nikon D300").json()
+    assert [p["filename"] for p in r["photos"]] == ["nikon.jpg"]
+
+
+def test_search_folder_filter(client):
+    _add("boxA.jpg", dt=1000, dir_="Box A")
+    _add("boxB.jpg", dt=1000, dir_="Box B")
+    r = client.get("/api/search", params={"dir": "Box A"}).json()
+    assert [p["filename"] for p in r["photos"]] == ["boxA.jpg"]
+
+
+def test_search_has_faces_filter(client):
+    alice = index.create_person("Alice")
+    with_face = _add("with_face.jpg", dt=1000)
+    without_face = _add("without_face.jpg", dt=2000)
+    _add_face(with_face, alice)
+    assert [p["filename"] for p in client.get("/api/search?has_faces=yes").json()["photos"]] == ["with_face.jpg"]
+    assert [p["filename"] for p in client.get("/api/search?has_faces=no").json()["photos"]] == ["without_face.jpg"]
+
+
+def test_search_gps_accuracy_filter(client):
+    _add("precise.jpg", lat=10, lng=20, dt=1000, gps_accuracy=None)
+    _add("imprecise.jpg", lat=10, lng=20, dt=2000, gps_accuracy=500.0)
+    assert [p["filename"] for p in client.get("/api/search?gps_accuracy=precise").json()["photos"]] == ["precise.jpg"]
+    assert [p["filename"] for p in client.get("/api/search?gps_accuracy=imprecise").json()["photos"]] == ["imprecise.jpg"]
+
+
+def test_search_sort(client):
+    _add("b.jpg", dt=2000)
+    _add("a.jpg", dt=1000)
+    assert [p["filename"] for p in client.get("/api/search?sort=date_asc").json()["photos"]] == ["a.jpg", "b.jpg"]
+    assert [p["filename"] for p in client.get("/api/search?sort=date_desc").json()["photos"]] == ["b.jpg", "a.jpg"]
+    assert [p["filename"] for p in client.get("/api/search?sort=filename").json()["photos"]] == ["a.jpg", "b.jpg"]
+
+
+def test_search_cameras_endpoint(client):
+    _add("a.jpg", dt=1000, camera="Nikon D300")
+    _add("b.jpg", dt=1000, camera="iPhone")
+    _add("c.jpg", dt=1000, camera=None)
+    assert set(client.get("/api/search/cameras").json()["cameras"]) == {"Nikon D300", "iPhone"}
 
 
 def test_invalid_location_selection(client):

@@ -168,6 +168,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     await enterBatch(batchArg);
     return;
   }
+  // "?ids=1,2,3" (from the Search page's "Open in Geocode") loads exactly that
+  // photo set, in place of a month/folder/batch scope.
+  const idsArg = params.get("ids");
+  if (idsArg) {
+    const ids = idsArg.split(",").map(Number).filter(Number.isFinite);
+    if (ids.length) {
+      await loadPhotosByIds(ids, `${ids.length.toLocaleString()} photo(s) from Search`);
+      return;
+    }
+  }
   const monthArg = params.get("month");
   const monthMatch = monthArg && monthArg.match(/^(\d{4})-(\d{2})$/);
   if (monthMatch) {
@@ -1396,6 +1406,13 @@ async function loadPhotosByDateRange(from, to, label) {
   setTimelineAvailable(true);
   batchScope = { url: `/api/photos?geotagged=all&date_from=${from}&date_to=${to}`, label,
                  timeline: true };
+  await loadPhotoScope(batchScope.url, label, { timeline: true });
+}
+
+async function loadPhotosByIds(ids, label) {
+  clearScopeSelections();
+  setTimelineAvailable(true);
+  batchScope = { url: `/api/photos?ids=${ids.join(",")}`, label, timeline: true };
   await loadPhotoScope(batchScope.url, label, { timeline: true });
 }
 

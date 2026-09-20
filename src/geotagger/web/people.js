@@ -104,13 +104,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   await loadFocusYears();      // restores any saved Focus before the first load
   await loadPersons();
 
-  // Deep-link from the Search page's "find untagged faces" candidates:
-  // people.html?person=<id>&review=suggested opens straight to that person's
-  // suggestion queue instead of the default Unlabeled view.
+  // Deep-link from the Search page: people.html?person=<id>&review=suggested
+  // opens straight to that person's suggestion queue (from "find untagged
+  // faces"); people.html?person=<id> alone (from "Open in People" on a
+  // single-person search) opens their tagged-faces scope instead.
   const qp = new URLSearchParams(window.location.search);
   const linkPersonId = qp.get("person") ? parseInt(qp.get("person")) : null;
   if (linkPersonId && qp.get("review") === "suggested") {
     await selectScope("suggested", linkPersonId);
+  } else if (linkPersonId) {
+    await selectScope("person", linkPersonId);
   } else {
     await loadFaces();
   }

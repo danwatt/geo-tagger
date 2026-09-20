@@ -29,6 +29,35 @@ async function loadStatus() {
   }
 }
 
+async function downloadBackup() {
+  const btn = document.getElementById("backup-download-btn");
+  const errEl = document.getElementById("backup-error");
+  errEl.textContent = "";
+  btn.disabled = true;
+  btn.textContent = "Preparing…";
+  try {
+    const res = await fetch("/api/data/backup");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const disposition = res.headers.get("Content-Disposition") || "";
+    const match = disposition.match(/filename="([^"]+)"/);
+    const filename = match ? match[1] : "geotagger-backup.json";
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    errEl.textContent = e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Download backup";
+  }
+}
+
 function renderFaceModel(m) {
   const el = document.getElementById("face-model-status");
   el.innerHTML = `
@@ -577,6 +606,7 @@ document.getElementById("streets-results").addEventListener("click", (e) => {
   if (row) focusStreetGroup(Number(row.dataset.i));
 });
 
+document.getElementById("backup-download-btn").addEventListener("click", downloadBackup);
 document.getElementById("geonames-download-btn").addEventListener("click", startGeonamesDownload);
 document.getElementById("osm-download-btn").addEventListener("click", startOsmDownload);
 document.getElementById("census-download-btn").addEventListener("click", startCensusDownload);

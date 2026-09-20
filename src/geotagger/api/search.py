@@ -31,6 +31,11 @@ async def api_search_locations(q: str = Query("", max_length=200)):
     return {"locations": suggestions(index.get_db(), q)}
 
 
+@router.get("/api/search/cameras")
+async def api_search_cameras():
+    return {"cameras": index.get_distinct_cameras()}
+
+
 def _parse_person_ids(person_ids: str) -> list[int]:
     try:
         return [int(x) for x in person_ids.split(",") if x.strip()]
@@ -51,12 +56,17 @@ async def api_search(
     person_mode: str = Query("all", pattern="^(all|any)$",
                              description="'all' = every listed person appears together; 'any' = at least one"),
     geotagged: str = Query("all", pattern="^(all|yes|no)$"),
+    camera: str | None = Query(None),
+    dir: str | None = Query(None, description="exact directory match (folder facet)"),
+    has_faces: str = Query("all", pattern="^(all|yes|no)$"),
+    gps_accuracy: str = Query("all", pattern="^(all|precise|imprecise)$"),
+    sort: str = Query("date_asc", pattern="^(date_asc|date_desc|filename|camera)$"),
     limit: int = Query(2000, ge=1, le=20000),
 ):
-    """Search photos by any combination of date range, location, and people.
-    All supplied criteria combine with AND; person_mode controls whether
-    multiple people must appear in the *same* photo ('all') or any one of
-    them does ('any')."""
+    """Search photos by any combination of date range, location, people, camera,
+    folder, GPS accuracy, and whether a face was detected. All supplied criteria
+    combine with AND; person_mode controls whether multiple people must appear in
+    the *same* photo ('all') or any one of them does ('any')."""
     _validate_location(place_id, location_fields, nearby_m)
     pids: list[int] | None = _parse_person_ids(person_ids) if person_ids else None
 
@@ -64,6 +74,7 @@ async def api_search(
         date_from=date_from, date_to=date_to, bbox=bbox, location=location,
         person_ids=pids, person_mode=person_mode, geotagged=geotagged, limit=limit,
         place_id=place_id, nearby_m=nearby_m, location_fields=location_fields,
+        camera=camera, dir=dir, has_faces=has_faces, gps_accuracy=gps_accuracy, sort=sort,
     )
     return {"photos": [serializers.photo_to_dict(r) for r in rows], "total": len(rows)}
 

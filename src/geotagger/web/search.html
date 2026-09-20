@@ -50,6 +50,43 @@
       <option value="no">Not geotagged</option>
     </select>
   </div>
+  <div class="search-field">
+    <label for="camera-select">Camera</label>
+    <select id="camera-select">
+      <option value="">Any</option>
+    </select>
+  </div>
+  <div class="search-field">
+    <label for="folder-select">Folder</label>
+    <select id="folder-select">
+      <option value="">Any</option>
+    </select>
+  </div>
+  <div class="search-field">
+    <label for="gps-accuracy-select">GPS accuracy</label>
+    <select id="gps-accuracy-select">
+      <option value="all">Any</option>
+      <option value="precise">Precise only</option>
+      <option value="imprecise">Imprecise (radius) only</option>
+    </select>
+  </div>
+  <div class="search-field">
+    <label for="has-faces-select">Faces</label>
+    <select id="has-faces-select">
+      <option value="all">Any</option>
+      <option value="yes">Has faces</option>
+      <option value="no">No faces detected</option>
+    </select>
+  </div>
+  <div class="search-field">
+    <label for="sort-select">Sort</label>
+    <select id="sort-select">
+      <option value="date_asc">Date (oldest first)</option>
+      <option value="date_desc">Date (newest first)</option>
+      <option value="filename">Filename</option>
+      <option value="camera">Camera</option>
+    </select>
+  </div>
   <div class="search-field search-field-people">
     <label for="person-picker-input">People</label>
     <div id="person-chips"></div>
@@ -92,6 +129,10 @@
         <span id="search-summary"></span>
       </div>
       <div class="toolbar-spacer"></div>
+      <div class="toolbar-group" id="handoff-group" style="display:none">
+        <button id="open-geocode-btn" title="Open these results in Geocode for location tagging">📍 Open in Geocode</button>
+        <button id="open-people-btn" title="Open this person in People" style="display:none">🙂 Open in People</button>
+      </div>
       <div class="toolbar-group" id="selection-group" style="display:none">
         <span id="selection-count"></span>
         <button id="download-selected-btn" class="primary">⬇ Download ZIP</button>

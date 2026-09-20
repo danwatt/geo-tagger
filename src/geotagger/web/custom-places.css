@@ -233,12 +233,14 @@
 }
 .dialog-actions button:disabled { opacity: 0.5; cursor: default; }
 
-/* ── Circle edit handles ──
-   Two drag targets on the selected circle: round on the centre to move it,
-   square on the eastern edge to resize it. The shapes carry the meaning, so
-   they read differently at a glance even before the cursor changes. */
+/* ── Shape edit handles ──
+   Circle: round on the centre to move it, square on the eastern edge to resize
+   it. Rectangle: one square per corner, resizing around its diagonal opposite.
+   The shapes carry the meaning, so they read differently at a glance even
+   before the cursor changes. */
 .move-handle,
-.radius-handle {
+.radius-handle,
+.rect-handle {
   background: var(--accent);
   border: 2px solid #fff;
   box-shadow: 0 1px 4px rgba(0, 0, 0, .6);
@@ -247,10 +249,12 @@
   border-radius: 50%;
   cursor: move;
 }
-.radius-handle {
+.radius-handle,
+.rect-handle {
   border-radius: 3px;
-  cursor: ew-resize;
 }
+.radius-handle { cursor: ew-resize; }
+.rect-handle { cursor: nwse-resize; }
 
 .place-item-actions {
   display: flex;
@@ -259,29 +263,34 @@
   flex-wrap: wrap;
 }
 
-.place-item-actions button {
-  font-size: 12px;
-  padding: 3px 8px;
+/* Icons, not labels — the row already carries the name and photo count, so
+   these are just the actions, identified by a title tooltip on hover. */
+.place-item-actions button.icon-btn {
+  font-size: 13px;
+  padding: 3px 7px;
   border-radius: var(--radius);
   border: 1px solid var(--border-btn);
   background: var(--surface-input);
   color: var(--text);
   cursor: pointer;
+  line-height: 1;
 }
-.place-item-actions button:hover { background: var(--border-strong); }
-.place-item-actions .delete-btn { border-color: #833; color: #faa; }
+.place-item-actions button.icon-btn:hover { background: var(--border-strong); }
+.place-item-actions .delete-btn { border-color: #833; }
 .place-item-actions .delete-btn:hover { background: #511; }
 
-/* An <a> so it can be opened in a new tab, styled to sit in the button row. */
+/* An <a> so it can be opened in a new tab, styled to sit in the icon row. */
 .place-item-actions .photos-btn {
-  font-size: 12px;
-  padding: 3px 8px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 13px;
+  padding: 3px 7px;
   border-radius: var(--radius);
   border: 1px solid var(--accent);
   background: var(--accent-bg-2);
   color: var(--on-accent);
   text-decoration: none;
-  white-space: nowrap;
+  line-height: 1;
 }
 .place-item-actions .photos-btn:hover { background: var(--accent-bg); }
 
@@ -300,6 +309,16 @@
   pointer-events: none;
 }
 .leaflet-tooltip.place-label::before { display: none; }   /* drop the callout arrow */
+
+/* ── Suggested place banner ──
+   Reuses .hotspot-item's card but in accent blue, not hotspot amber — this is a
+   pointer at one specific spot worth naming, not a browsable list. */
+#suggest-place-banner {
+  margin: 0 12px 10px;
+  border-left-color: var(--accent);
+  cursor: default;
+}
+#suggest-place-banner:hover { border-color: var(--border-strong); }
 
 #no-places-hint {
   color: #666;

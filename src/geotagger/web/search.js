@@ -84,6 +84,42 @@ async function loadPersons() {
   }
 }
 
+/* ── Camera / folder facets ── */
+
+async function loadCameraFacet() {
+  try {
+    const res = await fetch("/api/search/cameras");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const { cameras } = await res.json();
+    const select = document.getElementById("camera-select");
+    cameras.forEach((cam) => {
+      const opt = document.createElement("option");
+      opt.value = cam;
+      opt.textContent = cam;
+      select.appendChild(opt);
+    });
+  } catch (e) {
+    // Facet is a convenience; leave it at "Any" if it can't load.
+  }
+}
+
+async function loadFolderFacet() {
+  try {
+    const res = await fetch("/api/photos/dirs?limit=5000");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const dirs = await res.json();
+    const select = document.getElementById("folder-select");
+    dirs.forEach((d) => {
+      const opt = document.createElement("option");
+      opt.value = d.dir;
+      opt.textContent = d.dir;
+      select.appendChild(opt);
+    });
+  } catch (e) {
+    // Same as above — the rest of the form still works without it.
+  }
+}
+
 function renderPersonChips() {
   const wrap = document.getElementById("person-chips");
   wrap.innerHTML = selectedPersons.map((p) => `
@@ -105,6 +141,7 @@ function renderPersonChips() {
 function updatePersonModeVisibility() {
   document.getElementById("person-mode-field").style.display =
     selectedPersons.length >= 2 ? "" : "none";
+  refreshHandoffUI();
   const untaggedField = document.getElementById("untagged-field");
   const untaggedBtn = document.getElementById("untagged-btn");
   if (selectedPersons.length === 0) {
@@ -173,6 +210,11 @@ function buildQuery() {
   const location = document.getElementById("location-input").value.trim();
   const geotagged = document.getElementById("geotagged-select").value;
   const personMode = document.getElementById("person-mode-select").value;
+  const camera = document.getElementById("camera-select").value;
+  const folder = document.getElementById("folder-select").value;
+  const gpsAccuracy = document.getElementById("gps-accuracy-select").value;
+  const hasFaces = document.getElementById("has-faces-select").value;
+  const sort = document.getElementById("sort-select").value;
 
   if (dateFrom) params.set("date_from", dateFrom);
   if (dateTo) params.set("date_to", dateTo);
@@ -185,6 +227,11 @@ function buildQuery() {
     params.set("location_fields", JSON.stringify(selectedLocation.fields));
   } else if (location) params.set("location", location);
   if (geotagged !== "all") params.set("geotagged", geotagged);
+  if (camera) params.set("camera", camera);
+  if (folder) params.set("dir", folder);
+  if (gpsAccuracy !== "all") params.set("gps_accuracy", gpsAccuracy);
+  if (hasFaces !== "all") params.set("has_faces", hasFaces);
+  if (sort !== "date_asc") params.set("sort", sort);
   if (selectedPersons.length > 0) {
     params.set("person_ids", selectedPersons.map((p) => p.id).join(","));
     params.set("person_mode", personMode);
@@ -212,10 +259,32 @@ async function runSearch() {
     buildHistogram();
     renderGrid();
     summary.textContent = `${data.total.toLocaleString()} photo${data.total === 1 ? "" : "s"} found`;
+    refreshHandoffUI();
     setStatus("");
   } catch (e) {
     setStatus(`Search failed: ${e.message}`, true);
   }
+}
+
+/* ── Handoff: send the current results into Geocode or People, so Search can
+ * act as the selection tool for the rest of the app instead of a dead end. ── */
+
+function refreshHandoffUI() {
+  const group = document.getElementById("handoff-group");
+  const peopleBtn = document.getElementById("open-people-btn");
+  group.style.display = resultsMode === "photos" && resultPhotos.length > 0 ? "" : "none";
+  peopleBtn.style.display = selectedPersons.length === 1 ? "" : "none";
+}
+
+function openInGeocode() {
+  const ids = (selectedIds.size > 0 ? [...selectedIds] : filteredPhotos.map((p) => p.id));
+  if (!ids.length) return;
+  window.location.href = `/geocode.html?ids=${ids.join(",")}`;
+}
+
+function openInPeople() {
+  if (selectedPersons.length !== 1) return;
+  window.location.href = `/people.html?person=${selectedPersons[0].id}`;
 }
 
 /* ── Untagged-face search: candidates where the searched people appear via an
@@ -799,6 +868,11 @@ function clearForm() {
   resetLocationPicker();
   document.getElementById("geotagged-select").value = "all";
   document.getElementById("person-mode-select").value = "all";
+  document.getElementById("camera-select").value = "";
+  document.getElementById("folder-select").value = "";
+  document.getElementById("gps-accuracy-select").value = "all";
+  document.getElementById("has-faces-select").value = "all";
+  document.getElementById("sort-select").value = "date_asc";
   selectedPersons = [];
   renderPersonChips();
   updatePersonModeVisibility();
@@ -808,6 +882,7 @@ function clearForm() {
   untaggedCandidates = [];
   histBuckets = [];
   document.getElementById("timeline").style.display = "none";
+  document.getElementById("handoff-group").style.display = "none";
   selectedIds.clear();
   refreshSelectionUI();
   showPlaceholder();
@@ -1000,6 +1075,8 @@ document.getElementById("untagged-btn").addEventListener("click", runUntaggedSea
 document.getElementById("clear-btn").addEventListener("click", clearForm);
 document.getElementById("download-selected-btn").addEventListener("click", downloadSelected);
 document.getElementById("clear-selection-btn").addEventListener("click", clearSelection);
+document.getElementById("open-geocode-btn").addEventListener("click", openInGeocode);
+document.getElementById("open-people-btn").addEventListener("click", openInPeople);
 document.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && document.activeElement &&
       document.activeElement.id !== "person-picker-input") {
@@ -1036,5 +1113,7 @@ wirePersonPicker();
 wireLocationPicker();
 wireDateRangePicker();
 loadPersons();
+loadCameraFacet();
+loadFolderFacet();
 bindTimeline();
 applyPlaceIdFromUrl();
