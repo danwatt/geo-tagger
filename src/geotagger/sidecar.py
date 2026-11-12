@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from geotagger.config import SIDECAR_MODE
-from geotagger.exiftool_session import get_et
+from geotagger.exiftool_session import get_et, get_et_lock
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,8 @@ def read_orientations(paths: list) -> dict[Path, int]:
     if not paths:
         return {}
     et = get_et()
-    result = et.get_tags([str(p) for p in paths], tags=["EXIF:Orientation#"])
+    with get_et_lock():
+        result = et.get_tags([str(p) for p in paths], tags=["EXIF:Orientation#"])
     by_path = {Path(r["SourceFile"]): _coerce_orientation(r.get("EXIF:Orientation"))
                for r in result}
     # Fill in anything ExifTool didn't return (e.g. it skipped an unreadable file).
@@ -69,10 +70,14 @@ def read_metadata(image_path: Path) -> dict:
     # correction written by write_datetime/Time Sync — the original file is
     # never touched, so this is the only place such a correction lives).
     if sc.exists():
-        result = et.get_tags([str(sc)], tags=[
-            "XMP:GPSLatitude", "XMP:GPSLongitude", "XMP:GPSHPositioningError",
-            "XMP:DateTimeOriginal",
-        ])
+        # Lock each native call, not the whole function: scan workers call this
+        # concurrently, and two threads interleaving on the shared -stay_open
+        # pipe deadlock each other.
+        with get_et_lock():
+            result = et.get_tags([str(sc)], tags=[
+                "XMP:GPSLatitude", "XMP:GPSLongitude", "XMP:GPSHPositioningError",
+                "XMP:DateTimeOriginal",
+            ])
         if result:
             row = result[0]
             _lat = row.get("XMP:GPSLatitude")
@@ -89,17 +94,18 @@ def read_metadata(image_path: Path) -> dict:
 
     # Read embedded GPS + camera in one targeted call — cheaper than pulling
     # every tag, since only these fields are ever extracted from it.
-    result = et.get_tags([str(image_path)], tags=[
-        "Composite:GPSLatitude", "Composite:GPSLongitude",
-        "GPS:GPSLatitude", "GPS:GPSLongitude",
-        "EXIF:Make", "EXIF:Model",
-        "QuickTime:Make", "QuickTime:Model",
-        "EXIF:DateTimeOriginal", "QuickTime:CreateDate",
-        "XMP:DateTimeOriginal",
-        "EXIF:GPSHPositioningError",
-        "XMP:GPSHPositioningError",
-        "EXIF:Orientation#",  # '#' → numeric 1..8 rather than "Rotate 90 CW"
-    ])
+    with get_et_lock():
+        result = et.get_tags([str(image_path)], tags=[
+            "Composite:GPSLatitude", "Composite:GPSLongitude",
+            "GPS:GPSLatitude", "GPS:GPSLongitude",
+            "EXIF:Make", "EXIF:Model",
+            "QuickTime:Make", "QuickTime:Model",
+            "EXIF:DateTimeOriginal", "QuickTime:CreateDate",
+            "XMP:DateTimeOriginal",
+            "EXIF:GPSHPositioningError",
+            "XMP:GPSHPositioningError",
+            "EXIF:Orientation#",  # '#' → numeric 1..8 rather than "Rotate 90 CW"
+        ])
     row = result[0] if result else {}
 
     if source == "none":
@@ -176,7 +182,8 @@ def write_gps(image_path: Path, lat: float, lng: float, location: dict | None = 
 
     if location is not None:
         args += _location_args(location)
-    et.execute(*args, str(sc))
+    with get_et_lock():
+        et.execute(*args, str(sc))
 
     # Log the change
     acc_log = f" (accuracy: {gps_accuracy}m)" if gps_accuracy and gps_accuracy > 0 else ""
@@ -194,7 +201,8 @@ def write_location(image_path: Path, location: dict) -> Path:
     sidecar path."""
     et = get_et()
     sc = sidecar_path(image_path)
-    et.execute("-overwrite_original", *_location_args(location), str(sc))
+    with get_et_lock():
+        et.execute("-overwrite_original", *_location_args(location), str(sc))
     logger.info(
         f"Wrote location to {sc.name}: "
         f"{location.get('city')}, {location.get('state')}, {location.get('country')}"
@@ -211,15 +219,16 @@ def remove_gps(image_path: Path) -> Path:
     sc = sidecar_path(image_path)
     if sc.exists():
         # Clear coordinates, accuracy and the derived place names together.
-        et.execute(
-            "-overwrite_original",
-            "-XMP:GPSLatitude=",
-            "-XMP:GPSLongitude=",
-            "-XMP:GPSHPositioningError=",
-            "-GPSHPositioningError=",
-            *_location_args(None),
-            str(sc),
-        )
+        with get_et_lock():
+            et.execute(
+                "-overwrite_original",
+                "-XMP:GPSLatitude=",
+                "-XMP:GPSLongitude=",
+                "-XMP:GPSHPositioningError=",
+                "-GPSHPositioningError=",
+                *_location_args(None),
+                str(sc),
+            )
 
     # Log the removal
     if old_lat is not None and old_lng is not None:
@@ -242,11 +251,12 @@ def write_datetime(image_path: Path, timestamp: int) -> Path:
 
     et = get_et()
     sc = sidecar_path(image_path)
-    et.execute(
-        "-overwrite_original",
-        f"-XMP:DateTimeOriginal={exif_datetime}",
-        str(sc),
-    )
+    with get_et_lock():
+        et.execute(
+            "-overwrite_original",
+            f"-XMP:DateTimeOriginal={exif_datetime}",
+            str(sc),
+        )
 
     # Log the change
     if old_ts and old_ts != 0:
