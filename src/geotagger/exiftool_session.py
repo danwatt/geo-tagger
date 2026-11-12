@@ -5,7 +5,12 @@ from geotagger import config
 
 _et: exiftool.ExifToolHelper | None = None
 _et_error: str | None = None
-_et_lock = threading.Lock()
+# Reentrant: the -stay_open session is a single request/response pipe, so EVERY
+# native call from a worker thread must hold this. sidecar.py takes it around each
+# call internally, and some callers (e.g. geocode_service.export_to_sidecars) also
+# hold it around a whole sidecar.write_gps() — which itself reads metadata — so a
+# plain Lock would self-deadlock on that nesting.
+_et_lock = threading.RLock()
 
 
 def get_et() -> exiftool.ExifToolHelper:
@@ -16,8 +21,10 @@ def get_et() -> exiftool.ExifToolHelper:
     return _et
 
 
-def get_et_lock() -> threading.Lock:
-    """Get the lock for thread-safe ExifTool access."""
+def get_et_lock() -> threading.RLock:
+    """Get the (reentrant) lock for thread-safe ExifTool access. Hold it around
+    every native call on the shared session: unserialized concurrent calls
+    interleave on the pipe and leave both readers blocked forever."""
     return _et_lock
 
 
