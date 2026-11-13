@@ -1300,7 +1300,7 @@ function updateDateLabels() {
 function fmtDate(ts) {
   if (!ts) return "";
   const d = new Date(ts * 1000);
-  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
 }
 
 function applyTimelineFilter() {

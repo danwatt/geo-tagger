@@ -73,6 +73,10 @@ function initTimeline() {
     multiselect: true,
     selectable: true,
     snap: null,
+    // photo_datetime is the camera's wall clock stored as a UTC epoch, so the
+    // axis must render in UTC — the browser's zone would shift every label
+    // (and the day boundaries) by the local offset.
+    moment: (date) => vis.moment(date).utc(),
     editable: {
       updateTime: false,
       updateGroup: false,
@@ -293,7 +297,7 @@ function updateHistLabels() {
   const formatDate = (ts) => {
     if (ts === 0) return "";
     const d = new Date(ts * 1000);
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
   };
   document.getElementById("hist-label-lo").textContent = formatDate(dateFilterLo);
   document.getElementById("hist-label-hi").textContent = formatDate(dateFilterHi);
@@ -513,9 +517,11 @@ function updateDetailPane() {
 
   const table = document.getElementById("detail-meta");
   const offset = appliedOffsets[photo.id] || 0;
-  const originalTime = photo.photo_datetime ? new Date(photo.photo_datetime * 1000).toLocaleString() : "Unknown";
+  // Wall clock stored as a UTC epoch: format in UTC, not the browser's zone.
+  const wallClock = (ts) => new Date(ts * 1000).toLocaleString(undefined, { timeZone: "UTC" });
+  const originalTime = photo.photo_datetime ? wallClock(photo.photo_datetime) : "Unknown";
   const adjustedTime = offset !== 0 && photo.photo_datetime
-    ? new Date((photo.photo_datetime + offset) * 1000).toLocaleString()
+    ? wallClock(photo.photo_datetime + offset)
     : originalTime;
 
   table.innerHTML = `
