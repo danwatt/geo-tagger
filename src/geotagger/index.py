@@ -60,6 +60,12 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     _db_path = cache_dir / "index.db"
     _db = sqlite3.connect(str(_db_path), check_same_thread=False, factory=TimedConnection)
     _db.row_factory = sqlite3.Row
+    # Registered once per connection, here and nowhere else. The connection is
+    # shared across threads, and SQLite refuses to redefine a user function while
+    # any statement on it is still active, so registering per query raised
+    # "Error creating function" whenever another cursor was mid-iteration.
+    from geotagger.search_locations import place_distance
+    _db.create_function("search_place_distance", 4, place_distance, deterministic=True)
     _db.execute("PRAGMA journal_mode=WAL")
     # 64 MB page cache — default 2 MB is far too small for 93K embedding blobs.
     # Negative value = kibibytes; positive = pages (4 KB each).
@@ -893,12 +899,11 @@ def search_photos(date_from: str | None = None, date_to: str | None = None,
         except ValueError:
             pass
 
-    from geotagger.search_locations import parse_fields, place_distance
+    from geotagger.search_locations import parse_fields
     for field, value in parse_fields(location_fields).items():
         clauses.append(f"COALESCE({field}, '') = ? COLLATE NOCASE")
         params.append(value)
     if place_id is not None:
-        db.create_function("search_place_distance", 4, place_distance, deterministic=True)
         clauses.append("EXISTS (SELECT 1 FROM places WHERE places.id = ? "
                        "AND search_place_distance(photos.lat, photos.lng, places.type, places.bounds) <= ?)")
         params.extend([place_id, nearby_m])
@@ -1180,9 +1185,8 @@ def get_place_stats() -> dict[int, dict]:
     /api/geotag/guess make one photo at a time. The untagged timestamp array is
     fetched once and reused across every place rather than requeried per place.
     """
-    from geotagger.search_locations import place_bbox, place_distance
+    from geotagger.search_locations import place_bbox
     db = get_db()
-    db.create_function("search_place_distance", 4, place_distance, deterministic=True)
 
     untagged_times = [r["photo_datetime"] for r in db.execute("""
         SELECT photo_datetime FROM photos

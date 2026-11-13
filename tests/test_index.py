@@ -465,3 +465,22 @@ class TestGeotagGeneration:
         index.set_geocode_ignored([pid], True)
         index.assign_approximate_date(pid, 946684800, "year", None, None)
         assert index.geotag_generation() == gen
+
+
+class TestPlaceSearchWithOpenCursor:
+    """search_place_distance is registered once on the shared connection (init_db).
+    Registering it per query raised "Error creating function" while another
+    statement on the connection was still active, e.g. a cursor left partly read."""
+
+    def test_place_queries_work_while_another_cursor_is_open(self, db):
+        for i in range(3):
+            _upsert(db, path=f"in{i}.jpg", lat=40.0 + i * 1e-4, lng=-75.0, photo_datetime=100 + i)
+        _upsert(db, path="far.jpg", lat=41.0, lng=-75.0, photo_datetime=200)
+        pid = index.create_place("Home", "circle", '{"lat":40.0,"lng":-75.0,"radius":1000}')
+
+        cur = db.execute("SELECT id FROM photos ORDER BY id")
+        cur.fetchone()  # leave the statement active, with rows still pending
+
+        rows = index.search_photos(place_id=pid, nearby_m=0)
+        assert sorted(r["filename"] for r in rows) == ["in0.jpg", "in1.jpg", "in2.jpg"]
+        assert index.get_place_stats()[pid]["photo_count"] == 3
