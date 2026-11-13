@@ -515,3 +515,108 @@ class TestPlaceSearchWithOpenCursor:
         rows = index.search_photos(place_id=pid, nearby_m=0)
         assert sorted(r["filename"] for r in rows) == ["in0.jpg", "in1.jpg", "in2.jpg"]
         assert index.get_place_stats()[pid]["photo_count"] == 3
+
+
+class TestSpatialTriggers:
+    """photos_spatial_update is scoped to UPDATE OF lat, lng: the R*Tree only
+    holds coordinates, so other writes (face scans, checksums, dates) must not
+    touch it. Coordinate moves in all three directions must still keep it in sync."""
+
+    OLD_UPDATE_TRIGGER = """
+        CREATE TRIGGER photos_spatial_update AFTER UPDATE ON photos
+        BEGIN
+            DELETE FROM photos_spatial WHERE id = OLD.id;
+            INSERT INTO photos_spatial (id, min_lat, max_lat, min_lng, max_lng)
+            SELECT NEW.id, NEW.lat, NEW.lat, NEW.lng, NEW.lng
+            WHERE NEW.lat IS NOT NULL AND NEW.lng IS NOT NULL;
+        END
+    """
+
+    def _pid(self, db):
+        return db.execute("SELECT id FROM photos WHERE filename='p1.jpg'").fetchone()[0]
+
+    def _rtree_row(self, db, pid):
+        return db.execute(
+            "SELECT min_lat, max_lat, min_lng, max_lng FROM photos_spatial WHERE id=?", (pid,)
+        ).fetchone()
+
+    def test_trigger_is_scoped_to_coordinates(self, db):
+        sql = db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='photos_spatial_update'"
+        ).fetchone()["sql"]
+        assert "AFTER UPDATE OF lat, lng ON photos" in sql
+
+    def test_value_to_value_moves_rtree_entry(self, db):
+        _upsert(db, lat=40.0, lng=-75.0)
+        index.update_geotag(self._pid(db), 41.0, -74.0, "sidecar", "p1.xmp", 1.0)
+        assert tuple(self._rtree_row(db, self._pid(db))) == (41.0, 41.0, -74.0, -74.0)
+        assert [r["filename"] for r in index.get_photos(bbox="-75,39.5,-73.5,40.5")] == []
+        assert [r["filename"] for r in index.get_photos(bbox="-75,40.5,-73.5,41.5")] == ["p1.jpg"]
+
+    def test_null_to_value_adds_rtree_entry(self, db):
+        _upsert(db)
+        pid = self._pid(db)
+        assert self._rtree_row(db, pid) is None
+        index.update_geotag(pid, 40.0, -75.0, "sidecar", "p1.xmp", 1.0)
+        assert tuple(self._rtree_row(db, pid)) == (40.0, 40.0, -75.0, -75.0)
+
+    def test_value_to_null_removes_rtree_entry(self, db):
+        _upsert(db, lat=40.0, lng=-75.0)
+        pid = self._pid(db)
+        index.update_geotag(pid, None, None, "none", "p1.xmp", 1.0)
+        assert self._rtree_row(db, pid) is None
+        assert index.get_photos(bbox="-76,39,-74,41") == []
+
+    def test_upsert_coordinate_change_syncs_rtree(self, db):
+        _upsert(db, lat=40.0, lng=-75.0)
+        _upsert(db, lat=41.0, lng=-75.0, mtime=2000.0)
+        assert tuple(self._rtree_row(db, self._pid(db))) == (41.0, 41.0, -75.0, -75.0)
+
+    def test_unrelated_update_does_not_write_rtree(self, db):
+        _upsert(db, lat=40.0, lng=-75.0)
+        pid = self._pid(db)
+        before = tuple(self._rtree_row(db, pid))
+        statements = []
+        db.set_trace_callback(statements.append)
+        try:
+            index.set_checksums([("abc123", pid)])
+            index.set_orientations([(6, pid)])
+        finally:
+            db.set_trace_callback(None)
+        assert any("UPDATE photos" in s for s in statements)  # the write did run
+        assert not any("photos_spatial" in s for s in statements)
+        assert tuple(self._rtree_row(db, pid)) == before
+
+    def test_migrates_old_trigger_form(self, db, tmp_path):
+        """An install from before the UPDATE OF change has the broad trigger;
+        CREATE TRIGGER IF NOT EXISTS would leave it in place, so init_db must
+        replace it."""
+        _upsert(db, lat=40.0, lng=-75.0)
+        db_path = index._db_path
+        index.close_db()
+
+        raw = sqlite3.connect(str(db_path))
+        raw.execute("DROP TRIGGER photos_spatial_update")
+        raw.execute(self.OLD_UPDATE_TRIGGER)
+        raw.commit()
+        raw.close()
+
+        db = index.init_db(tmp_path)
+        try:
+            sql = db.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='photos_spatial_update'"
+            ).fetchone()["sql"]
+            assert "UPDATE OF lat, lng" in sql
+
+            # Second run is a no-op on the migrated schema.
+            index.init_db(tmp_path)
+            assert db.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='photos_spatial_update'"
+            ).fetchone()["sql"] == sql
+
+            # Spatial sync still works after the migration.
+            pid = self._pid(db)
+            index.update_geotag(pid, 41.0, -74.0, "sidecar", "p1.xmp", 1.0)
+            assert tuple(self._rtree_row(db, pid)) == (41.0, 41.0, -74.0, -74.0)
+        finally:
+            index.close_db()

@@ -363,7 +363,7 @@ names. No archive is extracted to disk. Download URLs are fixed HTTPS constants.
 `scanning.py:18,31`, `scanner.py:20-22`. `rglob("*")` runs twice and filters `.geotagger` only after enumeration.
 *Fix:* one `os.walk` that prunes the cache directory.
 
-**P3 — Medium — `photos_spatial_update` fires on every UPDATE of `photos`** [seen]
+**P3 — Medium — `photos_spatial_update` fires on every UPDATE of `photos`** [seen] — ✅ **Done** (`AFTER UPDATE OF lat, lng`, old trigger dropped and recreated in `init_db`)
 `index.py:448`. No column list, so every face-scan, checksum or date write does an R*Tree delete and insert.
 *Fix:* recreate as `AFTER UPDATE OF lat, lng`.
 

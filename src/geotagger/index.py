@@ -583,9 +583,21 @@ def _init_db_locked(root: Path | None) -> sqlite3.Connection:
         END
     """)
 
-    # Update trigger
+    # Update trigger. Scoped to lat/lng, the only photos columns the R*Tree holds
+    # (the body reads just NEW.id/NEW.lat/NEW.lng and OLD.id; id is never
+    # updated). Unscoped, it delete+inserted an rtree row on every UPDATE of
+    # photos: face scans, checksums, date writes.
+    # IF NOT EXISTS won't replace the broad trigger an earlier install created,
+    # so drop that form first. Idempotent: once the SQL says UPDATE OF it's a
+    # no-op. This runs after the repair UPDATE above, which has already opened
+    # the pending transaction, so a failure rolls back with init_db.
+    _old_update_trigger = _db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='photos_spatial_update'"
+    ).fetchone()
+    if _old_update_trigger is not None and "UPDATE OF" not in _old_update_trigger["sql"].upper():
+        _db.execute("DROP TRIGGER photos_spatial_update")
     _db.execute("""
-        CREATE TRIGGER IF NOT EXISTS photos_spatial_update AFTER UPDATE ON photos
+        CREATE TRIGGER IF NOT EXISTS photos_spatial_update AFTER UPDATE OF lat, lng ON photos
         BEGIN
             DELETE FROM photos_spatial WHERE id = OLD.id;
             INSERT INTO photos_spatial (id, min_lat, max_lat, min_lng, max_lng)
