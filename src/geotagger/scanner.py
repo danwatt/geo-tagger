@@ -1,6 +1,7 @@
 import hashlib
+import os
 from pathlib import Path
-from geotagger.config import ALL_EXTENSIONS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, CACHE_DIR_NAME
+from geotagger.config import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, CACHE_DIR_NAME
 
 
 def file_checksum(path: Path, _chunk: int = 1 << 20) -> str:
@@ -15,26 +16,68 @@ def file_checksum(path: Path, _chunk: int = 1 << 20) -> str:
     return h.hexdigest()
 
 
+def walk_media(root: Path, cancel=None):
+    """Yield (path, media_type, xmp_names) for every supported file under root, in
+    ONE tree walk that never enters the cache directory.
+
+    The old rglob("*") enumerated everything under .geotagger (the thumbnail cache,
+    easily hundreds of thousands of small files) and only then discarded it, and it
+    ran twice per scan. Here the directory is pruned before it is listed.
+
+    `xmp_names` is the casefolded set of .xmp file names in the file's own
+    directory (shared by every file there). Callers use it as a cheap negative
+    test for "this file has no sidecar", saving a stat per file; a casefolded
+    miss is a miss on case-insensitive filesystems too, so only a hit still needs
+    the real stat.
+
+    Like rglob it lists symlinks (a link to a media file is yielded) but never
+    descends into a symlinked directory, and an unreadable directory is skipped,
+    not fatal. `cancel` is checked once per directory so a cancelled scan stops
+    walking promptly."""
+    stack = [str(root)]
+    while stack:
+        if cancel is not None and cancel.is_set():
+            return
+        dir_path = stack.pop()
+        files: list[tuple[str, str]] = []  # (path, ext) of media candidates
+        xmp: set[str] = set()
+        try:
+            with os.scandir(dir_path) as it:
+                for entry in it:
+                    name = entry.name
+                    if name == CACHE_DIR_NAME:
+                        continue  # prune: never list the cache dir's contents
+                    try:
+                        is_dir = entry.is_dir(follow_symlinks=False)
+                    except OSError:
+                        is_dir = False
+                    if is_dir:
+                        stack.append(entry.path)
+                        continue
+                    ext = os.path.splitext(name)[1].lower()
+                    if ext == ".xmp":
+                        xmp.add(name.casefold())
+                    elif ext in IMAGE_EXTENSIONS or ext in VIDEO_EXTENSIONS:
+                        files.append((entry.path, ext))
+        except OSError:
+            continue  # PermissionError etc.: skip this directory, keep walking
+        xmp_names = frozenset(xmp)
+        for path, ext in files:
+            yield Path(path), ("image" if ext in IMAGE_EXTENSIONS else "video"), xmp_names
+
+
 def iter_media(root: Path):
     """Yield (path, media_type) for all supported files under root."""
-    for p in root.rglob("*"):
-        # Skip cache dir and sidecar files
-        if CACHE_DIR_NAME in p.parts:
-            continue
-        if p.suffix.lower() == ".xmp":
-            continue
-        ext = p.suffix.lower()
-        if ext in IMAGE_EXTENSIONS:
-            yield p, "image"
-        elif ext in VIDEO_EXTENSIONS:
-            yield p, "video"
+    for p, media_type, _ in walk_media(root):
+        yield p, media_type
 
 
-def detect_sidecar_collisions(root: Path) -> list[str]:
-    """Warn about files sharing a basename.xmp sidecar in the same directory."""
+def find_sidecar_collisions(media: list[tuple[Path, str]]) -> list[str]:
+    """Warn about image files sharing a basename.xmp sidecar in the same directory.
+    Takes an already-walked (path, media_type) list so a scan doesn't walk twice."""
     from collections import defaultdict
     stem_map: dict[Path, list[Path]] = defaultdict(list)
-    for p, _ in iter_media(root):
+    for p, _ in media:
         if p.suffix.lower() not in IMAGE_EXTENSIONS:
             continue
         stem_map[p.parent / p.stem].append(p)
@@ -46,3 +89,7 @@ def detect_sidecar_collisions(root: Path) -> list[str]:
                 f"Sidecar collision: {names} in {stem_path.parent} share {stem_path.name}.xmp"
             )
     return warnings
+
+
+def detect_sidecar_collisions(root: Path) -> list[str]:
+    return find_sidecar_collisions([(p, t) for p, t in iter_media(root)])

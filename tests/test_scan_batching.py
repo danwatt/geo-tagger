@@ -254,3 +254,45 @@ class TestBatchedWrites:
         assert len(_indexed_names(db)) == 4
         assert len(fake_meta) < 10  # queued files were dropped, not all processed
         assert not db.in_transaction
+
+
+class TestSingleWalk:
+    @pytest.mark.parametrize("mode", ["basename", "fullname"])
+    def test_sidecars_resolved_from_listing_in_both_modes(self, db, lib, fake_meta, monkeypatch, mode):
+        monkeypatch.setattr(sidecar, "SIDECAR_MODE", mode)
+        (lib / "sub").mkdir()
+        (lib / "a.jpg").write_bytes(b"a")
+        (lib / "b.jpg").write_bytes(b"b")  # no sidecar
+        (lib / "sub" / "c.jpg").write_bytes(b"c")
+        names = {"basename": ["a.xmp", "sub/c.xmp"], "fullname": ["a.jpg.xmp", "sub/c.jpg.xmp"]}[mode]
+        for rel in names:
+            (lib / rel).write_bytes(b"x")
+        # A basename-style sidecar must not count for b.jpg in fullname mode.
+        (lib / "b.xmp").write_bytes(b"x")
+        _scan(lib)
+        rows = {r["filename"]: r["sidecar_path"]
+                for r in db.execute("SELECT filename, sidecar_path FROM photos")}
+        expected_b = "b.xmp" if mode == "basename" else None
+        assert rows == {"a.jpg": names[0], "b.jpg": expected_b, "c.jpg": names[1].split("/")[1]}
+
+    def test_cache_dir_media_is_never_indexed_or_listed(self, db, lib, fake_meta, monkeypatch):
+        import os
+        _make_files(lib, 3)
+        (lib / ".geotagger" / "thumbs").mkdir(parents=True)
+        (lib / ".geotagger" / "thumbs" / "sentinel.jpg").write_bytes(b"s")
+        listed = []
+        real = os.scandir
+        monkeypatch.setattr(os, "scandir", lambda p: (listed.append(os.fspath(p)), real(p))[1])
+        _scan(lib)
+        assert "sentinel.jpg" not in _indexed_names(db)
+        assert not any(".geotagger" in d for d in listed)
+        assert len(listed) == 2  # root + d0: the tree is walked exactly once
+
+    def test_rescan_of_indexed_tree_is_all_fresh(self, db, lib, fake_meta):
+        _make_files(lib, 5, subdirs=2)
+        (lib / "d0" / "p0.xmp").write_bytes(b"x")
+        _scan(lib)
+        fake_meta.clear()
+        count, skipped, _ = _scan(lib)
+        assert (count, skipped) == (0, 5)
+        assert fake_meta == []

@@ -161,7 +161,7 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
     # total stays 0 until the file walk below finishes (the UI shows "counting files").
     _update_scan_state(root=str(root), processed=0, total=0, indexed=0, skipped=0)
 
-    warnings = scanner.detect_sidecar_collisions(root)
+    warnings: list[str] = []
     count = 0
     skipped = 0
     total_processed = 0
@@ -179,20 +179,37 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
     # Track what each worker is processing
     worker_status = {}  # worker_id -> (filename, stage)
 
+    # ONE walk (it prunes the cache dir) feeds both the collision check and the
+    # work list; these used to be two rglob passes over the whole tree.
     # Collect all files first so we can process them with a thread pool
     files_to_process = []
-    for p, media_type in scanner.iter_media(root):
+    media: list[tuple[Path, str]] = []
+    read_errors: list[str] = []
+    for p, media_type, xmp_names in scanner.walk_media(root, cancel=cancel):
         if cancelled():
             break
+        media.append((p, media_type))
         try:
+            # Path.stat(), not the walk's DirEntry.stat(): on NTFS the directory
+            # listing can carry a stale mtime/size for a recently written file, and
+            # the freshness check compares against these values.
             stat = p.stat()
             sc = sidecar.sidecar_path(p)
-            sc_mtime = sc.stat().st_mtime if sc.exists() else None
+            sc_mtime = None
+            # The directory listing already says which .xmp names exist, so most
+            # files (no sidecar) cost no sidecar stat at all.
+            if sc.name.casefold() in xmp_names:
+                try:
+                    sc_mtime = sc.stat().st_mtime
+                except OSError:  # vanished / dangling link: same as "no sidecar"
+                    sc_mtime = None
             # Filename only — the sidecar always sits next to the image (same `dir`).
-            sc_path_str = sc.name if sc.exists() else None
+            sc_path_str = sc.name if sc_mtime is not None else None
             files_to_process.append((p, media_type, stat, sc_path_str, sc_mtime))
         except Exception as e:
-            warnings.append(f"Error reading {p.name}: {e}")
+            read_errors.append(f"Error reading {p.name}: {e}")
+    warnings.extend(scanner.find_sidecar_collisions(media))
+    warnings.extend(read_errors)
 
     _update_scan_state(total=len(files_to_process))
 

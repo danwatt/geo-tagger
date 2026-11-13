@@ -359,7 +359,7 @@ names. No archive is extracted to disk. Download URLs are fixed HTTPS constants.
 `index.py:626`, `scanning.py:88`. `upsert_photo` commits per row at the default `synchronous=FULL`.
 *Fix:* `PRAGMA synchronous=NORMAL`, preload existing rows in one query, batch commits.
 
-**P2 — Medium — Two full tree walks that descend into the thumbnail cache** [traced]
+**P2 — Medium — Two full tree walks that descend into the thumbnail cache** [traced] — ✅ **Done** (`scanner.walk_media`: one pruned `os.scandir` walk; 2k files + 50k cache files: ~500 ms → ~6 ms)
 `scanning.py:18,31`, `scanner.py:20-22`. `rglob("*")` runs twice and filters `.geotagger` only after enumeration.
 *Fix:* one `os.walk` that prunes the cache directory.
 
