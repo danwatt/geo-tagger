@@ -1,5 +1,8 @@
 import hashlib
 import io
+import os
+import threading
+import uuid
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -34,6 +37,53 @@ def _get_thumbs_dir() -> Path:
 
 def _cache_key(path: Path, mtime: float, size: int) -> str:
     return hashlib.sha1(f"{path}:{mtime}:{size}".encode()).hexdigest()
+
+
+# ── Atomic cache I/O ──
+
+def _read_cached(cached: Path) -> bytes | None:
+    """Bytes of a cache hit, or None for a miss. A zero-length file counts as a miss
+    (a truncated leftover from a crash or an old non-atomic write would otherwise be
+    served forever, since the cache key never changes), as does any OS error reading it."""
+    try:
+        data = cached.read_bytes()
+    except OSError:
+        return None
+    return data or None
+
+
+def _cache_present(cached: Path) -> bool:
+    """Cheap existence check (stat, no read) with the same zero-length-is-a-miss rule."""
+    try:
+        return cached.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _write_cached(cached: Path, data: bytes) -> None:
+    """Write a cache file atomically: temp sibling then ``os.replace``, so a concurrent
+    reader sees either no file or the complete one, never a partial write.
+
+    The temp name is unique per writer (pid + thread + uuid) so two threads generating the
+    same rendition don't clobber each other's temp. It keeps the ``{key}_`` prefix (so
+    ``invalidate_photo_cache`` sweeps stray temps) but ends in ``.tmp``, so it can never
+    equal a real cache filename. On Windows ``os.replace`` raises PermissionError if a
+    reader has the destination open at that instant; that (or the temp having been swept
+    away) means someone else's complete file is already in place, so it is not an error.
+    """
+    tmp = cached.with_name(
+        f"{cached.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_bytes(data)
+        try:
+            os.replace(tmp, cached)
+        except (PermissionError, FileNotFoundError):
+            pass  # lost a race; finally below removes our temp if it's still there
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass  # already renamed into place (normal) or swept
 
 
 # ── Rendition encoding (one place, so format is switchable) ──
@@ -296,7 +346,7 @@ def thumbnail_exists(path: Path, mtime: float, size: int) -> bool:
         key = _cache_key(path, mtime, size)
         subdir = thumbs / key[:2]
         cached = subdir / (key + "_thumb" + cache_ext())
-        return cached.exists()
+        return _cache_present(cached)
     except Exception:
         return False
 
@@ -313,7 +363,7 @@ def face_crop_exists(path: Path, mtime: float, size: int,
         key = _cache_key(path, mtime, size)
         subdir = thumbs / key[:2]
         cached = subdir / f"{key}_face_{bbox_key}{_fd_suffix(path)}{_orient_suffix(orientation)}{cache_ext()}"
-        return cached.exists()
+        return _cache_present(cached)
     except Exception:
         return False
 
@@ -334,8 +384,11 @@ def invalidate_photo_cache(path: Path, mtime: float, size: int) -> int:
     if not subdir.exists():
         return 0
     removed = 0
-    for f in subdir.glob(f"{key}_*"):
-        f.unlink()
+    for f in subdir.glob(f"{key}_*"):  # also matches in-flight/leftover ``.tmp`` files
+        try:
+            f.unlink()
+        except FileNotFoundError:
+            continue  # a writer just renamed/removed its temp
         removed += 1
     return removed
 
@@ -349,11 +402,12 @@ def get_thumbnail(path: Path, mtime: float, size: int,
     subdir = thumbs / key[:2]
     subdir.mkdir(exist_ok=True)
     cached = subdir / f"{key}_thumb{_orient_suffix(orientation)}{cache_ext()}"
-    if cached.exists():
-        return cached.read_bytes()
+    hit = _read_cached(cached)
+    if hit is not None:
+        return hit
     is_video = path.suffix.lower() in VIDEO_EXTENSIONS
     data = _make_thumbnail(path, THUMB_SIZE, is_video=is_video, orientation=orientation)
-    cached.write_bytes(data)
+    _write_cached(cached, data)
     return data
 
 
@@ -379,7 +433,7 @@ def rebuild_preview_from_full_decode(path: Path, mtime: float, size: int) -> byt
     is_raw = path.suffix.lower() in config.RAW_EXTENSIONS
     data = _make_thumbnail(path, PREVIEW_SIZE, full_decode=is_raw)
     cached = subdir / f"{key}_preview{_fd_suffix(path)}{cache_ext()}"
-    cached.write_bytes(data)
+    _write_cached(cached, data)
     return data
 
 
@@ -403,12 +457,13 @@ def get_preview(path: Path, mtime: float, size: int,
     subdir.mkdir(exist_ok=True)
     fd = _fd_suffix(path)
     cached = subdir / f"{key}_preview{fd}{cache_ext()}"
-    if cached.exists():
-        return cached.read_bytes()
+    hit = _read_cached(cached)
+    if hit is not None:
+        return hit
     is_video = path.suffix.lower() in VIDEO_EXTENSIONS
     data = _make_thumbnail(path, PREVIEW_SIZE, is_video=is_video, orientation=orientation,
                            full_decode=bool(fd), sensor_space=True)
-    cached.write_bytes(data)
+    _write_cached(cached, data)
     return data
 
 
@@ -426,12 +481,13 @@ def get_preview_oriented(path: Path, mtime: float, size: int,
     subdir = thumbs / key[:2]
     subdir.mkdir(exist_ok=True)
     cached = subdir / f"{key}_preview{_fd_suffix(path)}_o{orientation}{cache_ext()}"
-    if cached.exists():
-        return cached.read_bytes()
+    hit = _read_cached(cached)
+    if hit is not None:
+        return hit
     img = Image.open(io.BytesIO(get_preview(path, mtime, size, orientation))).convert("RGB")
     img = apply_orientation(img, orientation)
     data = _encode(img)
-    cached.write_bytes(data)
+    _write_cached(cached, data)
     return data
 
 
@@ -488,8 +544,9 @@ def get_face_crop(path: Path, mtime: float, size: int, bbox: tuple[float, float,
     subdir = thumbs / key[:2]
     subdir.mkdir(exist_ok=True)
     cached = subdir / f"{key}_face_{bbox_key}{_fd_suffix(path)}{_orient_suffix(orientation)}{cache_ext()}"
-    if cached.exists():
-        return cached.read_bytes()
+    hit = _read_cached(cached)
+    if hit is not None:
+        return hit
 
     img = Image.open(io.BytesIO(get_preview(path, mtime, size, orientation))).convert("RGB")
     w, h = img.size
@@ -505,7 +562,7 @@ def get_face_crop(path: Path, mtime: float, size: int, bbox: tuple[float, float,
     crop = crop.resize((out_size, out_size), Image.LANCZOS)
 
     data = _encode(crop)
-    cached.write_bytes(data)
+    _write_cached(cached, data)
     return data
 
 

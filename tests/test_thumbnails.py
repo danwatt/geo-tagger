@@ -493,3 +493,87 @@ class TestGetFaceCrop:
 
         data2 = thumbnails.get_face_crop(path, 1.0, fsize, bbox=(0.5, 0.5, 0.9, 0.9))
         assert data2 != data1
+
+
+# ── Atomic cache I/O ──
+
+class TestAtomicCacheIO:
+    def test_write_leaves_no_temp_file(self, tmp_path):
+        target = tmp_path / "abc_thumb.webp"
+        thumbnails._write_cached(target, b"DATA")
+        assert target.read_bytes() == b"DATA"
+        assert [p.name for p in tmp_path.iterdir()] == ["abc_thumb.webp"]
+
+    def test_failed_write_leaves_neither_final_nor_temp(self, tmp_path, monkeypatch):
+        target = tmp_path / "abc_thumb.webp"
+        real_write = Path.write_bytes
+
+        def boom(self, data):
+            real_write(self, data[:1])  # partial write, then fail
+            raise OSError("disk full")
+
+        monkeypatch.setattr(Path, "write_bytes", boom)
+        with pytest.raises(OSError):
+            thumbnails._write_cached(target, b"DATA")
+        assert list(tmp_path.iterdir()) == []
+
+    def test_permission_error_on_replace_is_swallowed(self, tmp_path, monkeypatch):
+        def deny(src, dst):
+            raise PermissionError("destination open")
+
+        monkeypatch.setattr(thumbnails.os, "replace", deny)
+        target = tmp_path / "abc_thumb.webp"
+        thumbnails._write_cached(target, b"DATA")  # must not raise
+        assert list(tmp_path.iterdir()) == []
+
+    def test_zero_length_read_is_a_miss(self, tmp_path):
+        f = tmp_path / "x.webp"
+        assert thumbnails._read_cached(f) is None
+        f.write_bytes(b"")
+        assert thumbnails._read_cached(f) is None
+        f.write_bytes(b"ok")
+        assert thumbnails._read_cached(f) == b"ok"
+
+    def test_zero_length_thumbnail_is_regenerated(self, thumbs_dir, tmp_path):
+        path = _make_photo(tmp_path)
+        st = path.stat()
+        data = thumbnails.get_thumbnail(path, st.st_mtime, st.st_size)
+        (cached,) = [p for p in thumbs_dir.rglob("*_thumb*")]
+        cached.write_bytes(b"")
+        assert not thumbnails.thumbnail_exists(path, st.st_mtime, st.st_size)
+        assert thumbnails.get_thumbnail(path, st.st_mtime, st.st_size) == data
+        assert cached.stat().st_size > 0
+
+    def test_replace_permission_error_still_returns_generated_bytes(
+            self, thumbs_dir, tmp_path, monkeypatch):
+        path = _make_photo(tmp_path)
+        st = path.stat()
+
+        def deny(src, dst):
+            raise PermissionError("destination open")
+
+        monkeypatch.setattr(thumbnails.os, "replace", deny)
+        data = thumbnails.get_thumbnail(path, st.st_mtime, st.st_size)
+        assert data
+        assert list(thumbs_dir.rglob("*.tmp")) == []
+
+    def test_invalidate_also_removes_stray_temp_files(self, thumbs_dir, tmp_path):
+        path = _make_photo(tmp_path)
+        st = path.stat()
+        thumbnails.get_thumbnail(path, st.st_mtime, st.st_size)
+        key = thumbnails._cache_key(path, st.st_mtime, st.st_size)
+        stray = thumbs_dir / key[:2] / f"{key}_thumb.webp.1.2.deadbeef.tmp"
+        stray.write_bytes(b"x")
+        assert thumbnails.invalidate_photo_cache(path, st.st_mtime, st.st_size) == 2
+        assert not stray.exists()
+
+    def test_concurrent_requests_get_identical_nonempty_bytes(self, thumbs_dir, tmp_path):
+        from concurrent.futures import ThreadPoolExecutor
+        path = _make_photo(tmp_path, size=(400, 300))
+        st = path.stat()
+        with ThreadPoolExecutor(8) as ex:
+            results = list(ex.map(
+                lambda _: thumbnails.get_preview(path, st.st_mtime, st.st_size), range(16)))
+        assert all(results)
+        assert len(set(results)) == 1
+        assert list(thumbs_dir.rglob("*.tmp")) == []
