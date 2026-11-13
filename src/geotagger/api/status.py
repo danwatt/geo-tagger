@@ -27,6 +27,15 @@ async def api_status():
     return {**exiftool_status(), "db_total": total, "geocoder": geocode.status()}
 
 
+@router.get("/api/scan/status")
+async def api_scan_status():
+    """Background startup-scan progress. A separate route (not a field on
+    /api/status) because the nav banner polls it every ~2s and /api/status runs a
+    COUNT(*) on the photos table; this one is pure in-memory state."""
+    from geotagger import scanning
+    return scanning.get_scan_status()
+
+
 @router.get("/api/settings")
 async def api_get_settings():
     """The safe-to-tune-live subset of config.py knobs (face matching/clustering

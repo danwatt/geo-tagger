@@ -277,6 +277,11 @@ FACE_MANUAL_CROP_DIM = int(os.environ.get("GEOTAGGER_FACE_MANUAL_CROP_DIM", "640
 # Server
 HOST = os.environ.get("GEOTAGGER_HOST", "127.0.0.1")
 PORT = int(os.environ.get("GEOTAGGER_PORT", "8000"))
+# Extra DNS names the app may be reached by (comma-separated, case-insensitive), on top of
+# localhost / IP literals / this machine's hostname which middleware.RequestGuard always
+# allows. Needed only when serving under another name (reverse proxy, mDNS alias, ...);
+# any other Host header is refused to block DNS-rebinding attacks.
+ALLOWED_HOSTS = [h.strip().lower() for h in os.environ.get("GEOTAGGER_ALLOWED_HOSTS", "").split(",") if h.strip()]
 
 # ── Face detection / recognition ──
 # InsightFace model pack ("buffalo_l" = SCRFD detector + ArcFace r50 embeddings).

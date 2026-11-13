@@ -1,9 +1,39 @@
 import argparse
+import ipaddress
 import os
 import sys
 from pathlib import Path
 
 import uvicorn
+
+# Hosts that listen on every interface rather than a single address.
+_WILDCARD_HOSTS = ("0.0.0.0", "::")
+
+
+def _is_loopback(host: str) -> bool:
+    """True only when the bind host can be reached from this computer alone.
+
+    Anything else (wildcards, LAN addresses, ordinary hostnames) exposes the
+    unauthenticated app to other machines, so callers warn on False.
+    """
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        # Not an IP literal (hostname, empty string, ...). Treat as non-loopback
+        # rather than guessing how the resolver would map it.
+        return False
+
+
+def _positive_int(value: str) -> int:
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected an integer, got {value!r}")
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {n}")
+    return n
 
 
 def main():
@@ -37,9 +67,12 @@ def main():
     )
     parser.add_argument(
         "--workers",
-        type=int,
-        default=4,
-        help="Number of worker threads for thumbnail generation (default: 4)"
+        type=_positive_int,
+        # None (not 4) so an unset flag leaves GEOTAGGER_WORKERS from the
+        # environment alone; the consumers fall back to 4 when it is unset.
+        default=None,
+        help="Worker thread count for the shared request thread pool and the scan pool "
+             "(default: 4, or the GEOTAGGER_WORKERS environment variable if set)"
     )
     parser.add_argument(
         "--no-scan",
@@ -53,8 +86,10 @@ def main():
     if args.cache_dir:
         os.environ["GEOTAGGER_CACHE_DIR"] = str(Path(args.cache_dir).resolve())
 
-    # Set worker threads
-    os.environ["GEOTAGGER_WORKERS"] = str(args.workers)
+    # Set worker threads only when the flag was given, so a pre-set
+    # GEOTAGGER_WORKERS in the environment is respected.
+    if args.workers is not None:
+        os.environ["GEOTAGGER_WORKERS"] = str(args.workers)
 
     # Set no-scan flag
     if args.no_scan:
@@ -95,14 +130,23 @@ def main():
 
     bind_port = args.port if args.port else PORT
 
+    # IPv6 literals need brackets in a URL, or the port is parsed as part of the address.
+    url_host = f"[{bind_host}]" if ":" in bind_host else bind_host
+
     # Print access information
-    if bind_host == "0.0.0.0":
-        import socket
-        print(f"\nWARNING: --network exposes Geo-Tagger to your entire local network with")
+    if _is_loopback(bind_host):
+        print(f"Server accessible at: http://{url_host}:{bind_port}")
+    else:
+        # Any non-loopback bind is reachable from the network with no auth,
+        # not just the 0.0.0.0 wildcard, so the warning is keyed on the address.
+        print(f"\nWARNING: binding to {bind_host} exposes Geo-Tagger to your entire local network with")
         print(f"NO AUTHENTICATION. Anyone who can reach this port can browse every photo,")
         print(f"rewrite geotags, edit sidecar files, and rename people. Only use this on a")
         print(f"network you trust.")
-        print(f"\nBinding to 0.0.0.0:{bind_port}")
+
+    if bind_host in _WILDCARD_HOSTS:
+        import socket
+        print(f"\nBinding to {url_host}:{bind_port}")
         print(f"Server will be accessible at:")
         print(f"  - http://localhost:{bind_port} (this computer)")
 
@@ -132,8 +176,10 @@ def main():
         print("  2. Ensure devices are on the same network")
         print("  3. Try accessing from this computer first using the IP above")
         print()
-    else:
-        print(f"Server accessible at: http://{bind_host}:{bind_port}")
+    elif not _is_loopback(bind_host):
+        # Specific LAN address: one URL is enough, the interface list is only
+        # useful when we don't know which address the user should pick.
+        print(f"\nServer accessible at: http://{url_host}:{bind_port}")
 
     uvicorn.run(
         "geotagger.main:app",

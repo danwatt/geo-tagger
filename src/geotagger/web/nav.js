@@ -58,4 +58,78 @@
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") el.querySelectorAll(".nav-group.open").forEach((g) => g.classList.remove("open"));
   });
+
+  // ── Background-scan banner ──
+  // The startup scan runs server-side after the app is already serving, so every
+  // page shows its progress. One check on load; poll only while it's running.
+  const POLL_MS = 2000;
+  const banner = document.createElement("div");
+  banner.id = "scan-banner";
+  banner.hidden = true;
+  const bannerText = document.createElement("span");
+  const bannerClose = document.createElement("button");
+  bannerClose.type = "button";
+  bannerClose.className = "scan-banner-close";
+  bannerClose.textContent = "✕";
+  bannerClose.title = "Dismiss";
+  banner.append(bannerText, bannerClose);
+  // The nav lives inside the page's toolbar; sit the banner under the toolbar.
+  const anchor = el.closest("#toolbar") || el;
+  anchor.insertAdjacentElement("afterend", banner);
+
+  let dismissedError = null;  // the error message the user already closed
+  let sawRunning = false;     // this page watched a scan in progress
+  let lastRunning = false;    // most recent successful poll said running
+  bannerClose.addEventListener("click", () => {
+    dismissedError = banner.dataset.error || null;
+    sawRunning = false;
+    banner.hidden = true;
+  });
+
+  function renderScan(s) {
+    if (s.running) {
+      sawRunning = true;
+      banner.className = "scan-running";
+      banner.dataset.error = "";
+      bannerText.textContent = s.total > 0
+        ? `Scanning library… ${s.processed.toLocaleString()} / ${s.total.toLocaleString()} files`
+        : "Scanning library… counting files";
+      bannerClose.hidden = true;
+      banner.hidden = false;
+    } else if (s.error && s.error !== dismissedError) {
+      banner.className = "scan-error";
+      banner.dataset.error = s.error;
+      bannerText.textContent = `Library scan failed: ${s.error}`;  // textContent: server string
+      bannerClose.hidden = false;
+      banner.hidden = false;
+    } else if (sawRunning) {
+      // The page was loaded mid-scan, so what it shows predates the new photos.
+      banner.className = "scan-running";
+      banner.dataset.error = "";
+      bannerText.textContent = s.warnings > 0
+        ? `Library scan finished with ${s.warnings.toLocaleString()} warning(s) — see the server console. Reload to see new photos.`
+        : "Library scan finished — reload to see new photos.";
+      bannerClose.hidden = false;
+      banner.hidden = false;
+    } else {
+      banner.hidden = true;
+    }
+  }
+
+  async function pollScan() {
+    // Keep polling through a failed request while a scan was last seen running,
+    // otherwise one dropped fetch would end the banner until the next page load.
+    let running = lastRunning;
+    try {
+      const res = await fetch("/api/scan/status");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const s = await res.json();
+      renderScan(s);
+      running = lastRunning = !!s.running;
+    } catch (e) {
+      // Transient (server restarting, etc.): leave the last progress showing.
+    }
+    if (running) setTimeout(pollScan, POLL_MS);
+  }
+  pollScan();
 })();

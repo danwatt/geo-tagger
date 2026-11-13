@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from geotagger.lifespan import lifespan
 from geotagger.api import ROUTERS
+from geotagger.middleware import RequestGuard
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,6 +24,8 @@ _WEB_DIR = Path(__file__).parent / "web"
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Geo-Tagger", lifespan=lifespan)
+    # Host/Origin guard against DNS rebinding + cross-site writes (see middleware.py).
+    app.add_middleware(RequestGuard)
     for router in ROUTERS:
         app.include_router(router)
     # ── Static files (must be mounted last so it doesn't shadow the API routes) ──

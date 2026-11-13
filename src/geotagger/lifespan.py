@@ -1,16 +1,17 @@
 """App lifespan: initialize the request executor and ExifTool session, then set up
-the index/thumbnails/faces caches and (unless --no-scan) scan the configured or
-last-used directories."""
+the index/thumbnails/faces caches and (unless --no-scan) scan the configured
+directories in a background thread so the server accepts requests immediately."""
 
+import asyncio
 import os
 import sys
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from geotagger import index, thumbnails, faces, semantic, config
+from geotagger import index, thumbnails, faces, semantic, config, scanning
 from geotagger.exiftool_session import lifespan as _et_lifespan
 from geotagger.executor import init_executor
-from geotagger.scanning import scan_directory
 
 
 def _auto_vacuum():
@@ -28,6 +29,18 @@ def _auto_vacuum():
                   f"{resize_note}")
     except Exception as e:
         print(f"Auto-vacuum skipped: {e}")
+
+
+def _init_caches(root: Path) -> None:
+    """Open the DB and every per-root cache under `root`. The single place that
+    knows the init order, so a new subsystem can't be wired into only one of the
+    startup branches (scan-dirs vs. legacy last-root)."""
+    index.init_db(root)
+    config.apply_all_overrides(index.get_all_settings())
+    _auto_vacuum()
+    thumbnails.init_thumbs(root)
+    faces.init_faces(root)
+    semantic.init_semantic(root)
 
 
 def _primary_root() -> Path | None:
@@ -55,6 +68,11 @@ async def lifespan(app):
     # before ExifTool starts, so it looks in the right place for the bundled binary.
     config.resolve_data_paths(_primary_root())
 
+    # Idle state (also clears anything left over from a previous app instance).
+    scanning.reset_scan_state()
+    scan_cancel = threading.Event()
+    scan_thread: threading.Thread | None = None
+
     async with _et_lifespan(app):
         no_scan = os.environ.get("GEOTAGGER_NO_SCAN") == "1"
 
@@ -65,45 +83,30 @@ async def lifespan(app):
             try:
                 # If GEOTAGGER_CACHE_DIR isn't set, the cache lives under the first
                 # scan directory (matching the single-root fallback below).
-                primary_root = scan_dirs[0]
-                index.init_db(primary_root)
-                config.apply_all_overrides(index.get_all_settings())
-                _auto_vacuum()
-                thumbnails.init_thumbs(primary_root)
-                faces.init_faces(primary_root)
-                semantic.init_semantic(primary_root)
-
-                if no_scan:
-                    print(f"Skipping scan (--no-scan), using existing database")
-                else:
-                    print(f"Initialized cache with {len(scan_dirs)} scan directories")
-
-                    # Scan all directories
-                    for scan_dir in scan_dirs:
-                        print(f"Scanning {scan_dir}...")
-                        count, skipped, warnings = scan_directory(scan_dir)
-                        if warnings:
-                            print(f"  Warnings: {len(warnings)}")
-                            for w in warnings[:5]:  # Show first 5 warnings
-                                print(f"    {w}")
-
-                    # Save the list of scanned directories
-                    index.save_last_scan_roots([str(d) for d in scan_dirs])
+                _init_caches(scan_dirs[0])
             except Exception as e:
-                print(f"FATAL: startup scan failed: {e}", file=sys.stderr)
+                print(f"FATAL: startup initialization failed: {e}", file=sys.stderr)
                 raise
+
+            if no_scan:
+                print("Skipping scan (--no-scan), using existing database")
+            else:
+                print(f"Initialized cache with {len(scan_dirs)} scan directories")
+                # A dedicated thread, NOT the shared request executor: a scan can
+                # run for minutes and must not occupy request workers. It uses the
+                # shared ExifTool session, so shutdown (below) joins it before the
+                # ExifTool context exits.
+                scan_thread = threading.Thread(
+                    target=scanning.run_scan, args=(scan_dirs, scan_cancel),
+                    name="startup-scan", daemon=True)
+                scan_thread.start()
         else:
             # Legacy: Auto-reconnect to the last scanned directory
             last_root = index.get_last_scan_root()
             if last_root:
                 root = Path(last_root)
                 try:
-                    index.init_db(root)
-                    config.apply_all_overrides(index.get_all_settings())
-                    _auto_vacuum()
-                    thumbnails.init_thumbs(root)
-                    faces.init_faces(root)
-                    semantic.init_semantic(root)
+                    _init_caches(root)
                     if no_scan:
                         print(f"Skipping scan (--no-scan), loaded index from {root}")
                     else:
@@ -111,4 +114,11 @@ async def lifespan(app):
                 except Exception as e:
                     print(f"FATAL: failed to load previous scan directory {root}: {e}", file=sys.stderr)
                     raise
-        yield
+        try:
+            yield
+        finally:
+            if scan_thread is not None:
+                scan_cancel.set()
+                # Off the event loop: the join can take as long as the slowest
+                # in-flight file task.
+                await asyncio.to_thread(scan_thread.join)

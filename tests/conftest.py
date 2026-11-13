@@ -319,7 +319,8 @@ def client(tmp_path, monkeypatch):
     # session-scoped et_session fixture already had it running, restart it after
     # teardown so later et_session-based tests still find a live process.
     et_was_running = exiftool_session._et is not None
-    with TestClient(main.app) as c:
+    # base_url pins Host to 127.0.0.1: the default "testserver" is rejected by RequestGuard.
+    with TestClient(main.app, base_url="http://127.0.0.1") as c:
         yield c
     if et_was_running:
         exiftool_session.start_et()

@@ -516,6 +516,7 @@ live from the Settings page):
 | `GEOTAGGER_SIDECAR_MODE` | `basename` | `basename` or `fullname` |
 | `GEOTAGGER_HOST` | `127.0.0.1` | Bind address |
 | `GEOTAGGER_PORT` | `8000` | Port |
+| `GEOTAGGER_ALLOWED_HOSTS` | *(empty)* | Comma-separated extra hostnames the app may be reached by. `localhost`, IP addresses and this machine's hostname are always allowed; any other `Host` header gets a 403 (DNS-rebinding protection). Cross-origin non-GET requests are also refused |
 | `GEOTAGGER_CACHE_DIR` | *(none — see [Cache location](#cache-location))* | Directory for the database + thumbnails + tools/data |
 | `GEOTAGGER_WORKERS` | `4` | Thumbnail-generation worker threads |
 | `GEOTAGGER_NO_SCAN` | `0` | `1` = skip the startup scan |

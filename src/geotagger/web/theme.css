@@ -196,6 +196,22 @@ input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
 .nav-group.open .nav-group-menu { display: flex; }
 .nav-group-item { white-space: nowrap; }
 
+/* ── Background scan banner (nav.js), slim strip under the toolbar ── */
+#scan-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 10px;
+  font-size: 12px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+#scan-banner[hidden] { display: none; }
+#scan-banner.scan-running { background: var(--accent-bg-2); color: var(--on-accent); }
+#scan-banner.scan-error { background: var(--surface-3); color: var(--danger-text); border-bottom-color: var(--danger); }
+#scan-banner .scan-banner-close { margin-left: auto; padding: 0 6px; line-height: 18px; }
+#scan-banner .scan-banner-close[hidden] { display: none; }
+
 /* ── Status bar (shared across photo + map pages) ── */
 #status-bar {
   height: 22px;
