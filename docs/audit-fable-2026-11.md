@@ -98,7 +98,7 @@ returns 500, and a client retry shifts the already-done photos again.
 `index.py:1855,1886,1917,2024,2052`. Reassigning, unassigning or ignoring a face leaves `representative=1`,
 so the new person inherits a stale representative. Only `delete_person` resets it.
 
-**D10 — Low — Bulk assign unassigns by omission** [seen]
+**D10 — Low — Bulk assign unassigns by omission** [seen] — ✅ **DONE** (both assign routes need exactly one of `person_id`, `name`, `clear`, else 400; `assigned` is the matched row count, plus `not_found`)
 `api/faces.py:317-324`. A request with no `person_id`, a blank `name` and `clear=false` falls through to
 `assign_faces(ids, None)` and wipes existing labels. `"assigned"` echoes the input length, not rows changed.
 *Fix:* 400 unless exactly one of `person_id`, `name`, `clear` is supplied; return the rowcount.

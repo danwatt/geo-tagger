@@ -616,7 +616,7 @@ async function assignSearchFace(faceId, personId) {
     const res = await fetch(`/api/faces/${faceId}/assign`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ person_id: personId }),
+      body: JSON.stringify(personId == null ? { clear: true } : { person_id: personId }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     await loadPersons();

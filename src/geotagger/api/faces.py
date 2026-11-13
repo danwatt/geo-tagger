@@ -43,8 +43,10 @@ class FamilyRequest(BaseModel):
     name: str
 
 class AssignFaceRequest(BaseModel):
-    person_id: int | None = None  # None clears the assignment
+    # Exactly one of these three must be given (see _resolve_assign_target).
+    person_id: int | None = None
     name: str | None = None       # convenience: create/lookup a person by name
+    clear: bool = False           # set True to unassign the face
 
 class BulkAssignRequest(BaseModel):
     face_ids: list[int]
@@ -345,14 +347,43 @@ def _require_person(person_id: int | None):
         raise HTTPException(404, "Person not found")
 
 
+def _resolve_assign_target(person_id: int | None, name: str | None, clear: bool
+                           ) -> tuple[int | None, str | None]:
+    """Validate the person_id / name / clear triple shared by the assign routes.
+
+    Exactly one intent must be expressed (a blank name counts as absent), so a
+    malformed request can never fall through to "unassign" and wipe labels.
+    Returns (person_id, name): (None, None) for clear, (id, None) for an existing
+    person (404 if it doesn't exist), (None, trimmed_name) for find-or-create by
+    name. The name's person is created by the caller, after it has confirmed the
+    target faces exist, so a failed request doesn't leave an orphan person.
+    """
+    name = name.strip() if name else None
+    given = [person_id is not None, bool(name), bool(clear)]
+    if sum(given) != 1:
+        raise HTTPException(400, "Provide exactly one of person_id, name (non-blank), "
+                                 "or clear=true")
+    _require_person(person_id)
+    return person_id, name or None
+
+
 @router.post("/api/faces/assign")
 async def api_bulk_assign(req: BulkAssignRequest):
-    person_id = None if req.clear else req.person_id
-    _require_person(person_id)
-    if person_id is None and not req.clear and req.name and req.name.strip():
-        person_id = index.get_or_create_person(req.name.strip())
-    index.assign_faces(req.face_ids, person_id)
-    return {"assigned": len(req.face_ids), "person_id": person_id}
+    """Assign (person_id / name) or unassign (clear=true) faces; exactly one of
+    the three. ``assigned`` is the number of faces that exist and were written
+    (including faces already on that person); ``not_found`` counts ids matching
+    no face. 404 if none of the ids exist, 400 on empty ``face_ids``."""
+    person_id, name = _resolve_assign_target(req.person_id, req.name, req.clear)
+    ids = list(dict.fromkeys(req.face_ids))
+    if not ids:
+        raise HTTPException(400, "face_ids required")
+    existing = index.count_existing_faces(ids)
+    if existing == 0:
+        raise HTTPException(404, "No matching faces")
+    if name:
+        person_id = index.get_or_create_person(name)
+    assigned = index.assign_faces(ids, person_id)
+    return {"assigned": assigned, "not_found": len(ids) - assigned, "person_id": person_id}
 
 
 @router.post("/api/faces/ignore")
@@ -569,12 +600,13 @@ async def api_photo_tagged_people(photo_id: int):
 
 @router.post("/api/faces/{face_id}/assign")
 async def api_assign_face(face_id: int, req: AssignFaceRequest):
+    """Assign (person_id / name) or unassign (clear=true) one face; exactly one
+    of the three, else 400. 404 for an unknown face or person."""
     if not index.get_face(face_id):
         raise HTTPException(404)
-    person_id = req.person_id
-    _require_person(person_id)
-    if person_id is None and req.name and req.name.strip():
-        person_id = index.get_or_create_person(req.name.strip())
+    person_id, name = _resolve_assign_target(req.person_id, req.name, req.clear)
+    if name:
+        person_id = index.get_or_create_person(name)
     index.assign_face(face_id, person_id)
     return {"face_id": face_id, "person_id": person_id}
 

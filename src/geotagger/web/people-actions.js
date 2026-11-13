@@ -51,7 +51,7 @@ async function assignFocusedFace({ personId = null, name = null, clear = false }
     stageFaces([f.id], clear ? { kind: "unassign" } : { kind: "assign", personId, name }, label);
     return;
   }
-  const body = clear ? { person_id: null } : name ? { name } : { person_id: personId };
+  const body = clear ? { clear: true } : name ? { name } : { person_id: personId };
   try {
     const res = await fetch(`/api/faces/${f.id}/assign`, {
       method: "POST",
@@ -266,7 +266,7 @@ async function confirmFace(faceId, personId) {
     const res = await fetch(`/api/faces/${faceId}/assign`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ person_id: personId }),
+      body: JSON.stringify(personId == null ? { clear: true } : { person_id: personId }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     selectedIds.delete(faceId);
@@ -377,11 +377,12 @@ async function acceptSuggestionsFor(faceList, label) {
   }
   try {
     for (const [pid, faceIds] of Object.entries(byPerson)) {
-      await fetch("/api/faces/assign", {
+      const res = await fetch("/api/faces/assign", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ face_ids: faceIds, person_id: parseInt(pid) }),
       });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
     }
     setStatus(`Accepted suggestions for ${targets.length} face(s)${where}.`);
     selectedIds.clear();

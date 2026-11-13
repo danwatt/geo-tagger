@@ -2219,6 +2219,20 @@ def get_face(face_id: int) -> sqlite3.Row | None:
     return get_db().execute("SELECT * FROM faces WHERE id=?", (face_id,)).fetchone()
 
 
+def count_existing_faces(face_ids: list[int]) -> int:
+    """How many of these face ids exist (chunked to stay under SQLite's
+    bound-variable limit)."""
+    ids = list(dict.fromkeys(face_ids))
+    db = get_db()
+    n = 0
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        n += db.execute(
+            f"SELECT COUNT(*) FROM faces WHERE id IN ({','.join('?' * len(chunk))})",
+            chunk).fetchone()[0]
+    return n
+
+
 def get_labeled_faces() -> list[sqlite3.Row]:
     """All faces assigned to a person (the recognition gallery), with each
     example's photo date and the person's birth date for age-aware matching.
@@ -2489,23 +2503,30 @@ _KEEP_REPRESENTATIVE_IF_SAME_PERSON = (
     "representative = CASE WHEN person_id IS ? THEN representative ELSE 0 END")
 
 
-def assign_faces(face_ids: list[int], person_id: int | None):
+def assign_faces(face_ids: list[int], person_id: int | None) -> int:
     """Bulk confirm (or clear, with None) the identity of several faces.
+
+    Returns the number of faces that exist and were written (rowcount: faces
+    already on that person still count; unknown ids do not; duplicate ids in
+    face_ids count once).
 
     Labeling or clearing always lifts the ignored and come_back flags (see
     assign_face). Faces confirmed together share one assigned_at, so a batch
     reads as a single tag action for ordering and undo; clearing nulls the
     timestamp.
     """
+    face_ids = list(dict.fromkeys(face_ids))
     if not face_ids:
-        return
+        return 0
     with transaction() as db:
         now = time.time() if person_id is not None else None
-        db.executemany(
+        # executemany's rowcount is the sum over every parameter set.
+        cur = db.executemany(
             "UPDATE faces SET person_id=?, ignored=0, come_back=0, come_back_at=NULL, "
             "assigned_at=?, " + _KEEP_REPRESENTATIVE_IF_SAME_PERSON + " WHERE id=?",
             [(person_id, now, person_id, fid) for fid in face_ids],
         )
+        matched = cur.rowcount
         if person_id is not None:
             # A face can't be both "assigned to P" and "not P" — drop that conflict.
             # Other persons' negatives on these faces are left intact.
@@ -2517,6 +2538,7 @@ def assign_faces(face_ids: list[int], person_id: int | None):
     if person_id is not None:  # labeled faces leave the unlabeled queue
         from geotagger import faces as _faces
         _faces.drop_from_unlabeled_cache(face_ids)
+    return matched
 
 
 def set_faces_ignored(face_ids: list[int], ignored: bool):
@@ -2690,8 +2712,9 @@ def get_unlabeled_faces() -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def assign_face(face_id: int, person_id: int | None):
+def assign_face(face_id: int, person_id: int | None) -> int:
     """Confirm (or clear, with None) the identity of a single face.
+    Returns 1 if the face exists and was written, else 0.
 
     Labeling or clearing always lifts the ignored and come_back flags, keeping
     the face states (labeled / unlabeled / ignored / come-back) mutually
@@ -2699,10 +2722,10 @@ def assign_face(face_id: int, person_id: int | None):
     """
     with transaction() as db:
         now = time.time() if person_id is not None else None
-        db.execute(
+        matched = db.execute(
             "UPDATE faces SET person_id=?, ignored=0, come_back=0, come_back_at=NULL, "
             "assigned_at=?, " + _KEEP_REPRESENTATIVE_IF_SAME_PERSON + " WHERE id=?",
-            (person_id, now, person_id, face_id))
+            (person_id, now, person_id, face_id)).rowcount
         if person_id is not None:
             # A face can't be both "assigned to P" and "not P" — drop that conflict.
             db.execute("DELETE FROM face_negatives WHERE face_id=? AND person_id=?",
@@ -2711,6 +2734,7 @@ def assign_face(face_id: int, person_id: int | None):
     if person_id is not None:  # labeled face leaves the unlabeled queue
         from geotagger import faces as _faces
         _faces.drop_from_unlabeled_cache([face_id])
+    return matched
 
 
 # ── Face negatives ──

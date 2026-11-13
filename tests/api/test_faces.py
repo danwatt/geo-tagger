@@ -600,3 +600,74 @@ def test_patch_person_unknown_family_404_and_unchanged(client):
     r = client.patch(f"/api/persons/{pid}", json={"name": "Alicia", "family_id": 9999})
     assert r.status_code == 404
     assert _person_row(client, pid)["name"] == "Alice"
+
+
+# ── D10: assign routes need exactly one intent; counts are truthful ──
+
+def _labeled_pair(client, seed):
+    """Two faces already assigned to Alice, one unlabeled spare."""
+    db = index.get_db()
+    ids = ff.seed_unlabeled(db, ff.unit_vectors(np.random.default_rng(seed), 3))
+    alice = client.post("/api/persons", json={"name": "Alice"}).json()["id"]
+    assert client.post("/api/faces/assign",
+                       json={"face_ids": ids[:2], "person_id": alice}).json()["assigned"] == 2
+    return db, ids, alice
+
+
+def test_bulk_assign_empty_intent_400_and_labels_untouched(client):
+    db, ids, alice = _labeled_pair(client, 50)
+    for body in ({}, {"name": ""}, {"name": "   "}, {"clear": False},
+                 {"person_id": alice, "clear": True},
+                 {"person_id": alice, "name": "Bob"}, {"name": "Bob", "clear": True}):
+        r = client.post("/api/faces/assign", json={"face_ids": ids[:2], **body})
+        assert r.status_code == 400, body
+    assert [_face_row(db, i)["person_id"] for i in ids[:2]] == [alice, alice]
+    assert db.execute("SELECT COUNT(*) FROM persons").fetchone()[0] == 1  # no "Bob"
+
+
+def test_bulk_assign_clear_reports_count(client):
+    db, ids, alice = _labeled_pair(client, 51)
+    r = client.post("/api/faces/assign", json={"face_ids": ids[:2], "clear": True})
+    assert r.status_code == 200
+    assert r.json() == {"assigned": 2, "not_found": 0, "person_id": None}
+    assert all(_face_row(db, i)["person_id"] is None for i in ids)
+
+
+def test_bulk_assign_counts_matched_rows_with_unknown_ids(client):
+    db, ids, alice = _labeled_pair(client, 52)
+    r = client.post("/api/faces/assign",
+                    json={"face_ids": [ids[2], ids[2], 9998, 9999], "name": "Bob"})
+    assert r.status_code == 200
+    body = r.json()
+    assert (body["assigned"], body["not_found"]) == (1, 2)   # duplicate counts once
+    assert _face_row(db, ids[2])["person_id"] == body["person_id"]
+    # Re-assigning faces already on the person still counts them (matched, not changed).
+    r = client.post("/api/faces/assign", json={"face_ids": ids[:2], "person_id": alice})
+    assert r.json()["assigned"] == 2
+
+
+def test_bulk_assign_404s_and_no_orphan_person(client):
+    db, ids, alice = _labeled_pair(client, 53)
+    assert client.post("/api/faces/assign",
+                       json={"face_ids": ids, "person_id": 999}).status_code == 404
+    assert client.post("/api/faces/assign",
+                       json={"face_ids": [9998, 9999], "name": "Ghost"}).status_code == 404
+    assert client.post("/api/faces/assign",
+                       json={"face_ids": [9998], "clear": True}).status_code == 404
+    assert client.post("/api/faces/assign",
+                       json={"face_ids": [], "clear": True}).status_code == 400
+    assert db.execute("SELECT COUNT(*) FROM persons").fetchone()[0] == 1
+
+
+def test_single_assign_requires_exactly_one_intent(client):
+    db, ids, alice = _labeled_pair(client, 54)
+    fid = ids[0]
+    for body in ({}, {"person_id": None}, {"name": "  "}, {"person_id": alice, "clear": True},
+                 {"person_id": alice, "name": "Bob"}):
+        assert client.post(f"/api/faces/{fid}/assign", json=body).status_code == 400, body
+    assert _face_row(db, fid)["person_id"] == alice
+    assert client.post(f"/api/faces/{fid}/assign", json={"person_id": 999}).status_code == 404
+    assert client.post("/api/faces/9999/assign", json={"clear": True}).status_code == 404
+    r = client.post(f"/api/faces/{fid}/assign", json={"clear": True})
+    assert r.status_code == 200 and r.json() == {"face_id": fid, "person_id": None}
+    assert _face_row(db, fid)["person_id"] is None
