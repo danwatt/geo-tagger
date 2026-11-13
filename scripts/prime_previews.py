@@ -80,7 +80,7 @@ def prime_thumbnails(rows, dry_run: bool) -> tuple[int, int, int]:
     total = len(rows)
     for i, r in enumerate(rows, 1):
         path = Path(index.photo_path(r))
-        already = thumbnails.thumbnail_exists(path, r["mtime"], r["size"])
+        already = thumbnails.thumbnail_exists(path, r["mtime"], r["size"], r["orientation"])
         if already:
             cached += 1
             continue

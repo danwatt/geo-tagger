@@ -346,7 +346,7 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
     thumbs_generated = 0
     thumbs_cached = 0
     lock = threading.Lock()
-    # Workers never touch the DB: freshness is decided up front (fresh_flags,
+    # Workers never touch the DB: freshness is decided up front (fresh_cache_ids,
     # below) and the rows they produce are written by this thread in batches
     # (_UpsertBatch). That also retires the old per-worker db_lock, which kept
     # one worker's read off the shared connection while another's write was
@@ -404,13 +404,17 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
     # now rather than as each file comes up, which only matters for a row a web
     # request rewrites mid-scan; its sidecar stat above is equally old, so
     # comparing the two snapshots is at least consistent.
+    # A fresh file comes back with its row's (mtime, size, orientation): the
+    # thumbnail below must be keyed on what the row stores, since that is what
+    # /api/thumbnail reads (audit S4).
     if not cancelled():
-        flags = index.fresh_flags([(str(p.parent), p.name, stat.st_mtime, sc_path_str, sc_mtime)
-                                   for p, _, stat, sc_path_str, sc_mtime in files_to_process])
+        fresh_ids = index.fresh_cache_ids(
+            [(str(p.parent), p.name, stat.st_mtime, sc_path_str, sc_mtime)
+             for p, _, stat, sc_path_str, sc_mtime in files_to_process])
         # Also one range read per root (usually empty).
         known_errors = index.scan_errors_under_dir(str(root))
     else:
-        flags = [False] * len(files_to_process)
+        fresh_ids = [None] * len(files_to_process)
 
     # Files whose metadata read failed before and that haven't changed since
     # (same mtime AND size) are not re-read: such a failure is a property of
@@ -421,18 +425,18 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
     # retried, and DELETE /api/scan/errors forces a retry of everything.
     known_bad = 0
     todo = []
-    for f, fresh in zip(files_to_process, flags):
+    for f, fresh_id in zip(files_to_process, fresh_ids):
         p, _, stat, _, _ = f
         key = (str(p.parent), p.name)
         known = known_errors.get(key)
         if known is not None:
-            if fresh:
+            if fresh_id is not None:
                 cleared_errors.append(key)  # indexed OK since (e.g. by a web request)
             elif (known["stage"] == "read" and known["mtime"] == stat.st_mtime
                     and known["size"] == stat.st_size):
                 known_bad += 1
                 continue
-        todo.append((*f, fresh))
+        todo.append((*f, fresh_id))
     files_to_process = todo
     # Counted as processed up front: nothing more happens to them this run.
     total_processed = known_bad
@@ -469,7 +473,7 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
         """Process a single file: index and generate thumbnail."""
         worker_id = threading.get_ident() % 1000  # Use last 3 digits of thread ID
 
-        p, media_type, stat, sc_path_str, sc_mtime, fresh = file_info
+        p, media_type, stat, sc_path_str, sc_mtime, fresh_id = file_info
 
         if cancelled():  # queued before cancel was set; skip without touching anything
             return None
@@ -487,8 +491,10 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
                 worker_status[worker_id] = (p.name, "Indexing")
                 update_display()
 
-            if fresh:
+            if fresh_id is not None:
                 was_skipped = True
+                # The row isn't rewritten, so key the thumbnail on what it stores.
+                thumb_id = fresh_id
             else:
                 meta = sidecar.read_metadata(p)
                 # Hash the file bytes for integrity/dedup. Non-fatal: a hash
@@ -510,6 +516,9 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
                     gps_accuracy=meta["gps_accuracy"], orientation=meta["orientation"],
                     checksum=checksum,
                 )
+                # Exactly the values the row will store, so the API (which reads
+                # them back from the row) serves this very file.
+                thumb_id = (row["mtime"], row["size"], row["orientation"])
 
             # Generate thumbnail if requested
             if generate_thumbnails:
@@ -519,13 +528,13 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
                         worker_status[worker_id] = (p.name, "Checking thumbnail")
                         update_display()
 
-                    if not thumbnails.thumbnail_exists(p, stat.st_mtime, stat.st_size):
+                    if not thumbnails.thumbnail_exists(p, *thumb_id):
                         # Update status: generating thumbnail
                         with lock:
                             worker_status[worker_id] = (p.name, "Generating thumbnail")
                             update_display()
 
-                        thumbnails.get_thumbnail(p, stat.st_mtime, stat.st_size)
+                        thumbnails.get_thumbnail(p, *thumb_id)
                         thumb_generated = True
                     else:
                         thumb_cached = True

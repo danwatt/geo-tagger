@@ -1680,7 +1680,9 @@ def save_last_scan_root(root: str):
     save_last_scan_roots([root])
 
 
-_FRESH_COLS = "mtime, sidecar_path, sidecar_mtime, camera, photo_datetime, gps_accuracy, orientation"
+# size isn't part of the freshness rule; it's selected so fresh_cache_ids can hand the
+# scan the row's thumbnail cache identity (mtime, size, orientation).
+_FRESH_COLS = "mtime, size, sidecar_path, sidecar_mtime, camera, photo_datetime, gps_accuracy, orientation"
 
 # Directories per `dir IN (…)` query in fresh_flags. Well under SQLite's
 # host-parameter limit (999 on older builds); each chunk is one indexed query.
@@ -1697,8 +1699,21 @@ def is_fresh(dir_: str, filename: str, mtime: float, sidecar_path: str | None, s
 
 
 def fresh_flags(entries: list[tuple[str, str, float, str | None, float | None]]) -> list[bool]:
+    """is_fresh for many files at once (see fresh_cache_ids), as bools."""
+    return [c is not None for c in fresh_cache_ids(entries)]
+
+
+def fresh_cache_ids(entries: list[tuple[str, str, float, str | None, float | None]]
+                    ) -> list[tuple[float, int, int | None] | None]:
     """is_fresh for many files at once: entries are (dir, filename, mtime,
-    sidecar_path, sidecar_mtime), the result is aligned with them.
+    sidecar_path, sidecar_mtime), the result is aligned with them — the indexed
+    row's (mtime, size, orientation) where the file is fresh, None where it must
+    be re-read.
+
+    The scan needs those values, not just the verdict: a fresh file's row is not
+    rewritten, so its stored mtime (which may differ from the current stat by up to
+    the 1 s tolerance) and size (not part of the rule) are what the thumbnail API
+    keys on, and the scan must key its thumbnail on the same ones (audit S4).
 
     One indexed `dir IN (…)` query per _FRESH_DIR_CHUNK distinct directories
     instead of one query per file — a rescan of an unchanged library otherwise
@@ -1709,13 +1724,13 @@ def fresh_flags(entries: list[tuple[str, str, float, str | None, float | None]])
     Memory: only one chunk's rows are held at a time (a dict entry of
     (dir, filename) -> small Row per photo, a few hundred bytes each, so even
     one chunk spanning a 500K-photo library stays ~100 MB transient); what is
-    kept is one bool per entry. Reads outside a transaction like any other
-    read, so a concurrent unit's uncommitted rows may be seen — as with
-    is_fresh."""
+    kept is one small tuple (or None) per entry, not the Row. Reads outside a
+    transaction like any other read, so a concurrent unit's uncommitted rows may
+    be seen — as with is_fresh."""
     by_dir: dict[str, list[int]] = {}
     for i, e in enumerate(entries):
         by_dir.setdefault(e[0], []).append(i)
-    flags = [False] * len(entries)
+    out: list[tuple[float, int, int | None] | None] = [None] * len(entries)
     dirs = list(by_dir)
     db = get_db()
     for start in range(0, len(dirs), _FRESH_DIR_CHUNK):
@@ -1728,8 +1743,10 @@ def fresh_flags(entries: list[tuple[str, str, float, str | None, float | None]])
         for d in chunk:
             for i in by_dir[d]:
                 _, filename, mtime, sidecar_path, sidecar_mtime = entries[i]
-                flags[i] = _row_is_fresh(rows.get((d, filename)), mtime, sidecar_path, sidecar_mtime)
-    return flags
+                row = rows.get((d, filename))
+                if _row_is_fresh(row, mtime, sidecar_path, sidecar_mtime):
+                    out[i] = (row["mtime"], row["size"], row["orientation"])
+    return out
 
 
 def _row_is_fresh(row, mtime: float, sidecar_path: str | None, sidecar_mtime: float | None) -> bool:

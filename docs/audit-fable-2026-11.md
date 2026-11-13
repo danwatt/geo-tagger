@@ -171,7 +171,7 @@ delete or flag the rest (cleaning faces and embeddings explicitly, since foreign
 print, and a file whose metadata read fails is silently absent and retried every boot.
 *Fix:* run the scan as a background task with a status endpoint; persist per-file scan errors.
 
-**S4 — Medium — Scan-time thumbnails ignore orientation** [traced]
+**S4 — Medium — Scan-time thumbnails ignore orientation** [traced] — ✅ **DONE** (one `thumbnails.thumb_cache_path`; scan keys on orientation and, for fresh files, the row's stored mtime/size; `prime_previews.py` had the same bug; old unsuffixed thumbs left orphaned)
 `scanning.py:121-127`, `api/photos.py:210-214`. The scan writes `{key}_thumb.webp`; the API looks for
 `{key}_thumb_o6.webp`. For every rotated photo the scan's thumbnail is never served. The scan also keys on
 `stat.st_mtime` while the API keys on the DB `mtime`.

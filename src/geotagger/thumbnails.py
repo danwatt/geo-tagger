@@ -36,7 +36,44 @@ def _get_thumbs_dir() -> Path:
 
 
 def _cache_key(path: Path, mtime: float, size: int) -> str:
-    return hashlib.sha1(f"{path}:{mtime}:{size}".encode()).hexdigest()
+    # float()/int() so an int mtime (e.g. 1700000000 vs 1700000000.0) can't change
+    # the key's text: the DB column is REAL, so every reader gets a float back, and a
+    # caller passing the same instant as an int must land on the same file.
+    return hashlib.sha1(f"{path}:{float(mtime)}:{int(size)}".encode()).hexdigest()
+
+
+def _cache_file(path: Path, mtime: float, size: int, variant: str) -> Path:
+    """``thumbs/{key[:2]}/{key}_{variant}{ext}`` — the one place a cached rendition's
+    filename is assembled. ``variant`` carries everything after the key (``thumb``,
+    ``thumb_o6``, ``face_<bbox>_fd_o8``…). Doesn't create the subdirectory."""
+    key = _cache_key(path, mtime, size)
+    return _get_thumbs_dir() / key[:2] / f"{key}_{variant}{cache_ext()}"
+
+
+def thumb_cache_path(path: Path, mtime: float, size: int, orientation: int | None) -> Path:
+    """Cache file of the grid thumbnail. Shared by ``get_thumbnail`` (API, scan) and
+    ``thumbnail_exists`` so the probe and the generator can't disagree on the name —
+    the scan once probed/wrote the unsuffixed name while the API read ``_o{n}``
+    (audit S4). ``mtime``/``size``/``orientation`` must be the values stored in the
+    photo's DB row: those are what the API passes."""
+    return _cache_file(path, mtime, size, f"thumb{_orient_suffix(orientation)}")
+
+
+def _preview_cache_path(path: Path, mtime: float, size: int,
+                        orientation: int | None = None) -> Path:
+    """Cache file of the canonical (orientation None/1) or oriented preview, shared by
+    ``get_preview``, ``get_preview_oriented`` and ``rebuild_preview_from_full_decode``."""
+    return _cache_file(path, mtime, size,
+                       f"preview{_fd_suffix(path)}{_orient_suffix(orientation)}")
+
+
+def _face_crop_cache_path(path: Path, mtime: float, size: int,
+                          bbox: tuple[float, float, float, float],
+                          orientation: int | None) -> Path:
+    """Cache file of one face crop, shared by ``get_face_crop`` / ``face_crop_exists``."""
+    bbox_key = hashlib.sha1(",".join(f"{v:.4f}" for v in bbox).encode()).hexdigest()[:10]
+    return _cache_file(path, mtime, size,
+                       f"face_{bbox_key}{_fd_suffix(path)}{_orient_suffix(orientation)}")
 
 
 # ── Atomic cache I/O ──
@@ -420,14 +457,12 @@ def _stamp_play_icon(img: Image.Image):
     img.paste(Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB"), (0, 0))
 
 
-def thumbnail_exists(path: Path, mtime: float, size: int) -> bool:
-    """Check if a thumbnail already exists in the cache."""
+def thumbnail_exists(path: Path, mtime: float, size: int,
+                     orientation: int | None = None) -> bool:
+    """Check if the grid thumbnail ``get_thumbnail`` would serve for this
+    ``orientation`` already exists in the cache."""
     try:
-        thumbs = _get_thumbs_dir()
-        key = _cache_key(path, mtime, size)
-        subdir = thumbs / key[:2]
-        cached = subdir / (key + "_thumb" + cache_ext())
-        return _cache_present(cached)
+        return _cache_present(thumb_cache_path(path, mtime, size, orientation))
     except Exception:
         return False
 
@@ -439,12 +474,7 @@ def face_crop_exists(path: Path, mtime: float, size: int,
     cache filename, minus the ``margin``/``out_size`` params — those aren't part of
     the cache key, so any prior crop for this bbox/orientation counts)."""
     try:
-        thumbs = _get_thumbs_dir()
-        bbox_key = hashlib.sha1(",".join(f"{v:.4f}" for v in bbox).encode()).hexdigest()[:10]
-        key = _cache_key(path, mtime, size)
-        subdir = thumbs / key[:2]
-        cached = subdir / f"{key}_face_{bbox_key}{_fd_suffix(path)}{_orient_suffix(orientation)}{cache_ext()}"
-        return _cache_present(cached)
+        return _cache_present(_face_crop_cache_path(path, mtime, size, bbox, orientation))
     except Exception:
         return False
 
@@ -476,13 +506,11 @@ def invalidate_photo_cache(path: Path, mtime: float, size: int) -> int:
 
 def get_thumbnail(path: Path, mtime: float, size: int,
                   orientation: int | None = None) -> bytes:
-    """Grid thumbnail, rotated upright for ``orientation`` (display-only path)."""
-    thumbs = _get_thumbs_dir()
-    key = _cache_key(path, mtime, size)
-    # Use first 2 chars of hash as subdirectory
-    subdir = thumbs / key[:2]
-    subdir.mkdir(exist_ok=True)
-    cached = subdir / f"{key}_thumb{_orient_suffix(orientation)}{cache_ext()}"
+    """Grid thumbnail, rotated upright for ``orientation`` (display-only path).
+    Rotation is applied exactly once, in ``_make_thumbnail``; the cached bytes are
+    already upright and served as-is."""
+    cached = thumb_cache_path(path, mtime, size, orientation)
+    cached.parent.mkdir(exist_ok=True)  # first 2 chars of the key as subdirectory
     hit = _read_cached(cached)
     if hit is not None:
         return hit
@@ -507,13 +535,10 @@ def rebuild_preview_from_full_decode(path: Path, mtime: float, size: int) -> byt
     freshly decoded pixels. Used by ``scripts/rescan_raw_faces.py``'s
     ``--thumbnails-only`` mode. Non-RAW files just get their normal preview.
     """
-    thumbs = _get_thumbs_dir()
-    key = _cache_key(path, mtime, size)
-    subdir = thumbs / key[:2]
-    subdir.mkdir(exist_ok=True)
+    cached = _preview_cache_path(path, mtime, size)
+    cached.parent.mkdir(exist_ok=True)
     is_raw = path.suffix.lower() in config.RAW_EXTENSIONS
     data = _make_thumbnail(path, PREVIEW_SIZE, full_decode=is_raw)
-    cached = subdir / f"{key}_preview{_fd_suffix(path)}{cache_ext()}"
     _write_cached(cached, data)
     return data
 
@@ -531,13 +556,9 @@ def get_preview(path: Path, mtime: float, size: int,
     not part of the cache key) — it's only needed to undo HEIC's baked-in container
     rotation in ``_open_image`` so "sensor space" holds for those files too.
     """
-    thumbs = _get_thumbs_dir()
-    key = _cache_key(path, mtime, size)
-    # Use first 2 chars of hash as subdirectory
-    subdir = thumbs / key[:2]
-    subdir.mkdir(exist_ok=True)
+    cached = _preview_cache_path(path, mtime, size)
+    cached.parent.mkdir(exist_ok=True)  # first 2 chars of the key as subdirectory
     fd = _fd_suffix(path)
-    cached = subdir / f"{key}_preview{fd}{cache_ext()}"
     hit = _read_cached(cached)
     if hit is not None:
         return hit
@@ -557,11 +578,8 @@ def get_preview_oriented(path: Path, mtime: float, size: int,
     """
     if not orientation or orientation == 1:
         return get_preview(path, mtime, size, orientation)
-    thumbs = _get_thumbs_dir()
-    key = _cache_key(path, mtime, size)
-    subdir = thumbs / key[:2]
-    subdir.mkdir(exist_ok=True)
-    cached = subdir / f"{key}_preview{_fd_suffix(path)}_o{orientation}{cache_ext()}"
+    cached = _preview_cache_path(path, mtime, size, orientation)
+    cached.parent.mkdir(exist_ok=True)
     hit = _read_cached(cached)
     if hit is not None:
         return hit
@@ -619,12 +637,8 @@ def get_face_crop(path: Path, mtime: float, size: int, bbox: tuple[float, float,
     size) and squared off, then cached on disk keyed by the photo, the box, and
     the orientation so the grid loads fast.
     """
-    thumbs = _get_thumbs_dir()
-    bbox_key = hashlib.sha1(",".join(f"{v:.4f}" for v in bbox).encode()).hexdigest()[:10]
-    key = _cache_key(path, mtime, size)
-    subdir = thumbs / key[:2]
-    subdir.mkdir(exist_ok=True)
-    cached = subdir / f"{key}_face_{bbox_key}{_fd_suffix(path)}{_orient_suffix(orientation)}{cache_ext()}"
+    cached = _face_crop_cache_path(path, mtime, size, bbox, orientation)
+    cached.parent.mkdir(exist_ok=True)
     hit = _read_cached(cached)
     if hit is not None:
         return hit
