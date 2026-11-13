@@ -367,7 +367,7 @@ names. No archive is extracted to disk. Download URLs are fixed HTTPS constants.
 `index.py:448`. No column list, so every face-scan, checksum or date write does an R*Tree delete and insert.
 *Fix:* recreate as `AFTER UPDATE OF lat, lng`.
 
-**P4 — Medium — `download-zip` builds the archive of originals in RAM, twice** [seen] — ✅ **Done** (temp-file zip, `GEOTAGGER_ZIP_MAX_BYTES` cap = 413, all-missing = 404, form-POST navigation download; browser flow not yet exercised)
+**P4 — Medium — `download-zip` builds the archive of originals in RAM, twice** [seen] — ✅ **Done** (temp-file zip, `GEOTAGGER_ZIP_MAX_BYTES` cap = 413, all-missing = 404, form-POST navigation download)
 `api/photos.py:459-498`, `web/search.js:1113-1127`. `BytesIO` on the server and `res.blob()` in the tab. A few
 hundred RAW files is several GB in each. An all-missing selection returns 200 with an empty zip.
 *Fix:* cap by total bytes, stream from a temp file, and use a plain navigation download.
