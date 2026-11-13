@@ -44,7 +44,7 @@ async function loadLiveSettings() {
     const scoreSpec = data.settings.find(s => s.key === "FACE_PRESELECT_MIN_SCORE");
     if (scoreSpec) CONFIDENT_SCORE = scoreSpec.value;
     const limitSpec = data.settings.find(s => s.key === "FACE_QUERY_LIMIT");
-    if (limitSpec) FACE_LIMIT = limitSpec.value;
+    if (limitSpec) { FACE_LIMIT = limitSpec.value; sizeCropImgCache(FACE_LIMIT); }
   } catch (e) {
     // Keep the built-in defaults if settings can't be reached.
   }

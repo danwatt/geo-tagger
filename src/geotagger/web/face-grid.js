@@ -19,9 +19,13 @@ function faceCropImg(face, opts = {}) {
     const hit = _cropImgCache.get(face.id);
     // Still in the document = in use by another view; moving it would tear it
     // out of there, so fall through and build a second one.
+    // (Callers build cells into detached containers, so this can't catch the
+    // same face being asked for twice within one render — callers must not do
+    // that. The People grid and its staging area are disjoint by construction.)
     if (hit && !hit.isConnected) {
       hit.alt = alt;
       if (opts.title) hit.title = opts.title;
+      _cropImgCacheSet(face.id, hit);   // refresh: a hit is a use, so it's LRU not FIFO
       return hit;
     }
   }
@@ -37,14 +41,26 @@ function faceCropImg(face, opts = {}) {
 
 // Detached <img> nodes held for reuse, keyed by face id. Bounded: a long people
 // session can walk through far more faces than any one view shows, and each
-// entry pins a decoded bitmap.
+// entry pins a decoded bitmap. The bound must never fall below what one render
+// can show, though: a rebuild walks the faces in order, so a cap smaller than
+// the grid evicts each entry just before the rebuild reaches it and every image
+// is recreated (LRU degenerates to 0% hits on a cyclic scan). Pages that reuse
+// call sizeCropImgCache() with their page size; the floor covers the rest.
 const _cropImgCache = new Map();
-const CROP_IMG_CACHE_MAX = 3000;
+const CROP_IMG_CACHE_FLOOR = 3000;
+let _cropImgCacheMax = CROP_IMG_CACHE_FLOOR;
+
+// Fit the cache to a page that can show up to `maxShown` reusable faces at once.
+// 1.5× headroom: the People staging area can still hold faces staged from an
+// earlier scope on top of a full grid of the current one.
+function sizeCropImgCache(maxShown) {
+  _cropImgCacheMax = Math.max(CROP_IMG_CACHE_FLOOR, Math.ceil((maxShown || 0) * 1.5));
+}
 
 function _cropImgCacheSet(id, img) {
   _cropImgCache.delete(id);   // re-insert so Map order stays least-recent-first
   _cropImgCache.set(id, img);
-  while (_cropImgCache.size > CROP_IMG_CACHE_MAX) {
+  while (_cropImgCache.size > _cropImgCacheMax) {
     _cropImgCache.delete(_cropImgCache.keys().next().value);
   }
 }

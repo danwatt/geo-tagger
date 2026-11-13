@@ -83,6 +83,7 @@ const FOCUS_LS_KEY = "geotagger.people.focusYear";
 // setting (see loadLiveSettings, which pulls both in one /api/settings
 // call); this default is only used if that fetch hasn't resolved yet.
 let FACE_LIMIT = 5000;
+sizeCropImgCache(FACE_LIMIT);   // the grid reuses crop <img>s; keep them all cached
 // Auto-select bar for the Unlabeled queue: a suggestion only exists at all above
 // FACE_MATCH_THRESHOLD, so this higher cutoff pre-selects just the confident
 // guesses and leaves weaker ones for manual triage. Loaded from the server's

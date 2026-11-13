@@ -23,6 +23,18 @@ function stagingEnabled() {
 // Park `ids` under one destination. Re-staging a face overwrites its previous
 // decision, so "move it to a different group" is just another stage call.
 function stageFaces(ids, change, dest) {
+  const staged = stageFacesNoRender(ids, change);
+  if (!staged) { setStatus("Nothing to stage.", true); return; }
+  afterStaging();
+  setStatus(`Staged ${staged} face(s) → ${dest}. Nothing saved yet — ` +
+            `review at the bottom of the grid, then Commit.`);
+}
+
+// The state half of stageFaces, for bulk callers that stage several
+// destinations in one go (Accept suggestions: one per suggested person) and
+// must then rebuild the grid once, via afterStaging(), not once per destination.
+// Returns how many faces were staged.
+function stageFacesNoRender(ids, change) {
   let staged = 0;
   ids.forEach(id => {
     const face = findFace(id);
@@ -32,13 +44,14 @@ function stageFaces(ids, change, dest) {
     if (focusedFaceId === id) focusedFaceId = null;
     staged++;
   });
-  if (!staged) { setStatus("Nothing to stage.", true); return; }
+  return staged;
+}
+
+function afterStaging() {
   lastClickedIndex = -1;   // renderOrder shifts under the cells we just removed
   updateActionButtons();
   renderGrid();            // renders the staging area too
   updateDetail();
-  setStatus(`Staged ${staged} face(s) → ${dest}. Nothing saved yet — ` +
-            `review at the bottom of the grid, then Commit.`);
 }
 
 // Drop staged decisions, returning those faces to the grid unchanged.

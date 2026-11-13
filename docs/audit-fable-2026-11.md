@@ -385,7 +385,7 @@ DOM marker with no clustering; the date scrubber triggers a full rebuild per `po
 points causes N full re-renders.
 *Fix:* rAF-throttle, `markerClusterGroup` (already used in `map.js`), `content-visibility: auto`, batch the commit.
 
-**P8 — Medium — People grid: no virtualisation, and a cache that misses 100% above 3000 faces** [traced]
+**P8 — Medium — People grid: no virtualisation, and a cache that misses 100% above 3000 faces** [traced] — ✅ **DONE** (cache sized from `FACE_LIMIT`, LRU refresh on hit, one rebuild per accept-suggestions, `content-visibility`; 3940-face scratch run: 2,400–3,940 → 0 images recreated per rebuild. Still no virtual scroller)
 `web/people.js:962-964,2942-2956`, `web/face-grid.js:18-27,42-50`. `CROP_IMG_CACHE_MAX = 3000` but
 `FACE_LIMIT = 5000`, with no LRU refresh on hit, so every rebuild recreates every image. "Accept suggestions"
 does one full rebuild per suggested person.

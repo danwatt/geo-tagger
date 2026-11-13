@@ -97,6 +97,18 @@
 }
 
 /* ── Center: faces grid (reuses #grid / .thumb-cell from style.css) ── */
+/* A load can be thousands of face cells (FACE_QUERY_LIMIT, 5000 by default).
+   Off-screen ones skip style, layout and paint until they scroll near the
+   viewport — the same trick as geocode.css. Nothing a cell draws escapes it:
+   .thumb-cell is already overflow: hidden, its badges/chips are absolutely
+   positioned inside it, the selection and ambiguous rings are its own border /
+   inset shadow (outside / inside the clip edge, respectively), and the
+   quick-action menu is a body-level popup. `auto` remembers each cell's real
+   size once rendered, so the placeholder only needs to be close. */
+#grid .thumb-cell {
+  content-visibility: auto;
+  contain-intrinsic-size: auto var(--face-size);
+}
 /* Sticky control bar pinned to the top of the (scrolling) middle pane. */
 #grid-nav {
   position: sticky;

@@ -232,6 +232,11 @@ function sortFaceGroups(groups) {
 // a staged face leaves one and appears in the other — so they always render
 // together. renderGridInner owns the grid itself.
 function renderGrid() {
+  // Empty the staging area first: a face reverted out of it is rebuilt in the
+  // grid below, and while its old staging cell is still in the document the
+  // crop cache won't hand that <img> over (see faceCropImg) — so every revert
+  // or undo would re-fetch and re-decode each returning face.
+  document.getElementById("pending-groups").innerHTML = "";
   renderGridInner();
   renderPending();
   // Full rebuilds paint each cell's selected class as it's created, so they skip

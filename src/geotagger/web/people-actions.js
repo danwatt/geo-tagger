@@ -363,13 +363,13 @@ async function acceptSuggestionsFor(faceList, label) {
     (byPerson[f.suggestion.person_id] ||= []).push(f.id);
   });
   if (stagingEnabled()) {
-    // One stage call per suggested person, so each lands in its own group; the
-    // last call's status line covers the batch.
+    // Stage each suggested person separately, so each lands in its own group,
+    // but rebuild the grid once at the end — a full rebuild per person made a
+    // many-person accept cost N rebuilds of the whole grid.
     Object.entries(byPerson).forEach(([pid, faceIds]) => {
-      const personId = parseInt(pid);
-      stageFaces(faceIds, { kind: "assign", personId },
-                 persons.find(p => p.id === personId)?.name || "a person");
+      stageFacesNoRender(faceIds, { kind: "assign", personId: parseInt(pid) });
     });
+    afterStaging();
     setStatus(`Staged ${targets.length} suggested face(s)${where} across ` +
               `${Object.keys(byPerson).length} person(s). Nothing saved yet — ` +
               `review at the bottom of the grid, then Commit.`);
