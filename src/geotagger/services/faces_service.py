@@ -217,12 +217,13 @@ def find_untagged_face_photos(pids: list[int], date_from: str | None, date_to: s
     threshold = config.FACE_MATCH_THRESHOLD if threshold is None else threshold
     warnings: list[str] = []
 
-    allowed_rows = index.search_photos(
+    # Ids only: this is a whole-library membership set. Full photo rows are
+    # fetched afterwards for just the candidates that survive the limit.
+    allowed_ids = {r["id"] for r in index.search_photos(
         date_from=date_from, date_to=date_to, bbox=bbox, location=location,
         person_ids=None, geotagged=geotagged, limit=10_000_000,
-        place_id=place_id, nearby_m=nearby_m, location_fields=location_fields)
-    allowed_ids = {r["id"] for r in allowed_rows}
-    allowed_photo = {r["id"]: r for r in allowed_rows}
+        place_id=place_id, nearby_m=nearby_m, location_fields=location_fields,
+        ids_only=True)}
 
     gallery = faces.build_gallery()
     names = serializers.person_name_map()
@@ -234,11 +235,12 @@ def find_untagged_face_photos(pids: list[int], date_from: str | None, date_to: s
     neg_map = faces.get_negatives_map()
 
     if len(pids) == 1:
-        result = _find_single(pids[0], allowed_ids, allowed_photo, gallery, names,
+        result = _find_single(pids[0], allowed_ids, gallery, names,
                               rows, unknowns, times, threshold, limit)
     else:
-        result = _find_together(pids, allowed_ids, allowed_photo, gallery, names,
+        result = _find_together(pids, allowed_ids, gallery, names,
                                 rows, unknowns, times, neg_map, threshold, limit)
+    _attach_photos(result["candidates"])
     result["warnings"] = warnings
     logger.info("find_untagged_face_photos pids=%s mode=%s candidates=%d total=%d %.2fms",
                pids, result["mode"], len(result["candidates"]), result["total"],
@@ -246,7 +248,17 @@ def find_untagged_face_photos(pids: list[int], date_from: str | None, date_to: s
     return result
 
 
-def _find_single(pid: int, allowed_ids: set[int], allowed_photo: dict,
+def _attach_photos(candidates: list[dict]) -> None:
+    """Fill each candidate's ``photo`` (from its ``_photo_id``) with one batched
+    fetch, only for the candidates actually returned. ``photo`` is placed first to
+    keep the response's key order."""
+    photos = {r["id"]: r for r in index.get_photos(ids=[c["_photo_id"] for c in candidates])}
+    for i, c in enumerate(candidates):
+        pid = c.pop("_photo_id")
+        candidates[i] = {"photo": serializers.photo_to_dict(photos[pid]), **c}
+
+
+def _find_single(pid: int, allowed_ids: set[int],
                  gallery, names: dict, rows, unknowns, times,
                  threshold: float, limit: int) -> dict:
     if pid not in gallery._pid_to_group:
@@ -263,7 +275,7 @@ def _find_single(pid: int, allowed_ids: set[int], allowed_photo: dict,
         if photo_id in already_tagged:
             continue
         entry = by_photo.setdefault(photo_id, {
-            "photo": serializers.photo_to_dict(allowed_photo[photo_id]),
+            "_photo_id": photo_id,
             "tagged": [], "proposed": [], "_best": 0.0,
         })
         entry["proposed"].append({
@@ -281,7 +293,7 @@ def _find_single(pid: int, allowed_ids: set[int], allowed_photo: dict,
             "candidates": candidates[:limit]}
 
 
-def _find_together(pids: list[int], allowed_ids: set[int], allowed_photo: dict,
+def _find_together(pids: list[int], allowed_ids: set[int],
                    gallery, names: dict, rows, unknowns, times, neg_map,
                    threshold: float, limit: int) -> dict:
     u_rows, u_embs, u_times = faces.window_rows(rows, unknowns, times, None, None, allowed_ids)
@@ -357,7 +369,7 @@ def _find_together(pids: list[int], allowed_ids: set[int], allowed_photo: dict,
                 "score": round(score, 4), "bbox": _bbox_for_row(u_rows[j]),
             })
         candidates.append({
-            "photo": serializers.photo_to_dict(allowed_photo[photo_id]),
+            "_photo_id": photo_id,
             "tagged": tagged_out, "proposed": proposed_out, "_best": best,
         })
 

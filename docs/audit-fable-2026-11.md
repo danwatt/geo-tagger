@@ -390,7 +390,7 @@ points causes N full re-renders.
 `FACE_LIMIT = 5000`, with no LRU refresh on hit, so every rebuild recreates every image. "Accept suggestions"
 does one full rebuild per suggested person.
 
-**P9 — Low** [traced] — `geocode_pending` commits twice per photo (`services/geocode_service.py:18-21`);
+**P9 — Low** [traced] — ✅ **DONE** (all six: chunked geocode writes, memoised bounds parse, cache drops embedding blobs, 256-row cluster slab, ids-only search, narrow `get_photos` columns) — `geocode_pending` commits twice per photo (`services/geocode_service.py:18-21`);
 `covered_by_place` re-parses bounds JSON per cluster × place (`hotspots_service.py:299-301`);
 `_unlabeled_cache` holds embeddings twice (`faces.py:513-515`); `cluster_unlabeled` allocates (1024, N)
 (`faces.py:1012`); `find_untagged_face_photos` loads every row to build an id set (`faces_service.py:220-225`);

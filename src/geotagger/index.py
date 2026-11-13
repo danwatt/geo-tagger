@@ -921,6 +921,16 @@ def ids_json(ids) -> str:
     return _json.dumps([int(i) for i in ids])
 
 
+# Columns the get_photos callers read (serializers.photo_to_dict / row_location,
+# zip_service via photo_path). SELECT * also dragged ext, mtime, size, sidecar_*,
+# scanned_at, orientation, checksum, faces_*, loc_county/postal_code/country_code
+# and geocoded_at through sqlite3 -> Python for every row of an unpaged result;
+# add a column here if a new caller needs it.
+_PHOTO_LIST_COLS = ("id, filename, dir, media_type, lat, lng, geotag_source, camera, "
+                    "photo_datetime, gps_accuracy, geocode_ignored, date_precision, "
+                    "loc_city, loc_sublocation, loc_postal_code, loc_state, loc_country")
+
+
 def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str | None = None,
                date_to: str | None = None, undated: bool = False,
                dir: str | None = None, ids: list[int] | None = None) -> list[sqlite3.Row]:
@@ -934,7 +944,7 @@ def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str |
         if not ids:
             return []
         return db.execute(
-            "SELECT * FROM photos WHERE id IN (SELECT value FROM json_each(?)) "
+            f"SELECT {_PHOTO_LIST_COLS} FROM photos WHERE id IN (SELECT value FROM json_each(?)) "
             "ORDER BY photo_datetime, filename",
             (ids_json(ids),),
         ).fetchall()
@@ -951,7 +961,7 @@ def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str |
         # No timestamp to filter by — date_from/date_to don't apply.
         clauses.append("(photo_datetime IS NULL OR photo_datetime <= 0)")
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-        return db.execute(f"SELECT * FROM photos {where} ORDER BY filename", params).fetchall()
+        return db.execute(f"SELECT {_PHOTO_LIST_COLS} FROM photos {where} ORDER BY filename", params).fetchall()
     if bbox and bbox.strip():
         # bbox=minLng,minLat,maxLng,maxLat; malformed raises ValueError
         clause, bbox_params = _bbox_clause(bbox)
@@ -965,7 +975,8 @@ def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str |
         clauses.append("photo_datetime < ?")
         params.append(_day_start_ts(date_to) + 86400)
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-    return db.execute(f"SELECT * FROM photos {where} ORDER BY photo_datetime, filename", params).fetchall()
+    return db.execute(f"SELECT {_PHOTO_LIST_COLS} FROM photos {where} ORDER BY photo_datetime, filename",
+                      params).fetchall()
 
 
 def get_dir_counts(limit: int = 500) -> list[sqlite3.Row]:
@@ -1014,7 +1025,7 @@ def search_photos(date_from: str | None = None, date_to: str | None = None,
                   location_fields: str | None = None,
                   camera: str | None = None, dir: str | None = None,
                   has_faces: str = "all", gps_accuracy: str = "all",
-                  sort: str = "date_asc") -> list[sqlite3.Row]:
+                  sort: str = "date_asc", ids_only: bool = False) -> list[sqlite3.Row]:
     """Flexible multi-criteria photo search: date range, location (bbox and/or a
     free-text match against the reverse-geocoded place columns), people, camera,
     folder, GPS accuracy, and whether any face was detected.
@@ -1026,6 +1037,10 @@ def search_photos(date_from: str | None = None, date_to: str | None = None,
     Every criterion is optional and they combine with AND. ``undated`` (no
     timestamp at all) is mutually exclusive with date_from/date_to, which are
     meaningless without a photo_datetime — same convention as get_photos.
+
+    ``ids_only`` returns rows carrying just ``id`` (same filters, order and
+    limit) for callers that only need the matching set — it spares SQLite and
+    Python from materializing every column of up to a whole library of rows.
     """
     db = get_db()
     clauses: list[str] = []
@@ -1109,7 +1124,8 @@ def search_photos(date_from: str | None = None, date_to: str | None = None,
 
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     order = SEARCH_SORTS.get(sort, SEARCH_SORTS["date_asc"])
-    sql = f"SELECT * FROM photos {where} ORDER BY {order} LIMIT ?"
+    select = "id" if ids_only else "*"
+    sql = f"SELECT {select} FROM photos {where} ORDER BY {order} LIMIT ?"
     params.append(limit)
     return db.execute(sql, params).fetchall()
 
@@ -1491,24 +1507,32 @@ def put_cached_geocode(qlat: int, qlng: int, loc: dict, source: str = "local"):
         )
 
 
+def _location_params(photo_id: int, loc: dict | None, now: float) -> tuple:
+    """Bind values for the location UPDATE; loc=None clears the loc_* columns."""
+    loc = loc or {}
+    return (loc.get("city"), loc.get("sublocation"), loc.get("postal_code"), loc.get("state"),
+            loc.get("county"), loc.get("country"), loc.get("country_code"), now, photo_id)
+
+
+_LOCATION_SQL = ("UPDATE photos SET loc_city=?, loc_sublocation=?, loc_postal_code=?, loc_state=?, "
+                 "loc_county=?, loc_country=?, loc_country_code=?, geocoded_at=? WHERE id=?")
+
+
 def update_photo_location(photo_id: int, loc: dict | None):
     """Store reverse-geocoded place names on a photo. geocoded_at is always set
     (so a no-match isn't retried endlessly); loc=None records 'looked up, no match'."""
+    update_photo_locations([(photo_id, loc)])
+
+
+def update_photo_locations(items: list[tuple[int, dict | None]]):
+    """update_photo_location for many photos in ONE transaction (one commit and one
+    hold of the global write lock, instead of one per photo). Callers do the
+    lookups first, outside any transaction."""
+    if not items:
+        return
+    now = time.time()
     with transaction() as db:
-        if loc is None:
-            db.execute(
-                "UPDATE photos SET loc_city=NULL, loc_sublocation=NULL, loc_postal_code=NULL, "
-                "loc_state=NULL, loc_county=NULL, loc_country=NULL, loc_country_code=NULL, "
-                "geocoded_at=? WHERE id=?",
-                (time.time(), photo_id),
-            )
-        else:
-            db.execute(
-                "UPDATE photos SET loc_city=?, loc_sublocation=?, loc_postal_code=?, loc_state=?, "
-                "loc_county=?, loc_country=?, loc_country_code=?, geocoded_at=? WHERE id=?",
-                (loc.get("city"), loc.get("sublocation"), loc.get("postal_code"), loc.get("state"),
-                 loc.get("county"), loc.get("country"), loc.get("country_code"), time.time(), photo_id),
-            )
+        db.executemany(_LOCATION_SQL, [_location_params(pid, loc, now) for pid, loc in items])
 
 
 def get_photos_needing_geocode(limit: int | None = None) -> list[sqlite3.Row]:

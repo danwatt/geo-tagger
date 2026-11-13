@@ -512,6 +512,10 @@ def get_unlabeled_matrix(scan_cap: int | None = None
     floor = config.FACE_SUGGEST_MIN_DET_SCORE if config.FACE_SUGGEST_MIN_DET_SCORE > 0 else None
     rows = index.list_faces("unlabeled", None, limit, min_det_score=floor)
     unknowns, times = _stack_rows(rows)
+    # The joined matrix is now the only copy of the embeddings: drop each row's
+    # blob (a Row is immutable, so rebuild as a dict with the same r["col"] /
+    # .keys() surface) or ~2 KB/face of blobs stay pinned beside the matrix.
+    rows = [{k: r[k] for k in r.keys() if k != "embedding"} for r in rows]
     _unlabeled_cache = (gen, scan_cap, rows, unknowns, times)
     return rows, unknowns, times
 
@@ -686,6 +690,7 @@ def suggest_person(vec: np.ndarray, photo_datetime, gallery: Gallery,
     return None
 
 
+_CLUSTER_CHUNK = 256  # rows per slab in cluster_unlabeled (see there)
 CHUNK = 1024  # caps each (gallery × unknown-chunk) score matrix to a few tens of MB
 
 
@@ -1007,10 +1012,20 @@ def cluster_unlabeled(unknowns: np.ndarray,
             parent[x], x = root, parent[x]
         return root
 
-    for c0 in range(0, n, CHUNK):
-        c1 = min(c0 + CHUNK, n)
-        sims = unknowns[c0:c1] @ unknowns.T          # (chunk, N) cosine
-        ii, jj = np.nonzero(sims >= threshold)
+    # Smaller chunk than CHUNK and reused out= buffers: the (chunk, N) float32
+    # sims plus its bool mask were the whole peak (~100 MB at N=20k with 1024
+    # rows) and were reallocated every chunk. Same pairs either way — only the
+    # slab size changes — and the matmul stays big enough to be BLAS-bound.
+    step = min(_CLUSTER_CHUNK, n)
+    sims_buf = np.empty((step, n), dtype=unknowns.dtype)   # keep caller dtype: identical scores
+    mask_buf = np.empty((step, n), dtype=bool)
+    for c0 in range(0, n, step):
+        c1 = min(c0 + step, n)
+        sims = sims_buf[:c1 - c0]
+        mask = mask_buf[:c1 - c0]
+        np.matmul(unknowns[c0:c1], unknowns.T, out=sims)   # (chunk, N) cosine
+        np.greater_equal(sims, threshold, out=mask)
+        ii, jj = np.nonzero(mask)
         gi = ii + c0
         upper = jj > gi                               # one edge per pair, skip self
         for a, b in zip(gi[upper].tolist(), jj[upper].tolist()):

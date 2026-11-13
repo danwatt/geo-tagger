@@ -1,10 +1,15 @@
 """Blocking reverse-geocoding batch jobs. Framework-free so both the scan path and
 the API routes can call them."""
 
+import logging
 from pathlib import Path
 
 from geotagger import index, sidecar, geocode
 from geotagger.exiftool_session import get_et_lock
+
+logger = logging.getLogger(__name__)
+
+_WRITE_CHUNK = 300  # photos per geocode write transaction
 
 
 def geocode_pending(limit: int | None = None) -> dict:
@@ -15,12 +20,29 @@ def geocode_pending(limit: int | None = None) -> dict:
                 "remaining": index.count_photos_needing_geocode()}
     rows = index.get_photos_needing_geocode(limit)
     processed = matched = 0
+    pending: list[tuple[int, dict | None]] = []
+
+    def flush() -> None:
+        nonlocal processed, matched
+        # One commit per chunk instead of per photo. Lookups (CPU/IO) happened
+        # before this, so the write lock is never held across geocoding.
+        index.update_photo_locations(pending)
+        processed += len(pending)
+        matched += sum(1 for _, loc in pending if loc)
+        pending.clear()
+
     for r in rows:
-        loc = geocode.lookup(r["lat"], r["lng"])
-        index.update_photo_location(r["id"], loc)
-        processed += 1
-        if loc:
-            matched += 1
+        try:
+            loc = geocode.lookup(r["lat"], r["lng"])
+        except Exception:
+            # One bad row mustn't lose the batch; it stays un-geocoded and is
+            # retried next run.
+            logger.exception("geocode lookup failed for photo %s", r["id"])
+            continue
+        pending.append((r["id"], loc))
+        if len(pending) >= _WRITE_CHUNK:   # bounds work lost if the process dies mid-run
+            flush()
+    flush()
     return {"processed": processed, "matched": matched, "available": True,
             "remaining": index.count_photos_needing_geocode()}
 
