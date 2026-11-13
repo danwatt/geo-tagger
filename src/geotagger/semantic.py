@@ -260,8 +260,14 @@ def rank(query: np.ndarray, candidate_ids: list[int] | None, min_score: float,
     ids, mat = get_matrix()
     if len(ids) == 0:
         return []
+    q = np.asarray(query, dtype=np.float32)
     if candidate_ids is None:
-        rows = np.arange(len(ids))
+        # Every row: score the matrix in place. `mat` has exactly len(ids) rows
+        # (index.load_embeddings returns a fresh C-contiguous array with no spare
+        # capacity), so row i is ids[i]. A fancy-index gather here would copy the
+        # whole matrix on every query.
+        rows = None
+        scores = mat @ q
     else:
         # ids is sorted, so map candidates to matrix rows by binary search
         # (O(c log n)) instead of a Python dict over every stored id.
@@ -270,13 +276,15 @@ def rank(query: np.ndarray, candidate_ids: list[int] | None, min_score: float,
         inside = pos < len(ids)
         pos, cand = pos[inside], cand[inside]
         rows = pos[ids[pos] == cand]
-    if len(rows) == 0:
-        return []
-    scores = mat[rows] @ np.asarray(query, dtype=np.float32)
+        if len(rows) == 0:
+            return []
+        # A subset has to be gathered, so this copy only covers the requested rows.
+        scores = mat[rows] @ q
     keep = scores >= min_score
-    rows, scores = rows[keep], scores[keep]
+    scores = scores[keep]
+    hit_rows = np.flatnonzero(keep) if rows is None else rows[keep]
     order = np.argsort(-scores, kind="stable")
-    out = [(int(ids[rows[i]]), float(scores[i])) for i in order
-           if exclude_id is None or ids[rows[i]] != exclude_id]
+    out = [(int(ids[hit_rows[i]]), float(scores[i])) for i in order
+           if exclude_id is None or ids[hit_rows[i]] != exclude_id]
     logger.info(f"Semantic rank over {len(ids)} vectors -> {len(out)} hits in {(time.time() - t0) * 1000:.2f}ms")
     return out

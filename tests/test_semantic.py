@@ -123,6 +123,72 @@ def test_rank_filters_orders_and_thresholds(db):
     assert [pid for pid, _ in semantic.rank(q, None, 0.5, exclude_id=a)] == [b]
 
 
+def _synthetic_matrix(monkeypatch, n, seed=0):
+    """Sparse, sorted photo ids with random unit rows, served through get_matrix so
+    rank() runs without a DB or model."""
+    rng = np.random.default_rng(seed)
+    ids = np.sort(rng.choice(np.arange(1, 10 * n), size=n, replace=False)).astype(np.int64)
+    mat = rng.standard_normal((n, semantic.EMBED_DIM)).astype(np.float32)
+    mat /= np.linalg.norm(mat, axis=1, keepdims=True)
+    monkeypatch.setattr(semantic, "get_matrix", lambda: (ids, mat))
+    return ids, mat
+
+
+def _reference_rank(ids, mat, q, candidate_ids, min_score, exclude_id):
+    """Plain per-row brute force: the behaviour rank() must keep."""
+    position = {int(pid): row for row, pid in enumerate(ids)}
+    if candidate_ids is None:
+        rows = range(len(ids))
+    else:
+        rows = [position[c] for c in sorted(set(candidate_ids)) if c in position]
+    scored = [(int(ids[r]), float(mat[r] @ q)) for r in rows]
+    scored = [(pid, s) for pid, s in scored if s >= min_score and pid != exclude_id]
+    return sorted(scored, key=lambda t: -t[1])  # stable: ties keep ascending-id order
+
+
+def _random_query(seed):
+    v = np.random.default_rng(seed).standard_normal(semantic.EMBED_DIM).astype(np.float32)
+    return v / np.linalg.norm(v)
+
+
+@pytest.mark.parametrize("case", ["unfiltered", "subset", "subset_with_strangers", "empty_subset"])
+def test_rank_matches_reference(monkeypatch, case):
+    ids, mat = _synthetic_matrix(monkeypatch, 300)
+    candidates = {
+        "unfiltered": None,
+        "subset": [int(x) for x in ids[::3]],
+        "subset_with_strangers": [int(x) for x in ids[::3]] + [1_000_000, 0],  # ids not in the matrix
+        "empty_subset": [],
+    }[case]
+    exclude_id = int(ids[7])
+    q = _random_query(1)
+    got = semantic.rank(q, candidates, 0.02, exclude_id=exclude_id)
+    want = _reference_rank(ids, mat, q, candidates, 0.02, exclude_id)
+    assert [pid for pid, _ in got] == [pid for pid, _ in want]
+    # Scores agree to float32 precision rather than bit-for-bit: the unfiltered path
+    # now multiplies the matrix directly instead of a gathered copy.
+    assert np.allclose([s for _, s in got], [s for _, s in want], rtol=0, atol=1e-6)
+    if case != "empty_subset":
+        assert len(got) > 0 and exclude_id not in [pid for pid, _ in got]
+
+
+def test_rank_unfiltered_does_not_copy_matrix(monkeypatch):
+    import tracemalloc
+
+    ids, mat = _synthetic_matrix(monkeypatch, 20_000)  # ~61 MB of float32 vectors
+    q = _random_query(2)
+    tracemalloc.start()
+    try:
+        hits = semantic.rank(q, None, min_score=0.5)  # random data: ~no hits, cheap output
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert hits == []
+    # A full gather would peak at mat.nbytes; the remaining work is a few per-row
+    # arrays (score vector and mask, about 0.1 MB here).
+    assert peak < mat.nbytes // 8, f"peak {peak} bytes vs matrix {mat.nbytes} bytes"
+
+
 def test_matrix_cache_rebuilds_on_change(db):
     a, b = _add("a.jpg"), _add("b.jpg")
     index.store_embeddings([(a, semantic.encode_vec(_unit(1)))], MODEL)

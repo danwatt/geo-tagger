@@ -376,7 +376,7 @@ hundred RAW files is several GB in each. An all-missing selection returns 200 wi
 `thumbnails.py:255-259`. `convert("RGB")` runs before `thumbnail()`, forfeiting Pillow's DCT draft mode.
 *Fix:* `img.draft("RGB", (max, max))` first.
 
-**P6 — Medium — Semantic `rank()` copies the whole matrix per query** [seen]
+**P6 — Medium — Semantic `rank()` copies the whole matrix per query** [seen] — ✅ **DONE** (unfiltered path scores `mat @ q` in place; 100k × 768 synthetic: peak 308 MB → 0.4 MB, 96 ms → 8 ms per query)
 `semantic.py:264,275`. `mat[np.arange(len(ids))] @ q` — about 300 MB at 100k photos. Use `mat @ q`.
 
 **P7 — Medium — Geocode grid and map do not scale** [traced]
