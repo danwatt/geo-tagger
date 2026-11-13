@@ -194,17 +194,14 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
             # listing can carry a stale mtime/size for a recently written file, and
             # the freshness check compares against these values.
             stat = p.stat()
-            sc = sidecar.sidecar_path(p)
-            sc_mtime = None
             # The directory listing already says which .xmp names exist, so most
-            # files (no sidecar) cost no sidecar stat at all.
-            if sc.name.casefold() in xmp_names:
-                try:
-                    sc_mtime = sc.stat().st_mtime
-                except OSError:  # vanished / dangling link: same as "no sidecar"
-                    sc_mtime = None
-            # Filename only — the sidecar always sits next to the image (same `dir`).
-            sc_path_str = sc.name if sc_mtime is not None else None
+            # files (no sidecar) cost no sidecar stat at all. sidecar_tracking is
+            # the same helper every sidecar writer records the row with, so the
+            # freshness check compares like with like.
+            if sidecar.sidecar_path(p).name.casefold() in xmp_names:
+                sc_path_str, sc_mtime = sidecar.sidecar_tracking(p)
+            else:
+                sc_path_str, sc_mtime = None, None
             files_to_process.append((p, media_type, stat, sc_path_str, sc_mtime))
         except Exception as e:
             read_errors.append(f"Error reading {p.name}: {e}")

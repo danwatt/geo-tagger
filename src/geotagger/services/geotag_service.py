@@ -31,16 +31,15 @@ def write_geotag(photo_ids: list[int], lat: float, lng: float,
         p = Path(index.photo_path(row))
         if config.WRITE_XMP_ON_GEOTAG:
             with lock:
-                sc = sidecar.write_gps(p, lat, lng, location=loc, gps_accuracy=gps_accuracy)
-            sc_mtime = sc.stat().st_mtime if sc.exists() else None
-            source, sc_name = "sidecar", sc.name
+                sidecar.write_gps(p, lat, lng, location=loc, gps_accuracy=gps_accuracy)
+            source = "sidecar"
         else:
-            # DB-only: leave any existing sidecar untouched and record whatever
-            # is actually on disk, so a later scan's freshness check (index.is_fresh)
-            # doesn't see a mismatch and re-read a stale/absent sidecar over this.
-            sc = sidecar.sidecar_path(p)
-            sc_mtime = sc.stat().st_mtime if sc.exists() else None
-            source, sc_name = "database", (sc.name if sc.exists() else None)
+            # DB-only: leave any existing sidecar untouched.
+            source = "database"
+        # Either way record whatever is actually on disk, as the scan will see it,
+        # so a later scan's freshness check (index.is_fresh) doesn't see a mismatch
+        # and re-read the file over this.
+        sc_name, sc_mtime = sidecar.sidecar_tracking(p)
         index.update_geotag(photo_id, lat, lng, source, sc_name, sc_mtime,
                             gps_accuracy=gps_accuracy)
         if loc is not None:
@@ -62,7 +61,13 @@ def write_geotag(photo_ids: list[int], lat: float, lng: float,
 
 
 def remove_geotag(photo_ids: list[int]) -> list[dict]:
-    """Strip GPS from each photo's sidecar and clear it in the DB. Blocking."""
+    """Strip GPS from each photo's sidecar and clear it in the DB. Blocking.
+
+    The removal must outlast a re-read even when the ORIGINAL has embedded GPS
+    (which can't be stripped): update_geotag sets the DB marker upsert_photo
+    honours, and the sidecar — when one exists, or is created here in
+    sidecar-writing mode — carries sidecar.GPS_VOID, which also survives a DB
+    rebuild. In DB-only mode with no sidecar the DB marker is the only record."""
     lock = get_et_lock()
     results = []
     for photo_id in photo_ids:
@@ -71,9 +76,11 @@ def remove_geotag(photo_ids: list[int]) -> list[dict]:
             continue
         p = Path(index.photo_path(row))
         with lock:
-            sc = sidecar.remove_gps(p)
-        sc_mtime = sc.stat().st_mtime if sc.exists() else None
-        index.update_geotag(photo_id, None, None, "none", str(sc), sc_mtime)
+            sidecar.remove_gps(p, create=config.WRITE_XMP_ON_GEOTAG)
+        sc_name, sc_mtime = sidecar.sidecar_tracking(p)
+        # gps_accuracy -1.0 ("none", as read_metadata reports it), not NULL, which
+        # the freshness check reads as "never read" and would re-read the file.
+        index.update_geotag(photo_id, None, None, "none", sc_name, sc_mtime, gps_accuracy=-1.0)
         results.append({"id": photo_id, "geotag_source": "none"})
     hotspots_service.invalidate()
     # Local import: work_queue_service imports this module for its proposals.

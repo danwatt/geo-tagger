@@ -65,14 +65,15 @@ def export_to_sidecars() -> dict:
         try:
             p = Path(index.photo_path(r))
             with lock:
-                sc = sidecar.write_gps(p, r["lat"], r["lng"], location=loc, gps_accuracy=r["gps_accuracy"])
-            sc_mtime = sc.stat().st_mtime if sc.exists() else None
-            # Keep sidecar tracking + source current so the next scan doesn't re-index this row.
+                sidecar.write_gps(p, r["lat"], r["lng"], location=loc, gps_accuracy=r["gps_accuracy"])
+            sc_name, sc_mtime = sidecar.sidecar_tracking(p)
+            # Keep sidecar tracking (exactly as the scan computes it) + source current
+            # so the next scan doesn't re-index this row.
             # Per file and after the ExifTool write, so the DB write lock is never
             # held across ExifTool.
             with index.transaction() as db:
                 db.execute("UPDATE photos SET sidecar_path=?, sidecar_mtime=?, geotag_source='sidecar' WHERE id=?",
-                           (sc.name, sc_mtime, r["id"]))
+                           (sc_name, sc_mtime, r["id"]))
             written += 1
         except Exception as e:
             errors += 1

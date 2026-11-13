@@ -63,7 +63,7 @@ sessions, and never anchor a route.
 `loc_postal_code`. After a geotag removal or move, the photo still shows and searches under the old values.
 *Fix:* clear both columns.
 
-**D4 — Medium — Removing a geotag can be undone by the next scan** [traced]
+**D4 — Medium — Removing a geotag can be undone by the next scan** [traced] — ✅ **DONE** (`sidecar.sidecar_tracking` for every writer; removal recorded as `photos.geotag_removed` plus `GPSStatus=V` in the sidecar when one exists; DB-only removals without a sidecar are lost on a DB rebuild)
 `services/geotag_service.py:75`, `index.py:1066`, `scanning.py:37`.
 `remove_geotag` stores `str(sc)` (full path, even when no sidecar exists) where the scanner compares
 `sc.name` or `None`. `is_fresh` therefore fails, the file is re-read, and a photo with GPS embedded in the

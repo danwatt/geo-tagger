@@ -58,6 +58,32 @@ def sidecar_path(image_path: Path) -> Path:
     return image_path.parent / (image_path.stem + ".xmp")
 
 
+def sidecar_tracking(image_path: Path) -> tuple[str | None, float | None]:
+    """The (photos.sidecar_path, photos.sidecar_mtime) pair for an image, exactly
+    as the scan computes it: the sidecar's file NAME (it always sits next to the
+    image, in `dir`) and its mtime, or (None, None) when there is no sidecar.
+
+    Every writer that touches a sidecar and then updates the row must store this,
+    not its own idea of the path: index._row_is_fresh compares the two verbatim,
+    so any other representation (a full path, a name for a sidecar that isn't on
+    disk) makes the next scan re-read the file and re-derive the row from it."""
+    sc = sidecar_path(image_path)
+    try:
+        return sc.name, sc.stat().st_mtime
+    except OSError:  # absent / vanished / dangling link: same as "no sidecar"
+        return None, None
+
+
+# XMP-exif:GPSStatus 'V' ("measurement void") in a sidecar that has no
+# coordinates is how a removed geotag is recorded there. The original can't be
+# edited, so if it carries embedded GPS, "no location" has to be said somewhere
+# a re-read will see; this is a standard EXIF/XMP tag ExifTool writes without a
+# config file, and its meaning ("the GPS fix is not valid") is the one wanted.
+# Coordinates in the sidecar always beat it, so a tool that later writes GPS
+# into the sidecar (without knowing about the marker) still wins.
+GPS_VOID = "V"
+
+
 def read_metadata(image_path: Path) -> dict:
     """Return dict with keys: lat, lng, geotag_source, camera, photo_datetime,
     gps_accuracy, orientation."""
@@ -68,6 +94,7 @@ def read_metadata(image_path: Path) -> dict:
     source = "none"
     gps_accuracy = -1.0
     sidecar_dt = None
+    gps_void = False  # sidecar says the location was removed (see GPS_VOID)
 
     # Try sidecar first for GPS, and for DateTimeOriginal (a sidecar-only
     # correction written by write_datetime/Time Sync — the original file is
@@ -79,7 +106,7 @@ def read_metadata(image_path: Path) -> dict:
         with get_et_lock():
             result = et.get_tags([str(sc)], tags=[
                 "XMP:GPSLatitude", "XMP:GPSLongitude", "XMP:GPSHPositioningError",
-                "XMP:DateTimeOriginal",
+                "XMP:DateTimeOriginal", "XMP:GPSStatus",
             ])
         if result:
             row = result[0]
@@ -93,6 +120,8 @@ def read_metadata(image_path: Path) -> dict:
                         gps_accuracy = float(_acc)
                     except (TypeError, ValueError):
                         pass
+            else:
+                gps_void = str(row.get("XMP:GPSStatus") or "").strip().upper() == GPS_VOID
             sidecar_dt = row.get("XMP:DateTimeOriginal")
 
     # Read embedded GPS + camera in one targeted call — cheaper than pulling
@@ -111,7 +140,8 @@ def read_metadata(image_path: Path) -> dict:
         ])
     row = result[0] if result else {}
 
-    if source == "none":
+    # A removed geotag (gps_void) hides the embedded position and its accuracy.
+    if source == "none" and not gps_void:
         _lat = row.get("Composite:GPSLatitude") or row.get("GPS:GPSLatitude")
         _lng = row.get("Composite:GPSLongitude") or row.get("GPS:GPSLongitude")
         if _lat is not None and _lng is not None:
@@ -129,7 +159,7 @@ def read_metadata(image_path: Path) -> dict:
               or row.get("QuickTime:CreateDate"))
     photo_datetime = _parse_exif_datetime(str(raw_dt)) if raw_dt else 0
 
-    if gps_accuracy <= 0:
+    if gps_accuracy <= 0 and not gps_void:
         raw_acc = row.get("EXIF:GPSHPositioningError") or row.get("XMP:GPSHPositioningError")
         if raw_acc is not None:
             try:
@@ -177,6 +207,8 @@ def write_gps(image_path: Path, lat: float, lng: float, location: dict | None = 
         "-overwrite_original",
         f"-XMP:GPSLatitude={lat}",
         f"-XMP:GPSLongitude={lng}",
+        # Drop any removed-geotag marker (GPS_VOID): this photo has a location again.
+        "-XMP-exif:GPSStatus=",
     ]
     if gps_accuracy is not None and gps_accuracy > 0:
         args.append(f"-XMP:GPSHPositioningError={gps_accuracy}")
@@ -215,14 +247,17 @@ def write_location(image_path: Path, location: dict) -> Path:
     return sc
 
 
-def remove_gps(image_path: Path) -> Path:
-    """Remove GPS from sidecar. Returns sidecar path."""
+def remove_gps(image_path: Path, create: bool = False) -> Path:
+    """Remove GPS from the sidecar and mark the location removed (GPS_VOID), so a
+    later read ignores GPS embedded in the original. An existing sidecar is always
+    updated; a missing one is created only when ``create`` (sidecar-writing mode),
+    otherwise the removal is recorded in the DB alone. Returns sidecar path."""
     # Read existing coordinates before removing
     old_lat, old_lng, _ = read_gps(image_path)
 
     et = get_et()
     sc = sidecar_path(image_path)
-    if sc.exists():
+    if create or sc.exists():
         # Clear coordinates, accuracy and the derived place names together.
         with get_et_lock():
             et.execute(
@@ -231,6 +266,7 @@ def remove_gps(image_path: Path) -> Path:
                 "-XMP:GPSLongitude=",
                 "-XMP:GPSHPositioningError=",
                 "-GPSHPositioningError=",
+                f"-XMP-exif:GPSStatus={GPS_VOID}",
                 *_location_args(None),
                 str(sc),
             )

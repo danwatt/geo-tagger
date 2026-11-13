@@ -322,6 +322,13 @@ def _init_db_locked(root: Path | None) -> sqlite3.Connection:
     # treat a non-NULL value as "approximate, don't trust the day/month".
     if "date_precision" not in cols:
         _db.execute("ALTER TABLE photos ADD COLUMN date_precision TEXT")
+    # 1 = the user removed this photo's geotag. The original can't be edited, so
+    # GPS embedded in it would otherwise come back on the next re-read; upsert_photo
+    # keeps lat/lng empty while this is set (see its `removed` rule). Not the same
+    # as geocode_ignored (which counts a photo as tagged) and kept apart from
+    # geotag_source, which stays 'none' so every "not geotagged" view sees it.
+    if "geotag_removed" not in cols:
+        _db.execute("ALTER TABLE photos ADD COLUMN geotag_removed INTEGER NOT NULL DEFAULT 0")
 
     # One-time cleanup: sidecar_path used to store the sidecar's full path;
     # it's now just the filename (the sidecar always sits next to the image,
@@ -395,6 +402,7 @@ def _init_db_locked(root: Path | None) -> sqlite3.Connection:
                 geocoded_at REAL,
                 geocode_ignored INTEGER NOT NULL DEFAULT 0,
                 date_precision TEXT,
+                geotag_removed INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(dir, filename)
             )
         """)
@@ -851,6 +859,17 @@ def upsert_photo(
         # gps_accuracy falls back to the file's value because update_geotag leaves
         # it NULL when none was given, and is_fresh reads NULL as "never read".
         keep = "photos.geotag_source = 'database' AND excluded.geotag_source <> 'sidecar'"
+        # The user removed the geotag (geotag_removed, set by update_geotag): GPS
+        # embedded in the original must not come back, since the original can't be
+        # edited to drop it. Clearing rules: any geotag write clears the marker
+        # (update_geotag); so does a re-read that finds coordinates in the SIDECAR —
+        # those can only have been written after the removal (remove_gps strips
+        # them), by the user's export or another tool, and a sidecar is the durable
+        # form of a geotag. Embedded GPS never clears it. gps_accuracy is pinned
+        # to -1.0 ("none", as read_metadata reports it) rather than NULL, which
+        # _row_is_fresh would read as "never read". `keep` and `removed` can't
+        # both hold: update_geotag sets 'database' only with coordinates.
+        removed = "photos.geotag_removed = 1 AND excluded.geotag_source <> 'sidecar'"
         # Coordinates before/after, to bump the geotag generation only when they
         # really move: a rescan of touched-but-otherwise-unchanged files (or new
         # photos without GPS) must not throw away the hotspot clustering per file.
@@ -866,13 +885,18 @@ def upsert_photo(
             ON CONFLICT(dir, filename) DO UPDATE SET
                 ext=excluded.ext,
                 media_type=excluded.media_type, mtime=excluded.mtime, size=excluded.size,
-                lat=CASE WHEN {keep} THEN photos.lat ELSE excluded.lat END,
-                lng=CASE WHEN {keep} THEN photos.lng ELSE excluded.lng END,
+                lat=CASE WHEN {keep} THEN photos.lat WHEN {removed} THEN NULL
+                         ELSE excluded.lat END,
+                lng=CASE WHEN {keep} THEN photos.lng WHEN {removed} THEN NULL
+                         ELSE excluded.lng END,
                 geotag_source=CASE WHEN {keep} THEN photos.geotag_source
+                                   WHEN {removed} THEN 'none'
                                    ELSE excluded.geotag_source END,
                 gps_accuracy=CASE WHEN {keep}
                                   THEN COALESCE(photos.gps_accuracy, excluded.gps_accuracy)
+                                  WHEN {removed} THEN -1.0
                                   ELSE excluded.gps_accuracy END,
+                geotag_removed=CASE WHEN {removed} THEN 1 ELSE 0 END,
                 sidecar_path=excluded.sidecar_path, sidecar_mtime=excluded.sidecar_mtime,
                 camera=excluded.camera, photo_datetime=excluded.photo_datetime,
                 orientation=excluded.orientation,
@@ -888,17 +912,22 @@ def upsert_photo(
 
 
 def update_geotag(photo_id: int, lat: float | None, lng: float | None,
-                  geotag_source: str, sidecar_path: str, sidecar_mtime: float | None,
+                  geotag_source: str, sidecar_path: str | None, sidecar_mtime: float | None,
                   gps_accuracy: float | None = None):
+    """A user geotag write; lat/lng None is a removal. sidecar_path/sidecar_mtime
+    must be sidecar.sidecar_tracking()'s values, or the next scan re-reads the file."""
     with transaction() as db:
         # Coordinates changed, so any previously-derived location names are stale.
         # Clear them all and reset geocoded_at so the point is re-geocoded; the caller
         # repopulates them (geotag_service.write_geotag does this immediately after).
+        # geotag_removed records a removal so a rescan can't restore embedded GPS
+        # (see upsert_photo); any write with coordinates clears it.
+        removed = 1 if lat is None or lng is None else 0
         db.execute(f"""
             UPDATE photos SET lat=?, lng=?, gps_accuracy=?, geotag_source=?, sidecar_path=?, sidecar_mtime=?,
-                {DERIVED_LOCATION_CLEAR_SQL}
+                geotag_removed=?, {DERIVED_LOCATION_CLEAR_SQL}
             WHERE id=?
-        """, (lat, lng, gps_accuracy, geotag_source, sidecar_path, sidecar_mtime, photo_id))
+        """, (lat, lng, gps_accuracy, geotag_source, sidecar_path, sidecar_mtime, removed, photo_id))
     bump_geotag_generation()
 
 

@@ -26,7 +26,7 @@ def get_photo_metadata(path: str) -> dict:
 
 def update_photo_times(updates: dict[int, int]) -> int:
     """Apply time offsets to photos and write to sidecars."""
-    from geotagger.sidecar import write_datetime
+    from geotagger.sidecar import sidecar_tracking, write_datetime
 
     updated = 0
     for photo_id, offset_seconds in updates.items():
@@ -43,16 +43,16 @@ def update_photo_times(updates: dict[int, int]) -> int:
 
         # Write to sidecar
         photo_path = Path(index.photo_path(photo))
-        sc = write_datetime(photo_path, new_dt)
-        sc_mtime = sc.stat().st_mtime if sc.exists() else None
+        write_datetime(photo_path, new_dt)
+        sc_name, sc_mtime = sidecar_tracking(photo_path)
 
-        # Update database. Keep sidecar tracking current so the next scan
-        # doesn't consider this row stale and re-derive photo_datetime from
-        # the (uncorrected) embedded EXIF, clobbering this offset.
+        # Update database. Keep sidecar tracking current (exactly as the scan
+        # computes it) so the next scan doesn't consider this row stale and
+        # re-derive photo_datetime from the (uncorrected) embedded EXIF.
         with index.transaction() as db:
             db.execute(
                 "UPDATE photos SET photo_datetime=?, sidecar_path=?, sidecar_mtime=? WHERE id=?",
-                (new_dt, sc.name, sc_mtime, photo_id),
+                (new_dt, sc_name, sc_mtime, photo_id),
             )
 
         updated += 1
@@ -107,14 +107,14 @@ def commit_guessed_dates(entries: list[dict]) -> dict:
 
         precision = e.get("precision")
         if precision == "year":
-            sc, new_dt = sidecar.write_approximate_date(photo_path, e["year"], None)
+            _, new_dt = sidecar.write_approximate_date(photo_path, e["year"], None)
         elif precision == "month":
-            sc, new_dt = sidecar.write_approximate_date(photo_path, e["year"], e["month"])
+            _, new_dt = sidecar.write_approximate_date(photo_path, e["year"], e["month"])
         else:
-            sc, new_dt = sidecar.write_guessed_date(photo_path, e["year"], e["month"], e["day"])
+            _, new_dt = sidecar.write_guessed_date(photo_path, e["year"], e["month"], e["day"])
             precision = None
-        sc_mtime = sc.stat().st_mtime if sc.exists() else None
-        index.assign_approximate_date(photo["id"], new_dt, precision, sc.name, sc_mtime)
+        sc_name, sc_mtime = sidecar.sidecar_tracking(photo_path)
+        index.assign_approximate_date(photo["id"], new_dt, precision, sc_name, sc_mtime)
         updated += 1
 
     if updated:
@@ -135,10 +135,10 @@ def undo_date_commit(previous: list[dict]) -> int:
         if not photo:
             continue
         photo_path = Path(index.photo_path(photo))
-        sc = sidecar.write_datetime_raw(photo_path, snap["raw_datetime"])
-        sc_mtime = sc.stat().st_mtime if sc.exists() else None
+        sidecar.write_datetime_raw(photo_path, snap["raw_datetime"])
+        sc_name, sc_mtime = sidecar.sidecar_tracking(photo_path)
         index.assign_approximate_date(snap["photo_id"], snap["photo_datetime"],
-                                      snap["date_precision"], sc.name, sc_mtime)
+                                      snap["date_precision"], sc_name, sc_mtime)
         reverted += 1
 
     if reverted:
@@ -151,7 +151,7 @@ def assign_approximate_dates(photo_ids: list[int], year: int, month: int | None)
     (or otherwise wrong-dated) photos, writing the sidecar and flagging
     date_precision so consumers (histogram, age-aware face matching) know not
     to trust the day/month-within-year this synthesizes."""
-    from geotagger.sidecar import write_approximate_date
+    from geotagger.sidecar import sidecar_tracking, write_approximate_date
 
     precision = "month" if month else "year"
     updated = 0
@@ -161,10 +161,10 @@ def assign_approximate_dates(photo_ids: list[int], year: int, month: int | None)
             continue
 
         photo_path = Path(index.photo_path(photo))
-        sc, new_dt = write_approximate_date(photo_path, year, month)
-        sc_mtime = sc.stat().st_mtime if sc.exists() else None
+        _, new_dt = write_approximate_date(photo_path, year, month)
+        sc_name, sc_mtime = sidecar_tracking(photo_path)
 
-        index.assign_approximate_date(photo_id, new_dt, precision, sc.name, sc_mtime)
+        index.assign_approximate_date(photo_id, new_dt, precision, sc_name, sc_mtime)
         updated += 1
 
     if updated:
