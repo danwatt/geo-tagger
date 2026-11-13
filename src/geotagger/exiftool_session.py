@@ -3,7 +3,7 @@ import threading
 import exiftool
 from geotagger import config
 
-_et: exiftool.ExifToolHelper | None = None
+_et: "_GuardedExifTool | None" = None
 _et_error: str | None = None
 # Reentrant: the -stay_open session is a single request/response pipe, so EVERY
 # native call from a worker thread must hold this. sidecar.py takes it around each
@@ -11,6 +11,28 @@ _et_error: str | None = None
 # hold it around a whole sidecar.write_gps() — which itself reads metadata — so a
 # plain Lock would self-deadlock on that nesting.
 _et_lock = threading.RLock()
+
+
+class _GuardedExifTool(exiftool.ExifToolHelper):
+    """ExifToolHelper that refuses arguments containing a line break or NUL.
+
+    pyexiftool feeds the -stay_open process one argument per line, so a line
+    break inside any argument — a tag value, a place name, a file path — is
+    read by ExifTool as additional arguments. That turns attacker-influenced
+    text into arbitrary ExifTool options, including a second target file, which
+    would break the "originals are immutable" guarantee. Every helper method
+    (get_tags, execute_json, …) funnels through execute(), so checking here
+    covers all callers, reads included. Nothing the app writes legitimately
+    contains these characters.
+    """
+
+    def execute(self, *params, **kwargs):
+        for p in params:
+            bad = (any(c in p for c in (b"\n", b"\r", b"\0")) if isinstance(p, bytes)
+                   else any(c in str(p) for c in "\n\r\0"))
+            if bad:
+                raise ValueError("ExifTool argument contains a line break or NUL character")
+        return super().execute(*params, **kwargs)
 
 
 def get_et() -> exiftool.ExifToolHelper:
@@ -53,7 +75,7 @@ def start_et() -> bool:
         # non-Latin-1 place names from GeoNames (e.g. "Ōtemachi", "Zürich"), and
         # on non-cp1252 file paths. "-G -n" are pyexiftool's defaults, which the
         # rest of the app relies on (group-prefixed keys, numeric GPS/orientation).
-        _et = exiftool.ExifToolHelper(
+        _et = _GuardedExifTool(
             executable=config.EXIFTOOL_PATH,
             encoding="utf-8",
             common_args=["-charset", "filename=utf8", "-G", "-n"],

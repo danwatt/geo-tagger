@@ -408,6 +408,20 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     """)
     _db.execute("CREATE INDEX IF NOT EXISTS idx_face_negatives_person ON face_negatives(person_id)")
 
+    # One-shot repair (idempotent, index-driven, no-op on a clean DB): FKs are
+    # never enforced here, and delete_person/delete_family used to remove only
+    # the parent row. That left faces pointing at a dead person — invisible in
+    # every queue, and silently inherited by the next person to reuse the id —
+    # and persons pointing at a dead family. Put those faces back in the
+    # unlabeled queue and detach those persons.
+    _db.execute(
+        "UPDATE faces SET person_id=NULL, assigned_at=NULL, representative=0 "
+        "WHERE person_id IS NOT NULL AND person_id NOT IN (SELECT id FROM persons)")
+    _db.execute("DELETE FROM face_negatives WHERE person_id NOT IN (SELECT id FROM persons)")
+    _db.execute(
+        "UPDATE persons SET family_id=NULL "
+        "WHERE family_id IS NOT NULL AND family_id NOT IN (SELECT id FROM families)")
+
     # Create R*Tree spatial index for photo locations
     # R*Tree uses min/max bounds, so for a point we use same value for min and max
     _db.execute("""
@@ -576,7 +590,16 @@ def upsert_photo(
     checksum: str | None = None,
 ):
     db = get_db()
-    db.execute("""
+    # A hand-placed geotag with WRITE_XMP_ON_GEOTAG off exists only in this row
+    # (geotag_source='database'), so a rescan must not replace it with what the
+    # file says — the file has no GPS, or the embedded GPS the user overrode.
+    # Only a sidecar wins: that is the durable form of a geotag (sidecar export,
+    # or another tool). SET expressions all see the pre-update row, so the
+    # `photos.geotag_source` test is consistent across the four columns.
+    # gps_accuracy falls back to the file's value because update_geotag leaves
+    # it NULL when none was given, and is_fresh reads NULL as "never read".
+    keep = "photos.geotag_source = 'database' AND excluded.geotag_source <> 'sidecar'"
+    db.execute(f"""
         INSERT INTO photos
             (filename, dir, ext, media_type, mtime, size, lat, lng,
              geotag_source, sidecar_path, sidecar_mtime, camera, photo_datetime,
@@ -585,10 +608,16 @@ def upsert_photo(
         ON CONFLICT(dir, filename) DO UPDATE SET
             ext=excluded.ext,
             media_type=excluded.media_type, mtime=excluded.mtime, size=excluded.size,
-            lat=excluded.lat, lng=excluded.lng, geotag_source=excluded.geotag_source,
+            lat=CASE WHEN {keep} THEN photos.lat ELSE excluded.lat END,
+            lng=CASE WHEN {keep} THEN photos.lng ELSE excluded.lng END,
+            geotag_source=CASE WHEN {keep} THEN photos.geotag_source
+                               ELSE excluded.geotag_source END,
+            gps_accuracy=CASE WHEN {keep}
+                              THEN COALESCE(photos.gps_accuracy, excluded.gps_accuracy)
+                              ELSE excluded.gps_accuracy END,
             sidecar_path=excluded.sidecar_path, sidecar_mtime=excluded.sidecar_mtime,
             camera=excluded.camera, photo_datetime=excluded.photo_datetime,
-            gps_accuracy=excluded.gps_accuracy, orientation=excluded.orientation,
+            orientation=excluded.orientation,
             checksum=excluded.checksum,
             scanned_at=excluded.scanned_at
     """, (filename, dir_, ext, media_type, mtime, size, lat, lng,
@@ -736,7 +765,8 @@ SEARCH_SORTS = {
     "date_asc": "photo_datetime IS NULL, photo_datetime, filename",
     "date_desc": "photo_datetime IS NULL, photo_datetime DESC, filename",
     "filename": "filename",
-    "camera": "camera IS NULL, camera, photo_datetime",
+    # '' = read, no Make/Model (see sidecar.read_metadata); sorts last with NULL.
+    "camera": "camera IS NULL OR camera = '', camera, photo_datetime",
 }
 
 
@@ -1038,7 +1068,9 @@ def is_fresh(dir_: str, filename: str, mtime: float, sidecar_path: str | None, s
     if sidecar_mtime is not None and row["sidecar_mtime"] is not None:
         if abs(row["sidecar_mtime"] - sidecar_mtime) > 1:
             return False
-    # Re-index if metadata was never fully read (NULL = not yet indexed).
+    # Re-index if metadata was never fully read (NULL = not yet indexed). A file
+    # with no camera tags stores '' rather than NULL, so it isn't re-read (and
+    # re-hashed) on every boot.
     # orientation is included so existing libraries backfill it on the next scan.
     if (row["camera"] is None or row["photo_datetime"] is None
             or row["gps_accuracy"] is None or row["orientation"] is None):
@@ -2215,17 +2247,27 @@ def rename_family(family_id: int, name: str):
 
 
 def delete_family(family_id: int):
-    """Delete a family; member persons have their family_id NULLed by FK."""
+    """Delete a family; its members stay, with no family."""
     db = get_db()
+    # FKs aren't enforced (no PRAGMA foreign_keys=ON), so ON DELETE SET NULL
+    # never fires — detach the members explicitly, before the parent row goes
+    # and in the same transaction.
+    db.execute("UPDATE persons SET family_id=NULL WHERE family_id=?", (family_id,))
     db.execute("DELETE FROM families WHERE id=?", (family_id,))
     db.commit()
 
 
 def delete_person(person_id: int):
     db = get_db()
-    # FKs aren't enforced (no PRAGMA foreign_keys=ON), so cascade won't fire —
-    # clean up their negative exclusions explicitly before the parent row goes.
+    # FKs aren't enforced (no PRAGMA foreign_keys=ON), so neither the cascade
+    # nor ON DELETE SET NULL fires — do both explicitly before the parent row
+    # goes, in the same transaction. Faces left pointing at the dead id would
+    # drop out of every queue, and persons.id has no AUTOINCREMENT, so the next
+    # person created could reuse the id and inherit them.
     db.execute("DELETE FROM face_negatives WHERE person_id=?", (person_id,))
+    db.execute(
+        "UPDATE faces SET person_id=NULL, assigned_at=NULL, representative=0 "
+        "WHERE person_id=?", (person_id,))
     db.execute("DELETE FROM persons WHERE id=?", (person_id,))
     db.commit()
     bump_faces_generation()  # their faces revert to unlabeled

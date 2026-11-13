@@ -449,3 +449,94 @@ def test_crowds_window_filters_photos(client):
     win = client.get(f"/api/crowds?min_faces=2&start_ts={start}&end_ts={end}").json()
     assert win["photo_count"] == 1
     assert win["groups"][0]["label"] == "June 1, 2015"
+
+
+# ── Deleting a person / family (FKs aren't enforced, so cleanup is explicit) ──
+
+def _face_row(db, fid):
+    return db.execute(
+        "SELECT person_id, assigned_at, representative FROM faces WHERE id=?", (fid,)).fetchone()
+
+
+def test_delete_person_returns_faces_to_unlabeled(client):
+    db = index.get_db()
+    rng = np.random.default_rng(31)
+    alice_id, fids = ff.seed_person(db, "Alice", ff.unit_vectors(rng, 3))
+    index.set_person_representatives(alice_id, fids[:1])
+
+    assert client.delete(f"/api/persons/{alice_id}").json() == {"success": True}
+
+    for fid in fids:
+        row = _face_row(db, fid)
+        assert (row["person_id"], row["assigned_at"], row["representative"]) == (None, None, 0)
+    listing = client.get("/api/faces?scope=unlabeled").json()
+    assert listing["total"] == 3
+    assert sorted(f["id"] for f in listing["faces"]) == sorted(fids)
+
+
+def test_new_person_does_not_inherit_deleted_persons_faces(client):
+    """persons.id has no AUTOINCREMENT, so the next person can reuse the id."""
+    db = index.get_db()
+    rng = np.random.default_rng(32)
+    alice_id, _ = ff.seed_person(db, "Alice", ff.unit_vectors(rng, 2))
+    client.delete(f"/api/persons/{alice_id}")
+
+    bob_id = client.post("/api/persons", json={"name": "Bob"}).json()["id"]
+
+    assert client.get(f"/api/faces?scope=person&person_id={bob_id}").json()["total"] == 0
+
+
+def test_delete_family_detaches_members(client):
+    fid = client.post("/api/families", json={"name": "Smiths"}).json()["id"]
+    pid = client.post("/api/persons", json={"name": "Alice"}).json()["id"]
+    client.patch(f"/api/persons/{pid}", json={"family_id": fid})
+
+    assert client.delete(f"/api/families/{fid}").json() == {"success": True}
+
+    assert index.get_person(pid)["family_id"] is None
+    alice = next(p for p in client.get("/api/persons").json() if p["id"] == pid)
+    assert alice["family_id"] is None
+
+
+def test_init_db_repairs_refs_left_by_old_deletes(client, tmp_path):
+    """DBs written before deletes cleaned up after themselves still hold faces,
+    negatives and family links pointing at rows that are gone."""
+    db = index.get_db()
+    rng = np.random.default_rng(33)
+    alice_id, fids = ff.seed_person(db, "Alice", ff.unit_vectors(rng, 2))
+    bob_id, bob_fids = ff.seed_person(db, "Bob", ff.unit_vectors(rng, 1))
+    loose = ff.seed_unlabeled(db, ff.unit_vectors(rng, 1))[0]
+    index.add_face_negatives([loose], alice_id)
+    fam = index.create_family("Smiths")
+    index.set_person_family(bob_id, fam)
+    # The old delete paths: parent row only.
+    db.execute("DELETE FROM persons WHERE id=?", (alice_id,))
+    db.execute("DELETE FROM families WHERE id=?", (fam,))
+    db.commit()
+
+    reopened = index.init_db(tmp_path)
+    try:
+        for fid in fids:
+            row = _face_row(reopened, fid)
+            assert (row["person_id"], row["assigned_at"]) == (None, None)
+        assert _face_row(reopened, bob_fids[0])["person_id"] == bob_id  # untouched
+        assert reopened.execute("SELECT COUNT(*) FROM face_negatives").fetchone()[0] == 0
+        assert index.get_person(bob_id)["family_id"] is None
+    finally:
+        reopened.close()
+        index._db = db
+
+
+def test_assign_to_unknown_person_404(client):
+    db = index.get_db()
+    rng = np.random.default_rng(34)
+    fid = ff.seed_unlabeled(db, ff.unit_vectors(rng, 1))[0]
+    photo_id = db.execute("SELECT photo_id FROM faces WHERE id=?", (fid,)).fetchone()[0]
+
+    assert client.post("/api/faces/assign",
+                       json={"face_ids": [fid], "person_id": 999}).status_code == 404
+    assert client.post(f"/api/faces/{fid}/assign", json={"person_id": 999}).status_code == 404
+    assert client.post(f"/api/photos/{photo_id}/faces",
+                       json={"bbox": [0.1, 0.1, 0.2, 0.2], "person_id": 999}).status_code == 404
+    assert _face_row(db, fid)["person_id"] is None
+    assert db.execute("SELECT COUNT(*) FROM faces").fetchone()[0] == 1

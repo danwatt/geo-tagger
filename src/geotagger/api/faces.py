@@ -306,9 +306,18 @@ async def api_face_crop(face_id: int, request: Request):
         raise HTTPException(500, str(e))
 
 
+def _require_person(person_id: int | None):
+    """404 for an id that names no person (e.g. a stale client holding a person
+    deleted in another tab). With FKs unenforced, assigning to it would strand
+    the faces: out of every queue and attached to nobody."""
+    if person_id is not None and not index.get_person(person_id):
+        raise HTTPException(404, "Person not found")
+
+
 @router.post("/api/faces/assign")
 async def api_bulk_assign(req: BulkAssignRequest):
     person_id = None if req.clear else req.person_id
+    _require_person(person_id)
     if person_id is None and not req.clear and req.name and req.name.strip():
         person_id = index.get_or_create_person(req.name.strip())
     index.assign_faces(req.face_ids, person_id)
@@ -355,6 +364,7 @@ async def api_add_manual_face(photo_id: int, req: AddManualFaceRequest):
     if len(req.bbox) != 4:
         raise HTTPException(400, "bbox must be [x1, y1, x2, y2]")
     person_id = req.person_id
+    _require_person(person_id)
     if person_id is None and req.name and req.name.strip():
         person_id = index.get_or_create_person(req.name.strip())
     loop = asyncio.get_running_loop()
@@ -531,6 +541,7 @@ async def api_assign_face(face_id: int, req: AssignFaceRequest):
     if not index.get_face(face_id):
         raise HTTPException(404)
     person_id = req.person_id
+    _require_person(person_id)
     if person_id is None and req.name and req.name.strip():
         person_id = index.get_or_create_person(req.name.strip())
     index.assign_face(face_id, person_id)

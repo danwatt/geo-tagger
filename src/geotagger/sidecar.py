@@ -116,7 +116,9 @@ def read_metadata(image_path: Path) -> dict:
 
     make = (row.get("EXIF:Make") or row.get("QuickTime:Make") or "").strip()
     model = (row.get("EXIF:Model") or row.get("QuickTime:Model") or "").strip()
-    camera = f"{make} {model}".strip() or None
+    # '' (not None) when the file has no Make/Model: NULL in the DB means "never
+    # read" to index.is_fresh, which would re-scan scans/screenshots every boot.
+    camera = f"{make} {model}".strip()
 
     raw_dt = (sidecar_dt
               or row.get("EXIF:DateTimeOriginal")

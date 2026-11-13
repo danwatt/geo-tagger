@@ -176,7 +176,7 @@ def _sessions(rows: list, votes: dict, session_gap: int) -> list[dict]:
         if not run:
             return
         ids = [r["id"] for r in run]
-        camera = run[0]["camera"]
+        camera = run[0]["camera"] or None  # '' = no camera tags; same as NULL here
         start_ts, end_ts = run[0]["photo_datetime"], run[-1]["photo_datetime"]
         proposal, voted = _proposal(ids, votes)
         batches.append({
@@ -345,9 +345,13 @@ def _live_member_ids(batch: dict) -> list[int]:
             "ORDER BY photo_datetime, id", (batch["dir"],)).fetchall()
     else:
         rows = db.execute(
-            "SELECT id FROM photos WHERE camera IS ? AND photo_datetime BETWEEN ? AND ? "
+            # No-camera rows are '' once scanned, NULL on rows from before that
+            # sentinel existed; a session groups the two together, so match both.
+            "SELECT id FROM photos WHERE (camera = ? OR (? = '' AND camera IS NULL)) "
+            "AND photo_datetime BETWEEN ? AND ? "
             "AND lat IS NULL AND geocode_ignored = 0 ORDER BY photo_datetime, id",
-            (batch["camera"], batch["start_ts"], batch["end_ts"])).fetchall()
+            (batch["camera"] or "", batch["camera"] or "",
+             batch["start_ts"], batch["end_ts"])).fetchall()
     return [r["id"] for r in rows]
 
 

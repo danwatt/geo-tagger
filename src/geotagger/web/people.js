@@ -3203,7 +3203,15 @@ async function editPersonBirth(personId, name, current) {
 async function deletePerson(personId, name) {
   if (!confirm(`Delete "${name}"? Their faces will become unassigned.`)) return;
   try {
-    await fetch(`/api/persons/${personId}`, { method: "DELETE" });
+    const res = await fetch(`/api/persons/${personId}`, { method: "DELETE" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    // Staged assignments to this person can no longer be committed (the server
+    // 404s an unknown person) — put those faces back in the grid.
+    const orphaned = [];
+    pending.forEach((e, id) => {
+      if (e.kind === "assign" && e.personId === personId) orphaned.push(id);
+    });
+    unstageFaces(orphaned, true);
     if (scope === "person" && scopePersonId === personId) {
       scope = "unlabeled"; scopePersonId = null;
     }

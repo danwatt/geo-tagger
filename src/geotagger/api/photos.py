@@ -3,13 +3,15 @@ timestamp correction."""
 
 import asyncio
 import logging
+import re
 import time
 from io import BytesIO
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from geotagger import index, thumbnails, serializers
 from geotagger.executor import get_executor
@@ -409,8 +411,34 @@ async def api_commit_guessed_dates(req: CommitGuessedDatesRequest):
     return result
 
 
+# What ExifTool prints for XMP:DateTimeOriginal: 'YYYY:MM:DD HH:MM:SS', and for
+# sidecars from other tools possibly truncated, with sub-seconds, or with a zone.
+_RAW_DATETIME_RE = re.compile(
+    r"\d{4}(:\d{2}(:\d{2}( \d{2}:\d{2}(:\d{2}(\.\d+)?)?)?)?)?(Z|[+-]\d{2}:\d{2})?")
+
+
+class DateSnapshot(BaseModel):
+    """One photo's pre-commit state, as returned in commit-guessed-dates'
+    ``previous``. The client only stores and returns these, but they are still
+    client input on the way back: raw_datetime becomes an ExifTool argument, so
+    it is checked against the shape of a date rather than trusted."""
+    photo_id: int
+    raw_datetime: str | None = None
+    photo_datetime: int | None = None
+    date_precision: Literal["month", "year"] | None = None
+
+    @field_validator("raw_datetime")
+    @classmethod
+    def _raw_datetime_is_a_date(cls, v: str | None) -> str | None:
+        # fullmatch, not a `pattern=` constraint or match()+'$': '$' also matches
+        # before a trailing newline, which is exactly what must not get through.
+        if v is not None and not _RAW_DATETIME_RE.fullmatch(v):
+            raise ValueError("raw_datetime is not an EXIF date string")
+        return v
+
+
 class UndoDateCommitRequest(BaseModel):
-    previous: list[dict]  # opaque snapshots from a commit-guessed-dates response
+    previous: list[DateSnapshot]  # snapshots from a commit-guessed-dates response
 
 
 @router.post("/api/photos/undo-date-commit")
@@ -419,7 +447,8 @@ async def api_undo_date_commit(req: UndoDateCommitRequest):
     if not req.previous:
         raise HTTPException(400, "nothing to undo")
     loop = asyncio.get_running_loop()
-    reverted = await loop.run_in_executor(get_executor(), photos_service.undo_date_commit, req.previous)
+    reverted = await loop.run_in_executor(get_executor(), photos_service.undo_date_commit,
+        [s.model_dump() for s in req.previous])
     return {"reverted": reverted}
 
 

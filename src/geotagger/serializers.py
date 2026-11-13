@@ -12,7 +12,7 @@ def photo_to_dict(r) -> dict:
     return {
         "id": r["id"], "filename": r["filename"], "media_type": r["media_type"],
         "lat": r["lat"], "lng": r["lng"], "geotag_source": r["geotag_source"],
-        "camera": r["camera"], "photo_datetime": r["photo_datetime"],
+        "camera": r["camera"] or None, "photo_datetime": r["photo_datetime"],
         "gps_accuracy": r["gps_accuracy"] if r["gps_accuracy"] and r["gps_accuracy"] > 0 else None,
         "geocode_ignored": bool(r["geocode_ignored"]),
         "date_precision": r["date_precision"] if "date_precision" in r.keys() else None,
@@ -27,7 +27,7 @@ def photo_geocode_dict(r) -> dict:
     return {
         "id": r["id"], "filename": r["filename"], "media_type": r["media_type"],
         "lat": r["lat"], "lng": r["lng"], "geotag_source": r["geotag_source"],
-        "camera": r["camera"], "photo_datetime": r["photo_datetime"],
+        "camera": r["camera"] or None, "photo_datetime": r["photo_datetime"],
         "gps_accuracy": r["gps_accuracy"] if r["gps_accuracy"] and r["gps_accuracy"] > 0 else None,
         "location": {
             "city": r["loc_city"],

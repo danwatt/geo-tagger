@@ -245,3 +245,60 @@ def test_download_zip_dedupes_duplicate_filenames(client, tmp_path):
     assert r.status_code == 200
     zf = zipfile.ZipFile(BytesIO(r.content))
     assert sorted(zf.namelist()) == ["same (1).jpg", "same.jpg"]
+
+
+# ── Undo date commit: client-supplied snapshots reach ExifTool args ──
+
+def _snap(**over):
+    return {"photo_id": 1, "raw_datetime": None, "photo_datetime": None,
+            "date_precision": None, **over}
+
+
+def test_undo_date_commit_rejects_injected_raw_datetime(client):
+    """pyexiftool joins args with newlines, so a newline inside the value would
+    smuggle extra ExifTool arguments (including another target file)."""
+    for bad in ["2011:10:27 00:00:00\n-XMP:Title=pwned",
+                "2011:10:27 00:00:00\r\n-all=",
+                "2011:10:27 00:00:00\n",
+                "not a date",
+                "-overwrite_original"]:
+        r = client.post("/api/photos/undo-date-commit",
+                        json={"previous": [_snap(raw_datetime=bad)]})
+        assert r.status_code == 422, bad
+
+
+def test_undo_date_commit_rejects_malformed_snapshots(client):
+    post = lambda snap: client.post("/api/photos/undo-date-commit", json={"previous": [snap]})
+    assert post(_snap(date_precision="decade")).status_code == 422
+    assert post(_snap(photo_datetime="yesterday")).status_code == 422
+    assert post({"raw_datetime": None}).status_code == 422  # no photo_id
+
+
+def test_commit_then_undo_round_trips_through_the_api(client, tmp_path):
+    """The snapshots commit returns — including a real ExifTool-read
+    raw_datetime string — must pass the undo route's validation."""
+    import pytest
+    from PIL import Image
+    from geotagger import exiftool_session
+    if exiftool_session._et is None:
+        pytest.skip("ExifTool unavailable")
+    Image.new("RGB", (8, 8), color="blue").save(tmp_path / "t.jpg", "JPEG")
+    index.upsert_photo(
+        filename="t.jpg", dir_=str(tmp_path), ext=".jpg", media_type="image",
+        mtime=1.0, size=1, lat=None, lng=None, geotag_source="none",
+        sidecar_path=None, sidecar_mtime=None, camera="", photo_datetime=0,
+        gps_accuracy=-1.0, orientation=1,
+    )
+    pid = index.get_db().execute("SELECT id FROM photos").fetchone()[0]
+    entry = lambda year: {"entries": [{"photo_id": pid, "year": year, "precision": "year"}]}
+
+    first = client.post("/api/photos/commit-guessed-dates", json=entry(2001)).json()
+    second = client.post("/api/photos/commit-guessed-dates", json=entry(2005)).json()
+    assert second["previous"][0]["raw_datetime"]  # a string ExifTool read back
+
+    r = client.post("/api/photos/undo-date-commit", json={"previous": second["previous"]})
+    assert r.status_code == 200 and r.json() == {"reverted": 1}
+    assert index.get_photo(pid)["date_precision"] == "year"
+    r = client.post("/api/photos/undo-date-commit", json={"previous": first["previous"]})
+    assert r.status_code == 200 and r.json() == {"reverted": 1}
+    assert index.get_photo(pid)["date_precision"] is None

@@ -115,6 +115,13 @@ class TestLocationRoundTrip:
         assert not tags.get("XMP:City")
 
 
+class TestReadMetadataCamera:
+    def test_file_without_make_model_reports_empty_camera(self, et_session, sample_image):
+        """'' (not None) = read, nothing found. index.is_fresh treats a NULL
+        camera as never-read and would re-scan the file on every boot."""
+        assert sidecar.read_metadata(sample_image)["camera"] == ""
+
+
 class TestReadOrientations:
     def test_missing_tag_defaults_to_1(self, et_session, sample_image):
         # A plain JPEG with no orientation tag must come back as 1, not absent.
@@ -169,3 +176,30 @@ class TestDatetimeRoundTrip:
 
         meta = sidecar.read_metadata(sample_image)
         assert meta["photo_datetime"] == calendar.timegm(corrected.timetuple())
+
+
+class TestArgumentInjectionGuard:
+    """pyexiftool sends one argument per line to the -stay_open process, so a
+    line break inside any argument becomes extra arguments."""
+
+    def test_write_rejects_line_break_in_value(self, et_session, sample_image):
+        with pytest.raises(ValueError):
+            sidecar.write_datetime_raw(
+                sample_image, "2011:10:27 00:00:00\n-XMP:Title=pwned")
+        assert not sidecar.sidecar_path(sample_image).exists()
+
+    def test_place_name_with_line_break_is_rejected(self, et_session, sample_image):
+        with pytest.raises(ValueError):
+            sidecar.write_location(sample_image, {"city": "Paris\n-XMP:Title=pwned"})
+        assert not sidecar.sidecar_path(sample_image).exists()
+
+    def test_read_rejects_line_break_in_path(self, et_session, sample_image):
+        et = exiftool_session.get_et()
+        with pytest.raises(ValueError):
+            et.get_tags([f"{sample_image}\n-ver"], tags=["XMP:Title"])
+
+    def test_session_still_usable_after_a_rejected_call(self, et_session, sample_image):
+        with pytest.raises(ValueError):
+            sidecar.write_datetime_raw(sample_image, "x\ny")
+        sidecar.write_datetime_raw(sample_image, "2011:10:27 00:00:00")
+        assert sidecar.read_sidecar_datetime_raw(sample_image) == "2011:10:27 00:00:00"

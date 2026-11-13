@@ -221,3 +221,85 @@ class TestGetPhotosBbox:
         rows = index.get_photos(
             bbox="-458.4223937988281,32.5635873170885,-456.0946655273438,33.0926823840692")
         assert [r["filename"] for r in rows] == ["fw.jpg"]
+
+
+def _scan_upsert(lat=None, lng=None, source="none", camera="", gps_accuracy=-1.0,
+                 sidecar_path=None, sidecar_mtime=None, mtime=1000.0):
+    """upsert_photo as the scan pipeline calls it: values straight from
+    sidecar.read_metadata for a file on disk."""
+    index.upsert_photo(
+        filename="p1.jpg", dir_=".", ext=".jpg", media_type="image",
+        mtime=mtime, size=100, lat=lat, lng=lng, geotag_source=source,
+        sidecar_path=sidecar_path, sidecar_mtime=sidecar_mtime,
+        camera=camera, photo_datetime=0, gps_accuracy=gps_accuracy, orientation=1,
+    )
+
+
+class TestRescanKeepsDatabaseGeotag:
+    """With WRITE_XMP_ON_GEOTAG off a hand-placed geotag lives only in the DB
+    (geotag_source='database'), so a rescan must not replace it with whatever
+    the file itself says."""
+
+    def _hand_tag(self, db, lat=48.85, lng=2.35):
+        _scan_upsert()
+        pid = db.execute("SELECT id FROM photos WHERE filename='p1.jpg'").fetchone()[0]
+        index.update_geotag(pid, lat, lng, "database", None, None)
+        return pid
+
+    def test_rescan_of_file_without_gps_keeps_the_tag(self, db):
+        pid = self._hand_tag(db)
+
+        _scan_upsert(mtime=2000.0)  # file touched → re-read, still no GPS
+
+        row = index.get_photo(pid)
+        assert (row["lat"], row["lng"], row["geotag_source"]) == (48.85, 2.35, "database")
+
+    def test_rescan_keeps_the_tag_over_embedded_gps(self, db):
+        """The user dragged a photo away from its embedded position; the file
+        still carries the old one."""
+        pid = self._hand_tag(db)
+
+        _scan_upsert(lat=10.0, lng=20.0, source="embedded", gps_accuracy=4.0, mtime=2000.0)
+
+        row = index.get_photo(pid)
+        assert (row["lat"], row["lng"], row["geotag_source"]) == (48.85, 2.35, "database")
+
+    def test_sidecar_gps_replaces_the_tag(self, db):
+        """A sidecar is the durable form of a geotag (export, or another tool),
+        so it wins over the DB-only value."""
+        pid = self._hand_tag(db)
+
+        _scan_upsert(lat=10.0, lng=20.0, source="sidecar", gps_accuracy=4.0,
+                     sidecar_path="p1.xmp", sidecar_mtime=5.0, mtime=2000.0)
+
+        row = index.get_photo(pid)
+        assert (row["lat"], row["lng"], row["geotag_source"]) == (10.0, 20.0, "sidecar")
+        assert row["gps_accuracy"] == 4.0
+
+    def test_non_database_rows_still_follow_the_file(self, db):
+        _scan_upsert(lat=10.0, lng=20.0, source="embedded")
+        pid = db.execute("SELECT id FROM photos WHERE filename='p1.jpg'").fetchone()[0]
+
+        _scan_upsert(mtime=2000.0)  # GPS stripped from the file
+
+        row = index.get_photo(pid)
+        assert (row["lat"], row["lng"], row["geotag_source"]) == (None, None, "none")
+
+    def test_hand_tagged_row_is_fresh_after_rescan(self, db):
+        """update_geotag leaves gps_accuracy NULL when none is given; the rescan
+        must fill it so the row doesn't look never-read on every boot."""
+        self._hand_tag(db)
+        _scan_upsert(mtime=2000.0)
+        assert index.is_fresh(".", "p1.jpg", 2000.0, None, None) is True
+
+
+class TestCameraLessFreshness:
+    def test_file_with_no_camera_tags_is_fresh_once_read(self, db):
+        """'' = metadata read, no Make/Model found (scans, screenshots). Only
+        NULL means never read."""
+        _scan_upsert(camera="")
+        assert index.is_fresh(".", "p1.jpg", 1000.0, None, None) is True
+
+    def test_never_read_camera_is_stale(self, db):
+        _scan_upsert(camera=None)
+        assert index.is_fresh(".", "p1.jpg", 1000.0, None, None) is False
