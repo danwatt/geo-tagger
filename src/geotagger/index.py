@@ -1030,8 +1030,50 @@ def _init_db_locked(root: Path | None) -> sqlite3.Connection:
         )
     """)
 
+    # ── One-shot data migrations ──
+    # Named markers for fixes that must touch existing rows exactly once. A
+    # column guard can't express these (no column is added), and re-running one
+    # would undo later rescans' work.
+    _db.execute("""
+        CREATE TABLE IF NOT EXISTS migrations (
+            name TEXT PRIMARY KEY,
+            applied_at REAL NOT NULL
+        )
+    """)
+    _run_once(_db, "video_dates_utc_s6", _reread_video_dates)
+
     _db.commit()
     return _db
+
+
+def _run_once(db: sqlite3.Connection, name: str, fn) -> None:
+    """Apply data migration ``fn(db)`` unless ``name`` is already recorded. Part
+    of init_db's single commit, so the marker and the change land together."""
+    if db.execute("SELECT 1 FROM migrations WHERE name=?", (name,)).fetchone():
+        return
+    fn(db)
+    db.execute("INSERT INTO migrations (name, applied_at) VALUES (?, ?)", (name, time.time()))
+
+
+def _reread_video_dates(db: sqlite3.Connection) -> None:
+    """Audit S6: videos used to take QuickTime:CreateDate (UTC) as if it were
+    the wall clock. Which tag a row's date came from was never stored, so every
+    video is made stale once — photo_datetime NULL is "never read" to
+    _row_is_fresh — and the next scan re-reads it with the corrected rules.
+
+    The cost is one re-read (and re-hash) per video, the same as a touched file.
+    Until that scan the videos show undated (startup scans, unless --no-scan).
+
+    Rows with date_precision set are skipped: that approximate date is the
+    user's and the precision flag is DB-only, so a re-read would mismatch them.
+    An exact date the user set (Time Sync, a guessed date) lives in the sidecar,
+    which the re-read reads first, so it comes back unchanged."""
+    n = db.execute(
+        "UPDATE photos SET photo_datetime=NULL "
+        "WHERE media_type='video' AND date_precision IS NULL AND photo_datetime IS NOT NULL"
+    ).rowcount
+    if n:
+        print(f"Re-reading dates of {n} videos on the next scan (QuickTime UTC fix)")
 
 
 def get_db() -> sqlite3.Connection:

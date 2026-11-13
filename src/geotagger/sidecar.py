@@ -18,11 +18,11 @@ logger = logging.getLogger(__name__)
 # left the row's date NULL and so permanently stale (audit S1).
 _EXIF_DT_RE = re.compile(
     r"(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})"
-    r"(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?"
+    r"(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})?"
 )
 
 
-def _parse_exif_datetime(s: str) -> int | None:
+def _parse_exif_datetime(s: str, utc: bool = False) -> int | None:
     """Parse '2024:10:02 14:23:45' → photo_datetime epoch, or None if unparseable.
 
     The offset suffix is matched but deliberately ignored: photo_datetime is the
@@ -30,32 +30,79 @@ def _parse_exif_datetime(s: str) -> int | None:
     is kept as written rather than converted to UTC. All-zero placeholders
     ('0000:00:00 00:00:00', common in QuickTime CreateDate) and other impossible
     values fail datetime() and return None, so read_metadata moves on to the
-    next candidate tag."""
+    next candidate tag.
+
+    ``utc=True`` is for tags that hold UTC by spec (QuickTime:CreateDate, audit
+    S6): a bare value is converted to wall clock with _utc_to_wallclock. One
+    that carries an offset (ExifTool run with -api QuickTimeUTC prints the local
+    time plus offset) is already a wall clock and is kept as written."""
     if not s:
         return None
     m = _EXIF_DT_RE.fullmatch(s.strip())
     if not m:
         return None
     try:
-        return wallclock_to_epoch(datetime(*(int(g) for g in m.groups())))
+        ts = wallclock_to_epoch(datetime(*(int(g) for g in m.groups()[:6])))
     except ValueError:  # year 0, month 13, Feb 30, …
         return None
+    if utc and m.group(7) is None:
+        return _utc_to_wallclock(ts)
+    return ts
 
 
-def _pick_datetime(candidates: list) -> int:
-    """First candidate (in priority order) that parses, else 0.
+def _local_utc_offset(utc_ts: int) -> int:
+    """This machine's UTC offset, in seconds, at the UTC instant ``utc_ts`` —
+    DST-aware, from the OS's zone rules (what ExifTool's QuickTimeUTC option
+    does too). The tz source for _utc_to_wallclock; tests monkeypatch it, since
+    Windows has no time.tzset to switch the process's zone.
+
+    time.localtime, not zoneinfo: Windows has no IANA database unless the tzdata
+    package is installed, and no stdlib way to name the local zone anyway.
+    localtime raises OSError for negative values on Windows (see timeutil), so a
+    pre-1970 instant — which only a hand-set CreateDate can hold; real QuickTime
+    files are all post-1970 — falls back to the zone's standard offset."""
+    import time
+    try:
+        return time.localtime(utc_ts).tm_gmtoff
+    except (OSError, OverflowError, ValueError):
+        return -time.timezone
+
+
+def _utc_to_wallclock(utc_ts: int) -> int:
+    """A UTC epoch → photo_datetime (wall clock stored as if UTC).
+
+    The capture timezone of a UTC-only video is unknown. The machine's local
+    zone at that instant is the best guess on offer: it is what ExifTool and
+    most desktop viewers show for such files, and it is right for a library
+    shot mostly at home — the common case. A neighbouring photo's offset would
+    be better when travelling, but nothing in the library records photos'
+    offsets (photo_datetime drops them), so there is nothing to borrow from.
+
+    Known limit: some non-phone cameras (certain GoPro/Sony/Canon models) write
+    local time into CreateDate against the spec. Neither we nor ExifTool can
+    tell such a file apart, so those land shifted by the local offset — the
+    sidecar date (Time Sync) is the fix for them."""
+    return utc_ts + _local_utc_offset(utc_ts)
+
+
+def _pick_datetime(candidates: list, utc_candidates: list = ()) -> int:
+    """First candidate (in priority order) that parses, else 0. ``candidates``
+    are wall-clock tags; ``utc_candidates`` hold UTC (see _parse_exif_datetime's
+    ``utc``) and are tried only after every wall-clock one, since a converted
+    UTC time is a guess at the offset while a wall-clock tag is the real thing.
 
     Each one is parsed in turn rather than taking the first truthy value: a
     present-but-garbage tag (a zeroed QuickTime CreateDate, say) must not hide
     a good one further down. 0 — not None — when nothing parses: it means "read,
     undated" (timeutil.has_date), whereas NULL means "never read" to
     index._row_is_fresh, which would re-read and re-hash the file every scan."""
-    for raw in candidates:
-        if raw is None:
-            continue
-        ts = _parse_exif_datetime(str(raw))
-        if ts is not None:
-            return ts
+    for utc, raws in ((False, candidates), (True, utc_candidates)):
+        for raw in raws:
+            if raw is None:
+                continue
+            ts = _parse_exif_datetime(str(raw), utc=utc)
+            if ts is not None:
+                return ts
     return 0
 
 
@@ -232,6 +279,10 @@ def read_metadata(image_path: Path) -> dict:
             "EXIF:Make", "EXIF:Model",
             "QuickTime:Make", "QuickTime:Model",
             "EXIF:DateTimeOriginal", "QuickTime:CreateDate",
+            # Keys/UserData CreationDate: the local wall clock plus its offset
+            # ('2024:06:01 14:23:45-07:00'), written by iPhones and most recent
+            # phones. Reported under group 0 'QuickTime' because of -G.
+            "QuickTime:CreationDate",
             "XMP:DateTimeOriginal",
             "EXIF:GPSHPositioningError",
             "XMP:GPSHPositioningError",
@@ -252,12 +303,17 @@ def read_metadata(image_path: Path) -> dict:
     # read" to index.is_fresh, which would re-scan scans/screenshots every boot.
     camera = f"{make} {model}".strip()
 
+    # Wall-clock tags first, QuickTime:CreateDate last: it is UTC by spec (audit
+    # S6), so it was landing phone videos hours away from the photos shot beside
+    # them. The sidecar date stays first — it is written as a bare wall clock
+    # (write_datetime), so a video whose date was derived here and then saved by
+    # Time Sync reads back as exactly the value saved, never re-converted.
     photo_datetime = _pick_datetime([
         sidecar_dt,
         row.get("EXIF:DateTimeOriginal"),
         row.get("XMP:DateTimeOriginal"),
-        row.get("QuickTime:CreateDate"),
-    ])
+        row.get("QuickTime:CreationDate"),
+    ], utc_candidates=[row.get("QuickTime:CreateDate")])
 
     if gps_accuracy <= 0 and not gps_void:
         raw_acc = row.get("EXIF:GPSHPositioningError") or row.get("XMP:GPSHPositioningError")

@@ -432,3 +432,143 @@ class TestArgumentInjectionGuard:
             sidecar.write_datetime_raw(sample_image, "x\ny")
         sidecar.write_datetime_raw(sample_image, "2011:10:27 00:00:00")
         assert sidecar.read_sidecar_datetime_raw(sample_image) == "2011:10:27 00:00:00"
+
+
+# ── QuickTime dates: UTC CreateDate vs wall-clock CreationDate (audit S6) ──
+
+_PDT = -7 * 3600  # a fixed tz source, so no test depends on the machine's zone
+
+
+def _wall(*parts):
+    return calendar.timegm((*parts, 0, 0, 0))
+
+
+def _make_video(path):
+    """A tiny real MP4 (PyAV) that ExifTool can write QuickTime tags into."""
+    import av
+    import numpy as np
+    c = av.open(str(path), "w")
+    s = c.add_stream("mpeg4", rate=1)
+    s.width = s.height = 16
+    s.pix_fmt = "yuv420p"
+    frame = av.VideoFrame.from_ndarray(np.zeros((16, 16, 3), np.uint8), format="rgb24")
+    for pkt in [*s.encode(frame), *s.encode()]:
+        c.mux(pkt)
+    c.close()
+    return path
+
+
+class TestQuickTimeDates:
+    def test_utc_candidate_converted_with_tz_source(self, monkeypatch):
+        monkeypatch.setattr(sidecar, "_local_utc_offset", lambda ts: _PDT)
+        assert sidecar._pick_datetime([None], utc_candidates=["2024:06:01 21:23:45"]) == \
+            _wall(2024, 6, 1, 14, 23, 45)
+
+    def test_tz_source_is_asked_about_the_instant(self, monkeypatch):
+        """DST: the offset is looked up per UTC instant, not once."""
+        winter = _wall(2024, 1, 15, 20, 0, 0)
+        monkeypatch.setattr(sidecar, "_local_utc_offset",
+                            lambda ts: -8 * 3600 if ts == winter else _PDT)
+        assert sidecar._parse_exif_datetime("2024:01:15 20:00:00", utc=True) == \
+            _wall(2024, 1, 15, 12, 0, 0)
+        assert sidecar._parse_exif_datetime("2024:07:15 20:00:00", utc=True) == \
+            _wall(2024, 7, 15, 13, 0, 0)
+
+    def test_wallclock_candidate_beats_utc_one(self, monkeypatch):
+        monkeypatch.setattr(sidecar, "_local_utc_offset", lambda ts: 5 * 3600)
+        assert sidecar._pick_datetime(
+            [None, None, None, "2024:06:01 14:23:45-07:00"],
+            utc_candidates=["2024:06:01 21:23:45"]) == _wall(2024, 6, 1, 14, 23, 45)
+
+    def test_zeroed_utc_candidate_is_undated(self, monkeypatch):
+        monkeypatch.setattr(sidecar, "_local_utc_offset", lambda ts: _PDT)
+        assert sidecar._pick_datetime([None], utc_candidates=["0000:00:00 00:00:00"]) == 0
+
+    def test_utc_tag_with_offset_is_already_wall_clock(self, monkeypatch):
+        """-api QuickTimeUTC output (local time + offset) must not be shifted again."""
+        monkeypatch.setattr(sidecar, "_local_utc_offset", lambda ts: _PDT)
+        assert sidecar._parse_exif_datetime("2024:06:01 14:23:45-07:00", utc=True) == \
+            _wall(2024, 6, 1, 14, 23, 45)
+
+    def test_pre1970_conversion_never_raises(self, monkeypatch):
+        # The real tz source: localtime(negative) raises OSError on Windows.
+        assert isinstance(sidecar._local_utc_offset(_wall(1955, 6, 1, 12, 0, 0)), int)
+        assert isinstance(sidecar._parse_exif_datetime("1955:06:01 12:00:00", utc=True), int)
+        monkeypatch.setattr(sidecar, "_local_utc_offset", lambda ts: _PDT)
+        assert sidecar._parse_exif_datetime("1955:06:01 12:00:00", utc=True) == \
+            _wall(1955, 6, 1, 5, 0, 0)
+
+    def test_photo_wall_clock_untouched(self, monkeypatch):
+        monkeypatch.setattr(sidecar, "_local_utc_offset", lambda ts: _PDT)
+        assert sidecar._pick_datetime(["2024:06:01 14:23:45"]) == _wall(2024, 6, 1, 14, 23, 45)
+
+
+class TestQuickTimeDatesEndToEnd:
+    @pytest.fixture
+    def video(self, tmp_path, et_session, monkeypatch):
+        pytest.importorskip("av")
+        monkeypatch.setattr(sidecar, "_local_utc_offset", lambda ts: _PDT)
+        return _make_video(tmp_path / "clip.mp4")
+
+    def test_creation_date_preferred_over_create_date(self, video):
+        exiftool_session.get_et().execute(
+            "-overwrite_original", "-QuickTime:CreateDate=2024:06:01 21:23:45",
+            "-Keys:CreationDate=2024:06:01 14:23:45+02:00", str(video))
+        # +02:00 here vs the patched -07:00: the wall clock comes from the tag.
+        assert sidecar.read_metadata(video)["photo_datetime"] == _wall(2024, 6, 1, 14, 23, 45)
+
+    def test_create_date_only_is_converted(self, video):
+        exiftool_session.get_et().execute(
+            "-overwrite_original", "-QuickTime:CreateDate=2024:06:01 21:23:45", str(video))
+        assert sidecar.read_metadata(video)["photo_datetime"] == _wall(2024, 6, 1, 14, 23, 45)
+
+    def test_derived_date_round_trips_through_sidecar(self, video):
+        """Time Sync writes the derived wall clock to the sidecar; the re-read
+        takes it from there as-is rather than converting it a second time."""
+        exiftool_session.get_et().execute(
+            "-overwrite_original", "-QuickTime:CreateDate=2024:06:01 21:23:45", str(video))
+        ts = sidecar.read_metadata(video)["photo_datetime"]
+        sidecar.write_datetime(video, ts + 60)
+        assert sidecar.read_metadata(video)["photo_datetime"] == ts + 60
+
+
+class TestVideoDateMigration:
+    def _upsert(self, name, media_type, ts, sidecar_path=None):
+        from geotagger import index
+        index.upsert_photo(
+            filename=name, dir_="/lib", ext=".mov" if media_type == "video" else ".jpg",
+            media_type=media_type, mtime=1.0, size=1, lat=None, lng=None,
+            geotag_source="none", sidecar_path=sidecar_path, sidecar_mtime=None,
+            camera="", photo_datetime=ts, gps_accuracy=-1.0, orientation=1)
+
+    def _dates(self, conn):
+        return {r["filename"]: r["photo_datetime"]
+                for r in conn.execute("SELECT filename, photo_datetime FROM photos")}
+
+    def test_videos_made_stale_once_except_approximate_dates(self, db, tmp_path):
+        from geotagger import index
+        t = _wall(2024, 6, 1, 21, 23, 45)
+        self._upsert("a.mov", "video", t)
+        self._upsert("b.mov", "video", t)
+        self._upsert("c.jpg", "image", t)
+        self._upsert("d.mov", "video", 0)  # undated: may gain a CreationDate now
+        with index.transaction() as tx:
+            tx.execute("UPDATE photos SET date_precision='year' WHERE filename='b.mov'")
+            # A pre-S6 database: the marker isn't there yet.
+            tx.execute("DELETE FROM migrations")
+        opened = [index.init_db(tmp_path)]
+        try:
+            assert self._dates(opened[0]) == {"a.mov": None, "b.mov": t, "c.jpg": t, "d.mov": None}
+            assert not index.is_fresh("/lib", "a.mov", 1.0, None, None)
+            assert index.is_fresh("/lib", "c.jpg", 1.0, None, None)
+            # The re-read stores a date; a later open must not undo it.
+            self._upsert("a.mov", "video", t - 7 * 3600)
+            opened.append(index.init_db(tmp_path))
+            assert self._dates(opened[1])["a.mov"] == t - 7 * 3600
+        finally:
+            for conn in opened:
+                conn.close()
+            index._db = db
+
+    def test_fresh_database_records_marker(self, db):
+        assert db.execute("SELECT name FROM migrations").fetchall()[0]["name"] == "video_dates_utc_s6"

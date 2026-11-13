@@ -180,7 +180,7 @@ print, and a file whose metadata read fails is silently absent and retried every
 `scanner.py:38`. In `basename` mode an iPhone Live Photo pair (`IMG_1.HEIC` + `IMG_1.MOV`) shares
 `IMG_1.xmp`, so geotagging one silently applies to the other, with no warning.
 
-**S6 — Low — `QuickTime:CreateDate` is UTC, EXIF dates are local wall-clock** [traced]
+**S6 — Low — `QuickTime:CreateDate` is UTC, EXIF dates are local wall-clock** [traced] — ✅ **DONE** (`QuickTime:CreationDate` wall clock preferred; bare CreateDate converted with this machine's offset at that instant; one-time `video_dates_utc_s6` migration re-reads video dates, skipping approximate dates; cameras writing local time into CreateDate cannot be detected)
 `sidecar.py:103,126`. Both go through the same `timegm`, so phone videos sit offset from photos by the UTC
 offset, which skews time-neighbour inference and session grouping.
 
