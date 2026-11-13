@@ -49,8 +49,9 @@ PLACE_COVERAGE_THRESHOLD = 0.9
 
 _METERS_PER_DEG_LAT = 111_320.0
 
-# (cache_key, merge_m) -> clusters. Invalidated by the geotagged-photo count, so
-# any commit through /api/geotag rebuilds it on the next request.
+# (geotag generation, merge_m) -> clusters. index bumps the generation on every
+# coordinate change — /api/geotag commits and scan upserts alike — so the next
+# request after one rebuilds it.
 _cache: dict[tuple, list[dict]] = {}
 
 
@@ -328,8 +329,11 @@ def in_bbox(lat: float, lng: float, bbox: tuple[float, float, float, float]) -> 
 
 def _all_clusters(merge_meters: float) -> list[dict]:
     """The full clustering of every geotagged photo, count-descending. Cached on
-    the geotagged-photo count, so a commit rebuilds it on the next request."""
-    cache_key = (index.count_geotagged_photos(), round(merge_meters, 1))
+    the geotag generation, so any coordinate change rebuilds it on the next
+    request. The stamp is read before the query: a write landing in between
+    files fresh data under the old stamp, which costs one spare rebuild rather
+    than serving anything stale."""
+    cache_key = (index.geotag_generation(), round(merge_meters, 1))
     clusters = _cache.get(cache_key)
     if clusters is not None:
         return clusters
@@ -490,6 +494,7 @@ def get_hotspots(limit: int = 40, merge_meters: float = DEFAULT_MERGE_METERS,
 
 
 def invalidate():
-    """Drop the cached clustering. The cache key already tracks the geotagged
-    photo count; this covers edits that change coordinates without changing it."""
+    """Drop the cached clustering. Redundant for coordinate changes made through
+    index (the cache key tracks index.geotag_generation()); kept as the explicit
+    hook for callers and tests that want a cold cache."""
     _cache.clear()

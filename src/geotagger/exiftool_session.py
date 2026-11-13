@@ -93,7 +93,16 @@ def start_et() -> bool:
         print(f"WARNING: {_et_error}")
         return False
     except Exception as e:
-        _et = None
+        # The helper auto-starts the process on first execute(), so a failure
+        # after that point (e.g. the `-ver` probe itself) leaves a live
+        # -stay_open child. Terminate it before dropping the only handle, or it
+        # lingers until the app exits. Best-effort: we're reporting `e` regardless.
+        et, _et = _et, None
+        try:
+            if et is not None and et.running:
+                et.terminate()
+        except Exception:
+            pass
         _et_error = str(e)
         print(f"WARNING: ExifTool startup failed: {e}")
         return False

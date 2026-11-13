@@ -5,11 +5,6 @@
  * photo with its metadata. One or more selected photos can be downloaded as
  * a ZIP of their original (full-quality / RAW) files. */
 
-const MONTH_NAMES = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
-
 let allPersons = [];      // {id, name} — loaded once for the picker
 let selectedPersons = []; // {id, name}, in pick order
 let resultPhotos = [];    // last search results (unfiltered by the timeline)

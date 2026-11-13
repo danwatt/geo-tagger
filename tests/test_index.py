@@ -1,4 +1,7 @@
 import json
+import sqlite3
+
+import pytest
 
 from geotagger import index
 
@@ -303,3 +306,162 @@ class TestCameraLessFreshness:
     def test_never_read_camera_is_stale(self, db):
         _scan_upsert(camera=None)
         assert index.is_fresh(".", "p1.jpg", 1000.0, None, None) is False
+
+
+class TestDayStartTs:
+    def test_is_utc_midnight(self):
+        assert index._day_start_ts("1970-01-02") == 86400
+        assert index._day_start_ts("2024-03-01") == 1709251200
+
+    def test_pre_1970_date_is_negative_not_an_error(self):
+        # datetime.timestamp() raises OSError for these on Windows.
+        assert index._day_start_ts("1969-12-31") == -86400
+
+    def test_unparseable_input_is_none(self):
+        assert index._day_start_ts("not-a-date") is None
+        assert index._day_start_ts("2024-13-01") is None
+        assert index._day_start_ts("2024-03-01T00:00") is None
+
+
+class TestDateRangeFilters:
+    """get_photos and search_photos share _day_start_ts; both treat the range
+    as whole UTC days, inclusive at both ends."""
+
+    DAY = 1709251200  # 2024-03-01 00:00 UTC
+
+    def _library(self, db):
+        _upsert(db, path="before.jpg", photo_datetime=self.DAY - 1)
+        _upsert(db, path="start.jpg", photo_datetime=self.DAY)
+        _upsert(db, path="end.jpg", photo_datetime=self.DAY + 86399)
+        _upsert(db, path="after.jpg", photo_datetime=self.DAY + 86400)
+
+    def test_get_photos_range_covers_the_whole_day(self, db):
+        self._library(db)
+        rows = index.get_photos(date_from="2024-03-01", date_to="2024-03-01")
+        assert [r["filename"] for r in rows] == ["start.jpg", "end.jpg"]
+
+    def test_search_photos_range_covers_the_whole_day(self, db):
+        self._library(db)
+        rows = index.search_photos(date_from="2024-03-01", date_to="2024-03-01")
+        assert [r["filename"] for r in rows] == ["start.jpg", "end.jpg"]
+
+    def test_unparseable_bounds_are_ignored(self, db):
+        self._library(db)
+        assert len(index.get_photos(date_from="garbage", date_to="nope")) == 4
+        assert len(index.search_photos(date_from="garbage", date_to="nope")) == 4
+
+    def test_one_bad_bound_does_not_disable_the_other(self, db):
+        self._library(db)
+        rows = index.get_photos(date_from="garbage", date_to="2024-03-01")
+        assert [r["filename"] for r in rows] == ["before.jpg", "start.jpg", "end.jpg"]
+        rows = index.search_photos(date_from="2024-03-01", date_to="garbage")
+        assert [r["filename"] for r in rows] == ["start.jpg", "end.jpg", "after.jpg"]
+
+
+class TestVacuumIfNeeded:
+    def test_resize_changes_page_size_and_stays_in_wal(self, db):
+        result = index.vacuum_if_needed(min_free_ratio=1.0, target_page_size=8192)
+        assert result["vacuumed"] and result["resized"]
+        assert db.execute("PRAGMA page_size").fetchone()[0] == 8192
+        assert db.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+    def test_failed_vacuum_still_restores_wal(self, db, monkeypatch):
+        """The resize path drops to the rollback journal for the VACUUM; a
+        failure there (disk full) must not leave the session out of WAL."""
+        seen = []
+
+        class FailingVacuum:
+            def execute(self, sql, *args):
+                if sql == "VACUUM":
+                    # Proves the test really went through the non-WAL window.
+                    seen.append(db.execute("PRAGMA journal_mode").fetchone()[0])
+                    raise sqlite3.OperationalError("database or disk is full")
+                return db.execute(sql, *args)
+
+        monkeypatch.setattr(index, "get_db", lambda: FailingVacuum())
+        with pytest.raises(sqlite3.OperationalError):
+            index.vacuum_if_needed(min_free_ratio=1.0, target_page_size=8192)
+
+        assert seen == ["delete"]
+        assert db.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+
+class TestCloseDb:
+    def test_get_db_raises_after_close(self, db):
+        index.close_db()
+
+        with pytest.raises(RuntimeError, match="not initialized"):
+            index.get_db()
+        with pytest.raises(sqlite3.ProgrammingError):
+            db.execute("SELECT 1")
+
+    def test_close_is_idempotent(self, db):
+        index.close_db()
+        index.close_db()  # nothing open: no-op
+
+    def test_close_folds_the_wal_into_the_main_file(self, db):
+        _upsert(db)
+        wal = index._db_path.with_name("index.db-wal")
+        assert wal.exists() and wal.stat().st_size > 0
+
+        index.close_db()
+
+        assert not wal.exists() or wal.stat().st_size == 0
+
+
+class TestGeotagGeneration:
+    """The change-stamp behind coordinate-derived caches: it must move on every
+    lat/lng change and stay put for writes that leave coordinates alone."""
+
+    def _pid(self, db):
+        return db.execute("SELECT id FROM photos WHERE filename='p1.jpg'").fetchone()[0]
+
+    def test_new_geotagged_photo_bumps(self, db):
+        gen = index.geotag_generation()
+        _upsert(db, lat=40.0, lng=-75.0)
+        assert index.geotag_generation() > gen
+
+    def test_new_untagged_photo_does_not_bump(self, db):
+        gen = index.geotag_generation()
+        _upsert(db)
+        assert index.geotag_generation() == gen
+
+    def test_rescan_with_unchanged_coordinates_does_not_bump(self, db):
+        _upsert(db, lat=40.0, lng=-75.0)
+        gen = index.geotag_generation()
+        _upsert(db, lat=40.0, lng=-75.0, mtime=2000.0)  # file touched, same GPS
+        assert index.geotag_generation() == gen
+
+    def test_rescan_with_moved_coordinates_bumps(self, db):
+        _upsert(db, lat=40.0, lng=-75.0)
+        gen = index.geotag_generation()
+        _upsert(db, lat=41.0, lng=-75.0, mtime=2000.0)
+        assert index.geotag_generation() > gen
+
+    def test_rescan_that_keeps_a_database_tag_does_not_bump(self, db):
+        """The stored coordinates decide, not the ones passed in: a hand-placed
+        DB-only tag survives the rescan, so nothing moved."""
+        _scan_upsert()
+        index.update_geotag(self._pid(db), 48.85, 2.35, "database", None, None)
+        gen = index.geotag_generation()
+        _scan_upsert(lat=10.0, lng=20.0, source="embedded", mtime=2000.0)
+        assert index.geotag_generation() == gen
+
+    def test_update_geotag_bumps_on_tag_move_and_removal(self, db):
+        _upsert(db)
+        pid = self._pid(db)
+        gen = index.geotag_generation()
+        index.update_geotag(pid, 40.0, -75.0, "sidecar", "p1.xmp", 1.0)
+        tagged = index.geotag_generation()
+        index.update_geotag(pid, 41.0, -75.0, "sidecar", "p1.xmp", 2.0)
+        moved = index.geotag_generation()
+        index.update_geotag(pid, None, None, "none", "p1.xmp", 3.0)
+        assert gen < tagged < moved < index.geotag_generation()
+
+    def test_non_coordinate_writes_do_not_bump(self, db):
+        _upsert(db, lat=40.0, lng=-75.0)
+        pid = self._pid(db)
+        gen = index.geotag_generation()
+        index.set_geocode_ignored([pid], True)
+        index.assign_approximate_date(pid, 946684800, "year", None, None)
+        assert index.geotag_generation() == gen

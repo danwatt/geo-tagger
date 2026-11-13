@@ -23,9 +23,30 @@ def bump_faces_generation():
     _faces_generation += 1
 
 
+# Bumped whenever any photo's coordinates change (a tag added, moved or removed),
+# and when the DB itself is swapped. Caches derived from the set of geotagged
+# points (services/hotspots_service.py) key on this instead of a COUNT(*): a
+# count can't see a moved tag, or one removed + one added, and costs a table
+# scan per check. In-memory only — a restart starts with cold caches anyway.
+_geotag_generation = 0
+
+
+def geotag_generation() -> int:
+    """Current geotag-data generation (see _geotag_generation)."""
+    return _geotag_generation
+
+
+def bump_geotag_generation():
+    """Invalidate caches derived from photo coordinates after a lat/lng change."""
+    global _geotag_generation
+    _geotag_generation += 1
+
+
 def init_db(root: Path | None = None) -> sqlite3.Connection:
     """Initialize the database. If CACHE_DIR is set, use that; otherwise use root / CACHE_DIR_NAME."""
     global _db, _db_path
+    # A different DB is a different set of geotags, whatever the old one held.
+    bump_geotag_generation()
 
     cache_dir_from_env = get_cache_dir()
     if cache_dir_from_env:
@@ -201,13 +222,6 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
         _db.execute(f"INSERT INTO photos ({col_list}) SELECT {col_list} FROM photos_old")
         _db.execute("DROP TABLE photos_old")
 
-    _db.execute("""
-        CREATE TABLE IF NOT EXISTS scans (
-            id INTEGER PRIMARY KEY,
-            root TEXT NOT NULL,
-            scanned_at REAL NOT NULL
-        )
-    """)
     _db.execute("""
         CREATE TABLE IF NOT EXISTS places (
             id INTEGER PRIMARY KEY,
@@ -533,6 +547,32 @@ def get_db() -> sqlite3.Connection:
     return _db
 
 
+def close_db() -> None:
+    """Close the shared connection at shutdown (see lifespan.py); get_db() raises
+    afterwards until init_db is called again. No-op if nothing is open.
+
+    The caller must have stopped everything that uses the DB first — the
+    connection is shared across threads, and a query on a closed connection
+    raises ProgrammingError."""
+    global _db, _db_path
+    db = _db
+    # Drop the handle first so a late get_db() fails with the clear
+    # "not initialized" error rather than handing out a closed connection.
+    _db = None
+    _db_path = None
+    if db is None:
+        return
+    try:
+        # Fold the WAL back into the main file so a clean exit leaves a single
+        # self-contained index.db. Best-effort: SQLite checkpoints on the last
+        # close anyway, and a busy checkpoint must not stop the close.
+        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except sqlite3.Error:
+        pass
+    db.close()
+    bump_geotag_generation()  # nothing cached from this DB is valid for the next
+
+
 def vacuum_if_needed(min_free_ratio: float = 0.1, target_page_size: int = 0) -> dict:
     """Reclaim free-list space (pages left behind by deletes/updates) via VACUUM,
     called once at app startup (see lifespan.py). Also applies ``target_page_size``
@@ -561,9 +601,14 @@ def vacuum_if_needed(min_free_ratio: float = 0.1, target_page_size: int = 0) -> 
         # rollback journal for the rebuild, then restore WAL below.
         db.execute("PRAGMA journal_mode=DELETE")
         db.execute(f"PRAGMA page_size={int(target_page_size)}")
-    db.execute("VACUUM")
-    if resize:
-        db.execute("PRAGMA journal_mode=WAL")
+    try:
+        db.execute("VACUUM")
+    finally:
+        # Also on failure (e.g. disk full): the caller treats a failed VACUUM as
+        # non-fatal and carries on, and without this the whole session would
+        # silently run on the rollback journal — readers blocking writers.
+        if resize:
+            db.execute("PRAGMA journal_mode=WAL")
     # VACUUM's rewrite is one big WAL transaction; left alone, the -wal file sits
     # at roughly the DB's own size until some later write happens to trigger
     # SQLite's normal auto-checkpoint. TRUNCATE folds it back into the main file
@@ -599,7 +644,13 @@ def upsert_photo(
     # gps_accuracy falls back to the file's value because update_geotag leaves
     # it NULL when none was given, and is_fresh reads NULL as "never read".
     keep = "photos.geotag_source = 'database' AND excluded.geotag_source <> 'sidecar'"
-    db.execute(f"""
+    # Coordinates before/after, to bump the geotag generation only when they
+    # really move: a rescan of touched-but-otherwise-unchanged files (or new
+    # photos without GPS) must not throw away the hotspot clustering per file.
+    # The lookup rides the UNIQUE(dir, filename) index the upsert needs anyway.
+    old = db.execute("SELECT lat, lng FROM photos WHERE dir=? AND filename=?",
+                     (dir_, filename)).fetchone()
+    new = db.execute(f"""
         INSERT INTO photos
             (filename, dir, ext, media_type, mtime, size, lat, lng,
              geotag_source, sidecar_path, sidecar_mtime, camera, photo_datetime,
@@ -620,10 +671,14 @@ def upsert_photo(
             orientation=excluded.orientation,
             checksum=excluded.checksum,
             scanned_at=excluded.scanned_at
+        RETURNING lat, lng
     """, (filename, dir_, ext, media_type, mtime, size, lat, lng,
           geotag_source, sidecar_path, sidecar_mtime, camera, photo_datetime,
-          gps_accuracy, orientation, checksum, time.time()))
+          gps_accuracy, orientation, checksum, time.time())).fetchone()
     db.commit()
+    # RETURNING reports what was actually stored, i.e. after the `keep` rule.
+    if (new["lat"], new["lng"]) != ((old["lat"], old["lng"]) if old else (None, None)):
+        bump_geotag_generation()
 
 
 def update_geotag(photo_id: int, lat: float | None, lng: float | None,
@@ -640,6 +695,7 @@ def update_geotag(photo_id: int, lat: float | None, lng: float | None,
         WHERE id=?
     """, (lat, lng, gps_accuracy, geotag_source, sidecar_path, sidecar_mtime, photo_id))
     db.commit()
+    bump_geotag_generation()
 
 
 def set_geocode_ignored(photo_ids: list[int], ignored: bool):
@@ -668,6 +724,24 @@ def assign_approximate_date(photo_id: int, photo_datetime: int | None, precision
         (photo_datetime, precision, sidecar_path, sidecar_mtime, photo_id),
     )
     db.commit()
+
+
+def _day_start_ts(day: str) -> int | None:
+    """Unix timestamp of 00:00 UTC on a YYYY-MM-DD day, or None if `day` doesn't
+    parse — callers then skip the filter rather than fail the query.
+
+    UTC via calendar.timegm — photo_datetime is stored as wall-clock-as-UTC and the
+    timeline buckets with strftime(...'unixepoch') (UTC). Using local-time
+    .timestamp() here would shift the window by the local tz offset and drop
+    boundary photos the timeline still counts (and it raises OSError on Windows
+    for pre-1970 dates).
+    """
+    import calendar
+    from datetime import datetime
+    try:
+        return calendar.timegm(datetime.strptime(day, "%Y-%m-%d").timetuple())
+    except ValueError:
+        return None
 
 
 def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str | None = None,
@@ -712,32 +786,16 @@ def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str |
         except ValueError:
             pass
     if date_from:
-        # Convert YYYY-MM-DD to Unix timestamp (start of day). UTC via
-        # calendar.timegm — photo_datetime is stored as wall-clock-as-UTC and the
-        # timeline buckets with strftime(...'unixepoch') (UTC). Using local-time
-        # .timestamp() here would shift the month window by the local tz offset and
-        # drop boundary photos the timeline still counts.
-        try:
-            import calendar
-            from datetime import datetime
-            dt = datetime.strptime(date_from, "%Y-%m-%d")
-            ts = calendar.timegm(dt.timetuple())
+        ts = _day_start_ts(date_from)
+        if ts is not None:
             clauses.append("photo_datetime >= ?")
             params.append(ts)
-        except ValueError:
-            pass
     if date_to:
-        # Convert YYYY-MM-DD to Unix timestamp (end of day), UTC — see date_from.
-        try:
-            import calendar
-            from datetime import datetime
-            dt = datetime.strptime(date_to, "%Y-%m-%d")
+        ts = _day_start_ts(date_to)
+        if ts is not None:
             # Add 24 hours to include the entire day
-            ts = calendar.timegm(dt.timetuple()) + 86400
             clauses.append("photo_datetime < ?")
-            params.append(ts)
-        except ValueError:
-            pass
+            params.append(ts + 86400)
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     return db.execute(f"SELECT * FROM photos {where} ORDER BY photo_datetime, filename", params).fetchall()
 
@@ -813,27 +871,16 @@ def search_photos(date_from: str | None = None, date_to: str | None = None,
     if undated:
         clauses.append("(photo_datetime IS NULL OR photo_datetime <= 0)")
     elif date_from:
-        # UTC via calendar.timegm — photo_datetime is stored as wall-clock-as-UTC;
-        # local-time .timestamp() would shift the range by the local tz offset. See
-        # get_photos for the full rationale.
-        try:
-            import calendar
-            from datetime import datetime
-            ts = calendar.timegm(datetime.strptime(date_from, "%Y-%m-%d").timetuple())
+        ts = _day_start_ts(date_from)
+        if ts is not None:
             clauses.append("photo_datetime >= ?")
             params.append(ts)
-        except ValueError:
-            pass
     if date_to and not undated:
-        try:
-            import calendar
-            from datetime import datetime
+        ts = _day_start_ts(date_to)
+        if ts is not None:
             # Add 24 hours to include the entire day
-            ts = calendar.timegm(datetime.strptime(date_to, "%Y-%m-%d").timetuple()) + 86400
             clauses.append("photo_datetime < ?")
-            params.append(ts)
-        except ValueError:
-            pass
+            params.append(ts + 86400)
 
     if bbox:
         # bbox=minLng,minLat,maxLng,maxLat
@@ -999,13 +1046,6 @@ def get_photos_by_time_range(min_time: int, max_time: int, has_geotag: bool | No
         WHERE {where}
         ORDER BY photo_datetime, filename
     """, params).fetchall()
-
-
-def record_scan_root(root: str):
-    db = get_db()
-    db.execute("DELETE FROM scans")
-    db.execute("INSERT INTO scans (root, scanned_at) VALUES (?, ?)", (root, time.time()))
-    db.commit()
 
 
 def get_last_scan_roots() -> list[str]:
@@ -1287,14 +1327,6 @@ def count_photos_needing_geocode() -> int:
     return get_db().execute(
         "SELECT COUNT(*) FROM photos "
         "WHERE lat IS NOT NULL AND lng IS NOT NULL AND geocoded_at IS NULL"
-    ).fetchone()[0]
-
-
-def count_geotagged_photos() -> int:
-    """Photos that have coordinates. Doubles as a cheap change-stamp for caches
-    keyed on the set of geotagged photos (see services/hotspots_service.py)."""
-    return get_db().execute(
-        "SELECT COUNT(*) FROM photos WHERE lat IS NOT NULL AND lng IS NOT NULL"
     ).fetchone()[0]
 
 

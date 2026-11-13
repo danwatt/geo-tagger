@@ -96,7 +96,20 @@ WEBP_METHOD = int(os.environ.get("GEOTAGGER_WEBP_METHOD", "4"))
 
 # Sidecar naming: "basename" -> IMG.NEF uses IMG.xmp
 #                 "fullname" -> IMG.NEF uses IMG.NEF.xmp
-SIDECAR_MODE = os.environ.get("GEOTAGGER_SIDECAR_MODE", "basename")  # or "fullname"
+# Validated like THUMB_FORMAT: sidecar.sidecar_path treats anything that isn't
+# "fullname" as basename, so an unchecked typo would silently write sidecars under
+# the wrong naming scheme.
+SIDECAR_MODES = ("basename", "fullname")
+
+
+def get_sidecar_mode() -> str:
+    mode = os.environ.get("GEOTAGGER_SIDECAR_MODE", "basename").strip().lower()
+    if mode not in SIDECAR_MODES:
+        raise ValueError(f"GEOTAGGER_SIDECAR_MODE must be 'basename' or 'fullname', got {mode!r}")
+    return mode
+
+
+SIDECAR_MODE: str = get_sidecar_mode()
 
 # ── Reverse geocoding (offline, GeoNames) ──
 # Directory holding the GeoNames data files (cities500.txt, admin1CodesASCII.txt,
@@ -283,6 +296,25 @@ FACE_MANUAL_CROP_DIM = int(os.environ.get("GEOTAGGER_FACE_MANUAL_CROP_DIM", "640
 # Server
 HOST = os.environ.get("GEOTAGGER_HOST", "127.0.0.1")
 PORT = int(os.environ.get("GEOTAGGER_PORT", "8000"))
+
+
+# Worker thread count for both the shared request executor (lifespan.py) and the
+# scan pipeline's own pool (scanning.py). `--workers` sets GEOTAGGER_WORKERS before
+# this module is imported (see __main__.py), so the precedence is flag > env > 4.
+# Validated here because ThreadPoolExecutor(max_workers=0) only fails later, with
+# an error that doesn't name the setting.
+def get_workers() -> int:
+    raw = os.environ.get("GEOTAGGER_WORKERS", "").strip() or "4"
+    try:
+        workers = int(raw)
+    except ValueError:
+        raise ValueError(f"GEOTAGGER_WORKERS must be an integer >= 1, got {raw!r}") from None
+    if workers < 1:
+        raise ValueError(f"GEOTAGGER_WORKERS must be an integer >= 1, got {raw!r}")
+    return workers
+
+
+WORKERS: int = get_workers()
 # Extra DNS names the app may be reached by (comma-separated, case-insensitive), on top of
 # localhost / IP literals / this machine's hostname which middleware.RequestGuard always
 # allows. Needed only when serving under another name (reverse proxy, mDNS alias, ...);

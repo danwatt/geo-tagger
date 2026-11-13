@@ -1,12 +1,11 @@
-"""Reverse-geocoding: status, GeoNames viewport query, backfill, sidecar export,
-and the next geotag-group picker."""
+"""Reverse-geocoding: status, GeoNames viewport query, backfill and sidecar export."""
 
 import asyncio
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from geotagger import census_places, index, geocode, osm_places, serializers
+from geotagger import census_places, index, geocode, osm_places
 from geotagger.geometry import normalize_lng_bbox
 from geotagger.executor import get_executor
 from geotagger.services import geocode_service
@@ -193,13 +192,3 @@ async def api_geocode_export_sidecars():
     where available) into its XMP sidecar."""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(get_executor(), geocode_service.export_to_sidecars)
-
-
-
-    return {
-        "before": [serializers.photo_geocode_dict(p) for p in groups["before"]],
-        "to_tag": [serializers.photo_geocode_dict(p) for p in groups["to_tag"]],
-        "after": [serializers.photo_geocode_dict(p) for p in groups["after"]],
-    }
-
-

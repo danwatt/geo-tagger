@@ -46,31 +46,6 @@ class TestPhotoToDict:
         assert serializers.photo_to_dict(index.get_photo(pid))["geocode_ignored"] is True
 
 
-class TestPhotoGeocodeDict:
-    def test_no_location_is_none(self, db):
-        pid = _add_photo(db, lat=1.0, lng=2.0)
-        d = serializers.photo_geocode_dict(index.get_photo(pid))
-        assert d["location"] is None
-        assert "geocode_ignored" not in d  # distinct shape from photo_to_dict
-
-    def test_nested_location_when_present(self, db):
-        pid = _add_photo(db, lat=1.0, lng=2.0)
-        db.execute("UPDATE photos SET loc_city=?, loc_state=?, loc_country=? WHERE id=?",
-                   ("Paris", "Île-de-France", "France", pid))
-        db.commit()
-        d = serializers.photo_geocode_dict(index.get_photo(pid))
-        assert d["location"] == {"city": "Paris", "sublocation": None,
-                                 "state": "Île-de-France", "country": "France"}
-
-    def test_nested_location_includes_sublocation(self, db):
-        pid = _add_photo(db, lat=1.0, lng=2.0)
-        db.execute("UPDATE photos SET loc_city=?, loc_sublocation=?, loc_country=? WHERE id=?",
-                   ("Paris", "Eiffel Tower", "France", pid))
-        db.commit()
-        d = serializers.photo_geocode_dict(index.get_photo(pid))
-        assert d["location"]["sublocation"] == "Eiffel Tower"
-
-
 class TestRowLocation:
     def test_none_when_country_missing(self, db):
         pid = _add_photo(db)

@@ -62,12 +62,6 @@ function applyMode() {
   document.getElementById("back-btn").textContent = backHref ? "← Back" : "✕ Close";
 }
 
-function setStatus(msg, isError = false) {
-  const bar = document.getElementById("status-bar");
-  bar.textContent = msg;
-  bar.style.color = isError ? "#f88" : "#888";
-}
-
 /* ── Toolbar ── */
 function bindToolbar() {
   document.getElementById("back-btn").addEventListener("click", () => {

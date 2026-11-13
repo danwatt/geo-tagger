@@ -21,23 +21,6 @@ def photo_to_dict(r) -> dict:
     }
 
 
-def photo_geocode_dict(r) -> dict:
-    """Geotag-group shape for a photo row (carries nested place names, no
-    geocode_ignored). Distinct from photo_to_dict — don't merge the two."""
-    return {
-        "id": r["id"], "filename": r["filename"], "media_type": r["media_type"],
-        "lat": r["lat"], "lng": r["lng"], "geotag_source": r["geotag_source"],
-        "camera": r["camera"] or None, "photo_datetime": r["photo_datetime"],
-        "gps_accuracy": r["gps_accuracy"] if r["gps_accuracy"] and r["gps_accuracy"] > 0 else None,
-        "location": {
-            "city": r["loc_city"],
-            "sublocation": r["loc_sublocation"] if "loc_sublocation" in r.keys() else None,
-            "state": r["loc_state"],
-            "country": r["loc_country"],
-        } if r["loc_country"] else None
-    }
-
-
 def row_location(r) -> dict | None:
     """Place names from a photo-joined row, or None. Defensive against rows that
     don't carry the loc_* columns (only list_faces rows do)."""

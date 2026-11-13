@@ -63,64 +63,12 @@ let dateRangeMax = 0;   // Unix ts — absolute max across all photos
 let dateFilterLo = 0;   // current low bound (inclusive)
 let dateFilterHi = 0;   // current high bound (inclusive)
 
-/* ── Basemap definitions ── */
-const BASEMAPS = {
-  street: {
-    label: "Street",
-    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-    options: {
-      attribution: "© OpenStreetMap contributors",
-      maxZoom: 19,
-    },
-  },
-  satellite: {
-    label: "Satellite",
-    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    options: {
-      attribution: "Tiles © Esri — Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community",
-      maxZoom: 19,
-    },
-  },
-  hybrid: {
-    label: "Hybrid",
-    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    overlayUrl: "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
-    options: {
-      attribution: "Tiles © Esri",
-      maxZoom: 19,
-    },
-  },
-};
+/* ── Basemaps ── BASEMAPS / setBasemap / addBasemapControl / correctWorldWrap
+ * live in basemaps.js. This page credits the satellite imagery in full. */
+BASEMAPS.satellite.options.attribution =
+  "Tiles © Esri — Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community";
 
-let activeBasemap = "street";
-let baseTileLayer = null;
-let overlayTileLayer = null;
-
-/* ── Camera colors ── */
-const CAM_PALETTE = [
-  "#e05c5c", // red
-  "#e0a040", // amber
-  "#d4d43a", // yellow
-  "#5cb85c", // green
-  "#3ab8b8", // teal
-  "#4a90d9", // blue
-  "#9b5ce0", // purple
-  "#e05cbc", // pink
-  "#e07840", // orange
-  "#7ab85c", // lime
-];
-const camColorMap = {};   // camera string -> hex color
-let camPaletteCursor = 0;
-let hiddenCameras = new Set();
-
-function camColor(camera) {
-  const key = camera || "Unknown";
-  if (!camColorMap[key]) {
-    camColorMap[key] = CAM_PALETTE[camPaletteCursor % CAM_PALETTE.length];
-    camPaletteCursor++;
-  }
-  return camColorMap[key];
-}
+/* ── Camera colors ── camColor / renderLegend / hiddenCameras live in camera-colors.js. */
 
 /* ── Photo timestamps are wall clock, not instants ──
  * photo_datetime is the EXIF datetime read as if it were UTC (sidecar.py's
@@ -270,21 +218,6 @@ function initMap() {
   });
 }
 
-// Leaflet projects longitude linearly with no wraparound, so continuous
-// horizontal dragging lets the map's own center drift past +/-180. Pins are
-// placed at their canonical (wrapped) lat/lng, so once the view has drifted a
-// full world away, they'd render a full world-width off screen. Silently
-// re-centering to the CRS-wrapped equivalent view fixes this — visually a
-// no-op, since Leaflet's tile rendering is already seamless across world
-// copies — and keeps the map's own coordinate system from drifting further.
-function correctWorldWrap() {
-  const center = map.getCenter();
-  const wrapped = map.wrapLatLng(center);
-  if (Math.abs(wrapped.lng - center.lng) > 1e-9) {
-    map.setView(wrapped, map.getZoom(), { animate: false });
-  }
-}
-
 async function fitMapToAllLocations() {
   try {
     const res = await fetch("/api/stats/bounds");
@@ -298,43 +231,6 @@ async function fitMapToAllLocations() {
   } catch (e) {
     // keep default world view
   }
-}
-
-function setBasemap(key) {
-  activeBasemap = key;
-  const def = BASEMAPS[key];
-
-  if (baseTileLayer) { map.removeLayer(baseTileLayer); baseTileLayer = null; }
-  if (overlayTileLayer) { map.removeLayer(overlayTileLayer); overlayTileLayer = null; }
-
-  baseTileLayer = L.tileLayer(def.url, def.options).addTo(map);
-  if (def.overlayUrl) {
-    overlayTileLayer = L.tileLayer(def.overlayUrl, { maxZoom: 19, opacity: 1 }).addTo(map);
-  }
-
-  // Update button states
-  document.querySelectorAll(".basemap-btn").forEach(btn => {
-    btn.classList.toggle("active", btn.dataset.key === key);
-  });
-}
-
-function addBasemapControl() {
-  const BasemapControl = L.Control.extend({
-    options: { position: "bottomright" },
-    onAdd() {
-      const div = L.DomUtil.create("div", "basemap-control");
-      L.DomEvent.disableClickPropagation(div);
-      Object.entries(BASEMAPS).forEach(([key, def]) => {
-        const btn = L.DomUtil.create("button", "basemap-btn", div);
-        btn.textContent = def.label;
-        btn.dataset.key = key;
-        if (key === activeBasemap) btn.classList.add("active");
-        L.DomEvent.on(btn, "click", () => setBasemap(key));
-      });
-      return div;
-    },
-  });
-  new BasemapControl().addTo(map);
 }
 
 function bindToolbar() {
@@ -385,8 +281,6 @@ function bindToolbar() {
   document.getElementById("place-search").addEventListener("keydown", (e) => {
     if (e.key === "Enter") doPlaceSearch();
   });
-  document.getElementById("apply-latlng-btn").addEventListener("click", doApplyLatLng);
-  document.getElementById("copy-location-btn").addEventListener("click", doCopyLocation);
   document.getElementById("remove-geotag-btn").addEventListener("click", doRemoveGeotag);
   document.getElementById("mark-ignored-btn").addEventListener("click", () => stageIgnore());
 
@@ -472,8 +366,6 @@ function bindToolbar() {
  * shows each month's volume + geotag coverage at a glance), then drill into a
  * single year for the full month grid. The old flat year-headed list meant
  * scrolling past ~12 rows per year to reach anything older. */
-const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
-                     "July", "August", "September", "October", "November", "December"];
 const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -1470,31 +1362,6 @@ function fitMapToPhotos() {
   map.flyToBounds(bounds, { padding: [40, 40], duration: 1.2, maxZoom: 16 });
 }
 
-/* ── Camera legend ── */
-function renderLegend() {
-  const legend = document.getElementById("cam-legend");
-  legend.innerHTML = "";
-
-  // Get unique cameras from currently loaded photos (filtered by month)
-  const currentCameras = new Set(photos.map(p => p.camera || "Unknown"));
-
-  // Only show cameras that are in the current month's photos
-  Object.entries(camColorMap).forEach(([cam, color]) => {
-    if (!currentCameras.has(cam)) return;  // Skip cameras not in current selection
-
-    const item = document.createElement("div");
-    item.className = "cam-legend-item" + (hiddenCameras.has(cam) ? " dimmed" : "");
-    item.title = `Click to hide/show ${cam}`;
-    item.innerHTML = `<div class="cam-legend-dot" style="background:${escapeHtml(color)}"></div><span>${escapeHtml(cam)}</span>`;
-    item.addEventListener("click", () => {
-      hiddenCameras.has(cam) ? hiddenCameras.delete(cam) : hiddenCameras.add(cam);
-      item.classList.toggle("dimmed");
-      applyFilters();
-    });
-    legend.appendChild(item);
-  });
-}
-
 const DAY_ABBRS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 /* ── Grid ── */
@@ -2123,25 +1990,6 @@ function stageIgnore(ids = [...selectedIds]) {
   refreshSelectionUI();    // same reason as stageDrop: the selection just shrank
   setStatus(`Staged ${staged} photo(s) as needing no location. Nothing saved yet — ` +
             `review at the bottom of the grid, then Commit.`);
-}
-
-/* ── Manual lat/lng ── */
-async function doApplyLatLng() {
-  const lat = parseFloat(document.getElementById("lat-input").value);
-  const lng = parseFloat(document.getElementById("lng-input").value);
-  if (isNaN(lat) || isNaN(lng)) { setStatus("Invalid lat/lng", true); return; }
-  if (!selectedIds.size) { setStatus("No photos selected", true); return; }
-  await stageDrop([...selectedIds], lat, lng, null);
-}
-
-/* ── Copy location ── */
-async function doCopyLocation() {
-  if (!focusedPhotoId) { setStatus("No photo in detail pane", true); return; }
-  const source = photos.find((p) => p.id === focusedPhotoId);
-  if (!source?.lat) { setStatus("Focused photo has no location", true); return; }
-  const targets = [...selectedIds].filter((id) => id !== focusedPhotoId);
-  if (!targets.length) { setStatus("No other photos selected", true); return; }
-  await geotag(targets, source.lat, source.lng);
 }
 
 /* ── Place search ── */
@@ -2890,8 +2738,6 @@ let batchAdvanceTimer = null;    // pending auto-advance after a batch is finish
 // the same queue head straight back and look broken.
 let passedOverBatches = new Set();
 
-const SKIPPED_BATCHES_KEY = "geotagger.workqueue.skipped";
-
 function loadSkippedBatches() {
   try {
     const raw = JSON.parse(localStorage.getItem(SKIPPED_BATCHES_KEY) || "[]");
@@ -3160,9 +3006,4 @@ function bindBatchMode() {
   });
 }
 
-/* ── Status ── */
-function setStatus(msg, isError = false) {
-  const bar = document.getElementById("status-bar");
-  bar.textContent = msg;
-  bar.style.color = isError ? "#f88" : "#888";
-}
+/* ── Status ── setStatus lives in status-bar.js. */

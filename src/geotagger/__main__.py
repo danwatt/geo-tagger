@@ -69,7 +69,7 @@ def main():
         "--workers",
         type=_positive_int,
         # None (not 4) so an unset flag leaves GEOTAGGER_WORKERS from the
-        # environment alone; the consumers fall back to 4 when it is unset.
+        # environment alone; config.get_workers() falls back to 4 when it is unset.
         default=None,
         help="Worker thread count for the shared request thread pool and the scan pool "
              "(default: 4, or the GEOTAGGER_WORKERS environment variable if set)"

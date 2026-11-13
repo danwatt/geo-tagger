@@ -3,6 +3,7 @@ import sys
 
 import pytest
 
+from geotagger import config
 from geotagger.__main__ import _is_loopback, main
 
 
@@ -67,16 +68,33 @@ def test_no_workers_flag_leaves_preset_env_untouched(cli, monkeypatch):
     monkeypatch.setenv("GEOTAGGER_WORKERS", "8")
     cli("--scan-dir", os.getcwd())
     assert os.environ["GEOTAGGER_WORKERS"] == "8"
+    assert config.get_workers() == 8
 
 
 def test_no_workers_flag_and_no_env_leaves_unset(cli):
     cli("--scan-dir", os.getcwd())
     assert "GEOTAGGER_WORKERS" not in os.environ
+    assert config.get_workers() == 4
 
 
 def test_workers_flag_sets_env(cli):
     cli("--scan-dir", os.getcwd(), "--workers", "6")
     assert os.environ["GEOTAGGER_WORKERS"] == "6"
+    assert config.get_workers() == 6
+
+
+def test_workers_flag_overrides_preset_env(cli, monkeypatch):
+    monkeypatch.setenv("GEOTAGGER_WORKERS", "8")
+    cli("--scan-dir", os.getcwd(), "--workers", "2")
+    assert config.get_workers() == 2
+
+
+@pytest.mark.parametrize("value", ["-3", "abc", "2.5"])
+def test_workers_flag_bad_value_is_rejected(cli, capsys, value):
+    with pytest.raises(SystemExit) as exc:
+        cli("--scan-dir", os.getcwd(), f"--workers={value}")
+    assert exc.value.code != 0
+    assert "--workers" in capsys.readouterr().err
 
 
 def test_workers_zero_is_rejected(cli, capsys):

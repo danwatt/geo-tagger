@@ -11,7 +11,7 @@ from pathlib import Path
 
 from geotagger import index, thumbnails, faces, semantic, config, scanning
 from geotagger.exiftool_session import lifespan as _et_lifespan
-from geotagger.executor import init_executor
+from geotagger.executor import init_executor, shutdown_executor
 
 
 def _auto_vacuum():
@@ -61,8 +61,7 @@ def _primary_root() -> Path | None:
 @asynccontextmanager
 async def lifespan(app):
     # Initialize thread pool
-    max_workers = int(os.environ.get("GEOTAGGER_WORKERS", "4"))
-    init_executor(max_workers)
+    init_executor(config.WORKERS)
 
     # Resolve tools/data default location (alongside the primary root's cache_dir)
     # before ExifTool starts, so it looks in the right place for the bundled binary.
@@ -72,6 +71,10 @@ async def lifespan(app):
     scanning.reset_scan_state()
     scan_cancel = threading.Event()
     scan_thread: threading.Thread | None = None
+
+    # Set by the teardown below: False if an executor job outlived the shutdown
+    # grace period and may still be using the DB.
+    workers_done = True
 
     async with _et_lifespan(app):
         no_scan = os.environ.get("GEOTAGGER_NO_SCAN") == "1"
@@ -122,3 +125,19 @@ async def lifespan(app):
                 # Off the event loop: the join can take as long as the slowest
                 # in-flight file task.
                 await asyncio.to_thread(scan_thread.join)
+            # Then the request executor, still inside the ExifTool context: its
+            # jobs use the shared session too, so they must be finished (or given
+            # up on) before stop_et runs on the way out of this block. Off the
+            # event loop because it waits up to the grace period.
+            workers_done = await asyncio.to_thread(shutdown_executor)
+
+    # Last, once the scan thread and the workers — everything that touches the
+    # DB — are done and ExifTool has stopped: checkpoint and close the DB. If a
+    # job outlived the grace period it may still be mid-query, so leave the
+    # connection open for it; WAL keeps the file consistent without a clean
+    # close, and the next start checkpoints it.
+    if workers_done:
+        index.close_db()
+    else:
+        print("Shutdown: a background job is still running; leaving the database "
+              "open (it will be checkpointed on next start)")

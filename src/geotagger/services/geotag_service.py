@@ -51,8 +51,9 @@ def write_geotag(photo_ids: list[int], lat: float, lng: float,
             "location": loc,
             "gps_accuracy": gps_accuracy,
         })
-    # New coordinates shift the palette. The cache key only tracks how many photos
-    # are geotagged, which doesn't move when an already-tagged photo is re-dropped.
+    # New coordinates shift the palette. update_geotag already bumped the geotag
+    # generation the cache keys on; dropping it here just frees the old clustering
+    # now rather than on the next palette request.
     hotspots_service.invalidate()
     # Local import: work_queue_service imports this module for its proposals.
     from geotagger.services import work_queue_service

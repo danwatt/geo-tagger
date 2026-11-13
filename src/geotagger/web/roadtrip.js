@@ -41,7 +41,6 @@
   let predictionLayer = null;  // ghost pins for the predicted positions
   let endpointLayer = null;    // the two photos the trip was started/ended from
 
-  let predictions = new Map(); // photo id → prediction object from the server
   let lastResult = null;
   let activeTimeframe = null;  // { from, to, label } captured when the query ran
 
@@ -353,7 +352,6 @@
     tripStart = null;
     tripWindow = null;
     endpoints = null;
-    predictions.clear();
     drawRoute();
     renderPredictions();
     renderEndpoints();
@@ -549,9 +547,6 @@
   // loaded scope, so the grid, legend, timeline, selection, drag-drop and
   // staging all work on it exactly as they do for a month or an area.
   function adoptResult(data) {
-    predictions = new Map();
-    data.candidates.forEach((c) => predictions.set(c.id, c.predicted));
-
     // Merged, not appended: the grid groups by *runs* of the same day, so two
     // separately-sorted blocks (tagged, then predicted) would render the trip's
     // days twice, out of order.

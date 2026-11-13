@@ -22,23 +22,7 @@ let dateFilterLo = 0;   // current low handle value
 let dateFilterHi = 0;   // current high handle value
 let histBuckets = [];   // [{ts, count}] for drawing
 
-/* ── Camera colors ── */
-const CAM_PALETTE = [
-  "#e05c5c", "#e0a040", "#d4d43a", "#5cb85c", "#3ab8b8",
-  "#4a90d9", "#9b5ce0", "#e05cbc", "#e07840", "#7ab85c",
-];
-const camColorMap = {};   // camera string -> hex color
-let camPaletteCursor = 0;
-let hiddenCameras = new Set();
-
-function camColor(camera) {
-  const key = camera || "Unknown";
-  if (!camColorMap[key]) {
-    camColorMap[key] = CAM_PALETTE[camPaletteCursor % CAM_PALETTE.length];
-    camPaletteCursor++;
-  }
-  return camColorMap[key];
-}
+/* ── Camera colors ── camColor / renderLegend / hiddenCameras live in camera-colors.js. */
 
 /* ── Init ── */
 document.addEventListener("DOMContentLoaded", async () => {
@@ -75,12 +59,6 @@ async function checkStatus() {
   } catch (err) {
     setStatus("Connection error: " + err.message, true);
   }
-}
-
-function setStatus(msg, isError = false) {
-  const bar = document.getElementById("status-bar");
-  bar.textContent = msg;
-  bar.style.color = isError ? "#f88" : "#888";
 }
 
 /* ── Timeline initialization ── */
@@ -440,29 +418,6 @@ function applyFilters(fitTimeline = false) {
       timeline.setWindow(new Date(minTime), new Date(maxTime), { animation: true });
     }
   }
-}
-
-/* ── Camera legend ── */
-function renderLegend() {
-  const legend = document.getElementById("cam-legend");
-  legend.innerHTML = "";
-
-  const currentCameras = new Set(photos.map(p => p.camera || "Unknown"));
-
-  Object.entries(camColorMap).forEach(([cam, color]) => {
-    if (!currentCameras.has(cam)) return;
-
-    const item = document.createElement("div");
-    item.className = "cam-legend-item" + (hiddenCameras.has(cam) ? " dimmed" : "");
-    item.title = `Click to hide/show ${cam}`;
-    item.innerHTML = `<div class="cam-legend-dot" style="background:${escapeHtml(color)}"></div><span>${escapeHtml(cam)}</span>`;
-    item.addEventListener("click", () => {
-      hiddenCameras.has(cam) ? hiddenCameras.delete(cam) : hiddenCameras.add(cam);
-      item.classList.toggle("dimmed");
-      applyFilters();
-    });
-    legend.appendChild(item);
-  });
 }
 
 /* ── Grid ── */

@@ -2,13 +2,12 @@
 a live terminal progress display. CLI-facing, so it uses print() (not logging) and
 runs its own local ThreadPoolExecutor, separate from the shared request executor."""
 
-import os
 import sys
 import threading
 import time
 from pathlib import Path
 
-from geotagger import index, scanner, sidecar, thumbnails, geocode
+from geotagger import config, index, scanner, sidecar, thumbnails, geocode
 from geotagger.services import geocode_service
 
 # ── Scan state (polled by GET /api/scan/status) ──
@@ -237,7 +236,7 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
         return was_indexed, was_skipped, thumb_generated, thumb_cached, error_msg, worker_id
 
     # Process files with a thread pool
-    max_workers = int(os.environ.get("GEOTAGGER_WORKERS", "4"))
+    max_workers = config.WORKERS
 
     # Initialize display
     if show_progress:

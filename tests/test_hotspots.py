@@ -282,6 +282,34 @@ class TestHotspotCache:
         _upsert("b.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")
         assert hotspots_service.get_hotspots()["hotspots"][0]["count"] == 2
 
+    def test_moved_geotag_invalidates_the_cache(self, db):
+        """The geotagged-photo count doesn't change here, which is why the cache
+        keys on index.geotag_generation() instead. No explicit invalidate():
+        this is the path a background scan takes."""
+        a = _upsert("a.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")
+        assert hotspots_service.get_hotspots()["hotspots"][0]["lat"] == pytest.approx(40.0)
+
+        index.update_geotag(a, 50.0, 10.0, "sidecar", None, None)
+        assert hotspots_service.get_hotspots()["hotspots"][0]["lat"] == pytest.approx(50.0)
+
+    def test_one_tag_removed_and_one_added_invalidates_the_cache(self, db):
+        a = _upsert("a.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")
+        b = _upsert("b.jpg")
+        assert hotspots_service.get_hotspots()["hotspots"][0]["sample_photo_id"] == a
+
+        index.update_geotag(a, None, None, "none", None, None)
+        index.update_geotag(b, 50.0, 10.0, "sidecar", None, None)
+        hotspots = hotspots_service.get_hotspots()["hotspots"]
+        assert [h["sample_photo_id"] for h in hotspots] == [b]
+
+    def test_unchanged_rescan_reuses_the_cached_clustering(self, db):
+        _upsert("a.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")
+        first = hotspots_service._all_clusters(hotspots_service.DEFAULT_MERGE_METERS)
+
+        _upsert("a.jpg", lat=40.0, lng=-75.0, geotag_source="sidecar")  # touched, same GPS
+        _upsert("c.jpg")                                                 # new, no GPS
+        assert hotspots_service._all_clusters(hotspots_service.DEFAULT_MERGE_METERS) is first
+
 
 class TestProposeLocations:
     def test_proposes_the_location_of_the_nearest_time_neighbor(self, db):

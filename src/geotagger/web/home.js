@@ -1,8 +1,3 @@
-const MONTH_NAMES = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
-
 function showError(cardId, msg) {
   const card = document.getElementById(cardId);
   let el = card.querySelector(".error-line");
@@ -473,8 +468,6 @@ document.getElementById("wq-more").addEventListener("click", () => loadWorkQueue
 /* Skipped batches — the list Geocode's Skip button writes. It lives in this
    browser's localStorage, so Home is the only place that can show how big it has
    grown and offer to forget it. */
-const SKIPPED_BATCHES_KEY = "geotagger.workqueue.skipped";
-
 function skippedBatchCount() {
   try {
     const raw = JSON.parse(localStorage.getItem(SKIPPED_BATCHES_KEY) || "[]");

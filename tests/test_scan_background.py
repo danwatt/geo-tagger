@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from geotagger import index, scanning
+from geotagger import config, index, scanning
 
 
 @pytest.fixture(autouse=True)
@@ -125,7 +125,7 @@ class TestCancel:
         scan_root.mkdir()
         _make_jpegs(scan_root, 6)
         cancel = threading.Event()
-        monkeypatch.setenv("GEOTAGGER_WORKERS", "1")
+        monkeypatch.setattr(config, "WORKERS", 1)
 
         real_is_fresh = index.is_fresh
 

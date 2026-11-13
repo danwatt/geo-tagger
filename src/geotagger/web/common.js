@@ -18,3 +18,11 @@ function escapeHtml(value) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
+
+/** Full month names, index 0 = January. */
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
+                     "July", "August", "September", "October", "November", "December"];
+
+/** localStorage key for the work-queue batches skipped on the Geocode page
+ *  (written by app.js, counted/cleared by home.js). */
+const SKIPPED_BATCHES_KEY = "geotagger.workqueue.skipped";

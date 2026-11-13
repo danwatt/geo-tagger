@@ -3,9 +3,6 @@
    and selectable as jump targets on the Geocode page. */
 
 let map;
-let baseTileLayer = null;
-let overlayTileLayer = null;
-let activeBasemap = "street";
 
 // State
 let places = [];            // loaded from /api/places
@@ -22,24 +19,7 @@ let drawingMode = null;     // null | "rectangle" | "circle"
 let drawingShape = null;    // temporary shape being drawn
 let drawStartLatLng = null;
 
-const BASEMAPS = {
-  street: {
-    label: "Street",
-    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-    options: { attribution: "© OpenStreetMap contributors", maxZoom: 19 },
-  },
-  satellite: {
-    label: "Satellite",
-    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    options: { attribution: "Tiles © Esri", maxZoom: 19 },
-  },
-  hybrid: {
-    label: "Hybrid",
-    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    overlayUrl: "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
-    options: { attribution: "Tiles © Esri", maxZoom: 19 },
-  },
-};
+// Basemap definitions + switcher (and correctWorldWrap) live in basemaps.js.
 
 /* ── Init ── */
 document.addEventListener("DOMContentLoaded", () => {
@@ -103,50 +83,6 @@ function fitToPlaces() {
   if (!shapes.length) return;
   const bounds = shapes.reduce((acc, s) => acc.extend(s.getBounds()), L.latLngBounds([]));
   if (bounds.isValid()) map.fitBounds(bounds.pad(0.15), { maxZoom: 14 });
-}
-
-// See map.js — keeps the map's own center from drifting past ±180 when
-// panning continuously across the antimeridian, which would otherwise render
-// canonical shapes a full world-width off screen.
-function correctWorldWrap() {
-  const center = map.getCenter();
-  const wrapped = map.wrapLatLng(center);
-  if (Math.abs(wrapped.lng - center.lng) > 1e-9) {
-    map.setView(wrapped, map.getZoom(), { animate: false });
-  }
-}
-
-function setBasemap(key) {
-  activeBasemap = key;
-  const def = BASEMAPS[key];
-  if (baseTileLayer) { map.removeLayer(baseTileLayer); baseTileLayer = null; }
-  if (overlayTileLayer) { map.removeLayer(overlayTileLayer); overlayTileLayer = null; }
-  baseTileLayer = L.tileLayer(def.url, def.options).addTo(map);
-  if (def.overlayUrl) {
-    overlayTileLayer = L.tileLayer(def.overlayUrl, { maxZoom: 19, opacity: 1 }).addTo(map);
-  }
-  document.querySelectorAll(".basemap-btn").forEach(btn => {
-    btn.classList.toggle("active", btn.dataset.key === key);
-  });
-}
-
-function addBasemapControl() {
-  const BasemapControl = L.Control.extend({
-    options: { position: "bottomright" },
-    onAdd() {
-      const div = L.DomUtil.create("div", "basemap-control");
-      L.DomEvent.disableClickPropagation(div);
-      Object.entries(BASEMAPS).forEach(([key, def]) => {
-        const btn = L.DomUtil.create("button", "basemap-btn", div);
-        btn.textContent = def.label;
-        btn.dataset.key = key;
-        if (key === activeBasemap) btn.classList.add("active");
-        L.DomEvent.on(btn, "click", () => setBasemap(key));
-      });
-      return div;
-    },
-  });
-  new BasemapControl().addTo(map);
 }
 
 /* ── Toolbar ── */
