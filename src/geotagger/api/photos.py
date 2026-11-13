@@ -42,10 +42,16 @@ async def api_photos(
             id_list = [int(x) for x in ids.split(",") if x.strip()]
         except ValueError:
             raise HTTPException(400, "ids must be a comma-separated list of integers")
-    rows = index.get_photos(
-        geotagged=geotagged, bbox=bbox,
-        date_from=date_from, date_to=date_to, undated=undated, dir=dir, ids=id_list,
-    )
+    # Deliberately unpaged: the map frontend loads the full filtered set in one
+    # request by design. A malformed bbox/date is a client error (400), never a
+    # silently-dropped filter that returns the whole library.
+    try:
+        rows = index.get_photos(
+            geotagged=geotagged, bbox=bbox,
+            date_from=date_from, date_to=date_to, undated=undated, dir=dir, ids=id_list,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return [serializers.photo_to_dict(r) for r in rows]
 
 
@@ -155,15 +161,31 @@ async def api_photos_by_location(
     location_fields: str = Query(...),
     geotagged: str = Query("all", pattern="^(all|yes|no)$"),
     window: int = Query(900, ge=0),
+    limit: int = Query(1_000_000, ge=1, le=5_000_000,
+                       description="max recorded-location matches considered"),
+    response: Response = None,
 ):
-    """Recorded location matches plus temporally adjacent geotag candidates."""
+    """Recorded location matches plus temporally adjacent geotag candidates.
+
+    The map loads every photo recorded in the chosen location in one shot, so the
+    default cap is far above any real library (it only exists to stop a runaway
+    value, not to page). If the cap is hit the response still carries what fit and
+    sets an ``X-Truncated: true`` header (the body stays a plain list so the
+    frontend is unchanged)."""
     from geotagger.search_locations import parse_fields
 
     try:
         parse_fields(location_fields)
     except (ValueError, TypeError):
         raise HTTPException(400, "Invalid location selection")
-    rows = index.search_photos(location_fields=location_fields, limit=10_000_000)
+    try:
+        # limit+1 so "exactly at the cap" is distinguishable from "over it".
+        rows = index.search_photos(location_fields=location_fields, limit=limit + 1)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if len(rows) > limit:
+        rows = rows[:limit]
+        response.headers["X-Truncated"] = "true"
     located = [r for r in rows if r["lat"] is not None and r["lng"] is not None]
     return [serializers.photo_to_dict(r)
             for r in _augment_and_filter(located, geotagged, window)]

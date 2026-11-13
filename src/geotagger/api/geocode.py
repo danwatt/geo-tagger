@@ -3,7 +3,7 @@
 import asyncio
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from geotagger import census_places, index, geocode, osm_places
 from geotagger.geometry import normalize_lng_bbox
@@ -14,7 +14,7 @@ router = APIRouter()
 
 
 class GeocodeBackfillRequest(BaseModel):
-    limit: int = 1000  # photos geocoded per call; repeat until remaining == 0
+    limit: int = Field(1000, ge=1, le=100_000)  # photos geocoded per call; repeat until remaining == 0
 
 
 def _parse_bbox(bbox: str) -> tuple[float, float, float, float]:
@@ -43,7 +43,7 @@ async def api_geocode_status():
 
 
 @router.get("/api/geocode/places")
-async def api_geocode_places(bbox: str = Query(...), limit: int = Query(3000, le=10000)):
+async def api_geocode_places(bbox: str = Query(...), limit: int = Query(3000, ge=1, le=10000)):
     """GeoNames places within a viewport bbox — backs the Places DB map, which
     plots the raw reverse-geocode reference data (not photos) so the user can
     verify what place names a coordinate would resolve to."""
@@ -55,7 +55,7 @@ async def api_geocode_places(bbox: str = Query(...), limit: int = Query(3000, le
 
 
 @router.get("/api/geocode/voronoi")
-async def api_geocode_voronoi(bbox: str = Query(...), limit: int = Query(4000, le=8000)):
+async def api_geocode_voronoi(bbox: str = Query(...), limit: int = Query(4000, ge=1, le=8000)):
     """Boundary cells for GeoNames places in a viewport bbox — for each place, the
     area a coordinate must fall in to reverse-geocode to it. Exact Voronoi cells
     under the plain nearest-point lookup; grid-traced outlines (accurate to about
@@ -73,7 +73,7 @@ async def api_geocode_voronoi(bbox: str = Query(...), limit: int = Query(4000, l
 
 
 @router.get("/api/geocode/osm-places")
-async def api_geocode_osm_places(bbox: str = Query(...), limit: int = Query(4000, le=8000),
+async def api_geocode_osm_places(bbox: str = Query(...), limit: int = Query(4000, ge=1, le=8000),
                                   buildings: bool = Query(True)):
     """OSM place polygons overlapping a viewport bbox, as a GeoJSON FeatureCollection
     — backs the Places DB map's OSM boundary overlay (cities, parks, stadiums,
@@ -99,7 +99,7 @@ async def api_geocode_osm_places(bbox: str = Query(...), limit: int = Query(4000
 
 
 @router.get("/api/geocode/census-places")
-async def api_geocode_census_places(bbox: str = Query(...), limit: int = Query(4000, le=8000)):
+async def api_geocode_census_places(bbox: str = Query(...), limit: int = Query(4000, ge=1, le=8000)):
     """US Census place polygons overlapping a viewport bbox, as a GeoJSON
     FeatureCollection — backs the Places DB map's census overlay. These are the
     boundaries consulted after OSM and before the GeoNames distance estimate, so
@@ -121,7 +121,7 @@ async def api_geocode_census_places(bbox: str = Query(...), limit: int = Query(4
 
 
 @router.get("/api/geocode/zctas")
-async def api_geocode_zctas(bbox: str = Query(...), limit: int = Query(4000, le=8000)):
+async def api_geocode_zctas(bbox: str = Query(...), limit: int = Query(4000, ge=1, le=8000)):
     """ZIP code areas overlapping a viewport bbox, as a GeoJSON FeatureCollection —
     backs the Places DB map's ZIP overlay. Each feature carries the ZIP plus its
     crosswalk city, i.e. the mailing city a photo inside it can fall back to.

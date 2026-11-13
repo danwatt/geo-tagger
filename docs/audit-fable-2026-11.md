@@ -283,7 +283,7 @@ response has already changed the name. Unknown ids return 200.
 "2,000 photos found" and "Select all" acts on a partial set.
 *Fix:* return the true total and a `truncated` flag; show "first 2,000 of N".
 
-**A4 — Medium — Unbounded and unvalidated parameters** [traced]
+**A4 — Medium — Unbounded and unvalidated parameters** [traced] — ✅ **Done** (bad bbox/date = 400, id lists via `json_each`, limits bounded; `/api/photos` deliberately still unpaged — map loads full set)
 - `/api/photos` has no paging; an unparseable `bbox` or date is silently dropped (`index.py:712,727,739`), so a typo returns the whole library.
 - `/api/photos/by-location` passes `limit=10_000_000` (`api/photos.py:166`).
 - Id lists are expanded into `IN (?,…)` (`index.py:685,1469,2015`); more than 32,766 ids gives a 500.

@@ -10,7 +10,7 @@ import time
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from geotagger import index
 from geotagger.executor import get_executor
@@ -32,7 +32,7 @@ class ForceRequest(BaseModel):
 class StreetSearchRequest(BaseModel):
     bbox: str            # "minLng,minLat,maxLng,maxLat" — the map viewport
     query: str           # case-insensitive substring of a street's name or ref
-    limit: int | None = None
+    limit: int | None = Field(None, ge=1, le=100_000)
     include_paths: bool = False  # also match footway/path/cycleway/track
 
 

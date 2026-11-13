@@ -5,7 +5,7 @@ api/search.py) so they combine with every other filter."""
 import asyncio
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from geotagger import index, serializers
 from geotagger.executor import get_executor
@@ -16,7 +16,7 @@ router = APIRouter()
 
 
 class SemanticScanRequest(BaseModel):
-    limit: int = 32
+    limit: int = Field(32, ge=1, le=1000)
 
 
 class ForceRequest(BaseModel):

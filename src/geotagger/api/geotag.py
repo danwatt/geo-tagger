@@ -4,7 +4,7 @@ the time-neighbor location guesser."""
 import asyncio
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from geotagger import index
 from geotagger.executor import get_executor
@@ -29,7 +29,7 @@ class SetGeocodeIgnoredRequest(BaseModel):
 class ProposeRequest(BaseModel):
     ids: list[int]
     window: int = geotag_service.DEFAULT_PROPOSE_WINDOW
-    limit: int = 3
+    limit: int = Field(3, ge=1, le=50)
 
 
 @router.post("/api/geotag")

@@ -146,10 +146,13 @@ async def api_search_untagged_faces(
     if not pids:
         raise HTTPException(400, "person_ids is required")
     loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(
-        get_executor(),
-        faces_service.find_untagged_face_photos,
-        pids, date_from, date_to, bbox, location, geotagged, threshold, limit,
-        place_id, nearby_m, location_fields,
-    )
+    try:
+        result = await loop.run_in_executor(
+            get_executor(),
+            faces_service.find_untagged_face_photos,
+            pids, date_from, date_to, bbox, location, geotagged, threshold, limit,
+            place_id, nearby_m, location_fields,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return result

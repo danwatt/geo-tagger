@@ -141,11 +141,10 @@ def propose_locations(photo_ids: list[int], window: int = DEFAULT_PROPOSE_WINDOW
     db = index.get_db()
     # Only untagged, dated photos are proposable — `selected` counts those, not the
     # raw selection, so the "N of M" the UI shows matches what a stage would touch.
-    qmarks = ",".join("?" * len(photo_ids))
     targets = db.execute(
-        f"SELECT id, photo_datetime FROM photos "
-        f"WHERE id IN ({qmarks}) AND lat IS NULL AND photo_datetime > 0",
-        photo_ids,
+        "SELECT id, photo_datetime FROM photos "
+        "WHERE id IN (SELECT value FROM json_each(?)) AND lat IS NULL AND photo_datetime > 0",
+        (index.ids_json(photo_ids),),
     ).fetchall()
     if not targets:
         return empty(0)

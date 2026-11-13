@@ -317,10 +317,10 @@ class TestDayStartTs:
         # datetime.timestamp() raises OSError for these on Windows.
         assert index._day_start_ts("1969-12-31") == -86400
 
-    def test_unparseable_input_is_none(self):
-        assert index._day_start_ts("not-a-date") is None
-        assert index._day_start_ts("2024-13-01") is None
-        assert index._day_start_ts("2024-03-01T00:00") is None
+    def test_unparseable_input_raises(self):
+        for bad in ("not-a-date", "2024-13-01", "2024-03-01T00:00"):
+            with pytest.raises(ValueError, match="YYYY-MM-DD"):
+                index._day_start_ts(bad)
 
 
 class TestDateRangeFilters:
@@ -345,17 +345,48 @@ class TestDateRangeFilters:
         rows = index.search_photos(date_from="2024-03-01", date_to="2024-03-01")
         assert [r["filename"] for r in rows] == ["start.jpg", "end.jpg"]
 
-    def test_unparseable_bounds_are_ignored(self, db):
+    def test_unparseable_bounds_raise(self, db):
         self._library(db)
-        assert len(index.get_photos(date_from="garbage", date_to="nope")) == 4
-        assert len(index.search_photos(date_from="garbage", date_to="nope")) == 4
+        for fn in (index.get_photos, index.search_photos):
+            with pytest.raises(ValueError):
+                fn(date_from="garbage")
+            with pytest.raises(ValueError):
+                fn(date_to="nope")
 
-    def test_one_bad_bound_does_not_disable_the_other(self, db):
+    def test_empty_bounds_mean_no_filter(self, db):
         self._library(db)
-        rows = index.get_photos(date_from="garbage", date_to="2024-03-01")
-        assert [r["filename"] for r in rows] == ["before.jpg", "start.jpg", "end.jpg"]
-        rows = index.search_photos(date_from="2024-03-01", date_to="garbage")
-        assert [r["filename"] for r in rows] == ["start.jpg", "end.jpg", "after.jpg"]
+        assert len(index.get_photos(date_from="", date_to="")) == 4
+        assert len(index.search_photos(date_from="", date_to="")) == 4
+
+
+class TestBboxAndIdList:
+    def test_malformed_bbox_raises(self, db):
+        for bad in ("garbage", "1,2,3", "1,2,3,x", "1,2,3,4,5", "nan,0,1,1"):
+            with pytest.raises(ValueError, match="bbox"):
+                index.get_photos(bbox=bad)
+            with pytest.raises(ValueError, match="bbox"):
+                index.search_photos(bbox=bad)
+
+    def test_empty_bbox_means_no_filter(self, db):
+        _upsert(db, path="a.jpg")
+        assert len(index.get_photos(bbox="")) == 1
+        assert len(index.search_photos(bbox="")) == 1
+
+    def test_id_list_beyond_sqlite_variable_limit(self, db):
+        _upsert(db, path="b.jpg", photo_datetime=2)
+        _upsert(db, path="a.jpg", photo_datetime=1)
+        real = [r["id"] for r in index.get_photos()]
+        ids = list(range(100_000, 140_000)) + real  # > 32,766 mostly-missing ids
+        rows = index.get_photos(ids=ids)
+        assert [r["filename"] for r in rows] == ["a.jpg", "b.jpg"]  # ORDER BY kept
+
+    def test_write_paths_accept_huge_id_lists(self, db):
+        _upsert(db, path="c.jpg")
+        pid = index.get_photos()[0]["id"]
+        huge = list(range(100_000, 140_000)) + [pid]
+        assert index.delete_photo_faces(huge) == 0
+        assert index.ignore_unlabeled_in_photos(huge) == 0
+        index.set_person_representatives(1, list(range(100_000, 140_000)))
 
 
 class TestVacuumIfNeeded:

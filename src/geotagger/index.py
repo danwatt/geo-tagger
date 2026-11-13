@@ -851,9 +851,10 @@ def assign_approximate_date(photo_id: int, photo_datetime: int | None, precision
         )
 
 
-def _day_start_ts(day: str) -> int | None:
-    """Unix timestamp of 00:00 UTC on a YYYY-MM-DD day, or None if `day` doesn't
-    parse — callers then skip the filter rather than fail the query.
+def _day_start_ts(day: str) -> int:
+    """Unix timestamp of 00:00 UTC on a YYYY-MM-DD day. Raises ValueError if `day`
+    doesn't parse — a typo'd filter must fail loudly (the API maps it to 400)
+    rather than silently match the whole library.
 
     UTC via calendar.timegm — photo_datetime is stored as wall-clock-as-UTC and the
     timeline buckets with strftime(...'unixepoch') (UTC). Using local-time
@@ -866,7 +867,33 @@ def _day_start_ts(day: str) -> int | None:
     try:
         return calendar.timegm(datetime.strptime(day, "%Y-%m-%d").timetuple())
     except ValueError:
-        return None
+        raise ValueError(f"invalid date {day!r}: expected YYYY-MM-DD") from None
+
+
+def _bbox_clause(bbox: str) -> tuple[str, list[float]]:
+    """SQL clause + params for a ``minLng,minLat,maxLng,maxLat`` viewport string.
+    Raises ValueError on anything malformed (wrong arity, non-numeric, NaN/inf)."""
+    import math
+    from geotagger.geometry import normalize_lng_bbox
+    try:
+        parts = [float(x) for x in bbox.split(",")]
+    except ValueError:
+        parts = []
+    if len(parts) != 4 or not all(math.isfinite(v) for v in parts):
+        raise ValueError("bbox must be minLng,minLat,maxLng,maxLat")
+    min_lng, min_lat, max_lng, max_lat = parts
+    min_lng, max_lng = normalize_lng_bbox(min_lng, max_lng)
+    return "lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?", [min_lat, max_lat, min_lng, max_lng]
+
+
+def ids_json(ids) -> str:
+    """JSON array of ints for ``IN (SELECT value FROM json_each(?))``. A caller-
+    supplied id list expanded into ``IN (?,?,...)`` hits SQLite's 32,766-variable
+    cap (OperationalError -> 500); one bound JSON parameter has no such limit,
+    keeps a single indexed query, and preserves ORDER BY/LIMIT over the whole set
+    (chunk-and-concatenate would not)."""
+    import json as _json
+    return _json.dumps([int(i) for i in ids])
 
 
 def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str | None = None,
@@ -881,10 +908,10 @@ def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str |
         # picked exactly these photos.
         if not ids:
             return []
-        placeholders = ",".join("?" * len(ids))
         return db.execute(
-            f"SELECT * FROM photos WHERE id IN ({placeholders}) ORDER BY photo_datetime, filename",
-            ids,
+            "SELECT * FROM photos WHERE id IN (SELECT value FROM json_each(?)) "
+            "ORDER BY photo_datetime, filename",
+            (ids_json(ids),),
         ).fetchall()
     if dir is not None:
         # Exact match, not a prefix: a folder batch is one directory, and
@@ -900,27 +927,18 @@ def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str |
         clauses.append("(photo_datetime IS NULL OR photo_datetime <= 0)")
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         return db.execute(f"SELECT * FROM photos {where} ORDER BY filename", params).fetchall()
-    if bbox:
-        # bbox=minLng,minLat,maxLng,maxLat
-        try:
-            from geotagger.geometry import normalize_lng_bbox
-            min_lng, min_lat, max_lng, max_lat = map(float, bbox.split(","))
-            min_lng, max_lng = normalize_lng_bbox(min_lng, max_lng)
-            clauses.append("lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?")
-            params += [min_lat, max_lat, min_lng, max_lng]
-        except ValueError:
-            pass
+    if bbox and bbox.strip():
+        # bbox=minLng,minLat,maxLng,maxLat; malformed raises ValueError
+        clause, bbox_params = _bbox_clause(bbox)
+        clauses.append(clause)
+        params += bbox_params
     if date_from:
-        ts = _day_start_ts(date_from)
-        if ts is not None:
-            clauses.append("photo_datetime >= ?")
-            params.append(ts)
+        clauses.append("photo_datetime >= ?")
+        params.append(_day_start_ts(date_from))
     if date_to:
-        ts = _day_start_ts(date_to)
-        if ts is not None:
-            # Add 24 hours to include the entire day
-            clauses.append("photo_datetime < ?")
-            params.append(ts + 86400)
+        # Add 24 hours to include the entire day
+        clauses.append("photo_datetime < ?")
+        params.append(_day_start_ts(date_to) + 86400)
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     return db.execute(f"SELECT * FROM photos {where} ORDER BY photo_datetime, filename", params).fetchall()
 
@@ -996,27 +1014,18 @@ def search_photos(date_from: str | None = None, date_to: str | None = None,
     if undated:
         clauses.append("(photo_datetime IS NULL OR photo_datetime <= 0)")
     elif date_from:
-        ts = _day_start_ts(date_from)
-        if ts is not None:
-            clauses.append("photo_datetime >= ?")
-            params.append(ts)
+        clauses.append("photo_datetime >= ?")
+        params.append(_day_start_ts(date_from))
     if date_to and not undated:
-        ts = _day_start_ts(date_to)
-        if ts is not None:
-            # Add 24 hours to include the entire day
-            clauses.append("photo_datetime < ?")
-            params.append(ts + 86400)
+        # Add 24 hours to include the entire day
+        clauses.append("photo_datetime < ?")
+        params.append(_day_start_ts(date_to) + 86400)
 
-    if bbox:
-        # bbox=minLng,minLat,maxLng,maxLat
-        try:
-            from geotagger.geometry import normalize_lng_bbox
-            min_lng, min_lat, max_lng, max_lat = map(float, bbox.split(","))
-            min_lng, max_lng = normalize_lng_bbox(min_lng, max_lng)
-            clauses.append("lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?")
-            params += [min_lat, max_lat, min_lng, max_lng]
-        except ValueError:
-            pass
+    if bbox and bbox.strip():
+        # bbox=minLng,minLat,maxLng,maxLat; malformed raises ValueError
+        clause, bbox_params = _bbox_clause(bbox)
+        clauses.append(clause)
+        params += bbox_params
 
     from geotagger.search_locations import parse_fields
     for field, value in parse_fields(location_fields).items():
@@ -1574,9 +1583,9 @@ def replace_faces(photo_id: int, faces: list[dict], det_dimension: int | None = 
             # otherwise dangle (FKs aren't enforced — no cascade). Known, accepted
             # limitation: a rescan drops negatives, same as it already drops
             # assignments (see docstring above).
-            placeholders = ','.join('?' * len(old_ids))
-            db.execute(f"DELETE FROM face_negatives WHERE face_id IN ({placeholders})", old_ids)
-            db.execute(f"DELETE FROM face_embeddings WHERE face_id IN ({placeholders})", old_ids)
+            old_json = ids_json(old_ids)
+            db.execute("DELETE FROM face_negatives WHERE face_id IN (SELECT value FROM json_each(?))", (old_json,))
+            db.execute("DELETE FROM face_embeddings WHERE face_id IN (SELECT value FROM json_each(?))", (old_json,))
         db.execute("DELETE FROM faces WHERE photo_id=? AND source='detected'", (photo_id,))
         now = time.time()
         new_ids = []
@@ -1611,17 +1620,17 @@ def delete_photo_faces(photo_ids: list[int]) -> int:
     if not photo_ids:
         return 0
     with transaction() as db:
-        placeholders = ",".join("?" * len(photo_ids))
         old_ids = [r[0] for r in db.execute(
-            f"SELECT id FROM faces WHERE photo_id IN ({placeholders})", photo_ids
+            "SELECT id FROM faces WHERE photo_id IN (SELECT value FROM json_each(?))",
+            (ids_json(photo_ids),),
         ).fetchall()]
         if old_ids:
             # FKs aren't enforced (no cascade) — drop negatives and embeddings
             # explicitly, same as replace_faces does for a routine rescan.
-            fplaceholders = ",".join("?" * len(old_ids))
-            db.execute(f"DELETE FROM face_negatives WHERE face_id IN ({fplaceholders})", old_ids)
-            db.execute(f"DELETE FROM face_embeddings WHERE face_id IN ({fplaceholders})", old_ids)
-            db.execute(f"DELETE FROM faces WHERE id IN ({fplaceholders})", old_ids)
+            fjson = ids_json(old_ids)
+            db.execute("DELETE FROM face_negatives WHERE face_id IN (SELECT value FROM json_each(?))", (fjson,))
+            db.execute("DELETE FROM face_embeddings WHERE face_id IN (SELECT value FROM json_each(?))", (fjson,))
+            db.execute("DELETE FROM faces WHERE id IN (SELECT value FROM json_each(?))", (fjson,))
         db.executemany(
             "UPDATE photos SET faces_scanned_at=NULL, faces_det_dimension=NULL WHERE id=?",
             [(pid,) for pid in photo_ids],
@@ -1785,10 +1794,9 @@ def set_person_representatives(person_id: int, representative_ids: list[int]):
     with transaction() as db:
         db.execute("UPDATE faces SET representative=0 WHERE person_id=?", (person_id,))
         if representative_ids:
-            placeholders = ",".join("?" * len(representative_ids))
             db.execute(
-                f"UPDATE faces SET representative=1 WHERE id IN ({placeholders})",
-                representative_ids,
+                "UPDATE faces SET representative=1 WHERE id IN (SELECT value FROM json_each(?))",
+                (ids_json(representative_ids),),
             )
 
 
@@ -2150,9 +2158,9 @@ def ignore_unlabeled_in_photos(photo_ids: list[int]) -> int:
         face_ids = [
             r[0]
             for r in db.execute(
-                f"SELECT id FROM faces WHERE photo_id IN ({','.join('?' * len(photo_ids))})"
+                "SELECT id FROM faces WHERE photo_id IN (SELECT value FROM json_each(?))"
                 " AND person_id IS NULL AND ignored = 0 AND come_back = 0",
-                photo_ids,
+                (ids_json(photo_ids),),
             ).fetchall()
         ]
         if not face_ids:

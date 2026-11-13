@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from geotagger import index, faces, thumbnails, serializers, config
 from geotagger.executor import get_executor
@@ -65,7 +65,7 @@ class NegativeFacesRequest(BaseModel):
     negative: bool = True   # False removes the exclusion (undo)
 
 class ScanFacesRequest(BaseModel):
-    limit: int = 50  # photos processed per call; repeat to continue
+    limit: int = Field(50, ge=1, le=1000)  # photos processed per call; repeat to continue
 
 class NukePhotoFacesRequest(BaseModel):
     photo_ids: list[int]  # hard-wipe every face + cached rendition for these photos
