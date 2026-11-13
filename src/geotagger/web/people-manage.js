@@ -22,8 +22,9 @@ async function api(method, url, body) {
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(text || `HTTP ${res.status}`);
+    // FastAPI errors are {"detail": "..."} — show just the message.
+    const e = await res.json().catch(() => ({}));
+    throw new Error(typeof e.detail === "string" ? e.detail : `HTTP ${res.status}`);
   }
   return res.json();
 }

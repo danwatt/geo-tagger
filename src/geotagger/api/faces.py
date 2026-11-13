@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import sqlite3
 import time
 from pathlib import Path
 
@@ -109,19 +110,35 @@ async def api_update_person(person_id: int, req: UpdatePersonRequest):
     Only fields present in the request body are changed — send just the fields
     you want to update."""
     fields = req.model_fields_set
+    # Validate everything first so a bad field can't leave earlier ones applied.
+    name = None
     if "name" in fields:
         name = (req.name or "").strip()
         if not name:
             raise HTTPException(400, "Name cannot be empty")
-        index.rename_person(person_id, name)
-    if "birth_date" in fields:
-        index.set_person_birth_date(person_id, _parse_optional_date("birth_date", req.birth_date))
-    if "not_before" in fields:
-        index.set_person_not_before(person_id, _parse_optional_date("not_before", req.not_before))
-    if "not_after" in fields:
-        index.set_person_not_after(person_id, _parse_optional_date("not_after", req.not_after))
-    if "family_id" in fields:
-        index.set_person_family(person_id, req.family_id)
+    birth_date = _parse_optional_date("birth_date", req.birth_date) if "birth_date" in fields else None
+    not_before = _parse_optional_date("not_before", req.not_before) if "not_before" in fields else None
+    not_after = _parse_optional_date("not_after", req.not_after) if "not_after" in fields else None
+    # One transaction: any failure (409/404 below) rolls every field back.
+    try:
+        with index.transaction():
+            if not index.get_person(person_id):
+                raise HTTPException(404, "Person not found")
+            if ("family_id" in fields and req.family_id is not None
+                    and not index.get_family(req.family_id)):
+                raise HTTPException(404, "Family not found")
+            if "name" in fields:
+                index.rename_person(person_id, name)
+            if "birth_date" in fields:
+                index.set_person_birth_date(person_id, birth_date)
+            if "not_before" in fields:
+                index.set_person_not_before(person_id, not_before)
+            if "not_after" in fields:
+                index.set_person_not_after(person_id, not_after)
+            if "family_id" in fields:
+                index.set_person_family(person_id, req.family_id)
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, f'A person named "{name}" already exists')
     return {"id": person_id}
 
 
@@ -138,7 +155,10 @@ async def api_create_family(req: FamilyRequest):
     name = req.name.strip()
     if not name:
         raise HTTPException(400, "Name required")
-    family_id = index.create_family(name)
+    try:
+        family_id = index.create_family(name)
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, f'A family named "{name}" already exists')
     return {"id": family_id, "name": name, "person_count": 0}
 
 
@@ -147,13 +167,19 @@ async def api_rename_family(family_id: int, req: FamilyRequest):
     name = req.name.strip()
     if not name:
         raise HTTPException(400, "Name required")
-    index.rename_family(family_id, name)
+    try:
+        found = index.rename_family(family_id, name)
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, f'A family named "{name}" already exists')
+    if not found:
+        raise HTTPException(404, "Family not found")
     return {"id": family_id, "name": name}
 
 
 @router.delete("/api/families/{family_id}")
 async def api_delete_family(family_id: int):
-    index.delete_family(family_id)
+    if not index.delete_family(family_id):
+        raise HTTPException(404, "Family not found")
     return {"success": True}
 
 
@@ -162,13 +188,17 @@ async def api_create_person(req: CreatePersonRequest):
     name = req.name.strip()
     if not name:
         raise HTTPException(400, "Name required")
-    person_id = index.get_or_create_person(name)
+    try:
+        person_id = index.create_person(name)
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, f'A person named "{name}" already exists')
     return {"id": person_id, "name": name}
 
 
 @router.delete("/api/persons/{person_id}")
 async def api_delete_person(person_id: int):
-    index.delete_person(person_id)
+    if not index.delete_person(person_id):
+        raise HTTPException(404, "Person not found")
     return {"success": True}
 
 

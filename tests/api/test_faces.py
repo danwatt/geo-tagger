@@ -540,3 +540,63 @@ def test_assign_to_unknown_person_404(client):
                        json={"bbox": [0.1, 0.1, 0.2, 0.2], "person_id": 999}).status_code == 404
     assert _face_row(db, fid)["person_id"] is None
     assert db.execute("SELECT COUNT(*) FROM faces").fetchone()[0] == 1
+
+
+# ── Person/family mutation: validation, 409 on duplicate names, 404 on unknown ids ──
+
+def _person(client, name):
+    return client.post("/api/persons", json={"name": name}).json()["id"]
+
+
+def _person_row(client, pid):
+    return next(p for p in client.get("/api/persons").json() if p["id"] == pid)
+
+
+def test_patch_person_invalid_date_applies_nothing(client):
+    pid = _person(client, "Alice")
+    r = client.patch(f"/api/persons/{pid}",
+                     json={"name": "Alicia", "birth_date": "not-a-date"})
+    assert r.status_code == 400
+    assert _person_row(client, pid)["name"] == "Alice"
+
+
+def test_patch_person_conflict_rolls_back_other_fields(client):
+    _person(client, "Bob")
+    pid = _person(client, "Alice")
+    r = client.patch(f"/api/persons/{pid}",
+                     json={"name": "Bob", "birth_date": "1990-01-02"})
+    assert r.status_code == 409 and "Bob" in r.json()["detail"]
+    row = _person_row(client, pid)
+    assert row["name"] == "Alice" and row["birth_date"] is None
+
+
+def test_duplicate_person_create_409(client):
+    _person(client, "Alice")
+    r = client.post("/api/persons", json={"name": "Alice"})
+    assert r.status_code == 409
+    assert len([p for p in client.get("/api/persons").json() if p["name"] == "Alice"]) == 1
+
+
+def test_duplicate_family_create_and_rename_409(client):
+    client.post("/api/families", json={"name": "Smith"})
+    fid = client.post("/api/families", json={"name": "Jones"}).json()["id"]
+    assert client.post("/api/families", json={"name": "Smith"}).status_code == 409
+    r = client.patch(f"/api/families/{fid}", json={"name": "Smith"})
+    assert r.status_code == 409
+    names = [f["name"] for f in client.get("/api/families").json()]
+    assert sorted(names) == ["Jones", "Smith"]
+
+
+def test_unknown_person_and_family_ids_404(client):
+    assert client.patch("/api/persons/9999", json={"name": "X"}).status_code == 404
+    assert client.patch("/api/persons/9999", json={"birth_date": "2000-01-01"}).status_code == 404
+    assert client.delete("/api/persons/9999").status_code == 404
+    assert client.patch("/api/families/9999", json={"name": "X"}).status_code == 404
+    assert client.delete("/api/families/9999").status_code == 404
+
+
+def test_patch_person_unknown_family_404_and_unchanged(client):
+    pid = _person(client, "Alice")
+    r = client.patch(f"/api/persons/{pid}", json={"name": "Alicia", "family_id": 9999})
+    assert r.status_code == 404
+    assert _person_row(client, pid)["name"] == "Alice"

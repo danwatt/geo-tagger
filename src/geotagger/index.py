@@ -2314,40 +2314,51 @@ def get_persons(start_ts: int | None = None,
     ).fetchall()
 
 
-def set_person_birth_date(person_id: int, birth_date: str | None):
+def set_person_birth_date(person_id: int, birth_date: str | None) -> bool:
     """Set (or clear, with None) a person's ISO YYYY-MM-DD birth date."""
     with transaction() as db:
-        db.execute("UPDATE persons SET birth_date=? WHERE id=?", (birth_date, person_id))
+        found = db.execute("UPDATE persons SET birth_date=? WHERE id=?",
+                           (birth_date, person_id)).rowcount > 0
     bump_faces_generation()  # gallery birth_times feed suggestion scores
+    return found
 
 
-def set_person_not_before(person_id: int, not_before: str | None):
+def set_person_not_before(person_id: int, not_before: str | None) -> bool:
     """Set (or clear, with None) a person's ISO YYYY-MM-DD not-before date —
     photos taken before this date never match this person."""
     with transaction() as db:
-        db.execute("UPDATE persons SET not_before=? WHERE id=?", (not_before, person_id))
+        found = db.execute("UPDATE persons SET not_before=? WHERE id=?",
+                           (not_before, person_id)).rowcount > 0
     bump_faces_generation()  # gallery not_before_times feed suggestion scores
+    return found
 
 
-def set_person_not_after(person_id: int, not_after: str | None):
+def set_person_not_after(person_id: int, not_after: str | None) -> bool:
     """Set (or clear, with None) a person's ISO YYYY-MM-DD not-after date —
     photos taken after this date never match this person."""
     with transaction() as db:
-        db.execute("UPDATE persons SET not_after=? WHERE id=?", (not_after, person_id))
+        found = db.execute("UPDATE persons SET not_after=? WHERE id=?",
+                           (not_after, person_id)).rowcount > 0
     bump_faces_generation()  # gallery not_after_times feed suggestion scores
+    return found
 
 
-def rename_person(person_id: int, name: str):
-    """Rename a person; bumps the face-recognition generation."""
+def rename_person(person_id: int, name: str) -> bool:
+    """Rename a person; bumps the face-recognition generation. False if no such
+    person. Raises sqlite3.IntegrityError if the name is taken (UNIQUE)."""
     with transaction() as db:
-        db.execute("UPDATE persons SET name=? WHERE id=?", (name, person_id))
+        found = db.execute("UPDATE persons SET name=? WHERE id=?",
+                           (name, person_id)).rowcount > 0
     bump_faces_generation()
+    return found
 
 
-def set_person_family(person_id: int, family_id: int | None):
-    """Assign (or clear, with None) a person's family membership."""
+def set_person_family(person_id: int, family_id: int | None) -> bool:
+    """Assign (or clear, with None) a person's family membership. False if no
+    such person."""
     with transaction() as db:
-        db.execute("UPDATE persons SET family_id=? WHERE id=?", (family_id, person_id))
+        return db.execute("UPDATE persons SET family_id=? WHERE id=?",
+                          (family_id, person_id)).rowcount > 0
 
 
 # ── Families ──
@@ -2361,6 +2372,10 @@ def get_families() -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def get_family(family_id: int) -> sqlite3.Row | None:
+    return get_db().execute("SELECT * FROM families WHERE id=?", (family_id,)).fetchone()
+
+
 def create_family(name: str) -> int:
     with transaction() as db:
         cursor = db.execute(
@@ -2369,22 +2384,25 @@ def create_family(name: str) -> int:
     return cursor.lastrowid
 
 
-def rename_family(family_id: int, name: str):
+def rename_family(family_id: int, name: str) -> bool:
+    """False if no such family; raises sqlite3.IntegrityError if the name is taken."""
     with transaction() as db:
-        db.execute("UPDATE families SET name=? WHERE id=?", (name, family_id))
+        return db.execute("UPDATE families SET name=? WHERE id=?",
+                          (name, family_id)).rowcount > 0
 
 
-def delete_family(family_id: int):
-    """Delete a family; its members stay, with no family."""
+def delete_family(family_id: int) -> bool:
+    """Delete a family; its members stay, with no family. False if no such family."""
     with transaction() as db:
         # FKs aren't enforced (no PRAGMA foreign_keys=ON), so ON DELETE SET NULL
         # never fires — detach the members explicitly, before the parent row goes
         # and in the same transaction.
         db.execute("UPDATE persons SET family_id=NULL WHERE family_id=?", (family_id,))
-        db.execute("DELETE FROM families WHERE id=?", (family_id,))
+        return db.execute("DELETE FROM families WHERE id=?", (family_id,)).rowcount > 0
 
 
-def delete_person(person_id: int):
+def delete_person(person_id: int) -> bool:
+    """False if no such person."""
     with transaction() as db:
         # FKs aren't enforced (no PRAGMA foreign_keys=ON), so neither the cascade
         # nor ON DELETE SET NULL fires — do both explicitly before the parent row
@@ -2395,8 +2413,9 @@ def delete_person(person_id: int):
         db.execute(
             "UPDATE faces SET person_id=NULL, assigned_at=NULL, representative=0 "
             "WHERE person_id=?", (person_id,))
-        db.execute("DELETE FROM persons WHERE id=?", (person_id,))
+        found = db.execute("DELETE FROM persons WHERE id=?", (person_id,)).rowcount > 0
     bump_faces_generation()  # their faces revert to unlabeled
+    return found
 
 
 # ── Settings (runtime overrides of config.py tuning knobs) ──

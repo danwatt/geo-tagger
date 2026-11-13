@@ -206,11 +206,15 @@ async function addPerson() {
   const name = prompt("New person's name:");
   if (!name || !name.trim()) return;
   try {
-    await fetch("/api/persons", {
+    const res = await fetch("/api/persons", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: name.trim() }),
     });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.detail || `HTTP ${res.status}`);
+    }
     await loadPersons();
   } catch (err) {
     setStatus("Could not add person: " + err.message, true);

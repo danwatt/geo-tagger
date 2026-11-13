@@ -111,7 +111,7 @@ so the new person inherits a stale representative. Only `delete_person` resets i
 ## Concurrency
 
 <a id="c1"></a>
-**C1 — High — One shared SQLite connection, no lock, no rollback** [seen]
+**C1 — High — One shared SQLite connection, no lock, no rollback** [seen] — ✅ **Done** (`22ad220`: `index.transaction()`; unlocked readers can still see uncommitted writes)
 `index.py:40`. `check_same_thread=False`, used by the event loop, the executor threads and the scan workers.
 There are zero `rollback()` calls in `src/`. Consequences:
 
@@ -126,26 +126,26 @@ back, or one locked writer connection with per-thread readers (WAL already suppo
 largest single change in the audit, and it unblocks P1.
 
 <a id="c2"></a>
-**C2 — High — `create_function` is called on every place search** [run]
+**C2 — High — `create_function` is called on every place search** [run] — ✅ **Done** (`1d9723a`)
 `index.py:854,1145`. SQLite refuses to redefine a function while any statement on the connection is active;
 this raises `OperationalError: Error creating function`. `/api/search` only catches `ValueError`, so the result
 is an intermittent 500 on `/api/search?place_id=`, `/api/search/untagged-faces` and `/api/places?stats=true`
 whenever another request is mid-query.
 *Fix:* register once in `init_db()`.
 
-**C3 — Medium — Thumbnail cache files are written non-atomically** [traced]
+**C3 — Medium — Thumbnail cache files are written non-atomically** [traced] — ✅ **Done** (`9af6528`)
 `thumbnails.py:352-356,382,406-411,429-434,491-508`. `if cached.exists(): return cached.read_bytes()` then
 `cached.write_bytes(data)`. A concurrent request can read a partial file; a crash mid-write leaves a truncated
 file served forever.
 *Fix:* write to a temp name and `os.replace`; treat zero-length as a miss.
 
-**C4 — Medium — ExifTool lock held across up to three calls, no timeout on the server path** [traced]
+**C4 — Medium — ExifTool lock held across up to three calls, no timeout on the server path** [traced] — ✅ **Done** (`8ee5ae6`: watchdog + one-call preview; session pool not done)
 `thumbnails.py:167-174`, `exiftool_session.py:13`. Videos without an embedded preview pay three failed
 round-trips under the global lock. A file that hangs ExifTool wedges every executor thread;
 `run_with_timeout` is only used by scripts.
 *Fix:* order tags per extension, add a watchdog timeout with restart, consider a small session pool.
 
-**C5 — Low — Census `_has_zctas()` races with `reset()`** [traced]
+**C5 — Low — Census `_has_zctas()` races with `reset()`** [traced] — ✅ **Done** (`597c423`)
 `census_places.py:75-85,188-191`. Runs outside `_lock` on every `postal_lookup`; `_conn` can become `None`
 between the check and the lock.
 
@@ -272,7 +272,7 @@ The module also imports `services.data_service`, inverting the layering.
 `api/geocode.py:54`. Each stalls every other request, including thumbnails, against the project's own
 "never block event loop" rule. *Fix:* move bodies into `services/` and `run_in_executor` them (after C1).
 
-**A2 — Medium — Duplicate names return 500; PATCH applies partially** [traced]
+**A2 — Medium — Duplicate names return 500; PATCH applies partially** [traced] — ✅ **Done** (409 on duplicates, 404 on unknown ids, PATCH atomic; `POST /api/persons` is now strict create)
 `api/faces.py:106-125,136-151`. `persons.name` and `families.name` are `UNIQUE`, so a rename collision raises
 an uncaught `IntegrityError`. `api_update_person` commits the rename before validating `birth_date`, so a 400
 response has already changed the name. Unknown ids return 200.
@@ -527,6 +527,9 @@ keyboard users cannot operate the toolbar on flat scopes.
 A shared modal helper and a `<button>` sweep would address most of this.
 
 ## Refactors
+
+✅ **R1–R5 done** in `750e1b9`. Exceptions: `doRemoveGeotag` kept (wanted by U2); the `search.js` histogram
+named in R3 turned out to be live UI and was left alone.
 
 **R1 — Split `people.js` (3224 lines)** along its existing seams, as plain `<script>` files: state (with an
 id `Map`), API (one `postJson` with `res.ok` and `detail` parsing, replacing about 12 near-identical fetch
