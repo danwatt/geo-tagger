@@ -166,6 +166,22 @@ def transaction() -> Iterator[sqlite3.Connection]:
             _tx_depth = depth
 
 
+# Every photos column derived from a photo's coordinates (reverse geocoding plus the
+# geocoded_at marker). Whenever lat/lng change or are removed these must be cleared
+# together, or a photo keeps showing and searching under the old place. Add a new
+# derived column here AND to the SETs that write it (update_geotag, _LOCATION_SQL).
+# Writers that clear the set build their SET fragment from DERIVED_LOCATION_CLEAR_SQL
+# so they cannot drift; test_index.py asserts _LOCATION_SQL writes the same set.
+# loc_landmark / loc_landmark_type are deliberately absent: they are only in the
+# migration-rebuild CREATE TABLE, nothing writes or reads them, and fresh databases
+# don't have them, so naming them here would break fresh installs.
+DERIVED_LOCATION_COLUMNS = (
+    "loc_city", "loc_state", "loc_county", "loc_country", "loc_country_code",
+    "loc_sublocation", "loc_postal_code", "geocoded_at",
+)
+DERIVED_LOCATION_CLEAR_SQL = ", ".join(f"{c}=NULL" for c in DERIVED_LOCATION_COLUMNS)
+
+
 def init_db(root: Path | None = None) -> sqlite3.Connection:
     """Initialize the database. If CACHE_DIR is set, use that; otherwise use root / CACHE_DIR_NAME."""
     # Under the write lock so a (re)open can't swap the connection out from
@@ -876,12 +892,11 @@ def update_geotag(photo_id: int, lat: float | None, lng: float | None,
                   gps_accuracy: float | None = None):
     with transaction() as db:
         # Coordinates changed, so any previously-derived location names are stale.
-        # Clear them and reset geocoded_at so the point is re-geocoded; the caller
-        # repopulates them (api_geotag does this immediately after).
-        db.execute("""
+        # Clear them all and reset geocoded_at so the point is re-geocoded; the caller
+        # repopulates them (geotag_service.write_geotag does this immediately after).
+        db.execute(f"""
             UPDATE photos SET lat=?, lng=?, gps_accuracy=?, geotag_source=?, sidecar_path=?, sidecar_mtime=?,
-                loc_city=NULL, loc_state=NULL, loc_county=NULL, loc_country=NULL,
-                loc_country_code=NULL, geocoded_at=NULL
+                {DERIVED_LOCATION_CLEAR_SQL}
             WHERE id=?
         """, (lat, lng, gps_accuracy, geotag_source, sidecar_path, sidecar_mtime, photo_id))
     bump_geotag_generation()

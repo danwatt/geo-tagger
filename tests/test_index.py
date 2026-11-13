@@ -498,6 +498,58 @@ class TestGeotagGeneration:
         assert index.geotag_generation() == gen
 
 
+class TestCoordinateChangeClearsDerivedLocation:
+    """Moving or removing a geotag must clear every coordinate-derived column, or the
+    photo keeps showing and searching under the old place (audit D3)."""
+
+    _OLD_PLACE = {
+        "loc_city": "Oldtown", "loc_state": "Oldstate", "loc_county": "Old County",
+        "loc_country": "Oldland", "loc_country_code": "OL",
+        "loc_sublocation": "Old Park", "loc_postal_code": "00000",
+    }
+
+    def _tagged_with_old_place(self, db):
+        _upsert(db, lat=40.0, lng=-75.0)
+        pid = db.execute("SELECT id FROM photos WHERE filename='p1.jpg'").fetchone()[0]
+        db.execute(
+            "UPDATE photos SET loc_city=?, loc_state=?, loc_county=?, loc_country=?, "
+            "loc_country_code=?, loc_sublocation=?, loc_postal_code=?, geocoded_at=? WHERE id=?",
+            (*self._OLD_PLACE.values(), 1234.0, pid),
+        )
+        return pid
+
+    def _derived_row(self, db, pid):
+        cols = ", ".join(index.DERIVED_LOCATION_COLUMNS)
+        return dict(db.execute(f"SELECT {cols} FROM photos WHERE id=?", (pid,)).fetchone())
+
+    def test_move_clears_every_derived_column(self, db):
+        pid = self._tagged_with_old_place(db)
+        index.update_geotag(pid, 41.0, -75.0, "sidecar", "p1.xmp", 2.0)
+        row = self._derived_row(db, pid)
+        assert all(v is None for v in row.values()), row
+
+    def test_removal_clears_every_derived_column(self, db):
+        pid = self._tagged_with_old_place(db)
+        index.update_geotag(pid, None, None, "none", "p1.xmp", 3.0)
+        row = self._derived_row(db, pid)
+        assert all(v is None for v in row.values()), row
+
+    def test_removed_place_no_longer_matches_search(self, db):
+        pid = self._tagged_with_old_place(db)
+        assert [r["id"] for r in index.search_photos(location="Old Park")] == [pid]
+        index.update_geotag(pid, None, None, "none", "p1.xmp", 3.0)
+        assert index.search_photos(location="Old Park") == []
+        assert index.search_photos(location="Oldtown") == []
+
+    def test_location_setter_writes_every_derived_column(self, db):
+        """_LOCATION_SQL must write the same set the clear path resets, so a future
+        column added to one list can't silently go missing from the other."""
+        import re
+        set_clause = index._LOCATION_SQL.split(" WHERE ")[0]
+        written = set(re.findall(r"(\w+)=\?", set_clause))
+        assert written == set(index.DERIVED_LOCATION_COLUMNS)
+
+
 class TestPlaceSearchWithOpenCursor:
     """search_place_distance is registered once on the shared connection (init_db).
     Registering it per query raised "Error creating function" while another

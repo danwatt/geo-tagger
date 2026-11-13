@@ -58,7 +58,7 @@ XMP gets a value off by the machine's UTC offset. Any later re-read of that side
 sessions, and never anchor a route.
 *Fix:* same timedelta arithmetic as D1; use `IS NOT NULL AND != 0` as the "has a date" predicate, behind one helper.
 
-**D3 — Medium — `update_geotag` leaves sub-location and postal code behind** [seen]
+**D3 — Medium — `update_geotag` leaves sub-location and postal code behind** [seen] — ✅ **DONE** (`index.DERIVED_LOCATION_COLUMNS` is the single list; `update_geotag` clears all eight)
 `index.py:636-641`. The UPDATE clears city, state, county and country, but not `loc_sublocation` or
 `loc_postal_code`. After a geotag removal or move, the photo still shows and searches under the old values.
 *Fix:* clear both columns.
