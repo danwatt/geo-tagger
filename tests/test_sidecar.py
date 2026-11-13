@@ -1,5 +1,5 @@
 import calendar
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -140,27 +140,88 @@ class TestReadOrientations:
         assert sidecar.read_orientations([]) == {}
 
 
+class _FakeLocalDatetime(datetime):
+    """Stands in for sidecar.datetime on a machine in UTC+5:30: any conversion
+    through the local zone (fromtimestamp without tz, .timestamp() on a naive
+    value) is shifted, so code that wrongly goes through local time fails here
+    even when the real machine/CI zone is UTC. Windows has no time.tzset(), so
+    this is how the zone is forced portably."""
+    _OFFSET = timedelta(hours=5, minutes=30)
+
+    @classmethod
+    def fromtimestamp(cls, ts, tz=None):
+        if tz is not None:
+            return super().fromtimestamp(ts, tz)
+        return cls(1970, 1, 1) + timedelta(seconds=ts) + cls._OFFSET
+
+
+# Wall-clock instants, incl. pre-1970 (negative epoch: fromtimestamp raises
+# OSError on Windows) and a DST-ambiguous summer date.
+_WALLCLOCKS = [
+    datetime(2020, 5, 17, 10, 30, 0),
+    datetime(2019, 1, 2, 3, 4, 5),
+    datetime(1955, 6, 1, 12, 0, 0),
+]
+
+
+class TestDatetimeEpochHelpers:
+    @pytest.mark.parametrize("wall", _WALLCLOCKS)
+    def test_helpers_are_inverses(self, wall):
+        ts = sidecar.wallclock_to_epoch(wall)
+        assert sidecar.epoch_to_wallclock(ts) == wall
+
+    def test_pre_1970_epoch_converts(self):
+        assert sidecar.epoch_to_wallclock(-86400) == datetime(1969, 12, 31)
+
+    @pytest.mark.parametrize("wall", _WALLCLOCKS)
+    def test_write_datetime_hands_exiftool_the_exact_wallclock(self, wall, tmp_path, monkeypatch):
+        """No ExifTool needed: capture the string write_datetime would write.
+        The DB holds wall-clock-as-UTC, so the sidecar must get that same wall
+        clock with no timezone shift, whatever the machine zone."""
+        written = []
+        monkeypatch.setattr(sidecar, "read_metadata", lambda p: {"photo_datetime": 0})
+        monkeypatch.setattr(sidecar, "write_datetime_raw",
+                            lambda p, s: written.append(s) or tmp_path / "x.xmp")
+        monkeypatch.setattr(sidecar, "datetime", _FakeLocalDatetime)  # simulate UTC+5:30
+
+        sidecar.write_datetime(tmp_path / "photo.jpg", calendar.timegm(wall.timetuple()))
+
+        assert written == [wall.strftime("%Y:%m:%d %H:%M:%S")]
+
+    def test_write_datetime_logging_old_time_does_not_use_local_zone(self, tmp_path, monkeypatch):
+        # Pre-1970 old_ts used to hit fromtimestamp (OSError on Windows).
+        monkeypatch.setattr(sidecar, "read_metadata", lambda p: {"photo_datetime": -86400 * 5})
+        monkeypatch.setattr(sidecar, "write_datetime_raw", lambda p, s: tmp_path / "x.xmp")
+        monkeypatch.setattr(sidecar, "datetime", _FakeLocalDatetime)
+        sidecar.write_datetime(tmp_path / "photo.jpg", 0)
+
+
 class TestDatetimeRoundTrip:
-    def test_write_datetime_writes_local_wallclock_string(self, et_session, sample_image):
-        dt = datetime(2020, 5, 17, 10, 30, 0)
-        sidecar.write_datetime(sample_image, int(dt.timestamp()))
-
-        et = exiftool_session.get_et()
-        sc = sidecar.sidecar_path(sample_image)
-        tags = et.get_tags([str(sc)], tags=["XMP:DateTimeOriginal"])[0]
-        assert tags["XMP:DateTimeOriginal"] == dt.strftime("%Y:%m:%d %H:%M:%S")
-
-    def test_write_then_read_datetime(self, et_session, sample_image):
-        # write_datetime formats the given epoch as a *local* wall-clock string;
-        # read_metadata (_parse_exif_datetime) parses that string back treating it
-        # as UTC. The two are not inverses on a non-UTC host — this pins down the
-        # actual round-trip contract rather than assuming naive symmetry.
-        dt = datetime(2020, 5, 17, 10, 30, 0)
-        ts_in = int(dt.timestamp())
+    @pytest.mark.parametrize("wall", _WALLCLOCKS)
+    def test_write_then_read_datetime_is_identity(self, wall, et_session, sample_image):
+        """True round trip: the epoch handed to write_datetime comes back
+        unchanged from read_metadata, and the sidecar holds the wall-clock text."""
+        ts_in = calendar.timegm(wall.timetuple())
         sidecar.write_datetime(sample_image, ts_in)
-        got = sidecar.read_metadata(sample_image)["photo_datetime"]
-        expected = calendar.timegm(datetime.fromtimestamp(ts_in).timetuple())
-        assert got == expected
+
+        assert sidecar.read_sidecar_datetime_raw(sample_image) == wall.strftime("%Y:%m:%d %H:%M:%S")
+        assert sidecar.read_metadata(sample_image)["photo_datetime"] == ts_in
+
+    def test_round_trip_in_a_forced_non_utc_zone(self, et_session, sample_image, monkeypatch):
+        # Where the platform allows, force a real non-UTC zone as well (POSIX only;
+        # the fake-datetime tests above cover Windows).
+        import time
+        if not hasattr(time, "tzset"):
+            pytest.skip("time.tzset unavailable on this platform")
+        monkeypatch.setenv("TZ", "Asia/Kolkata")
+        time.tzset()
+        try:
+            ts_in = calendar.timegm(datetime(2020, 5, 17, 10, 30, 0).timetuple())
+            sidecar.write_datetime(sample_image, ts_in)
+            assert sidecar.read_metadata(sample_image)["photo_datetime"] == ts_in
+        finally:
+            monkeypatch.undo()
+            time.tzset()
 
     def test_sidecar_datetime_correction_takes_priority_over_embedded(self, et_session, sample_image):
         # Regression guard for Time Sync: a correction written to the sidecar
@@ -172,7 +233,7 @@ class TestDatetimeRoundTrip:
         et.execute("-overwrite_original", "-EXIF:DateTimeOriginal=2000:01:01 00:00:00", str(sample_image))
 
         corrected = datetime(2019, 1, 2, 3, 4, 5)
-        sidecar.write_datetime(sample_image, int(corrected.timestamp()))
+        sidecar.write_datetime(sample_image, calendar.timegm(corrected.timetuple()))
 
         meta = sidecar.read_metadata(sample_image)
         assert meta["photo_datetime"] == calendar.timegm(corrected.timetuple())

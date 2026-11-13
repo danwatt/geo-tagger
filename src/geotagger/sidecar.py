@@ -1,11 +1,30 @@
 import calendar
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from geotagger.config import SIDECAR_MODE
 from geotagger.exiftool_session import get_et, get_et_lock
 
 logger = logging.getLogger(__name__)
+
+
+_EPOCH = datetime(1970, 1, 1)
+
+
+def wallclock_to_epoch(dt: datetime) -> int:
+    """Naive wall-clock datetime → the project's photo_datetime epoch (the wall
+    clock read as if it were UTC). Inverse of epoch_to_wallclock."""
+    return int(calendar.timegm(dt.timetuple()))
+
+
+def epoch_to_wallclock(ts: int | float) -> datetime:
+    """photo_datetime epoch → naive wall-clock datetime, by pure UTC arithmetic.
+
+    Never use datetime.fromtimestamp() here: photo_datetime is wall-clock-as-UTC,
+    so converting through the machine's local zone shifts the value by the local
+    UTC offset (and raises OSError for pre-1970 values on Windows). Epoch + a
+    timedelta has neither problem."""
+    return _EPOCH + timedelta(seconds=ts)
 
 
 def _parse_exif_datetime(s: str) -> int | None:
@@ -15,7 +34,7 @@ def _parse_exif_datetime(s: str) -> int | None:
     try:
         # ExifTool format: 'YYYY:MM:DD HH:MM:SS'
         dt = datetime.strptime(s.strip(), "%Y:%m:%d %H:%M:%S")
-        return int(calendar.timegm(dt.timetuple()))
+        return wallclock_to_epoch(dt)
     except Exception:
         return None
 
@@ -287,10 +306,9 @@ def write_approximate_date(image_path: Path, year: int, month: int | None) -> tu
 
     Stores the first instant of the year/month — day 1, 00:00:00 — as the
     conventional stand-in for "somewhere in this period". Built directly as an
-    EXIF-format string (not via write_datetime's fromtimestamp/strftime round trip,
-    which goes through the local timezone and can shift the calendar date), and the
-    returned timestamp is computed the same way _parse_exif_datetime will read it
-    back (UTC, via calendar.timegm) so a rescan reproduces exactly this value.
+    EXIF-format string, and the returned timestamp is computed the same way
+    _parse_exif_datetime will read it back (UTC, via calendar.timegm) so a rescan
+    reproduces exactly this value.
     Returns (sidecar_path, photo_datetime).
     """
     exif_datetime = f"{year:04d}:{month or 1:02d}:01 00:00:00"
@@ -308,13 +326,16 @@ def write_datetime(image_path: Path, timestamp: int) -> Path:
     old_ts = m["photo_datetime"]
 
     # Convert Unix timestamp to EXIF format: "YYYY:MM:DD HH:MM:SS"
-    dt = datetime.fromtimestamp(timestamp)
+    # The stored value is wall-clock-as-UTC, so format it with UTC arithmetic: the
+    # string written is exactly the wall clock the DB holds, and _parse_exif_datetime
+    # reads it back to the same epoch regardless of the machine's timezone.
+    dt = epoch_to_wallclock(timestamp)
     exif_datetime = dt.strftime("%Y:%m:%d %H:%M:%S")
     sc = write_datetime_raw(image_path, exif_datetime)
 
     # Log the change
     if old_ts and old_ts != 0:
-        old_dt = datetime.fromtimestamp(old_ts)
+        old_dt = epoch_to_wallclock(old_ts)
         old_str = old_dt.strftime("%Y-%m-%d %H:%M:%S")
         new_str = dt.strftime("%Y-%m-%d %H:%M:%S")
         diff_seconds = timestamp - old_ts

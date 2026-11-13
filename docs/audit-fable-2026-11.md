@@ -39,7 +39,7 @@ Severity is **High** (data loss, wrong data written to disk, or a crash on a nor
 ## Data integrity (backend)
 
 <a id="d1"></a>
-**D1 — High — Time Sync shifts sidecar times by the local UTC offset** [seen]
+**D1 — High — Time Sync shifts sidecar times by the local UTC offset** [seen] — ✅ **DONE** (`sidecar.epoch_to_wallclock`; sidecars already written by Time Sync on a non-UTC machine stay shifted — DB value is still correct, no repair action yet)
 `sidecar.py:311`, `services/photos_service.py:26-62`.
 `photo_datetime` is wall-clock stored as UTC (`calendar.timegm`), but `write_datetime` formats with
 `datetime.fromtimestamp(timestamp)`, which converts through local time. The DB gets the intended value and the
