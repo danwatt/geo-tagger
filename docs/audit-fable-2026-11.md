@@ -176,7 +176,7 @@ print, and a file whose metadata read fails is silently absent and retried every
 `{key}_thumb_o6.webp`. For every rotated photo the scan's thumbnail is never served. The scan also keys on
 `stat.st_mtime` while the API keys on the DB `mtime`.
 
-**S5 — Low — Sidecar collision check skips videos** [traced]
+**S5 — Low — Sidecar collision check skips videos** [traced] — ✅ **DONE** (basename mode: a video with a same-stem image uses `IMG_1.MOV.xmp`; legacy shared sidecars copied once by the scan when the row shows the video read it; image+image pairs still share, by design; edits before the first scan reaches a legacy pair can drop old fields)
 `scanner.py:38`. In `basename` mode an iPhone Live Photo pair (`IMG_1.HEIC` + `IMG_1.MOV`) shares
 `IMG_1.xmp`, so geotagging one silently applies to the other, with no warning.
 

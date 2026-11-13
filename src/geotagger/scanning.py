@@ -313,6 +313,50 @@ def _failure_is_transient(e: BaseException) -> bool:
                               ValueError, TypeError))
 
 
+def _split_legacy_shared_sidecars(files: list[tuple], candidates: list[int],
+                                  warnings: list[str]) -> list[tuple]:
+    """Give Live Photo videos that used to share their image's basename sidecar
+    a copy of it as their own (audit S5); returns `files` with those entries'
+    sidecar tracking updated (and any whose split failed dropped).
+
+    `candidates` index videos that, under today's sidecar_path, have no sidecar
+    of their own while IMG_1.xmp exists. Only some were sharing it: the shared
+    file is the image's, and one the image got AFTER this rule (the user
+    geotagged the HEIC) must not leak into the video, which is the bug being
+    fixed. The row tells them apart — a video row whose sidecar_path is the
+    basename name was recorded by the old rule, i.e. the video was showing that
+    file's data. Only those are split; the rest simply have no sidecar.
+
+    Splitting changes the video's tracked name, so its row is re-read once
+    (same data) and is fresh from then on: the row now records IMG_1.MOV.xmp,
+    which is what sidecar_tracking returns. A failed copy drops the file from
+    this scan instead of re-reading it without the data (which would overwrite
+    the row and lose the legacy marker); it is retried next scan."""
+    recorded = index.recorded_sidecar_names(
+        [(str(files[i][0].parent), files[i][0].name) for i in candidates])
+    drop: set[int] = set()
+    for i in candidates:
+        p, media_type, stat, _, _ = files[i]
+        shared = p.stem + ".xmp"
+        name = recorded.get((str(p.parent), p.name))
+        if name is None or name.casefold() != shared.casefold():
+            continue
+        try:
+            own = sidecar.split_shared_sidecar(p)
+        except FileExistsError:
+            own = p.parent / (p.name + ".xmp")  # appeared meanwhile: it's the video's now
+        except OSError as e:
+            warnings.append(f"Could not split shared sidecar {shared} for {p.name} in {p.parent}: {e}")
+            drop.add(i)
+            continue
+        warnings.append(
+            f"Sidecar split: {p.name} in {p.parent} was sharing {shared} with an image of the "
+            f"same name; it now has its own {own.name} (a copy), so the two are tagged separately"
+        )
+        files[i] = (p, media_type, stat, *sidecar.sidecar_tracking(p))
+    return [f for i, f in enumerate(files) if i not in drop] if drop else files
+
+
 def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: bool = True,
                    cancel: threading.Event | None = None,
                    footprint: ScanFootprint | None = None) -> tuple[int, int, list[str]]:
@@ -363,6 +407,7 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
     files_to_process = []
     media: list[tuple[Path, str]] = []
     read_errors: list[str] = []
+    legacy_shared: list[int] = []  # files_to_process indexes, see _split_legacy_shared_sidecars
     unreadable = footprint.unreadable if footprint is not None else None
     for p, media_type, xmp_names in scanner.walk_media(root, cancel=cancel, unreadable=unreadable):
         if cancelled():
@@ -377,10 +422,18 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
             # files (no sidecar) cost no sidecar stat at all. sidecar_tracking is
             # the same helper every sidecar writer records the row with, so the
             # freshness check compares like with like.
-            if sidecar.sidecar_path(p).name.casefold() in xmp_names:
+            if any(n.casefold() in xmp_names for n in sidecar.sidecar_name_candidates(p)):
                 sc_path_str, sc_mtime = sidecar.sidecar_tracking(p)
             else:
                 sc_path_str, sc_mtime = None, None
+            # A Live Photo video with no sidecar of its own next to the basename
+            # one its image owns: it may have been sharing it (audit S5).
+            # (In basename mode, no tracked sidecar despite IMG_1.xmp being
+            # listed means sidecar_path resolved to the video's own name.)
+            if (media_type == "video" and sidecar.SIDECAR_MODE == "basename"
+                    and sc_path_str is None
+                    and (p.stem + ".xmp").casefold() in xmp_names):
+                legacy_shared.append(len(files_to_process))
             files_to_process.append((p, media_type, stat, sc_path_str, sc_mtime))
         except Exception as e:
             read_errors.append(f"Error reading {p.name}: {e}")
@@ -388,6 +441,8 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
             new_errors.append((str(p.parent), p.name, "stat", str(e) or type(e).__name__, None, None))
     warnings.extend(scanner.find_sidecar_collisions(media))
     warnings.extend(read_errors)
+    if legacy_shared and not cancelled():
+        files_to_process = _split_legacy_shared_sidecars(files_to_process, legacy_shared, warnings)
     if footprint is not None:
         # Every listed file counts as seen, including ones whose stat failed: the
         # file is there, so its row must not be pruned.

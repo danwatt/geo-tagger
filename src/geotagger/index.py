@@ -1749,6 +1749,27 @@ def fresh_cache_ids(entries: list[tuple[str, str, float, str | None, float | Non
     return out
 
 
+def recorded_sidecar_names(keys: list[tuple[str, str]]) -> dict[tuple[str, str], str | None]:
+    """photos.sidecar_path for many (dir, filename) keys at once; keys with no
+    row are absent from the result. Same per-directory chunking (and exact `dir`
+    comparison) as fresh_cache_ids."""
+    by_dir: dict[str, set[str]] = {}
+    for d, f in keys:
+        by_dir.setdefault(d, set()).add(f)
+    out: dict[tuple[str, str], str | None] = {}
+    dirs = list(by_dir)
+    db = get_db()
+    for start in range(0, len(dirs), _FRESH_DIR_CHUNK):
+        chunk = dirs[start:start + _FRESH_DIR_CHUNK]
+        placeholders = ",".join("?" * len(chunk))
+        for r in db.execute(
+            f"SELECT dir, filename, sidecar_path FROM photos WHERE dir IN ({placeholders})", chunk,
+        ):
+            if r["filename"] in by_dir[r["dir"]]:
+                out[(r["dir"], r["filename"])] = r["sidecar_path"]
+    return out
+
+
 def _row_is_fresh(row, mtime: float, sidecar_path: str | None, sidecar_mtime: float | None) -> bool:
     """The freshness rule shared by is_fresh and fresh_flags (row has
     _FRESH_COLS, or is None when the file isn't indexed)."""

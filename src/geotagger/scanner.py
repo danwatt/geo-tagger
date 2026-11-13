@@ -81,7 +81,12 @@ def iter_media(root: Path):
 
 def find_sidecar_collisions(media: list[tuple[Path, str]]) -> list[str]:
     """Warn about image files sharing a basename.xmp sidecar in the same directory.
-    Takes an already-walked (path, media_type) list so a scan doesn't walk twice."""
+    Takes an already-walked (path, media_type) list so a scan doesn't walk twice.
+
+    Videos are left out on purpose: one that shares a stem with an image (a Live
+    Photo pair) gets its own IMG_1.MOV.xmp from sidecar.sidecar_path, so it no
+    longer collides; a pair that used to share is split, and warned about, by
+    scanning._split_legacy_shared_sidecars."""
     from collections import defaultdict
     stem_map: dict[Path, list[Path]] = defaultdict(list)
     for p, _ in media:

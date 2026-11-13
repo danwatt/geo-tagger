@@ -79,7 +79,8 @@ class TestDetectSidecarCollisions:
         assert "photo.heic" in warnings[0]
 
     def test_no_collision_between_video_and_image_same_stem(self, tmp_path):
-        # Only image extensions are considered for sidecar collisions.
+        # The video gets its own clip.mp4.xmp (sidecar.sidecar_path, audit S5),
+        # so only image+image pairs actually collide.
         _touch(tmp_path / "clip.mp4")
         _touch(tmp_path / "clip.jpg")
         assert detect_sidecar_collisions(tmp_path) == []

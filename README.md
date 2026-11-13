@@ -512,6 +512,11 @@ share one sidecar. The scan will warn you. Switch to `fullname.xmp` mode to avoi
 GEOTAGGER_SIDECAR_MODE=fullname uv run geotagger
 ```
 
+Videos are the exception: a video that shares its stem with an image (an iPhone Live Photo pair,
+`IMG_1.HEIC` + `IMG_1.MOV`) always gets its own `IMG_1.MOV.xmp`, so geotagging one never
+changes the other; `IMG_1.xmp` stays the image's. A pair that was sharing `IMG_1.xmp` from an
+earlier version is split on the next scan (the video gets a copy) and the scan says so.
+
 ## Configuration
 
 Common environment variables — see `src/geotagger/config.py` for the full list (~35 knobs

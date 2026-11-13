@@ -18,6 +18,82 @@ class TestSidecarPath:
         assert sidecar.sidecar_path(tmp_path / "IMG_1.NEF") == tmp_path / "IMG_1.NEF.xmp"
 
 
+class TestLivePhotoSidecarPath:
+    """Audit S5: a video that shares its stem with an image gets its own sidecar
+    in basename mode instead of silently sharing the image's."""
+
+    @pytest.fixture
+    def pair(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sidecar, "SIDECAR_MODE", "basename")
+        (tmp_path / "IMG_1.HEIC").write_bytes(b"h")
+        (tmp_path / "IMG_1.MOV").write_bytes(b"m")
+        return tmp_path
+
+    def test_image_keeps_basename_video_gets_fullname(self, pair):
+        assert sidecar.sidecar_path(pair / "IMG_1.HEIC") == pair / "IMG_1.xmp"
+        assert sidecar.sidecar_path(pair / "IMG_1.MOV") == pair / "IMG_1.MOV.xmp"
+
+    def test_lone_video_keeps_basename(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sidecar, "SIDECAR_MODE", "basename")
+        (tmp_path / "VID.MOV").write_bytes(b"m")
+        assert sidecar.sidecar_path(tmp_path / "VID.MOV") == tmp_path / "VID.xmp"
+
+    def test_lowercase_extensions_pair_too(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sidecar, "SIDECAR_MODE", "basename")
+        (tmp_path / "a.jpg").write_bytes(b"j")
+        (tmp_path / "a.mp4").write_bytes(b"v")
+        assert sidecar.sidecar_path(tmp_path / "a.mp4") == tmp_path / "a.mp4.xmp"
+
+    def test_fullname_mode_unchanged(self, pair, monkeypatch):
+        monkeypatch.setattr(sidecar, "SIDECAR_MODE", "fullname")
+        assert sidecar.sidecar_path(pair / "IMG_1.MOV") == pair / "IMG_1.MOV.xmp"
+        assert sidecar.sidecar_name_candidates(pair / "IMG_1.MOV") == ("IMG_1.MOV.xmp",)
+
+    def test_name_candidates_cover_both_video_names(self, pair):
+        assert sidecar.sidecar_name_candidates(pair / "IMG_1.MOV") == ("IMG_1.xmp", "IMG_1.MOV.xmp")
+        assert sidecar.sidecar_name_candidates(pair / "IMG_1.HEIC") == ("IMG_1.xmp",)
+
+    def test_tracking_ignores_the_images_sidecar(self, pair):
+        (pair / "IMG_1.xmp").write_bytes(b"x")
+        assert sidecar.sidecar_tracking(pair / "IMG_1.MOV") == (None, None)
+        assert sidecar.sidecar_tracking(pair / "IMG_1.HEIC")[0] == "IMG_1.xmp"
+
+    def test_split_copies_and_never_overwrites(self, pair):
+        (pair / "IMG_1.xmp").write_bytes(b"<shared/>")
+        own = sidecar.split_shared_sidecar(pair / "IMG_1.MOV")
+        assert own == pair / "IMG_1.MOV.xmp" and own.read_bytes() == b"<shared/>"
+        assert (pair / "IMG_1.xmp").read_bytes() == b"<shared/>"
+        own.write_bytes(b"<video's own/>")
+        with pytest.raises(FileExistsError):
+            sidecar.split_shared_sidecar(pair / "IMG_1.MOV")
+        assert own.read_bytes() == b"<video's own/>"
+
+
+@pytest.mark.usefixtures("et_session")
+class TestLivePhotoWrites:
+    @pytest.fixture
+    def pair(self, tmp_path, sample_image, monkeypatch):
+        # Real JPEG bytes under both names, so ExifTool can read the originals.
+        monkeypatch.setattr(sidecar, "SIDECAR_MODE", "basename")
+        data = sample_image.read_bytes()
+        (tmp_path / "IMG_1.HEIC").write_bytes(data)
+        (tmp_path / "IMG_1.MOV").write_bytes(data)
+        return tmp_path / "IMG_1.HEIC", tmp_path / "IMG_1.MOV"
+
+    def test_each_gets_its_own_sidecar(self, pair):
+        heic, mov = pair
+        assert sidecar.write_gps(heic, 10.0, 20.0) == heic.parent / "IMG_1.xmp"
+        assert sidecar.write_gps(mov, 30.0, 40.0) == mov.parent / "IMG_1.MOV.xmp"
+        assert sidecar.read_gps(heic)[:2] == pytest.approx((10.0, 20.0))
+        assert sidecar.read_gps(mov)[:2] == pytest.approx((30.0, 40.0))
+
+    def test_geotagging_the_image_leaves_the_video_alone(self, pair):
+        heic, mov = pair
+        sidecar.write_gps(heic, 10.0, 20.0)
+        assert sidecar.read_gps(mov) == (None, None, "none")
+        assert not (mov.parent / "IMG_1.MOV.xmp").exists()
+
+
 class TestCoerceOrientation:
     def test_valid_values_pass_through(self):
         for v in range(1, 9):

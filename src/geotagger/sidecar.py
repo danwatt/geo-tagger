@@ -3,7 +3,7 @@ import logging
 import re
 from datetime import datetime
 from pathlib import Path
-from geotagger.config import SIDECAR_MODE
+from geotagger.config import IMAGE_EXTENSIONS, SIDECAR_MODE, VIDEO_EXTENSIONS
 from geotagger.exiftool_session import get_et, get_et_lock
 # Re-exported: the conversions live in the dependency-free timeutil so modules
 # that must not pull in ExifTool (serializers, services) can share them.
@@ -88,10 +88,73 @@ def read_orientations(paths: list) -> dict[Path, int]:
     return {Path(p): by_path.get(Path(p), 1) for p in paths}
 
 
+def _has_image_sibling(video_path: Path) -> bool:
+    """Whether an image with the same stem sits next to this video — an iPhone
+    Live Photo pair (IMG_1.HEIC + IMG_1.MOV) being the common case. A stat per
+    image extension, in its listed and upper-case spelling (a case-sensitive
+    filesystem would miss 'IMG_1.HEIC' otherwise; on a case-insensitive one the
+    second stat is just a repeat hit or miss). Only ever asked for videos."""
+    import os
+    parent, stem = video_path.parent, video_path.stem
+    for ext in IMAGE_EXTENSIONS:
+        for spelling in {ext, ext.upper()}:
+            if os.path.isfile(parent / (stem + spelling)):
+                return True
+    return False
+
+
 def sidecar_path(image_path: Path) -> Path:
+    """The sidecar this file reads and writes.
+
+    basename mode: IMG_1.NEF → IMG_1.xmp, except for a video that shares its stem
+    with an image in the same folder (a Live Photo pair, audit S5). There the
+    basename sidecar belongs to the image (it is the convention's subject — what
+    Lightroom/digiKam associate IMG_1.xmp with) and the video takes the
+    fullname-style IMG_1.MOV.xmp, so geotagging one never silently applies to
+    the other. A lone video keeps IMG_1.xmp, as before. Image+image collisions
+    (IMG_1.JPG + IMG_1.NEF) still share, deliberately: that's the RAW+JPEG
+    convention, and the scan warns about it (scanner.find_sidecar_collisions).
+
+    Existing libraries: a video row that recorded the shared IMG_1.xmp under the
+    old rule is split by the scan (scanning._split_legacy_shared_sidecars), which
+    copies the shared file to IMG_1.MOV.xmp so the video keeps what it showed."""
     if SIDECAR_MODE == "fullname":
         return image_path.parent / (image_path.name + ".xmp")
+    if image_path.suffix.lower() in VIDEO_EXTENSIONS and _has_image_sibling(image_path):
+        return image_path.parent / (image_path.name + ".xmp")
     return image_path.parent / (image_path.stem + ".xmp")
+
+
+def sidecar_name_candidates(path: Path) -> tuple[str, ...]:
+    """Every name sidecar_path(path) can resolve to, worked out without touching
+    the disk. The scan tests these against the directory's .xmp listing so a
+    file with no sidecar costs no stat — in particular a video skips the sibling
+    probe in sidecar_path unless one of its two possible sidecars exists."""
+    if SIDECAR_MODE == "fullname":
+        return (path.name + ".xmp",)
+    if path.suffix.lower() in VIDEO_EXTENSIONS:
+        return (path.stem + ".xmp", path.name + ".xmp")
+    return (path.stem + ".xmp",)
+
+
+def split_shared_sidecar(video_path: Path) -> Path:
+    """Give a Live Photo video its own sidecar by copying the basename one it
+    used to share with its image (IMG_1.xmp → IMG_1.MOV.xmp); returns the new
+    path. Only the scan calls this, and only for a video whose row proves it was
+    reading the shared file (see scanning._split_legacy_shared_sidecars).
+
+    A copy, not a move: the image keeps IMG_1.xmp, and right after the split both
+    files hold what both rows already showed, so nothing the user wrote is lost
+    whichever of the two it was meant for. Opened exclusive ('xb') so a sidecar
+    that appeared meanwhile (a web write) is never overwritten — that raises
+    FileExistsError, and the caller just uses the file that is there."""
+    import shutil
+    shared = video_path.parent / (video_path.stem + ".xmp")
+    own = video_path.parent / (video_path.name + ".xmp")
+    with open(shared, "rb") as src, open(own, "xb") as dst:
+        shutil.copyfileobj(src, dst)
+    logger.info(f"Split shared sidecar {shared.name} → {own.name} for {video_path.name}")
+    return own
 
 
 def sidecar_tracking(image_path: Path) -> tuple[str | None, float | None]:

@@ -298,3 +298,80 @@ class TestSingleWalk:
         count, skipped, _ = _scan(lib)
         assert (count, skipped) == (0, 5)
         assert fake_meta == []
+
+
+class TestLivePhotoSidecars:
+    """Audit S5: in basename mode a Live Photo pair (IMG_1.HEIC + IMG_1.MOV) used
+    to share IMG_1.xmp. The video now has its own IMG_1.MOV.xmp; a pair that was
+    sharing under the old rule is split once by the scan."""
+
+    @pytest.fixture
+    def pair(self, lib, monkeypatch):
+        monkeypatch.setattr(sidecar, "SIDECAR_MODE", "basename")
+        (lib / "IMG_1.HEIC").write_bytes(b"h")
+        (lib / "IMG_1.MOV").write_bytes(b"m")
+        (lib / "IMG_1.xmp").write_bytes(b"<shared/>")
+        return lib
+
+    def _rows(self, db):
+        return {r["filename"]: r["sidecar_path"]
+                for r in db.execute("SELECT filename, sidecar_path FROM photos")}
+
+    def _mark_legacy(self, db, lib):
+        # What the old rule recorded for the video: the shared basename sidecar.
+        with index.transaction() as tx:
+            tx.execute("UPDATE photos SET sidecar_path='IMG_1.xmp', sidecar_mtime=? "
+                       "WHERE filename='IMG_1.MOV'", ((lib / "IMG_1.xmp").stat().st_mtime,))
+
+    def test_image_sidecar_is_not_the_videos(self, db, pair, fake_meta):
+        _, _, warnings = _scan(pair)
+        # The HEIC owns IMG_1.xmp; the video, with no row recording it, has none.
+        assert self._rows(db) == {"IMG_1.HEIC": "IMG_1.xmp", "IMG_1.MOV": None}
+        assert not (pair / "IMG_1.MOV.xmp").exists()
+        assert not any("Sidecar split" in w for w in warnings)
+
+    def test_editing_the_image_sidecar_later_never_splits(self, db, pair, fake_meta):
+        _scan(pair)
+        (pair / "IMG_1.xmp").write_bytes(b"<geotagged heic/>")
+        _scan(pair)
+        assert not (pair / "IMG_1.MOV.xmp").exists()
+        assert self._rows(db)["IMG_1.MOV"] is None
+
+    def test_legacy_shared_sidecar_is_split_once(self, db, pair, fake_meta):
+        _scan(pair)
+        self._mark_legacy(db, pair)
+        fake_meta.clear()
+        _, _, warnings = _scan(pair)
+        own = pair / "IMG_1.MOV.xmp"
+        # The video keeps exactly what it was showing; the image keeps its file.
+        assert own.read_bytes() == b"<shared/>"
+        assert (pair / "IMG_1.xmp").read_bytes() == b"<shared/>"
+        assert [p.name for p in fake_meta] == ["IMG_1.MOV"]  # re-read once, from its own file
+        assert self._rows(db) == {"IMG_1.HEIC": "IMG_1.xmp", "IMG_1.MOV": "IMG_1.MOV.xmp"}
+        assert any("Sidecar split" in w and "IMG_1.MOV" in w for w in warnings)
+        # Fresh from then on: no permanent re-read, no repeat warning.
+        fake_meta.clear()
+        _, _, warnings = _scan(pair)
+        assert fake_meta == []
+        assert not any("Sidecar split" in w for w in warnings)
+
+    def test_failed_split_leaves_row_alone_and_warns(self, db, pair, fake_meta, monkeypatch):
+        _scan(pair)
+        self._mark_legacy(db, pair)
+
+        def boom(p):
+            raise PermissionError("read-only folder")
+
+        monkeypatch.setattr(sidecar, "split_shared_sidecar", boom)
+        fake_meta.clear()
+        _, _, warnings = _scan(pair)
+        assert all(p.name != "IMG_1.MOV" for p in fake_meta)
+        assert self._rows(db)["IMG_1.MOV"] == "IMG_1.xmp"  # still marked, retried next scan
+        assert any("Could not split" in w for w in warnings)
+
+    def test_lone_video_keeps_basename_sidecar(self, db, lib, fake_meta, monkeypatch):
+        monkeypatch.setattr(sidecar, "SIDECAR_MODE", "basename")
+        (lib / "VID_1.MOV").write_bytes(b"m")
+        (lib / "VID_1.xmp").write_bytes(b"x")
+        _scan(lib)
+        assert self._rows(db) == {"VID_1.MOV": "VID_1.xmp"}
