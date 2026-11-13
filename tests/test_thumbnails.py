@@ -577,3 +577,120 @@ class TestAtomicCacheIO:
         assert all(results)
         assert len(set(results)) == 1
         assert list(thumbs_dir.rglob("*.tmp")) == []
+
+
+class TestEmbeddedPreviewSelection:
+    """_extract_embedded_preview's tag priority (PreviewImage > JpgFromRaw >
+    ThumbnailImage, ignoring stubs <= 100 bytes) against a stubbed ExifTool, for
+    both strategies: per-tag calls for RAW, one `-j -b` call for everything else."""
+
+    BIG_P, BIG_J, BIG_T = b"P" * 500, b"J" * 500, b"T" * 500
+
+    class _RawStub:
+        """Answers `-b -<Tag> path` from a {tag: bytes | Exception} table."""
+        def __init__(self, table):
+            self.table, self.calls = table, []
+
+        def execute(self, *args, raw_bytes=False):
+            self.calls.append(args)
+            tag = args[1].lstrip("-")
+            value = self.table.get(tag, b"")
+            if isinstance(value, BaseException):
+                raise value
+            return value
+
+    class _JsonStub:
+        def __init__(self, row=None, exc=None):
+            self.row, self.exc, self.calls = row, exc, []
+
+        def execute(self, *args, **kw):
+            import json
+            self.calls.append(args)
+            if self.exc:
+                raise self.exc
+            return json.dumps([{"SourceFile": str(args[-1]), **(self.row or {})}])
+
+    @staticmethod
+    def _b64(data: bytes) -> str:
+        import base64
+        return "base64:" + base64.b64encode(data).decode()
+
+    def _use(self, monkeypatch, stub):
+        monkeypatch.setattr(thumbnails, "get_et", lambda: stub)
+        return stub
+
+    # RAW: one tag per call, best first
+
+    def test_raw_stops_at_preview_image(self, monkeypatch):
+        stub = self._use(monkeypatch, self._RawStub(
+            {"PreviewImage": self.BIG_P, "JpgFromRaw": self.BIG_J, "ThumbnailImage": self.BIG_T}))
+        assert thumbnails._extract_embedded_preview(Path("a.NEF")) == self.BIG_P
+        assert [c[1] for c in stub.calls] == ["-PreviewImage"]  # never ships JpgFromRaw
+
+    def test_raw_skips_stubs_and_errors_in_priority_order(self, monkeypatch):
+        stub = self._use(monkeypatch, self._RawStub(
+            {"PreviewImage": b"x" * 100, "JpgFromRaw": RuntimeError("bad"), "ThumbnailImage": self.BIG_T}))
+        assert thumbnails._extract_embedded_preview(Path("a.dng")) == self.BIG_T
+        assert [c[1] for c in stub.calls] == ["-PreviewImage", "-JpgFromRaw", "-ThumbnailImage"]
+
+    def test_raw_with_nothing_returns_none(self, monkeypatch):
+        self._use(monkeypatch, self._RawStub({}))
+        assert thumbnails._extract_embedded_preview(Path("a.nef")) is None
+
+    def test_raw_timeout_propagates_without_trying_more_tags(self, monkeypatch):
+        from geotagger.exiftool_session import ExifToolTimeout
+        stub = self._use(monkeypatch, self._RawStub({"PreviewImage": ExifToolTimeout("hung")}))
+        with pytest.raises(ExifToolTimeout):
+            thumbnails._extract_embedded_preview(Path("a.nef"))
+        assert len(stub.calls) == 1
+
+    # Everything else: one -j -b call for all three tags
+
+    def test_single_call_requests_all_tags(self, monkeypatch):
+        stub = self._use(monkeypatch, self._JsonStub({}))
+        assert thumbnails._extract_embedded_preview(Path("clip.MOV")) is None
+        assert stub.calls == [("-j", "-b", "-PreviewImage", "-JpgFromRaw", "-ThumbnailImage", "clip.MOV")]
+
+    def test_single_call_honours_priority_not_json_order(self, monkeypatch):
+        self._use(monkeypatch, self._JsonStub({
+            "EXIF:ThumbnailImage": self._b64(self.BIG_T),
+            "QuickTime:PreviewImage": self._b64(self.BIG_P),
+        }))
+        assert thumbnails._extract_embedded_preview(Path("clip.mp4")) == self.BIG_P
+
+    def test_single_call_ignores_stubs(self, monkeypatch):
+        self._use(monkeypatch, self._JsonStub({
+            "QuickTime:PreviewImage": self._b64(b"x" * 50),
+            "EXIF:JpgFromRaw": "tiny text",
+            "EXIF:ThumbnailImage": self._b64(self.BIG_T),
+        }))
+        assert thumbnails._extract_embedded_preview(Path("img.heic")) == self.BIG_T
+
+    def test_single_call_error_means_no_preview(self, monkeypatch):
+        self._use(monkeypatch, self._JsonStub(exc=RuntimeError("unreadable")))
+        assert thumbnails._extract_embedded_preview(Path("x.tif")) is None
+
+    def test_single_call_timeout_propagates(self, monkeypatch):
+        from geotagger.exiftool_session import ExifToolTimeout
+        self._use(monkeypatch, self._JsonStub(exc=ExifToolTimeout("hung")))
+        with pytest.raises(ExifToolTimeout):
+            thumbnails._extract_embedded_preview(Path("x.mov"))
+
+    def test_both_strategies_agree_on_a_real_file(self, et_session, tmp_path):
+        """Against the real binary: a JPEG carrying only an EXIF ThumbnailImage
+        (the third-priority tag) yields the same bytes via both strategies."""
+        from geotagger import exiftool_session
+        et = exiftool_session.get_et()
+        thumb = tmp_path / "t.jpg"
+        Image.new("RGB", (160, 120), "blue").save(thumb)
+        host = tmp_path / "host.jpg"
+        Image.new("RGB", (800, 600), "red").save(host)
+        et.execute("-overwrite_original", f"-ThumbnailImage<={thumb}", str(host))
+
+        single = thumbnails._extract_embedded_preview(host)          # .jpg → -j -b path
+        raw_named = tmp_path / "host.nef"
+        raw_named.write_bytes(host.read_bytes())
+        per_tag = thumbnails._extract_embedded_preview(raw_named)    # .nef → per-tag path
+        assert single is not None and len(single) > 100
+        assert single == per_tag
+        assert Image.open(io.BytesIO(single)).size == (160, 120)

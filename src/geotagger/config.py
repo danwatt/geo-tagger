@@ -57,6 +57,28 @@ def get_exiftool_path(data_root: Path | None = None) -> str:
 
 EXIFTOOL_PATH: str = get_exiftool_path()
 
+
+# Per-call watchdog (seconds) on the shared -stay_open ExifTool session (see
+# exiftool_session._GuardedExifTool.execute). A file that makes ExifTool hang would
+# otherwise hold the global ExifTool lock forever and wedge every worker that needs
+# it; past this deadline the process is killed and restarted and that one call fails.
+# 60s is far above any healthy single-file read or preview extraction (a large RAW's
+# JpgFromRaw off a slow NAS is a few seconds), yet short enough that a wedge costs
+# one file rather than the session. 0 disables the watchdog.
+def get_exiftool_timeout() -> float:
+    raw = os.environ.get("GEOTAGGER_EXIFTOOL_TIMEOUT", "").strip() or "60"
+    try:
+        timeout = float(raw)
+    except ValueError:
+        raise ValueError(f"GEOTAGGER_EXIFTOOL_TIMEOUT must be a number of seconds >= 0, got {raw!r}") from None
+    # `not >= 0` also rejects NaN; inf is rejected since it isn't a usable deadline.
+    if not timeout >= 0 or timeout == float("inf"):
+        raise ValueError(f"GEOTAGGER_EXIFTOOL_TIMEOUT must be a number of seconds >= 0, got {raw!r}")
+    return timeout
+
+
+EXIFTOOL_TIMEOUT: float = get_exiftool_timeout()
+
 # Reclaim free-list space (deleted-row pages) at startup via VACUUM, gated on
 # the free-page ratio so a mostly-compact DB isn't fully rewritten every run.
 AUTO_VACUUM = os.environ.get("GEOTAGGER_AUTO_VACUUM", "1") == "1"

@@ -521,6 +521,7 @@ live from the Settings page):
 | Env var | Default | Description |
 |---|---|---|
 | `GEOTAGGER_EXIFTOOL` | *(none — see [tools/data location](#where-downloaded-toolsdata-end-up))* | Path to ExifTool binary |
+| `GEOTAGGER_EXIFTOOL_TIMEOUT` | `60` | Seconds one ExifTool call may take before the process is killed and restarted (that file's step fails); `0` disables |
 | `GEOTAGGER_SIDECAR_MODE` | `basename` | `basename` or `fullname` |
 | `GEOTAGGER_HOST` | `127.0.0.1` | Bind address |
 | `GEOTAGGER_PORT` | `8000` | Port |

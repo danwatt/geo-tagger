@@ -51,3 +51,26 @@ class TestSidecarMode:
         monkeypatch.setenv("GEOTAGGER_SIDECAR_MODE", value)
         with pytest.raises(ValueError, match="GEOTAGGER_SIDECAR_MODE must be"):
             config.get_sidecar_mode()
+
+
+# ── GEOTAGGER_EXIFTOOL_TIMEOUT ──
+
+class TestExifToolTimeout:
+    def test_defaults_to_sixty_seconds(self, monkeypatch):
+        monkeypatch.delenv("GEOTAGGER_EXIFTOOL_TIMEOUT", raising=False)
+        assert config.get_exiftool_timeout() == 60.0
+
+    def test_empty_counts_as_unset(self, monkeypatch):
+        monkeypatch.setenv("GEOTAGGER_EXIFTOOL_TIMEOUT", " ")
+        assert config.get_exiftool_timeout() == 60.0
+
+    @pytest.mark.parametrize(("value", "expected"), [("15", 15.0), ("2.5", 2.5), ("0", 0.0)])
+    def test_allowed_values(self, monkeypatch, value, expected):
+        monkeypatch.setenv("GEOTAGGER_EXIFTOOL_TIMEOUT", value)
+        assert config.get_exiftool_timeout() == expected
+
+    @pytest.mark.parametrize("value", ["-1", "abc", "nan", "inf"])
+    def test_invalid_value_is_rejected(self, monkeypatch, value):
+        monkeypatch.setenv("GEOTAGGER_EXIFTOOL_TIMEOUT", value)
+        with pytest.raises(ValueError, match="GEOTAGGER_EXIFTOOL_TIMEOUT must be"):
+            config.get_exiftool_timeout()

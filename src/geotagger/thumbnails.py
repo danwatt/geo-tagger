@@ -8,7 +8,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 from geotagger import config
 from geotagger.config import THUMB_SIZE, PREVIEW_SIZE, CACHE_DIR_NAME, get_cache_dir, VIDEO_EXTENSIONS
-from geotagger.exiftool_session import get_et, get_et_lock
+from geotagger.exiftool_session import get_et
 
 _thumbs_dir: Path | None = None
 
@@ -210,19 +210,88 @@ def _decode_raw_full(path: Path) -> Image.Image:
     return Image.fromarray(rgb)
 
 
-def _extract_embedded_preview(path: Path) -> bytes | None:
-    et = get_et()
-    lock = get_et_lock()
+# Embedded-image tags to try, best first, and the size below which a hit is ignored
+# (some files carry a stub/placeholder a few bytes long).
+_PREVIEW_TAGS = ("PreviewImage", "JpgFromRaw", "ThumbnailImage")
+_MIN_PREVIEW_BYTES = 100
 
-    with lock:
-        for tag in ("-PreviewImage", "-JpgFromRaw", "-ThumbnailImage"):
-            try:
-                data = et.execute("-b", tag, str(path), raw_bytes=True)
-                if data and len(data) > 100:
-                    return data
-            except Exception:
-                pass
+
+def _pick_preview(found: dict[str, bytes]) -> bytes | None:
+    """First candidate in _PREVIEW_TAGS priority order that's big enough to be real."""
+    for tag in _PREVIEW_TAGS:
+        data = found.get(tag)
+        if data and len(data) > _MIN_PREVIEW_BYTES:
+            return data
     return None
+
+
+def _parse_preview_json(out: str) -> dict[str, bytes]:
+    """Decode `exiftool -j -b -Tag…` output into {bare tag name: bytes}.
+
+    With -j, -b emits binary values as "base64:…" strings. Keys carry a group
+    prefix (-G is a common arg, e.g. "QuickTime:PreviewImage"), stripped here; without
+    -a ExifTool reports one value per tag name — the same one plain `-b -Tag` would."""
+    import base64
+    import json as _json
+    rows = _json.loads(out) if out.strip() else []
+    found: dict[str, bytes] = {}
+    for key, value in (rows[0] if rows else {}).items():
+        tag = key.rsplit(":", 1)[-1]
+        if tag not in _PREVIEW_TAGS or tag in found:
+            continue
+        if isinstance(value, str) and value.startswith("base64:"):
+            found[tag] = base64.b64decode(value[len("base64:"):])
+        elif value is not None:
+            # Data that happens to be valid UTF-8 comes back as plain text; real
+            # JPEG never does (0xFF 0xD8 isn't UTF-8), so this only sees stubs.
+            found[tag] = str(value).encode("utf-8")
+    return found
+
+
+def _extract_embedded_preview(path: Path) -> bytes | None:
+    """The file's best embedded JPEG (PreviewImage > JpgFromRaw > ThumbnailImage),
+    or None. Each ExifTool call takes the session lock for that call only, so other
+    workers' calls interleave between attempts.
+
+    Two strategies, chosen by what's typical for the type, giving identical results:
+
+    - Camera RAW (RAW_EXTENSIONS): one tag per call, PreviewImage first. It's almost
+      always present, so the usual cost is one call that ships only that image. Asking
+      for all three at once would also ship JpgFromRaw, which in a NEF is the
+      full-size JPEG (several MB, base64-inflated by a third) — pure waste whenever
+      PreviewImage wins.
+    - Everything else (video, HEIC, TIFF): usually *no* embedded preview, which cost
+      three failed calls — three parses of the file, under the lock — before the
+      PyAV/libheif fallback. Ask for all three in one `-j -b` call instead: one parse,
+      and whatever previews these types do carry are small.
+
+    ExifToolTimeout propagates (the session has already been restarted): trying the
+    next tag or strategy would just hang on the same file again."""
+    from geotagger.exiftool_session import ExifToolTimeout
+    et = get_et()
+
+    if path.suffix.lower() in config.RAW_EXTENSIONS:
+        for tag in _PREVIEW_TAGS:
+            try:
+                data = et.execute("-b", f"-{tag}", str(path), raw_bytes=True)
+            except ExifToolTimeout:
+                raise
+            except Exception:
+                continue
+            if data and len(data) > _MIN_PREVIEW_BYTES:
+                return data
+        return None
+
+    try:
+        out = et.execute("-j", "-b", *(f"-{t}" for t in _PREVIEW_TAGS), str(path))
+    except ExifToolTimeout:
+        raise
+    except Exception:
+        return None
+    try:
+        return _pick_preview(_parse_preview_json(out))
+    except (ValueError, TypeError, AttributeError, IndexError):
+        return None  # malformed JSON / unexpected shape: same as "no preview"
 
 
 def _frame_via_av(path: Path) -> Image.Image:

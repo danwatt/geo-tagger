@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from geotagger import index, sidecar  # noqa: E402
 from geotagger.exiftool_session import (  # noqa: E402
-    start_et, stop_et, restart_et, run_with_timeout,
+    get_et, start_et, stop_et, run_with_timeout,
 )
 
 
@@ -56,8 +56,8 @@ def read_chunk_per_file(chunk, timeout_s: float) -> tuple[list[tuple[int, int]],
         except TimeoutError:
             n_timeouts += 1
             updates.append((1, r["id"]))
+            # The session watchdog already killed and restarted ExifTool.
             print(f"    TIMEOUT (> {timeout_s:.0f}s), skipping: {p}", file=sys.stderr)
-            restart_et()  # the timeout killed the session; revive it for the next file
         except Exception as e:
             updates.append((1, r["id"]))
             print(f"    ERROR reading {p}: {e}", file=sys.stderr)
@@ -102,11 +102,12 @@ def main():
                 oris = run_with_timeout(lambda: sidecar.read_orientations(paths), batch_timeout)
                 updates = [(oris[Path(index.photo_path(r))], r["id"]) for r in chunk]
             except TimeoutError:
-                # The batch wedged on some file. run_with_timeout killed the session;
-                # bring it back and isolate the culprit(s) with a per-file timeout.
+                # The batch wedged on some file. The session watchdog has already
+                # killed and restarted ExifTool; isolate the culprit(s) with a
+                # per-file timeout.
                 print(f"  batch at {start}: no response in {batch_timeout:.0f}s — "
                       f"isolating files one at a time", file=sys.stderr)
-                if not restart_et():
+                if not get_et().running:  # its restart failed
                     errors += len(chunk)
                     print(f"  batch at {start}: ExifTool would not restart; skipping",
                           file=sys.stderr)
