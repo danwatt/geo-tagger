@@ -672,3 +672,95 @@ class TestSpatialTriggers:
             assert tuple(self._rtree_row(db, pid)) == (41.0, 41.0, -74.0, -74.0)
         finally:
             index.close_db()
+
+
+class TestRepresentativeFlagFollowsPerson:
+    """faces.representative means "kept exemplar OF the face's current person",
+    so it must not survive the face leaving that person (D9)."""
+
+    def _rep_face(self, db, person):
+        _photo_with_faces(db, f"rep{person}.jpg", [(person, 0), (person, 0)])
+        fids = [r[0] for r in db.execute(
+            "SELECT id FROM faces WHERE person_id=? ORDER BY id", (person,))]
+        index.set_person_representatives(person, fids[:1])
+        return fids[0], fids[1]
+
+    def _flag(self, db, fid):
+        return db.execute("SELECT representative FROM faces WHERE id=?", (fid,)).fetchone()[0]
+
+    @pytest.mark.parametrize("bulk", [False, True])
+    def test_reassign_to_other_person_clears_flag(self, db, bulk):
+        a, b = index.create_person("A"), index.create_person("B")
+        rep, _ = self._rep_face(db, a)
+        index.assign_faces([rep], b) if bulk else index.assign_face(rep, b)
+        assert self._flag(db, rep) == 0
+        # B must not inherit an exemplar it never chose.
+        assert index.get_persons_with_representatives() == []
+
+    @pytest.mark.parametrize("bulk", [False, True])
+    def test_unassign_clears_flag(self, db, bulk):
+        a = index.create_person("A")
+        rep, _ = self._rep_face(db, a)
+        index.assign_faces([rep], None) if bulk else index.assign_face(rep, None)
+        assert self._flag(db, rep) == 0
+
+    @pytest.mark.parametrize("bulk", [False, True])
+    def test_same_person_noop_keeps_flag(self, db, bulk):
+        a = index.create_person("A")
+        rep, other = self._rep_face(db, a)
+        index.assign_faces([rep, other], a) if bulk else index.assign_face(rep, a)
+        assert self._flag(db, rep) == 1
+
+    def test_mixed_batch_only_clears_leavers(self, db):
+        a, b = index.create_person("A"), index.create_person("B")
+        rep_a, _ = self._rep_face(db, a)
+        rep_b, _ = self._rep_face(db, b)
+        index.assign_faces([rep_a, rep_b], b)   # rep_a leaves A, rep_b stays in B
+        assert (self._flag(db, rep_a), self._flag(db, rep_b)) == (0, 1)
+
+    def test_ignore_and_come_back_clear_flag(self, db):
+        a = index.create_person("A")
+        _photo_with_faces(db, "x.jpg", [(a, 0), (a, 0)])
+        f1, f2 = [r[0] for r in db.execute("SELECT id FROM faces WHERE person_id=? ORDER BY id", (a,))]
+        index.set_person_representatives(a, [f1, f2])
+        index.set_faces_ignored([f1], True)
+        index.set_faces_come_back([f2], True)
+        assert (self._flag(db, f1), self._flag(db, f2)) == (0, 0)
+        # Restoring from ignored must not resurrect anything.
+        index.set_faces_ignored([f1], False)
+        assert self._flag(db, f1) == 0
+
+    def test_ignore_unlabeled_in_photos_clears_flag(self, db):
+        # Defensive: the helper targets person_id IS NULL, so a stale flag there
+        # (older DBs) must not ride along into the ignored state.
+        pid = _photo_with_faces(db, "y.jpg", [(None, 0)])
+        fid = db.execute("SELECT id FROM faces WHERE photo_id=?", (pid,)).fetchone()[0]
+        db.execute("UPDATE faces SET representative=1 WHERE id=?", (fid,))
+        db.commit()
+        index.ignore_unlabeled_in_photos([pid])
+        assert self._flag(db, fid) == 0
+
+    def test_zero_representatives_reader_fallback(self, db):
+        a = index.create_person("A")
+        rep, other = self._rep_face(db, a)
+        index.assign_face(rep, None)   # A now has no representative left
+        from geotagger import faces
+        # Review page: empty (same as "recompute hasn't run"), not an error; the
+        # picker lists no one; the recognition gallery never reads the flag.
+        assert faces.get_representative_groups(a) == []
+        assert index.get_persons_with_representatives() == []
+        assert len(index.get_labeled_faces_for_person(a)) == 1
+
+    def test_init_db_clears_flags_on_unassigned_and_ignored_faces(self, db, tmp_path):
+        a = index.create_person("A")
+        _photo_with_faces(db, "z.jpg", [(a, 0), (None, 0), (None, 1)])
+        keep, loose, ign = [r[0] for r in db.execute("SELECT id FROM faces ORDER BY id")]
+        db.execute("UPDATE faces SET representative=1")   # stale flags as old code left them
+        db.commit()
+        reopened = index.init_db(tmp_path)
+        try:
+            flags = {r[0]: r[1] for r in reopened.execute("SELECT id, representative FROM faces")}
+            assert flags == {keep: 1, loose: 0, ign: 0}
+        finally:
+            reopened.close()
+            index._db = db

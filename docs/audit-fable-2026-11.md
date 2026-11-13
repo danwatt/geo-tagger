@@ -94,7 +94,7 @@ earlier photos were written; cache invalidation after the loop is skipped; unkno
 returns 500, and a client retry shifts the already-done photos again.
 *Fix:* send absolute target timestamps, or return per-id results.
 
-**D9 — Low — `representative` flag survives reassignment** [traced]
+**D9 — Low — `representative` flag survives reassignment** [traced] — ✅ **DONE** (flag cleared in the same UPDATE whenever a face leaves its person, is ignored or queued; startup clears flags on unassigned/ignored faces)
 `index.py:1855,1886,1917,2024,2052`. Reassigning, unassigning or ignoring a face leaves `representative=1`,
 so the new person inherits a stale representative. Only `delete_person` resets it.
 

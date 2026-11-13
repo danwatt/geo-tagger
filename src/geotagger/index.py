@@ -887,6 +887,14 @@ def _init_db_locked(root: Path | None) -> sqlite3.Connection:
         "UPDATE persons SET family_id=NULL "
         "WHERE family_id IS NOT NULL AND family_id NOT IN (SELECT id FROM families)")
 
+    # One-shot repair (idempotent, no-op on a clean DB): older reassign/unassign/
+    # ignore paths left representative=1 behind. A flag on a face with no person
+    # (unassigned or ignored) is certainly stale; flags on faces that moved straight
+    # to another person look like real ones, so those wait for the next Recompute.
+    _db.execute(
+        "UPDATE faces SET representative=0 "
+        "WHERE representative=1 AND (person_id IS NULL OR ignored=1)")
+
     # Create R*Tree spatial index for photo locations
     # R*Tree uses min/max bounds, so for a point we use same value for min and max
     _db.execute("""
@@ -2471,6 +2479,16 @@ def get_face_with_photo(face_id: int) -> sqlite3.Row | None:
     ).fetchone()
 
 
+# ``representative`` means "kept exemplar OF the face's current person" (see
+# set_person_representatives), so it only survives a no-op reassignment to the same
+# person. person_id read inside the same UPDATE is the OLD value (SQLite evaluates
+# every SET expression against the pre-update row), so this is one statement per
+# face rather than a read-then-write. ``IS`` so NULL->NULL counts as "same". One
+# bound parameter: the new person_id.
+_KEEP_REPRESENTATIVE_IF_SAME_PERSON = (
+    "representative = CASE WHEN person_id IS ? THEN representative ELSE 0 END")
+
+
 def assign_faces(face_ids: list[int], person_id: int | None):
     """Bulk confirm (or clear, with None) the identity of several faces.
 
@@ -2485,8 +2503,8 @@ def assign_faces(face_ids: list[int], person_id: int | None):
         now = time.time() if person_id is not None else None
         db.executemany(
             "UPDATE faces SET person_id=?, ignored=0, come_back=0, come_back_at=NULL, "
-            "assigned_at=? WHERE id=?",
-            [(person_id, now, fid) for fid in face_ids],
+            "assigned_at=?, " + _KEEP_REPRESENTATIVE_IF_SAME_PERSON + " WHERE id=?",
+            [(person_id, now, person_id, fid) for fid in face_ids],
         )
         if person_id is not None:
             # A face can't be both "assigned to P" and "not P" — drop that conflict.
@@ -2515,7 +2533,7 @@ def set_faces_ignored(face_ids: list[int], ignored: bool):
         if ignored:
             db.executemany(
                 "UPDATE faces SET ignored=1, person_id=NULL, assigned_at=NULL, ignored_at=?, "
-                "come_back=0, come_back_at=NULL WHERE id=?",
+                "come_back=0, come_back_at=NULL, representative=0 WHERE id=?",
                 [(now, fid) for fid in face_ids],
             )
         else:
@@ -2545,7 +2563,7 @@ def set_faces_come_back(face_ids: list[int], come_back: bool):
         if come_back:
             db.executemany(
                 "UPDATE faces SET come_back=1, come_back_at=?, person_id=NULL, assigned_at=NULL, "
-                "ignored=0, ignored_at=NULL WHERE id=?",
+                "ignored=0, ignored_at=NULL, representative=0 WHERE id=?",
                 [(now, fid) for fid in face_ids],
             )
         else:
@@ -2654,7 +2672,8 @@ def ignore_unlabeled_in_photos(photo_ids: list[int]) -> int:
             return 0
         now = time.time()
         db.executemany(
-            "UPDATE faces SET ignored=1, person_id=NULL, assigned_at=NULL, ignored_at=? WHERE id=?",
+            "UPDATE faces SET ignored=1, person_id=NULL, assigned_at=NULL, ignored_at=?, "
+            "representative=0 WHERE id=?",
             [(now, fid) for fid in face_ids],
         )
     bump_faces_generation()
@@ -2682,8 +2701,8 @@ def assign_face(face_id: int, person_id: int | None):
         now = time.time() if person_id is not None else None
         db.execute(
             "UPDATE faces SET person_id=?, ignored=0, come_back=0, come_back_at=NULL, "
-            "assigned_at=? WHERE id=?",
-            (person_id, now, face_id))
+            "assigned_at=?, " + _KEEP_REPRESENTATIVE_IF_SAME_PERSON + " WHERE id=?",
+            (person_id, now, person_id, face_id))
         if person_id is not None:
             # A face can't be both "assigned to P" and "not P" — drop that conflict.
             db.execute("DELETE FROM face_negatives WHERE face_id=? AND person_id=?",
