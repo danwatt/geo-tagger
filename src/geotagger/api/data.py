@@ -7,12 +7,12 @@ import asyncio
 import json
 import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
 from pydantic import BaseModel, Field
 
-from geotagger import index
+from geotagger import config, index
 from geotagger.executor import get_executor
 from geotagger.geometry import normalize_lng_bbox
 from geotagger.services import backup_service, data_service, semantic_service, streets_service
@@ -159,3 +159,45 @@ async def api_data_backup():
         content=body, media_type="application/json",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+async def _read_capped_body(request: Request, max_bytes: int) -> bytes:
+    """The raw request body, refusing (413) past ``max_bytes`` — checked against
+    Content-Length up front and again while streaming, since the header may be
+    absent (chunked upload) or wrong."""
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > max_bytes:
+        raise HTTPException(413, f"Backup larger than {max_bytes // 2**20} MB "
+                                 "(GEOTAGGER_BACKUP_RESTORE_MAX_MB)")
+    chunks, total = [], 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(413, f"Backup larger than {max_bytes // 2**20} MB "
+                                     "(GEOTAGGER_BACKUP_RESTORE_MAX_MB)")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+@router.post("/api/data/backup/restore")
+async def api_data_backup_restore(request: Request, dry_run: bool = True,
+                                  overwrite: bool = False):
+    """Re-attach a backup (the JSON /api/data/backup downloads, as the raw request
+    body) to the current library. dry_run defaults to TRUE so a stray call changes
+    nothing: it returns the same report the real run would. Additive only;
+    conflicting values are skipped unless overwrite=true. See
+    backup_service.restore_backup."""
+    try:
+        body = await _read_capped_body(request, config.BACKUP_RESTORE_MAX_MB * 2**20)
+        if not body:
+            raise HTTPException(400, "Empty body: POST the backup JSON file")
+        loop = asyncio.get_running_loop()
+        # Parsing a large backup is CPU work too, so it rides the executor with the restore.
+        return await loop.run_in_executor(get_executor(), lambda: backup_service.restore_backup(
+            backup_service.parse_backup(body), dry_run=dry_run, overwrite=overwrite))
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, str(e))

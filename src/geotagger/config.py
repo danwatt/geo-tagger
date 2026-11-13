@@ -90,6 +90,12 @@ AUTO_VACUUM_THRESHOLD = float(os.environ.get("GEOTAGGER_AUTO_VACUUM_THRESHOLD", 
 # index.vacuum_if_needed) — a no-op once the DB is already at this page size.
 AUTO_VACUUM_PAGE_SIZE = int(os.environ.get("GEOTAGGER_VACUUM_PAGE_SIZE", "16384"))
 
+# Largest backup JSON (MB) POST /api/data/backup/restore accepts. The body is held
+# in memory and parsed whole (several times its size as Python objects), so this
+# bounds what an accidental upload of the wrong file can cost. A backup is a few
+# hundred bytes per tagged photo/face: 256 MB covers libraries far past 500K tags.
+BACKUP_RESTORE_MAX_MB = int(os.environ.get("GEOTAGGER_BACKUP_RESTORE_MAX_MB", "256"))
+
 # Thumbnail and preview dimensions
 THUMB_SIZE = 256
 PREVIEW_SIZE = 1000
@@ -584,6 +590,15 @@ def _coerce_setting(key: str, raw) -> float | int | bool:
     if not (spec["min"] <= value <= spec["max"]):
         raise ValueError(f"{key} must be between {spec['min']} and {spec['max']}")
     return value
+
+
+def coerce_setting(key: str, raw) -> float | int | bool:
+    """Validate + coerce one setting value WITHOUT applying it. Raises KeyError for
+    an unknown key, ValueError/TypeError for a bad value. For callers that must
+    decide before changing anything, e.g. a dry-run backup restore."""
+    if key not in SETTINGS_DEFAULTS:
+        raise KeyError(key)
+    return _coerce_setting(key, raw)
 
 
 def apply_setting_override(key: str, raw) -> float | int | bool:

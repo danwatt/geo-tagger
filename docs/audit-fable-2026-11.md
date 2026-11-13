@@ -103,7 +103,7 @@ so the new person inherits a stale representative. Only `delete_person` resets i
 `assign_faces(ids, None)` and wipes existing labels. `"assigned"` echoes the input length, not rows changed.
 *Fix:* 400 unless exactly one of `person_id`, `name`, `clear` is supplied; return the rowcount.
 
-**D11 — Low — Backup has no restore path and omits DB-only data** [traced]
+**D11 — Low — Backup has no restore path and omits DB-only data** [traced] — ✅ **DONE** (format 2: root-relative paths, checksum, `gps_accuracy`, `geocode_ignored`, `geotag_removed`, date precision; `POST /api/data/backup/restore` is additive, dry-run by default, round-trip tested; no restore UI yet)
 `services/backup_service.py:42-53`. Only `build_backup` exists, so the format is never exercised. It omits
 `geocode_ignored` and `gps_accuracy`, and anchors on absolute directories, so a moved library cannot be matched.
 *Fix:* add the fields, store directories relative to the scan root, implement restore with a round-trip test.
