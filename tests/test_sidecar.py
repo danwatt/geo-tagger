@@ -253,6 +253,106 @@ class TestGpsRoundTrip:
         assert meta["lng"] == pytest.approx(4.0)
 
 
+class TestEmbeddedGpsPick:
+    """Audit S7, pure: _embedded_gps over a tag row shaped as -G -n returns it
+    (the GPS IFD comes back under group 0 as 'EXIF:GPS…')."""
+
+    def test_composite_preferred_over_raw(self):
+        row = {"Composite:GPSLatitude": -33.5, "Composite:GPSLongitude": -70.1,
+               "EXIF:GPSLatitude": 33.5, "EXIF:GPSLongitude": 70.1,
+               "XMP:GPSLatitude": 10.0, "XMP:GPSLongitude": 20.0}
+        assert sidecar._embedded_gps(row) == (-33.5, -70.1)
+
+    def test_raw_fallback_applies_refs(self):
+        row = {"EXIF:GPSLatitude": 33.5, "EXIF:GPSLatitudeRef": "S",
+               "EXIF:GPSLongitude": 70.1, "EXIF:GPSLongitudeRef": "W"}
+        assert sidecar._embedded_gps(row) == (-33.5, -70.1)
+
+    def test_raw_fallback_per_axis(self):
+        row = {"Composite:GPSLatitude": -33.5,
+               "EXIF:GPSLatitude": 33.5, "EXIF:GPSLongitude": 70.1, "EXIF:GPSLongitudeRef": "W"}
+        assert sidecar._embedded_gps(row) == (-33.5, -70.1)
+
+    def test_raw_without_ref_stays_positive(self):
+        assert sidecar._embedded_gps({"EXIF:GPSLatitude": 33.5, "EXIF:GPSLongitude": 70.1}) == \
+            (33.5, 70.1)
+
+    def test_zero_latitude_is_kept(self):
+        row = {"Composite:GPSLatitude": 0, "Composite:GPSLongitude": 32.5}
+        assert sidecar._embedded_gps(row) == (0.0, 32.5)
+
+    def test_zero_longitude_is_kept(self):
+        row = {"Composite:GPSLatitude": 51.48, "Composite:GPSLongitude": 0.0}
+        assert sidecar._embedded_gps(row) == (51.48, 0.0)
+
+    def test_null_island_rejected(self):
+        assert sidecar._embedded_gps({"Composite:GPSLatitude": 0, "Composite:GPSLongitude": 0}) is None
+
+    def test_null_island_falls_through_to_xmp(self):
+        row = {"Composite:GPSLatitude": 0, "Composite:GPSLongitude": 0,
+               "XMP:GPSLatitude": -12.0, "XMP:GPSLongitude": 130.8}
+        assert sidecar._embedded_gps(row) == (-12.0, 130.8)
+
+    @pytest.mark.parametrize("lat,lng", [(91, 10), (-90.5, 10), (10, 180.1), (10, -181),
+                                         (float("nan"), 10), ("junk", 10)])
+    def test_out_of_range_or_corrupt_rejected(self, lat, lng):
+        assert sidecar._embedded_gps({"Composite:GPSLatitude": lat,
+                                      "Composite:GPSLongitude": lng}) is None
+
+    def test_range_edges_accepted(self):
+        assert sidecar._valid_gps(-90, 180) == (-90.0, 180.0)
+
+
+class TestEmbeddedGpsEndToEnd:
+    """Audit S7 through a real ExifTool read of the original file."""
+
+    def _write(self, img, *args):
+        exiftool_session.get_et().execute("-overwrite_original", *args, str(img))
+
+    def test_southern_western_hemisphere(self, et_session, sample_image):
+        self._write(sample_image, "-GPS:GPSLatitude=33.5", "-GPS:GPSLatitudeRef=S",
+                    "-GPS:GPSLongitude=70.1", "-GPS:GPSLongitudeRef=W")
+        meta = sidecar.read_metadata(sample_image)
+        assert (meta["lat"], meta["lng"], meta["geotag_source"]) == \
+            (pytest.approx(-33.5), pytest.approx(-70.1), "embedded")
+
+    def test_missing_refs_use_raw_values(self, et_session, sample_image):
+        """No Ref → ExifTool builds no Composite axis; the raw value is used."""
+        self._write(sample_image, "-GPS:GPSLatitude=33.5", "-GPS:GPSLongitude=70.1")
+        meta = sidecar.read_metadata(sample_image)
+        assert (meta["lat"], meta["lng"]) == (pytest.approx(33.5), pytest.approx(70.1))
+
+    def test_equator_kept(self, et_session, sample_image):
+        self._write(sample_image, "-GPS:GPSLatitude=0", "-GPS:GPSLatitudeRef=N",
+                    "-GPS:GPSLongitude=32.5", "-GPS:GPSLongitudeRef=E")
+        meta = sidecar.read_metadata(sample_image)
+        assert (meta["lat"], meta["lng"]) == (0.0, pytest.approx(32.5))
+
+    def test_null_island_is_no_gps(self, et_session, sample_image):
+        self._write(sample_image, "-GPS:GPSLatitude=0", "-GPS:GPSLatitudeRef=N",
+                    "-GPS:GPSLongitude=0", "-GPS:GPSLongitudeRef=E")
+        meta = sidecar.read_metadata(sample_image)
+        assert (meta["lat"], meta["lng"], meta["geotag_source"]) == (None, None, "none")
+
+    def test_embedded_xmp_only(self, et_session, sample_image):
+        self._write(sample_image, "-XMP:GPSLatitude=-33.5", "-XMP:GPSLongitude=-70.1")
+        meta = sidecar.read_metadata(sample_image)
+        assert (meta["lat"], meta["lng"]) == (pytest.approx(-33.5), pytest.approx(-70.1))
+
+    def test_sidecar_null_island_ignored(self, et_session, sample_image):
+        self._write(sample_image, "-GPS:GPSLatitude=33.5", "-GPS:GPSLatitudeRef=S",
+                    "-GPS:GPSLongitude=70.1", "-GPS:GPSLongitudeRef=W")
+        sidecar.write_gps(sample_image, 0.0, 0.0)
+        meta = sidecar.read_metadata(sample_image)
+        assert (meta["lat"], meta["geotag_source"]) == (pytest.approx(-33.5), "embedded")
+
+    def test_sidecar_on_prime_meridian_kept(self, et_session, sample_image):
+        sidecar.write_gps(sample_image, 51.48, 0.0)
+        meta = sidecar.read_metadata(sample_image)
+        assert (meta["lat"], meta["lng"], meta["geotag_source"]) == \
+            (pytest.approx(51.48), 0.0, "sidecar")
+
+
 class TestLocationRoundTrip:
     def test_write_location_writes_place_name_tags(self, et_session, sample_image):
         location = {"city": "Springfield", "state": "Illinois",

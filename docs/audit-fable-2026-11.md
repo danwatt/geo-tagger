@@ -184,7 +184,7 @@ print, and a file whose metadata read fails is silently absent and retried every
 `sidecar.py:103,126`. Both go through the same `timegm`, so phone videos sit offset from photos by the UTC
 offset, which skews time-neighbour inference and session grouping.
 
-**S7 — Low — GPS fallback loses the hemisphere and accepts 0,0** [traced]
+**S7 — Low — GPS fallback loses the hemisphere and accepts 0,0** [traced] — ✅ **DONE** (the raw fallback was dead code: with `-G` the tag is `EXIF:GPSLatitude`; now Composite per axis, else raw + Ref, else embedded XMP; single-axis 0 kept, exactly 0,0 and out-of-range = no GPS; no repair needed)
 `sidecar.py:112-113`. `Composite:GPSLatitude or GPS:GPSLatitude` treats 0.0 as missing and falls back to the
 unsigned raw tag.
 

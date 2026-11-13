@@ -230,6 +230,65 @@ def sidecar_tracking(image_path: Path) -> tuple[str | None, float | None]:
 GPS_VOID = "V"
 
 
+def _valid_gps(lat, lng) -> tuple[float, float] | None:
+    """(lat, lng) as floats, or None when the pair isn't a usable position.
+
+    Exactly (0, 0) — "Null Island", open ocean off Africa — is rejected: it is
+    what cameras and phones write when they have no fix (zero-filled GPS IFD),
+    not a place anyone photographs, and a stored pin there would draw every
+    such file into one bogus cluster. A 0 on just one axis is a real place
+    (the equator, the prime meridian) and is kept. Out-of-range and non-finite
+    values are corrupt tags, treated as no GPS rather than raising."""
+    import math
+    if lat is None or lng is None:
+        return None
+    try:
+        lat, lng = float(lat), float(lng)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(lat) and math.isfinite(lng)):
+        return None
+    if abs(lat) > 90 or abs(lng) > 180:
+        return None
+    if lat == 0 and lng == 0:
+        return None
+    return lat, lng
+
+
+def _signed_exif_coord(value, ref, negative: str):
+    """An EXIF GPS coordinate with its hemisphere applied. EXIF stores the
+    magnitude (an unsigned rational) and the sign in the separate *Ref tag,
+    which -n reports as the raw letter ('N'/'S', 'E'/'W'). A missing Ref leaves
+    the value positive, as ExifTool's own Composite:GPSPosition does."""
+    if value is None:
+        return None
+    try:
+        value = abs(float(value))
+    except (TypeError, ValueError):
+        return None
+    return -value if str(ref or "").strip().upper().startswith(negative) else value
+
+
+def _embedded_gps(row: dict) -> tuple[float, float] | None:
+    """The embedded position from read_metadata's tag row, or None.
+
+    Composite:GPSLatitude/Longitude come first: ExifTool derives them, already
+    signed, from EXIF GPS + Ref or from QuickTime GPSCoordinates (videos). But
+    each Composite axis exists only when its Ref tag does, so a file with a
+    missing Ref falls back to the raw EXIF value, signed by hand here. Note
+    that -G reports the GPS IFD under group 0, i.e. as 'EXIF:GPSLatitude', even
+    though it is requested as 'GPS:GPSLatitude' — the old fallback looked for
+    a 'GPS:' key and never fired. Embedded XMP (signed decimal under -n) is the
+    last resort: ExifTool builds no Composite from it."""
+    lat = row.get("Composite:GPSLatitude")
+    if lat is None:
+        lat = _signed_exif_coord(row.get("EXIF:GPSLatitude"), row.get("EXIF:GPSLatitudeRef"), "S")
+    lng = row.get("Composite:GPSLongitude")
+    if lng is None:
+        lng = _signed_exif_coord(row.get("EXIF:GPSLongitude"), row.get("EXIF:GPSLongitudeRef"), "W")
+    return _valid_gps(lat, lng) or _valid_gps(row.get("XMP:GPSLatitude"), row.get("XMP:GPSLongitude"))
+
+
 def read_metadata(image_path: Path) -> dict:
     """Return dict with keys: lat, lng, geotag_source, camera, photo_datetime,
     gps_accuracy, orientation."""
@@ -259,8 +318,11 @@ def read_metadata(image_path: Path) -> dict:
             _lat = row.get("XMP:GPSLatitude")
             _lng = row.get("XMP:GPSLongitude")
             _acc = row.get("XMP:GPSHPositioningError")
-            if _lat is not None and _lng is not None:
-                lat, lng, source = float(_lat), float(_lng), "sidecar"
+            # XMP GPS is a signed decimal under -n, so no Ref to apply; still
+            # validated, so a copied-in Null Island fix doesn't win over the
+            # embedded position.
+            if (pos := _valid_gps(_lat, _lng)) is not None:
+                (lat, lng), source = pos, "sidecar"
                 if _acc is not None:
                     try:
                         gps_accuracy = float(_acc)
@@ -275,7 +337,11 @@ def read_metadata(image_path: Path) -> dict:
     with get_et_lock():
         result = et.get_tags([str(image_path)], tags=[
             "Composite:GPSLatitude", "Composite:GPSLongitude",
+            # Raw GPS IFD values (unsigned) + their hemisphere refs, for files
+            # whose missing Ref leaves no Composite axis; see _embedded_gps.
             "GPS:GPSLatitude", "GPS:GPSLongitude",
+            "GPS:GPSLatitudeRef", "GPS:GPSLongitudeRef",
+            "XMP:GPSLatitude", "XMP:GPSLongitude",
             "EXIF:Make", "EXIF:Model",
             "QuickTime:Make", "QuickTime:Model",
             "EXIF:DateTimeOriginal", "QuickTime:CreateDate",
@@ -292,10 +358,9 @@ def read_metadata(image_path: Path) -> dict:
 
     # A removed geotag (gps_void) hides the embedded position and its accuracy.
     if source == "none" and not gps_void:
-        _lat = row.get("Composite:GPSLatitude") or row.get("GPS:GPSLatitude")
-        _lng = row.get("Composite:GPSLongitude") or row.get("GPS:GPSLongitude")
-        if _lat is not None and _lng is not None:
-            lat, lng, source = float(_lat), float(_lng), "embedded"
+        # `is not None` throughout (not `or`): a 0.0 latitude is the equator.
+        if (pos := _embedded_gps(row)) is not None:
+            (lat, lng), source = pos, "embedded"
 
     make = (row.get("EXIF:Make") or row.get("QuickTime:Make") or "").strip()
     model = (row.get("EXIF:Model") or row.get("QuickTime:Model") or "").strip()
