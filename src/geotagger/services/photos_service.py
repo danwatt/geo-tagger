@@ -24,42 +24,113 @@ def get_photo_metadata(path: str) -> dict:
         return {}
 
 
-def update_photo_times(updates: dict[int, int]) -> int:
-    """Apply time offsets to photos and write to sidecars."""
-    from geotagger.sidecar import sidecar_tracking, write_datetime
+def _time_bounds() -> tuple[int, int]:
+    """(lowest, highest) photo_datetime a correction may target: the first known
+    photograph (1826, as the year pickers allow) through the end of this year."""
+    from datetime import date, datetime
+    from geotagger.timeutil import wallclock_to_epoch
+    lo = wallclock_to_epoch(datetime(1826, 1, 1))
+    hi = wallclock_to_epoch(datetime(date.today().year + 1, 1, 1)) - 1
+    return lo, hi
 
-    updated = 0
-    for photo_id, offset_seconds in updates.items():
-        photo = index.get_photo(photo_id)
-        if not photo:
-            continue
 
-        # Calculate new timestamp
-        original_dt = photo["photo_datetime"]
-        if not has_date(original_dt):
-            continue
+def validate_time_updates(updates: list[dict]) -> None:
+    """Raise ValueError unless every entry is {id, expected, target} with integer
+    timestamps in range, and no id repeats. Run before anything is touched so a
+    bad request can't half-apply. 0 is rejected for both: it means "undated", and
+    clearing a date is not a time shift (the date tools set one instead)."""
+    lo, hi = _time_bounds()
+    seen: set[int] = set()
+    for u in updates:
+        pid = u.get("id")
+        if pid in seen:
+            raise ValueError(f"photo {pid} appears more than once")
+        seen.add(pid)
+        for name in ("expected", "target"):
+            v = u.get(name)
+            if not isinstance(v, int) or isinstance(v, bool):
+                raise ValueError(f"{name} must be an integer timestamp")
+            if not has_date(v):
+                raise ValueError(f"{name} 0 means undated; a time shift needs a real date")
+            if not lo <= v <= hi:
+                raise ValueError(f"{name} is outside the supported range (1826 to this year)")
 
-        new_dt = original_dt + offset_seconds
 
-        # Write to sidecar
-        photo_path = Path(index.photo_path(photo))
-        write_datetime(photo_path, new_dt)
-        sc_name, sc_mtime = sidecar_tracking(photo_path)
+def update_photo_times(updates: list[dict]) -> dict:
+    """Set photos' times to absolute targets, per photo, safe to retry.
 
-        # Update database. Keep sidecar tracking current (exactly as the scan
-        # computes it) so the next scan doesn't consider this row stale and
-        # re-derive photo_datetime from the (uncorrected) embedded EXIF.
-        with index.transaction() as db:
-            db.execute(
-                "UPDATE photos SET photo_datetime=?, sidecar_path=?, sidecar_mtime=? WHERE id=?",
-                (new_dt, sc_name, sc_mtime, photo_id),
-            )
+    Each entry is {"id", "expected", "target"}: `expected` is the time the caller
+    believes the photo has now, `target` the time it should have. That makes the
+    request idempotent — re-sending it after a partial failure leaves photos that
+    already landed alone (current == target: reported written, `unchanged`, no
+    sidecar write) instead of shifting them again, which a relative offset would.
+    A photo whose current time is neither is reported failed with `conflict: True`
+    and not touched (something else changed it since the caller loaded it); an
+    undated photo is reported failed too.
 
-        updated += 1
+    Each photo is isolated, as geotag_service.write_geotag: sidecar first, the DB
+    row only if that succeeded (so a failed write leaves the row as it was), one
+    failure doesn't stop the rest. A DB failure after a good sidecar write is
+    reported failed; the next scan sees the sidecar mtime mismatch and re-reads.
 
-    if updated:
-        index.bump_faces_generation()  # photo times feed age-aware suggestion scores
-    return updated
+    Returns {"results": [{id, photo_datetime, unchanged, sidecar_path}], "written":
+    [ids], "failed": [{id, error[, conflict]}], "not_found": [ids]}. Raises
+    ValueError for a malformed entry, before anything is touched."""
+    import logging
+    from geotagger import sidecar
+    from geotagger.services.geotag_service import _invalidate_caches, _short_error
+
+    validate_time_updates(updates)
+    logger = logging.getLogger(__name__)
+    results: list[dict] = []
+    failed: list[dict] = []
+    not_found: list[int] = []
+    moved = False
+    try:
+        for u in updates:
+            photo_id, expected, target = u["id"], u["expected"], u["target"]
+            photo = index.get_photo(photo_id)
+            if not photo:
+                not_found.append(photo_id)
+                continue
+            current = photo["photo_datetime"]
+            if current == target:
+                # Already there (a retry, or someone set it): nothing to write.
+                results.append({"id": photo_id, "photo_datetime": target, "unchanged": True,
+                                "sidecar_path": photo["sidecar_path"]})
+                continue
+            if not has_date(current):
+                failed.append({"id": photo_id, "error": "photo has no date to shift"})
+                continue
+            if current != expected:
+                failed.append({"id": photo_id, "conflict": True,
+                               "error": "date changed since it was loaded; reload and retry"})
+                continue
+            try:
+                photo_path = Path(index.photo_path(photo))
+                sidecar.write_datetime(photo_path, target)
+                moved = True  # the sidecar changed even if the row update below fails
+                sc_name, sc_mtime = sidecar.sidecar_tracking(photo_path)
+                # Keep sidecar tracking current (exactly as the scan computes it) so
+                # the next scan doesn't consider this row stale and re-derive
+                # photo_datetime from the (uncorrected) embedded EXIF.
+                with index.transaction() as db:
+                    db.execute(
+                        "UPDATE photos SET photo_datetime=?, sidecar_path=?, sidecar_mtime=? WHERE id=?",
+                        (target, sc_name, sc_mtime, photo_id),
+                    )
+            except Exception as e:
+                logger.exception("Time update failed for photo %s", photo_id)
+                failed.append({"id": photo_id, "error": _short_error(e)})
+                continue
+            results.append({"id": photo_id, "photo_datetime": target, "unchanged": False,
+                            "sidecar_path": sc_name})
+    finally:
+        if moved:
+            index.bump_faces_generation()  # photo times feed age-aware suggestion scores
+            _invalidate_caches()           # hotspot recency and work-queue batches key on time
+    return {"results": results, "written": [r["id"] for r in results],
+            "failed": failed, "not_found": not_found}
 
 
 def guess_dates(photo_ids: list[int]) -> list[dict]:

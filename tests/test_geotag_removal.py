@@ -251,7 +251,9 @@ class TestWritersLeaveRowFresh:
 
     def test_update_photo_times(self, db, et_session, lib, reads):
         img, pid = self._setup(lib, dt="2020:01:02 03:04:05")
-        assert photos_service.update_photo_times({pid: 3600}) == 1
+        t0 = 1577934245  # 2020-01-02 03:04:05 as wall-clock-as-UTC
+        out = photos_service.update_photo_times([{"id": pid, "expected": t0, "target": t0 + 3600}])
+        assert out["written"] == [pid]
         self._rescan_reads_nothing(lib, img, reads)
 
     def test_assign_approximate_dates(self, db, et_session, lib, reads):

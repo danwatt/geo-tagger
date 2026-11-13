@@ -242,16 +242,22 @@ class TestUpdatePhotoTimes:
     def test_applies_offset_and_persists(self, db, tmp_path, et_session):
         img = _make_jpg(tmp_path / "t.jpg")
         pid = _add_photo(db, path=img, photo_datetime=1000)
-        n = photos_service.update_photo_times({pid: 3600})
-        assert n == 1
+        out = photos_service.update_photo_times(
+            [{"id": pid, "expected": 1000, "target": 1000 + 3600}])
+        assert out["written"] == [pid]
         assert index.get_photo(pid)["photo_datetime"] == 1000 + 3600
         assert (tmp_path / "t.xmp").exists()
 
     def test_skips_missing_photo_and_zero_timestamp(self, db, tmp_path, et_session):
-        assert photos_service.update_photo_times({999999: 10}) == 0
+        out = photos_service.update_photo_times(
+            [{"id": 999999, "expected": 1000, "target": 1010}])
+        assert out["written"] == [] and out["not_found"] == [999999]
         img = _make_jpg(tmp_path / "z.jpg")
         pid = _add_photo(db, path=img, photo_datetime=0)
-        assert photos_service.update_photo_times({pid: 10}) == 0
+        out = photos_service.update_photo_times(
+            [{"id": pid, "expected": 1000, "target": 1010}])
+        assert out["written"] == [] and [f["id"] for f in out["failed"]] == [pid]
+        assert index.get_photo(pid)["photo_datetime"] == 0
 
 
 class TestGuessDates:

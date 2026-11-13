@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from geotagger import index
 
 
@@ -392,3 +394,175 @@ def test_commit_then_undo_round_trips_through_the_api(client, tmp_path):
     r = client.post("/api/photos/undo-date-commit", json={"previous": first["previous"]})
     assert r.status_code == 200 and r.json() == {"reverted": 1}
     assert index.get_photo(pid)["date_precision"] is None
+
+
+# ── /api/photos/update-times (absolute, retry-safe time corrections) ──
+
+def _dt(pid):
+    return index.get_db().execute("SELECT photo_datetime FROM photos WHERE id=?", (pid,)).fetchone()[0]
+
+
+def _stub_write(monkeypatch, fail_names=()):
+    """Replace the ExifTool sidecar write; record calls, fail for files named in
+    `fail_names` (a mutable set, so a test can 'fix' the fault between requests)."""
+    from geotagger import sidecar
+    calls = []
+
+    def fake(p, ts):
+        calls.append((p.name, ts))
+        if p.name in fail_names:
+            raise RuntimeError("exiftool exploded\nwith a traceback")
+        return p.with_suffix(".xmp")
+
+    monkeypatch.setattr(sidecar, "write_datetime", fake)
+    return calls
+
+
+def _upd(pid, expected, target):
+    return {"id": pid, "expected": expected, "target": target}
+
+
+def test_update_times_retry_after_partial_failure_applies_once(client, monkeypatch):
+    """The D8 regression: a failure mid-batch followed by re-sending the identical
+    request must leave every photo shifted exactly once, not twice."""
+    ids = [_add(f"r{i}.jpg", dt=1_600_000_000 + i) for i in range(3)]
+    fail = {"r1.jpg"}
+    calls = _stub_write(monkeypatch, fail)
+    body = {"updates": [_upd(i, 1_600_000_000 + n, 1_600_000_000 + n + 3600) for n, i in enumerate(ids)]}
+
+    r = client.post("/api/photos/update-times", json=body)
+    assert r.status_code == 200
+    out = r.json()
+    assert out["written"] == [ids[0], ids[2]]
+    assert out["failed"] == [{"id": ids[1], "error": "exiftool exploded"}]
+    assert _dt(ids[1]) == 1_600_000_001            # failed photo's row untouched
+
+    fail.clear()                                   # the fault goes away; client retries as-is
+    r = client.post("/api/photos/update-times", json=body)
+    assert r.status_code == 200 and r.json()["failed"] == []
+    assert [_dt(i) for i in ids] == [1_600_003_600, 1_600_003_601, 1_600_003_602]
+    # the two photos that had already landed were not written a second time
+    names = [c[0] for c in calls]
+    assert names.count("r0.jpg") == 1 and names.count("r2.jpg") == 1
+    unchanged = {x["id"]: x["unchanged"] for x in r.json()["results"]}
+    assert unchanged == {ids[0]: True, ids[1]: False, ids[2]: True}
+
+
+def test_update_times_conflict_is_not_applied(client, monkeypatch):
+    a = _add("ca.jpg", dt=5000)
+    b = _add("cb.jpg", dt=6000)
+    calls = _stub_write(monkeypatch)
+    r = client.post("/api/photos/update-times",
+                    json={"updates": [_upd(a, 4000, 4600), _upd(b, 6000, 6600)]})
+    assert r.status_code == 200
+    out = r.json()
+    assert out["written"] == [b]
+    assert out["failed"][0]["id"] == a and out["failed"][0]["conflict"] is True
+    assert _dt(a) == 5000 and _dt(b) == 6600
+    assert [c[0] for c in calls] == ["cb.jpg"]
+
+
+def test_update_times_all_conflicts_is_409(client, monkeypatch):
+    a = _add("c409.jpg", dt=5000)
+    _stub_write(monkeypatch)
+    r = client.post("/api/photos/update-times", json={"updates": [_upd(a, 4000, 4600)]})
+    assert r.status_code == 409 and r.json()["failed"][0]["conflict"] is True
+
+
+def test_update_times_already_at_target_is_noop(client, monkeypatch):
+    a = _add("noop.jpg", dt=7600)
+    calls = _stub_write(monkeypatch)
+    r = client.post("/api/photos/update-times", json={"updates": [_upd(a, 7000, 7600)]})
+    assert r.status_code == 200
+    out = r.json()
+    assert out["written"] == [a] and out["results"][0]["unchanged"] is True
+    assert calls == [] and _dt(a) == 7600
+
+
+def test_update_times_all_failed_is_502_and_unknown_ids_404(client, monkeypatch):
+    a = _add("f502.jpg", dt=5000)
+    _stub_write(monkeypatch, {"f502.jpg"})
+    r = client.post("/api/photos/update-times", json={"updates": [_upd(a, 5000, 5600)]})
+    assert r.status_code == 502 and r.json()["written"] == [] and _dt(a) == 5000
+    r = client.post("/api/photos/update-times", json={"updates": [_upd(98765, 5000, 5600)]})
+    assert r.status_code == 404 and r.json()["not_found"] == [98765]
+    assert client.post("/api/photos/update-times", json={"updates": []}).status_code == 200
+
+
+def test_update_times_mixed_known_unknown(client, monkeypatch):
+    a = _add("mix.jpg", dt=5000)
+    _stub_write(monkeypatch)
+    out = client.post("/api/photos/update-times",
+                      json={"updates": [_upd(a, 5000, 5600), _upd(98765, 5000, 5600)]}).json()
+    assert out["written"] == [a] and out["not_found"] == [98765]
+
+
+def test_update_times_undated_photo_reported_failed(client, monkeypatch):
+    a = _add("undated.jpg", dt=0)
+    calls = _stub_write(monkeypatch)
+    r = client.post("/api/photos/update-times", json={"updates": [_upd(a, 5000, 5600)]})
+    assert r.status_code == 502
+    assert r.json()["failed"] == [{"id": a, "error": "photo has no date to shift"}]
+    assert calls == [] and _dt(a) == 0
+
+
+@pytest.mark.parametrize("entry", [
+    {"id": 1, "expected": 5000, "target": 0},               # 0 = undated, not a time
+    {"id": 1, "expected": 0, "target": 5000},
+    {"id": 1, "expected": 5000, "target": -9_999_999_999},  # before 1826
+    {"id": 1, "expected": 5000, "target": 99_999_999_999},  # far future
+])
+def test_update_times_rejects_bad_timestamps(client, monkeypatch, entry):
+    calls = _stub_write(monkeypatch)
+    r = client.post("/api/photos/update-times", json={"updates": [entry]})
+    assert r.status_code == 400 and calls == []
+
+
+def test_update_times_rejects_non_integer_and_duplicate_ids(client, monkeypatch):
+    a = _add("dup.jpg", dt=5000)
+    _stub_write(monkeypatch)
+    r = client.post("/api/photos/update-times",
+                    json={"updates": [{"id": a, "expected": 5000, "target": 5000.5}]})
+    assert r.status_code == 422
+    r = client.post("/api/photos/update-times",
+                    json={"updates": [_upd(a, 5000, 5600), _upd(a, 5000, 5700)]})
+    assert r.status_code == 400 and _dt(a) == 5000
+
+
+def test_update_times_pre_1970_target(client, monkeypatch):
+    a = _add("old.jpg", dt=-500_000_000)          # 1954
+    calls = _stub_write(monkeypatch)
+    target = -500_000_000 + 86_400
+    r = client.post("/api/photos/update-times",
+                    json={"updates": [_upd(a, -500_000_000, target)]})
+    assert r.status_code == 200 and r.json()["written"] == [a]
+    assert _dt(a) == target and calls == [("old.jpg", target)]
+    assert client.get(f"/api/photo/{a}").status_code == 200   # serializes a negative time
+
+
+def test_update_times_db_failure_after_sidecar_is_failed(client, monkeypatch):
+    from contextlib import contextmanager
+    a = _add("dbf.jpg", dt=5000)
+    _stub_write(monkeypatch)
+
+    @contextmanager
+    def broken():
+        raise RuntimeError("db is locked")
+        yield  # pragma: no cover
+
+    with monkeypatch.context() as m:
+        m.setattr(index, "transaction", broken)
+        r = client.post("/api/photos/update-times", json={"updates": [_upd(a, 5000, 5600)]})
+    assert r.status_code == 502 and r.json()["failed"] == [{"id": a, "error": "db is locked"}]
+    assert _dt(a) == 5000
+
+
+def test_update_times_invalidates_caches_when_written(client, monkeypatch):
+    from geotagger.services import hotspots_service, work_queue_service
+    a = _add("inv.jpg", dt=5000)
+    _stub_write(monkeypatch)
+    inval = []
+    monkeypatch.setattr(hotspots_service, "invalidate", lambda: inval.append("hotspots"))
+    monkeypatch.setattr(work_queue_service, "invalidate", lambda: inval.append("queue"))
+    client.post("/api/photos/update-times", json={"updates": [_upd(a, 5000, 5600)]})
+    assert inval == ["hotspots", "queue"]

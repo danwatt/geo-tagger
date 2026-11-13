@@ -13,6 +13,7 @@ let shiftKeyPressed = false;
 
 /* ── Time offset state ── */
 let appliedOffsets = {};  // photo_id -> offset in seconds
+let baseTimes = {};       // photo_id -> photo_datetime when the offset was applied (the save's "expected")
 let hasUnsavedChanges = false;
 
 /* ── Date range filter state ── */
@@ -542,17 +543,26 @@ function applyTimeOffset() {
     return;
   }
 
-  // Apply offset to selected photos (relative to original time, not cumulative)
+  // Apply offset to selected photos (relative to original time, not cumulative).
+  // Undated photos have nothing to shift (0 means "no date"), so they're skipped.
+  // The base time is remembered so the save can send absolute times.
+  let applied = 0;
   selectedIds.forEach(id => {
+    const p = photos.find(x => x.id === id);
+    if (!p || !p.photo_datetime) return;   // truthy: keeps pre-1970 (negative)
     appliedOffsets[id] = totalOffset;
+    baseTimes[id] = p.photo_datetime;
+    applied++;
   });
+  const skipped = selectedIds.size - applied;
 
-  hasUnsavedChanges = true;
+  hasUnsavedChanges = Object.keys(appliedOffsets).length > 0;
   buildTimeline();
   applyFilters();
   updateDetailPane();
 
-  setStatus(`Applied ${totalOffset > 0 ? '+' : ''}${totalOffset}s offset to ${selectedIds.size} photos (relative to original time)`);
+  setStatus(`Applied ${totalOffset > 0 ? '+' : ''}${totalOffset}s offset to ${applied} photos (relative to original time)` +
+    (skipped ? `; ${skipped} undated photo(s) skipped` : ""));
 }
 
 function resetTimeOffsets() {
@@ -564,11 +574,13 @@ function resetTimeOffsets() {
     }
     if (!confirm("Reset all time offsets?")) return;
     appliedOffsets = {};
+    baseTimes = {};
     hasUnsavedChanges = false;
   } else {
     // Reset selected
     selectedIds.forEach(id => {
       delete appliedOffsets[id];
+      delete baseTimes[id];
     });
     hasUnsavedChanges = Object.keys(appliedOffsets).length > 0;
   }
@@ -577,6 +589,15 @@ function resetTimeOffsets() {
   applyFilters();
   updateDetailPane();
   setStatus("Time offsets reset");
+}
+
+// "2 failed: <first reason>" for the status line, or "" when everything landed
+// (same wording as the Geocode page's batchProblems in app.js).
+function batchProblems(out) {
+  const bad = out.failed.length + out.not_found.length;
+  if (!bad) return "";
+  const first = out.failed.length ? out.failed[0].error : "photo not found";
+  return `${bad} failed: ${first}`;
 }
 
 async function saveTimesToSidecars() {
@@ -591,27 +612,58 @@ async function saveTimesToSidecars() {
     return;
   }
 
+  // Absolute targets, not offsets: the request says "this photo is at X and
+  // should be at Y", so re-sending it after a partial failure (or a lost reply)
+  // can't shift a photo that already landed a second time.
+  const updates = photoIds.map(id => ({
+    id,
+    expected: baseTimes[id],
+    target: baseTimes[id] + appliedOffsets[id],
+  }));
+
   try {
     setStatus("Saving time adjustments...");
 
     const res = await fetch("/api/photos/update-times", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ updates: appliedOffsets })
+      body: JSON.stringify({ updates })
     });
 
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
+    // 200 carries a {results, written, failed, not_found} breakdown; 502/404/409
+    // carry the same body when nothing was written. Anything else (400/422/500)
+    // has no `written`.
+    const out = await res.json().catch(() => null);
+    if (!out || !Array.isArray(out.written)) {
+      throw new Error(out && typeof out.detail === "string" ? out.detail : `HTTP ${res.status}`);
     }
 
-    const result = await res.json();
-    setStatus(`Saved time adjustments for ${result.updated} photos`);
-    hasUnsavedChanges = false;
+    // Clear only what landed; failed photos keep their offset so Save can be
+    // pressed again (safe: the request is idempotent). A conflict can't be
+    // retried as-is (the photo's date moved), so its offset is dropped.
+    out.written.forEach(id => { delete appliedOffsets[id]; delete baseTimes[id]; });
+    const conflicted = out.failed.filter(f => f.conflict).map(f => f.id);
+    conflicted.forEach(id => { delete appliedOffsets[id]; delete baseTimes[id]; });
+    const retryable = out.failed.filter(f => !f.conflict).map(f => f.id);
+    hasUnsavedChanges = Object.keys(appliedOffsets).length > 0;
 
     // Reload photos to get updated times
     await loadPhotos();
-    appliedOffsets = {};
+
+    const problems = batchProblems(out);
+    if (problems) {
+      selectedIds = new Set(retryable);   // leave the retryable ones selected
+      buildTimeline();
+      applyFilters();
+      updateDetailPane();
+      const hint = retryable.length ? " — press Save again to retry" : "";
+      setStatus(`Updated ${out.written.length} of ${updates.length}; ${problems}${hint}`, true);
+    } else {
+      setStatus(`Saved time adjustments for ${out.written.length} photos`);
+    }
   } catch (err) {
+    // Request-level failure: the server may or may not have applied part of it.
+    // Offsets stay, so Save can be pressed again — it only applies what's left.
     setStatus("Save error: " + err.message, true);
   }
 }

@@ -89,7 +89,7 @@ earlier photos were written; cache invalidation after the loop is skipped; unkno
 `lat`/`lng` have no range validation, so `lat=999` reaches XMP.
 *Fix:* `Field(ge=-90, le=90)` and `ge=-180, le=180`; per-photo try/except returning `{written, failed}`; invalidate in `finally`.
 
-**D8 — Medium — `/api/photos/update-times` double-applies offsets on retry** [traced]
+**D8 — Medium — `/api/photos/update-times` double-applies offsets on retry** [traced] — ✅ **DONE** (body is now `[{id, expected, target}]` absolute timestamps; already-at-target is a no-op, mismatch is a conflict; same `{results, written, failed, not_found}` reply as geotag)
 `services/photos_service.py:26-62`. Relative offsets are applied with a commit per photo. A failure mid-batch
 returns 500, and a client retry shifts the already-done photos again.
 *Fix:* send absolute target timestamps, or return per-id results.

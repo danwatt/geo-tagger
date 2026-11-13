@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, field_validator
 
 from geotagger import index, thumbnails, serializers
@@ -343,16 +343,36 @@ async def api_photo(photo_id: int):
     }
 
 
+class TimeUpdate(BaseModel):
+    id: int
+    expected: int  # the photo_datetime the client believes the photo has now
+    target: int    # the photo_datetime it should have afterwards
+
+
 class UpdateTimesRequest(BaseModel):
-    updates: dict[int, int]  # photo_id -> offset in seconds
+    updates: list[TimeUpdate]
 
 
 @router.post("/api/photos/update-times")
 async def api_update_times(req: UpdateTimesRequest):
-    """Batch update photo timestamps by applying offsets."""
+    """Set photo timestamps to absolute targets (the Time Sync save). Idempotent:
+    re-sending the same body after a partial failure only applies what's left.
+    Same {results, written, failed, not_found} reply and status rules as
+    /api/geotag, plus 409 when every refusal was a conflict (the photos' dates
+    changed since the client loaded them)."""
+    from geotagger.api.geotag import _batch_response
     loop = asyncio.get_running_loop()
-    updated = await loop.run_in_executor(get_executor(), photos_service.update_photo_times, req.updates)
-    return {"updated": updated}
+    try:
+        out = await loop.run_in_executor(
+            get_executor(), photos_service.update_photo_times,
+            [u.model_dump() for u in req.updates],
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if (req.updates and not out["written"] and out["failed"]
+            and all(f.get("conflict") for f in out["failed"])):
+        return JSONResponse(out, status_code=409)
+    return _batch_response([u.id for u in req.updates], out)
 
 
 def _validate_year_month(year: int, month: int | None):
