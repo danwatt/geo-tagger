@@ -15,6 +15,7 @@ from pydantic import BaseModel, field_validator
 from geotagger import index, thumbnails, serializers
 from geotagger.executor import get_executor
 from geotagger.services import photos_service, zip_service
+from geotagger.timeutil import has_date
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -76,7 +77,7 @@ def _augment_and_filter(photos_in_area: list, geotagged: str, window: int) -> li
     # Timestamps of the geotagged photos in the region, used to pull in
     # temporally-adjacent untagged photos (candidates to inherit a location).
     times_in_area = [r["photo_datetime"] for r in photos_in_area
-                     if r["photo_datetime"] and r["photo_datetime"] > 0]
+                     if has_date(r["photo_datetime"])]
 
     if times_in_area and window > 0:
         times_sorted = sorted(times_in_area)
@@ -96,7 +97,10 @@ def _augment_and_filter(photos_in_area: list, geotagged: str, window: int) -> li
     elif geotagged == "no":
         photos_in_area = [r for r in photos_in_area if r["lat"] is None]
 
-    photos_in_area.sort(key=lambda r: (r["photo_datetime"] or 0, r["filename"]))
+    # Undated first as one block (same order as index.get_photos): `or 0` alone
+    # would slot undated photos between the 1969 and 1970 ones.
+    photos_in_area.sort(key=lambda r: (has_date(r["photo_datetime"]),
+                                       r["photo_datetime"] or 0, r["filename"]))
     return photos_in_area
 
 

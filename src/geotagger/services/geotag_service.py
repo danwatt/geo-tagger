@@ -143,7 +143,7 @@ def propose_locations(photo_ids: list[int], window: int = DEFAULT_PROPOSE_WINDOW
     # raw selection, so the "N of M" the UI shows matches what a stage would touch.
     targets = db.execute(
         "SELECT id, photo_datetime FROM photos "
-        "WHERE id IN (SELECT value FROM json_each(?)) AND lat IS NULL AND photo_datetime > 0",
+        f"WHERE id IN (SELECT value FROM json_each(?)) AND lat IS NULL AND {index.HAS_DATE_SQL}",
         (index.ids_json(photo_ids),),
     ).fetchall()
     if not targets:
@@ -151,10 +151,10 @@ def propose_locations(photo_ids: list[int], window: int = DEFAULT_PROPOSE_WINDOW
 
     lo = min(r["photo_datetime"] for r in targets) - window
     hi = max(r["photo_datetime"] for r in targets) + window
-    neighbors = db.execute("""
+    neighbors = db.execute(f"""
         SELECT id, lat, lng, photo_datetime FROM photos
         WHERE lat IS NOT NULL AND lng IS NOT NULL
-          AND photo_datetime BETWEEN ? AND ?
+          AND photo_datetime BETWEEN ? AND ? AND {index.HAS_DATE_SQL}
         ORDER BY photo_datetime
     """, (lo, hi)).fetchall()
     if not neighbors:

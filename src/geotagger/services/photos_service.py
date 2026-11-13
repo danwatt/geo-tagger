@@ -5,6 +5,7 @@ from pathlib import Path
 
 from geotagger import index
 from geotagger.exiftool_session import get_et, get_et_lock
+from geotagger.timeutil import has_date
 
 
 def get_photo_metadata(path: str) -> dict:
@@ -35,7 +36,7 @@ def update_photo_times(updates: dict[int, int]) -> int:
 
         # Calculate new timestamp
         original_dt = photo["photo_datetime"]
-        if not original_dt or original_dt == 0:
+        if not has_date(original_dt):
             continue
 
         new_dt = original_dt + offset_seconds

@@ -248,7 +248,7 @@ function computeTimeGroups(list, gapSeconds) {
   let cur = null;
   list.forEach(f => {
     const ts = f.photo_datetime;
-    if (!ts || ts <= 0) {                       // collect undated into one trailing group
+    if (!ts) {                                  // collect undated (0/null; negative = pre-1970) into one trailing group
       if (!cur || !cur.undated) { cur = { faces: [], undated: true }; groups.push(cur); }
       cur.faces.push(f);
       return;

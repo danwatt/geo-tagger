@@ -3,6 +3,7 @@ and no writes/I/O beyond the one read in person_name_map(); safe to unit-test ag
 sqlite3.Row objects."""
 
 from geotagger import index, thumbnails
+from geotagger.timeutil import epoch_to_wallclock, has_date
 
 
 def photo_to_dict(r) -> dict:
@@ -66,10 +67,11 @@ def format_photo_datetime(ts: int | None, precision: str | None) -> str | None:
     """Human-readable date for a photo, honest about precision: a manually
     assigned year/month-precision date (see photos_service.assign_approximate_dates)
     never claims a specific day it doesn't have."""
-    if not ts:
+    if not has_date(ts):
         return None
-    from datetime import datetime, timezone
-    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    # epoch_to_wallclock, not datetime.fromtimestamp: the latter raises OSError
+    # on Windows for the negative (pre-1970) values an assigned 1955 date stores.
+    dt = epoch_to_wallclock(ts)
     if precision == "year":
         return f"~{dt.year}"
     if precision == "month":
@@ -77,9 +79,8 @@ def format_photo_datetime(ts: int | None, precision: str | None) -> str | None:
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def format_crowd_group_label(ts: int) -> str:
-    if not ts:
+def format_crowd_group_label(ts: int | None) -> str:
+    if not has_date(ts):
         return "Unknown date"
-    from datetime import datetime, timezone
-    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    dt = epoch_to_wallclock(ts)  # pre-1970 safe, see format_photo_datetime
     return f"{dt.strftime('%B')} {dt.day}, {dt.year}"

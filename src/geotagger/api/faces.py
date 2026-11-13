@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from geotagger import index, faces, thumbnails, serializers, config
 from geotagger.executor import get_executor
 from geotagger.services import faces_service
+from geotagger.timeutil import has_date
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -23,7 +24,7 @@ def _in_window(ts, start_ts: int | None, end_ts: int | None) -> bool:
     Undated photos (ts None/0) fall outside any active window."""
     if start_ts is None and end_ts is None:
         return True
-    if not ts:
+    if not has_date(ts):
         return False
     return (start_ts is None or ts >= start_ts) and (end_ts is None or ts <= end_ts)
 
@@ -663,11 +664,16 @@ async def api_crowds(
     groups: list[dict] = []
     for row in rows:
         ts = row["photo_datetime"] or 0
-        if groups and ts - groups[-1]["_last_ts"] <= group_gap:
+        # Rows arrive undated-first (get_crowd_photos). The has_date check keeps
+        # the first dated row from joining the undated group: undated reads as 0,
+        # and a pre-1970 ts minus 0 is negative, so it would always pass the gap test.
+        if (groups and has_date(ts) == groups[-1]["_dated"]
+                and ts - groups[-1]["_last_ts"] <= group_gap):
             g = groups[-1]
         else:
             g = {
                 "_last_ts": ts,
+                "_dated": has_date(ts),
                 "label": serializers.format_crowd_group_label(ts),
                 "photos": [],
                 "total_faces": 0,
@@ -693,7 +699,7 @@ async def api_crowds(
         g["unlabeled_faces"] += row["unlabeled_faces"]
 
     for g in groups:
-        del g["_last_ts"]
+        del g["_last_ts"], g["_dated"]
     return {"groups": groups, "photo_count": len(rows)}
 
 

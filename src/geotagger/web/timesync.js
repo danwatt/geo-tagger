@@ -394,8 +394,9 @@ function applyFilters(fitTimeline = false) {
   filteredPhotos = photos.filter(p => {
     if (hiddenCameras.has(p.camera || "Unknown")) return false;
     if (dateRangeMin !== dateRangeMax) {
+      // Undated (0/null) stays visible; negative = pre-1970, still range-filtered.
       const ts = p.photo_datetime || 0;
-      if (ts > 0 && (ts < dateFilterLo || ts > dateFilterHi)) return false;
+      if (ts && (ts < dateFilterLo || ts > dateFilterHi)) return false;
     }
     return true;
   });
@@ -406,7 +407,7 @@ function applyFilters(fitTimeline = false) {
 
   if (fitTimeline && filteredPhotos.length > 0) {
     const times = filteredPhotos
-      .filter(p => p.photo_datetime && p.photo_datetime > 0)
+      .filter(p => p.photo_datetime)   // truthy: keeps pre-1970 (negative)
       .map(p => {
         const offset = appliedOffsets[p.id] || 0;
         return (p.photo_datetime + offset) * 1000;

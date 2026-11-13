@@ -15,7 +15,9 @@ async def api_stats_months():
     try:
         db = index.get_db()
         # Get monthly counts with geotagged breakdown
-        rows = db.execute("""
+        # strftime(..., 'unixepoch') handles negative (pre-1970) epochs; years
+        # sort correctly as strings since they're always 4 digits from 1826 on.
+        rows = db.execute(f"""
             SELECT
                 strftime('%Y', photo_datetime, 'unixepoch') as year,
                 strftime('%m', photo_datetime, 'unixepoch') as month,
@@ -23,18 +25,18 @@ async def api_stats_months():
                 SUM(CASE WHEN lat IS NOT NULL OR geocode_ignored = 1 THEN 1 ELSE 0 END) as geotagged,
                 SUM(CASE WHEN lat IS NULL AND geocode_ignored = 0 THEN 1 ELSE 0 END) as not_geotagged
             FROM photos
-            WHERE photo_datetime IS NOT NULL AND photo_datetime > 0
+            WHERE {index.HAS_DATE_SQL}
             GROUP BY year, month
             ORDER BY year DESC, month DESC
         """).fetchall()
 
-        undated = db.execute("""
+        undated = db.execute(f"""
             SELECT
                 COUNT(*) as total,
                 SUM(CASE WHEN lat IS NOT NULL OR geocode_ignored = 1 THEN 1 ELSE 0 END) as geotagged,
                 SUM(CASE WHEN lat IS NULL AND geocode_ignored = 0 THEN 1 ELSE 0 END) as not_geotagged
             FROM photos
-            WHERE photo_datetime IS NULL OR photo_datetime <= 0
+            WHERE {index.UNDATED_SQL}
         """).fetchone()
 
         return {
@@ -73,7 +75,7 @@ async def api_stats_years():
         db = index.get_db()
         row = db.execute(
             "SELECT MIN(photo_datetime) AS lo, MAX(photo_datetime) AS hi FROM photos "
-            "WHERE photo_datetime IS NOT NULL AND photo_datetime > 0"
+            f"WHERE {index.HAS_DATE_SQL}"
         ).fetchone()
         if row["lo"] is None:
             return {"years": []}
@@ -86,8 +88,10 @@ async def api_stats_years():
         for y in range(hi_year, lo_year - 1, -1):
             start = calendar.timegm((y, 1, 1, 0, 0, 0, 0, 0, 0))
             end = calendar.timegm((y + 1, 1, 1, 0, 0, 0, 0, 0, 0))
+            # HAS_DATE: the 1970 seek would otherwise "find" an undated 0 row.
             hit = db.execute(
-                "SELECT 1 FROM photos WHERE photo_datetime >= ? AND photo_datetime < ? LIMIT 1",
+                "SELECT 1 FROM photos WHERE photo_datetime >= ? AND photo_datetime < ? "
+                f"AND {index.HAS_DATE_SQL} LIMIT 1",
                 (start, end),
             ).fetchone()
             if hit:
@@ -106,7 +110,7 @@ async def api_stats_faces_months():
     no year/month to bucket into."""
     try:
         db = index.get_db()
-        rows = db.execute("""
+        rows = db.execute(f"""
             WITH photo_face_stats AS (
                 SELECT
                     ph.id AS pid,
@@ -118,7 +122,7 @@ async def api_stats_faces_months():
                 FROM photos ph
                 LEFT JOIN faces f ON f.photo_id = ph.id
                 WHERE ph.media_type = 'image' AND ph.faces_scanned_at IS NOT NULL
-                  AND ph.photo_datetime IS NOT NULL AND ph.photo_datetime > 0
+                  AND {index.has_date_sql("ph")}
                 GROUP BY ph.id
             )
             SELECT
@@ -132,7 +136,7 @@ async def api_stats_faces_months():
             ORDER BY year DESC, month DESC
         """).fetchall()
 
-        undated = db.execute("""
+        undated = db.execute(f"""
             WITH photo_face_stats AS (
                 SELECT
                     ph.id AS pid,
@@ -142,7 +146,7 @@ async def api_stats_faces_months():
                 FROM photos ph
                 LEFT JOIN faces f ON f.photo_id = ph.id
                 WHERE ph.media_type = 'image' AND ph.faces_scanned_at IS NOT NULL
-                  AND (ph.photo_datetime IS NULL OR ph.photo_datetime <= 0)
+                  AND {index.undated_sql("ph")}
                 GROUP BY ph.id
             )
             SELECT
@@ -202,13 +206,12 @@ async def api_stats_summary():
         window_sec = 900
         tagged_times = [r[0] for r in db.execute(
             "SELECT photo_datetime FROM photos "
-            "WHERE lat IS NOT NULL AND photo_datetime IS NOT NULL AND photo_datetime > 0 "
+            f"WHERE lat IS NOT NULL AND {index.HAS_DATE_SQL} "
             "ORDER BY photo_datetime"
         ).fetchall()]
         untagged_times = [r[0] for r in db.execute(
             "SELECT photo_datetime FROM photos "
-            "WHERE lat IS NULL AND geocode_ignored = 0 "
-            "AND photo_datetime IS NOT NULL AND photo_datetime > 0 "
+            f"WHERE lat IS NULL AND geocode_ignored = 0 AND {index.HAS_DATE_SQL} "
             "ORDER BY photo_datetime"
         ).fetchall()]
         guessable_count = 0
@@ -284,7 +287,7 @@ async def api_stats_dates(year: int | None = Query(None), month: int | None = Qu
         db = index.get_db()
 
         # Build query based on filters
-        where_clause = "WHERE photo_datetime IS NOT NULL AND photo_datetime > 0"
+        where_clause = f"WHERE {index.HAS_DATE_SQL}"
         params = []
 
         if year is not None and month is not None:

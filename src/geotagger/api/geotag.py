@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from geotagger import index
 from geotagger.executor import get_executor
 from geotagger.services import geotag_service, hotspots_service, work_queue_service
+from geotagger.timeutil import has_date
 
 router = APIRouter()
 
@@ -121,14 +122,14 @@ async def api_guess(photo_id: int, window: int = 900):
     if row["lat"] is not None:
         raise HTTPException(400, "Photo already has a geotag")
     ts = row["photo_datetime"]
-    if not ts or ts <= 0:
+    if not has_date(ts):
         raise HTTPException(400, "Photo has no timestamp — cannot guess location")
 
     db = index.get_db()
-    nearby = db.execute("""
+    nearby = db.execute(f"""
         SELECT id, lat, lng, filename, photo_datetime FROM photos
         WHERE lat IS NOT NULL
-          AND photo_datetime > 0
+          AND {index.HAS_DATE_SQL}
           AND photo_datetime BETWEEN ? AND ?
           AND id != ?
         ORDER BY ABS(photo_datetime - ?) ASC

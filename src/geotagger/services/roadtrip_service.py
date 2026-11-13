@@ -16,6 +16,7 @@ import bisect
 from geotagger import index, serializers
 from geotagger.geometry import (distance_to_route, local_scale, planar_distance,
                                 point_along_route, route_cumulative_lengths)
+from geotagger.timeutil import has_date
 
 # How far beyond the corridor's own first/last tagged photo an untagged photo can
 # still be picked up. Inside the span a photo is bracketed by two anchors; outside
@@ -59,7 +60,7 @@ def suggest_route(start_id: int, end_id: int,
     for r in (a, b):
         if r["lat"] is None:
             raise ValueError(f"{r['filename']} has no location — pick a geotagged photo")
-        if not r["photo_datetime"] or r["photo_datetime"] <= 0:
+        if not has_date(r["photo_datetime"]):
             raise ValueError(f"{r['filename']} has no timestamp — pick a dated photo")
 
     # Whichever was shot first is the start, so it doesn't matter which end of
@@ -166,7 +167,7 @@ def photos_along_route(
     anchors = []
     for r, s in on_route:
         ts = r["photo_datetime"]
-        if not ts or ts <= 0:
+        if not has_date(ts):
             continue
         if from_ts is not None and ts < from_ts:
             continue
@@ -204,7 +205,7 @@ def photos_along_route(
     candidates = []
     for r in untagged:
         ts = r["photo_datetime"]
-        if not ts or ts <= 0:
+        if not has_date(ts):
             continue
         pred = _predict(ts, times, arcs, speed, points, cum, route_len)
         if pred is None:
@@ -225,7 +226,7 @@ def _in_window(row, from_ts: int | None, to_ts: int | None) -> bool:
     only when no timeframe was asked for — they can't be placed on the trip's
     timeline, but they are genuinely inside the corridor."""
     ts = row["photo_datetime"]
-    if not ts or ts <= 0:
+    if not has_date(ts):
         return from_ts is None and to_ts is None
     if from_ts is not None and ts < from_ts:
         return False

@@ -48,7 +48,7 @@ XMP gets a value off by the machine's UTC offset. Any later re-read of that side
 *Fix:* format with `datetime(1970,1,1,tzinfo=utc) + timedelta(seconds=ts)`; rewrite the test as a true round trip.
 
 <a id="d2"></a>
-**D2 — High — Pre-1970 dates raise `OSError` on Windows and are treated as undated** [run]
+**D2 — High — Pre-1970 dates raise `OSError` on Windows and are treated as undated** [run] — ✅ **DONE** (`timeutil.py` conversions; one predicate `index.HAS_DATE_SQL` = `photo_datetime != 0` / `timeutil.has_date`; undated-aware ordering; exactly 1970-01-01 00:00:00 still reads as undated)
 `serializers.py:89,101`, `sidecar.py:311,317`, `services/work_queue_service.py:81`.
 `datetime.fromtimestamp(negative)` raises `OSError [Errno 22]` on Windows, with or without `tz`.
 `_validate_year_month` accepts years back to 1826, so assigning 1955 to a scan makes `/api/photo/{id}`,

@@ -910,7 +910,8 @@ function placeCenter(place) {
 function pickerTimeSpan() {
   let lo = Infinity, hi = -Infinity;
   photos.forEach((p) => {
-    if (!(p.photo_datetime > 0)) return;
+    // Truthiness, not `> 0`: pre-1970 dates are negative; undated is 0/null.
+    if (!p.photo_datetime) return;
     if (selectedIds.size && !selectedIds.has(p.id)) return;
     if (p.photo_datetime < lo) lo = p.photo_datetime;
     if (p.photo_datetime > hi) hi = p.photo_datetime;
@@ -1375,8 +1376,9 @@ function applyFilters(fitMap = false) {
     if (!FILTER_TOGGLES.screenshots && /\.png$/i.test(p.filename)) return false;
     if (!FILTER_TOGGLES[photoBucket(p)]) return false;
     if (dateRangeMin !== dateRangeMax) {
+      // Undated (0/null) stays visible; negative = pre-1970, still range-filtered.
       const ts = p.photo_datetime || 0;
-      if (ts > 0 && (ts < dateFilterLo || ts > dateFilterHi)) return false;
+      if (ts && (ts < dateFilterLo || ts > dateFilterHi)) return false;
     }
     return true;
   });
@@ -2356,7 +2358,7 @@ function dayCountsFromPhotos() {
   const byDay = new Map();
   for (const p of photos) {
     const ts = p.photo_datetime;
-    if (!ts || ts <= 0) continue;
+    if (!ts) continue;   // undated; negative (pre-1970) is a real date
     const key = new Date(ts * 1000).toISOString().slice(0, 10);
     byDay.set(key, (byDay.get(key) || 0) + 1);
   }
@@ -2391,7 +2393,7 @@ function bindTimeline() {
 }
 
 function buildHistogram() {
-  const tsList = photos.map(p => p.photo_datetime).filter(ts => ts && ts > 0);
+  const tsList = photos.map(p => p.photo_datetime).filter(Boolean);  // keeps pre-1970 (negative)
   if (tsList.length < 2) {
     setTimelineAvailable(false);
     dateRangeMin = dateRangeMax = 0;

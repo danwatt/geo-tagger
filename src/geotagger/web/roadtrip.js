@@ -170,7 +170,8 @@
   // Called by app.js's openPhotoContextMenu; `add(label, title, onClick, disabled)`
   // appends one entry. Exported on window because app.js loads first.
   window.roadtripContextItems = function (photo, add) {
-    const usable = photo.lat != null && photo.photo_datetime > 0;
+    // Truthy, not `> 0`: a pre-1970 (negative) timestamp is a usable endpoint.
+    const usable = photo.lat != null && !!photo.photo_datetime;
     const why = photo.lat == null
       ? "This photo has no location yet — a trip endpoint needs one"
       : "This photo has no timestamp — a trip endpoint needs one";

@@ -6,9 +6,46 @@ from contextlib import contextmanager
 from pathlib import Path
 from geotagger.config import CACHE_DIR_NAME, get_cache_dir, get_state_dir
 from geotagger.db_timing import TimedConnection
+from geotagger.timeutil import has_date
 
 _db: sqlite3.Connection | None = None
 _db_path: Path | None = None
+
+
+# ── "Has a date" predicate ──
+# The one SQL definition of a dated photo, twin of timeutil.has_date (see there
+# for the 0-or-NULL undated convention). Never `photo_datetime > 0`: pre-1970
+# dates are negative, and that test files them under Undated forever.
+#
+# Range filters (`photo_datetime >= ? AND < ?`) AND this in too: undated rows
+# store 0, so without it any window spanning 1970-01-01 would pull them in.
+#
+# Spelled as a bare `!= 0`, which already rejects NULL (NULL != 0 is NULL, and
+# WHERE treats NULL as false). Adding `IS NOT NULL AND` reads clearer but the
+# planner turns it into a `photo_datetime > NULL` range on idx_photos_datetime and
+# prefers that over the work queue's partial idx_photos_untagged: measured on a
+# 200K-row synthetic library, the work-queue target query went 36 ms -> 116 ms.
+# The bare form kept every other hot query level with the old `> 0` (years
+# MIN/MAX ~8.5 ms, month histogram ~95 ms, time-neighbour lists ~100-115 ms), and
+# beside a range bound the bound still drives the seek. In ORDER BY it sorts
+# NULL, then 0 (both undated), then 1 — undated first ascending.
+def has_date_sql(alias: str = "") -> str:
+    """``(… != 0)`` for photo_datetime — true only for a real date, NULL and 0
+    both fail it — optionally qualified with a table alias (``has_date_sql("ph")``).
+    Don't wrap it in NOT: NOT NULL is still NULL; use undated_sql()."""
+    col = f"{alias}.photo_datetime" if alias else "photo_datetime"
+    return f"({col} != 0)"
+
+
+def undated_sql(alias: str = "") -> str:
+    """Exact negation of has_date_sql (NULL-safe: NOT of a NULL comparison would
+    be NULL, so this is spelled out rather than wrapped in NOT)."""
+    col = f"{alias}.photo_datetime" if alias else "photo_datetime"
+    return f"({col} IS NULL OR {col} = 0)"
+
+
+HAS_DATE_SQL = has_date_sql()
+UNDATED_SQL = undated_sql()
 
 # Bumped on every change to face/person data that affects recognition. faces.py
 # caches decoded embedding matrices keyed on this, rebuilding only when it moves.
@@ -931,6 +968,12 @@ _PHOTO_LIST_COLS = ("id, filename, dir, media_type, lat, lng, geotag_source, cam
                     "loc_city, loc_sublocation, loc_postal_code, loc_state, loc_country")
 
 
+# Chronological with every undated photo first, as one block. Plain ORDER BY
+# photo_datetime would put NULL-undated first but 0-undated between the 1969 and
+# 1970 photos, so the grid's day grouping would show two "Undated" sections.
+_CHRONO_ORDER = f"{HAS_DATE_SQL}, photo_datetime, filename"
+
+
 def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str | None = None,
                date_to: str | None = None, undated: bool = False,
                dir: str | None = None, ids: list[int] | None = None) -> list[sqlite3.Row]:
@@ -945,7 +988,7 @@ def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str |
             return []
         return db.execute(
             f"SELECT {_PHOTO_LIST_COLS} FROM photos WHERE id IN (SELECT value FROM json_each(?)) "
-            "ORDER BY photo_datetime, filename",
+            f"ORDER BY {_CHRONO_ORDER}",
             (ids_json(ids),),
         ).fetchall()
     if dir is not None:
@@ -959,7 +1002,7 @@ def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str |
         clauses.append("lat IS NULL AND geocode_ignored = 0")
     if undated:
         # No timestamp to filter by — date_from/date_to don't apply.
-        clauses.append("(photo_datetime IS NULL OR photo_datetime <= 0)")
+        clauses.append(UNDATED_SQL)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         return db.execute(f"SELECT {_PHOTO_LIST_COLS} FROM photos {where} ORDER BY filename", params).fetchall()
     if bbox and bbox.strip():
@@ -974,8 +1017,10 @@ def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str |
         # Add 24 hours to include the entire day
         clauses.append("photo_datetime < ?")
         params.append(_day_start_ts(date_to) + 86400)
+    if date_from or date_to:
+        clauses.append(HAS_DATE_SQL)  # undated 0 would match a range spanning 1970
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-    return db.execute(f"SELECT {_PHOTO_LIST_COLS} FROM photos {where} ORDER BY photo_datetime, filename",
+    return db.execute(f"SELECT {_PHOTO_LIST_COLS} FROM photos {where} ORDER BY {_CHRONO_ORDER}",
                       params).fetchall()
 
 
@@ -998,9 +1043,12 @@ def get_photo(photo_id: int) -> sqlite3.Row | None:
     return get_db().execute("SELECT * FROM photos WHERE id=?", (photo_id,)).fetchone()
 
 
+# Undated photos sort last in both date orders — all of them: `photo_datetime IS
+# NULL` alone sent NULL-undated last but left 0-undated in among the dates (first
+# ascending before pre-1970 dates existed, mid-list after).
 SEARCH_SORTS = {
-    "date_asc": "photo_datetime IS NULL, photo_datetime, filename",
-    "date_desc": "photo_datetime IS NULL, photo_datetime DESC, filename",
+    "date_asc": f"{UNDATED_SQL}, photo_datetime, filename",
+    "date_desc": f"{UNDATED_SQL}, photo_datetime DESC, filename",
     "filename": "filename",
     # '' = read, no Make/Model (see sidecar.read_metadata); sorts last with NULL.
     "camera": "camera IS NULL OR camera = '', camera, photo_datetime",
@@ -1052,7 +1100,7 @@ def search_photos(date_from: str | None = None, date_to: str | None = None,
         clauses.append("lat IS NULL AND geocode_ignored = 0")
 
     if undated:
-        clauses.append("(photo_datetime IS NULL OR photo_datetime <= 0)")
+        clauses.append(UNDATED_SQL)
     elif date_from:
         clauses.append("photo_datetime >= ?")
         params.append(_day_start_ts(date_from))
@@ -1060,6 +1108,8 @@ def search_photos(date_from: str | None = None, date_to: str | None = None,
         # Add 24 hours to include the entire day
         clauses.append("photo_datetime < ?")
         params.append(_day_start_ts(date_to) + 86400)
+    if (date_from or date_to) and not undated:
+        clauses.append(HAS_DATE_SQL)  # undated 0 would match a range spanning 1970
 
     if bbox and bbox.strip():
         # bbox=minLng,minLat,maxLng,maxLat; malformed raises ValueError
@@ -1190,21 +1240,23 @@ def get_photos_in_bbox(min_lat: float, max_lat: float, min_lng: float, max_lng: 
     # R*Tree requires queries in the form: max_X >= min_query AND min_X <= max_query
     # This finds all items whose bounding box overlaps with the query bounding box
     # Since we store points (min_lat = max_lat), this becomes: lat >= min_lat AND lat <= max_lat
-    return db.execute("""
+    return db.execute(f"""
         SELECT photos.* FROM photos
         INNER JOIN photos_spatial ON photos.id = photos_spatial.id
         WHERE photos_spatial.max_lat >= ?
           AND photos_spatial.min_lat <= ?
           AND photos_spatial.max_lng >= ?
           AND photos_spatial.min_lng <= ?
-        ORDER BY photo_datetime, filename
+        ORDER BY {_CHRONO_ORDER}
     """, (min_lat, max_lat, min_lng, max_lng)).fetchall()
 
 
 def get_photos_by_time_range(min_time: int, max_time: int, has_geotag: bool | None = None) -> list[sqlite3.Row]:
-    """Get photos within a time range, optionally filtered by geotag presence."""
+    """Get dated photos within a time range, optionally filtered by geotag presence.
+    Undated rows (0) are excluded even when the range spans 1970-01-01 — every
+    caller treats the result as photos it can place in time."""
     db = get_db()
-    clauses = ["photo_datetime BETWEEN ? AND ?"]
+    clauses = ["photo_datetime BETWEEN ? AND ?", HAS_DATE_SQL]
     params = [min_time, max_time]
 
     if has_geotag is True:
@@ -1404,9 +1456,9 @@ def get_place_stats() -> dict[int, dict]:
     from geotagger.search_locations import place_bbox
     db = get_db()
 
-    untagged_times = [r["photo_datetime"] for r in db.execute("""
+    untagged_times = [r["photo_datetime"] for r in db.execute(f"""
         SELECT photo_datetime FROM photos
-        WHERE lat IS NULL AND geocode_ignored = 0 AND photo_datetime IS NOT NULL
+        WHERE lat IS NULL AND geocode_ignored = 0 AND {HAS_DATE_SQL}
         ORDER BY photo_datetime
     """).fetchall()]
 
@@ -1427,7 +1479,7 @@ def get_place_stats() -> dict[int, dict]:
               AND photos_spatial.min_lng <= ?
               AND search_place_distance(photos.lat, photos.lng, ?, ?) = 0
         """, (min_lat, max_lat, min_lng, max_lng, p["type"], p["bounds"])).fetchall()
-        times = [r["ts"] for r in rows if r["ts"]]
+        times = [r["ts"] for r in rows if has_date(r["ts"])]
         stats[p["id"]] = {
             "photo_count": len(rows),
             "last_ts": max(times) if times else None,
@@ -1901,8 +1953,8 @@ def set_person_representatives(person_id: int, representative_ids: list[int]):
 def _photo_ids_in_window(start_ts: int | None, end_ts: int | None) -> list[int]:
     """Photo ids with photo_datetime in [start_ts, end_ts] (either bound optional),
     via idx_photos_datetime. Used to pre-resolve a time Focus to a small photo_id
-    set — see list_faces for why."""
-    conds, params = [], []
+    set — see list_faces for why. Undated photos fall outside every window."""
+    conds, params = [HAS_DATE_SQL], []
     if start_ts is not None:
         conds.append("photo_datetime >= ?")
         params.append(start_ts)
@@ -2218,7 +2270,9 @@ def get_face_coverage() -> dict[str, int]:
 def get_crowd_photos(min_faces: int = 50, start_ts: int | None = None,
                      end_ts: int | None = None) -> list[sqlite3.Row]:
     """Return photos with at least `min_faces` detected faces, ordered by
-    photo_datetime. Each row includes per-state face counts. ``start_ts``/
+    photo_datetime with every undated photo first (api_crowds groups consecutive
+    rows by time gap, so undated must be one contiguous block, not split around
+    the pre-1970 photos). Each row includes per-state face counts. ``start_ts``/
     ``end_ts`` (epoch secs) window by photo_datetime — the People page's Focus."""
     clause = "WHERE ph.media_type = 'image' AND ph.faces_scanned_at IS NOT NULL"
     params: list = []
@@ -2228,6 +2282,8 @@ def get_crowd_photos(min_faces: int = 50, start_ts: int | None = None,
     if end_ts is not None:
         clause += " AND ph.photo_datetime <= ?"
         params.append(end_ts)
+    if start_ts is not None or end_ts is not None:
+        clause += f" AND {has_date_sql('ph')}"
     params.append(min_faces)
     return get_db().execute(
         f"""SELECT ph.id, ph.filename, ph.dir, ph.photo_datetime, ph.orientation,
@@ -2242,7 +2298,7 @@ def get_crowd_photos(min_faces: int = 50, start_ts: int | None = None,
            {clause}
            GROUP BY ph.id
            HAVING total_faces >= ?
-           ORDER BY ph.photo_datetime""",
+           ORDER BY {has_date_sql('ph')}, ph.photo_datetime""",
         params,
     ).fetchall()
 
@@ -2400,7 +2456,7 @@ def get_persons(start_ts: int | None = None,
                LEFT JOIN families fam ON fam.id = p.family_id
                ORDER BY p.name"""
         ).fetchall()
-    conds, params = ["f.person_id IS NOT NULL"], []
+    conds, params = ["f.person_id IS NOT NULL", has_date_sql("ph")], []
     if start_ts is not None:
         conds.append("ph.photo_datetime >= ?")
         params.append(start_ts)

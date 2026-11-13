@@ -386,7 +386,7 @@ def _window_counts(clusters: list[dict], merge_meters: float,
                MAX(id) AS sample_id
         FROM photos
         WHERE lat IS NOT NULL AND lng IS NOT NULL
-          AND photo_datetime BETWEEN ? AND ?
+          AND photo_datetime BETWEEN ? AND ? AND {index.HAS_DATE_SQL}
         GROUP BY ROUND(lat, {_CELL_DECIMALS}), ROUND(lng, {_CELL_DECIMALS})
     """, (from_ts, to_ts)).fetchall()
 

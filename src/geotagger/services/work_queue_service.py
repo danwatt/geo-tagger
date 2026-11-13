@@ -21,6 +21,7 @@ import time
 
 from geotagger import config, index
 from geotagger.services import geotag_service
+from geotagger.timeutil import epoch_to_wallclock, has_date
 
 logger = logging.getLogger(__name__)
 
@@ -76,18 +77,19 @@ def short_dir(d: str) -> str:
 
 def _ymd(ts: int) -> tuple[int, int, int]:
     """(year, month, day) of a timestamp, read as UTC — photo_datetime is stored
-    wall-clock-as-UTC, so local-time conversion would shift dates by the offset."""
-    from datetime import datetime, timezone
-    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    wall-clock-as-UTC, so local-time conversion would shift dates by the offset.
+    Epoch arithmetic rather than fromtimestamp, which raises OSError on Windows
+    for pre-1970 (negative) values."""
+    dt = epoch_to_wallclock(ts)
     return dt.year, dt.month, dt.day
 
 
 def date_span_label(start_ts: int | None, end_ts: int | None) -> str:
     """"Oct 12 2024", "Oct 12–13 2024", or "Oct 12 – Nov 2 2024"."""
-    if not start_ts:
+    if not has_date(start_ts):
         return "no date"
     y1, m1, d1 = _ymd(start_ts)
-    y2, m2, d2 = _ymd(end_ts or start_ts)
+    y2, m2, d2 = _ymd(end_ts if has_date(end_ts) else start_ts)
     if (y1, m1, d1) == (y2, m2, d2):
         return f"{_MONTHS[m1 - 1]} {d1} {y1}"
     if (y1, m1) == (y2, m2):
@@ -116,18 +118,18 @@ def _collect_votes(db) -> dict[int, tuple[float, float, float | None, int]]:
     straddling neighbours. Same sweep api_stats_summary runs to count `guessable`,
     but remembering *which* neighbour won.
     """
-    neighbors = db.execute("""
+    neighbors = db.execute(f"""
         SELECT id, lat, lng, photo_datetime FROM photos
-        WHERE lat IS NOT NULL AND lng IS NOT NULL AND photo_datetime > 0
+        WHERE lat IS NOT NULL AND lng IS NOT NULL AND {index.HAS_DATE_SQL}
         ORDER BY photo_datetime
     """).fetchall()
     if not neighbors:
         return {}
     times = [r["photo_datetime"] for r in neighbors]
 
-    targets = db.execute("""
+    targets = db.execute(f"""
         SELECT id, photo_datetime FROM photos
-        WHERE lat IS NULL AND geocode_ignored = 0 AND photo_datetime > 0
+        WHERE lat IS NULL AND geocode_ignored = 0 AND {index.HAS_DATE_SQL}
     """).fetchall()
 
     votes: dict[int, tuple[float, float, float | None, int]] = {}
@@ -167,7 +169,7 @@ def _proposal(member_ids: list[int], votes: dict) -> tuple[dict | None, int]:
 
 def _sessions(rows: list, votes: dict, session_gap: int) -> list[dict]:
     """Split untagged dated photos into one-camera, one-outing runs."""
-    dated = sorted((r for r in rows if (r["photo_datetime"] or 0) > 0),
+    dated = sorted((r for r in rows if has_date(r["photo_datetime"])),
                    key=lambda r: (r["camera"] or "", r["photo_datetime"], r["id"]))
     batches = []
     run: list = []
@@ -218,9 +220,10 @@ def _folders(db, rows: list, votes: dict, folder_min_frac: float) -> list[dict]:
         total = totals.get(d, len(members))
         if total <= 0 or len(members) / total < folder_min_frac:
             continue
-        members.sort(key=lambda r: (r["photo_datetime"] or 0, r["id"]))
+        # Undated first as one block, as index.get_photos orders the folder's grid.
+        members.sort(key=lambda r: (has_date(r["photo_datetime"]), r["photo_datetime"] or 0, r["id"]))
         ids = [r["id"] for r in members]
-        stamps = [r["photo_datetime"] for r in members if (r["photo_datetime"] or 0) > 0]
+        stamps = [r["photo_datetime"] for r in members if has_date(r["photo_datetime"])]
         proposal, voted = _proposal(ids, votes)
         cameras = [r["camera"] for r in members if r["camera"]]
         batches.append({
@@ -342,13 +345,13 @@ def _live_member_ids(batch: dict) -> list[int]:
     if batch["kind"] == "folder":
         rows = db.execute(
             "SELECT id FROM photos WHERE dir = ? AND lat IS NULL AND geocode_ignored = 0 "
-            "ORDER BY photo_datetime, id", (batch["dir"],)).fetchall()
+            f"ORDER BY {index.HAS_DATE_SQL}, photo_datetime, id", (batch["dir"],)).fetchall()
     else:
         rows = db.execute(
             # No-camera rows are '' once scanned, NULL on rows from before that
             # sentinel existed; a session groups the two together, so match both.
             "SELECT id FROM photos WHERE (camera = ? OR (? = '' AND camera IS NULL)) "
-            "AND photo_datetime BETWEEN ? AND ? "
+            f"AND photo_datetime BETWEEN ? AND ? AND {index.HAS_DATE_SQL} "
             "AND lat IS NULL AND geocode_ignored = 0 ORDER BY photo_datetime, id",
             (batch["camera"] or "", batch["camera"] or "",
              batch["start_ts"], batch["end_ts"])).fetchall()

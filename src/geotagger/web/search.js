@@ -1241,7 +1241,7 @@ function bindTimeline() {
 }
 
 function buildHistogram() {
-  const tsList = resultPhotos.map((p) => p.photo_datetime).filter((ts) => ts && ts > 0);
+  const tsList = resultPhotos.map((p) => p.photo_datetime).filter(Boolean);  // keeps pre-1970 (negative)
   filteredPhotos = resultPhotos;
   if (tsList.length < 2) {
     document.getElementById("timeline").style.display = "none";
