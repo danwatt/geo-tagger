@@ -3,7 +3,8 @@ let photos = [];          // full list from API
 let filteredPhotos = [];  // after camera hide + date range filter
 let selectedIds = new Set();
 let lastClickedIndex = -1;
-let markersById = {};
+let markersById = {};     // photo id → its saved-location pin (a member of photoCluster)
+let photoCluster = null;  // L.markerClusterGroup holding every pin in markersById
 let dayIsolation = null; // "YYYY-MM-DD" key, or null when all days are shown
 let focusedPhotoId = null;
 let map;
@@ -154,6 +155,19 @@ function initMap() {
   setBasemap("street");
   addBasemapControl();
   map.on("moveend", correctWorldWrap);
+
+  // Saved-location pins are clustered (same library and version as map.js), so a
+  // month of photos isn't thousands of live DOM markers. Only these: staged,
+  // guess and accuracy layers go straight on the map and are never hidden in a
+  // cluster. The radius is kept small — about a pin's width — so only pins that
+  // were already stacked on top of each other merge; pins that stood apart stay
+  // individually clickable and draggable at the zoom they always were.
+  photoCluster = L.markerClusterGroup({
+    maxClusterRadius: 30,
+    chunkedLoading: true,
+    showCoverageOnHover: false,
+  });
+  map.addLayer(photoCluster);
 
   const mapPane = document.getElementById("map-pane");
   let dragAccuracyCircle = null;
@@ -1335,7 +1349,24 @@ function photoBucket(photo) {
  * Every view loads its whole scope (geotagged=all) and filters here, so the
  * timeline histogram can describe the whole scope while the grid shows a subset,
  * and so flipping a toggle is instant instead of a round trip. */
+let applyFiltersFrame = 0;
+
+// applyFilters for high-frequency callers (the date scrubber): at most one
+// rebuild per animation frame, always of the state current when it runs.
+function scheduleApplyFilters() {
+  if (applyFiltersFrame) return;
+  applyFiltersFrame = requestAnimationFrame(() => {
+    applyFiltersFrame = 0;
+    applyFilters();
+  });
+}
+
 function applyFilters(fitMap = false) {
+  // A direct call renders the latest state, so a queued frame would only repeat it.
+  if (applyFiltersFrame) {
+    cancelAnimationFrame(applyFiltersFrame);
+    applyFiltersFrame = 0;
+  }
   filteredPhotos = photos.filter(p => {
     if (hiddenCameras.has(p.camera || "Unknown")) return false;
     // Screenshots cuts across the buckets rather than being one of them — a
@@ -1365,14 +1396,31 @@ function fitMapToPhotos() {
 const DAY_ABBRS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 /* ── Grid ── */
+// Each photo's cell, built once and re-used by every renderGrid. A filter
+// flip, a stage or a commit re-lays the day sections, but the cells (and their
+// <img>s, already decoded) just move into the new sections instead of being
+// rebuilt. Keyed by the photo *object*, so loading a new scope — which brings
+// fresh objects — starts clean and the old cells are collected with the old list.
+const thumbCells = new WeakMap();
+
 function makeThumbCell(photo, idx) {
-  const cell = document.createElement("div");
+  let cell = thumbCells.get(photo);
+  if (!cell) {
+    cell = buildThumbCell(photo);
+    thumbCells.set(photo, cell);
+  }
+  // State that changes between renders is (re)applied on every render.
   cell.className = "thumb-cell" +
     (selectedIds.has(photo.id) ? " selected" : "") +
     (photo.lat != null ? " tagged" : "") +
     (photo.geocode_ignored ? " geo-ignored" : "");
-  cell.dataset.id = photo.id;
   cell.dataset.idx = idx;
+  return cell;
+}
+
+function buildThumbCell(photo) {
+  const cell = document.createElement("div");
+  cell.dataset.id = photo.id;
   cell.draggable = true;
 
   const strip = document.createElement("div");
@@ -1392,7 +1440,9 @@ function makeThumbCell(photo, idx) {
   cell.appendChild(img);
   cell.appendChild(name);
 
-  cell.addEventListener("click", (e) => handleThumbClick(e, photo.id, idx));
+  // The index into filteredPhotos changes with every filter, so it's read off
+  // the cell at click time (makeThumbCell keeps it current).
+  cell.addEventListener("click", (e) => handleThumbClick(e, photo.id, Number(cell.dataset.idx)));
   cell.addEventListener("dragstart", (e) => handleDragStart(e, photo.id));
   cell.addEventListener("contextmenu", (e) => openPhotoContextMenu(e, photo));
   return cell;
@@ -1827,32 +1877,54 @@ function renderMarkers() {
   const isolatedSet = dayIsolation
     ? new Set(pinnable.filter(p => dayKey(p) === dayIsolation).map(p => p.id))
     : null;
-  const inScope = new Set(pinnable.map(p => p.id));
+  const wanted = new Map();   // photo id → photo, for every pin that should exist
+  pinnable.forEach((photo) => {
+    if (isolatedSet && !isolatedSet.has(photo.id)) return;
+    if (photo.lat != null && photo.lng != null) wanted.set(photo.id, photo);
+  });
+  // Diff against the pins already up, and hand the cluster group its changes in
+  // bulk: one addLayers/removeLayers re-clusters once, where per-pin calls would
+  // re-cluster per pin.
+  const stale = [];
   Object.entries(markersById).forEach(([id, m]) => {
-    const nid = Number(id);
-    if (!inScope.has(nid) || (isolatedSet && !isolatedSet.has(nid))) {
-      m.remove();
+    if (!wanted.has(Number(id))) {
+      stale.push(m);
       delete markersById[id];
     }
   });
-  pinnable.forEach((photo) => {
-    if (isolatedSet && !isolatedSet.has(photo.id)) return;
-    if (photo.lat != null && photo.lng != null) addOrUpdateMarker(photo);
+  if (stale.length) photoCluster.removeLayers(stale);
+  const fresh = [];
+  wanted.forEach((photo) => {
+    const created = addOrUpdateMarker(photo);
+    if (created) fresh.push(created);
   });
+  if (fresh.length) photoCluster.addLayers(fresh);
 }
 
+// Brings photo's pin up to date. An existing pin is touched only if its position
+// or look changed (a move re-files it in the cluster tree, and a new icon
+// rebuilds its DOM, so doing either for every pin on every render is the cost
+// this avoids). A new pin is returned, *not* yet added: renderMarkers adds the
+// whole batch to photoCluster at once.
 function addOrUpdateMarker(photo) {
   const color = camColor(photo.camera);
-  const isImprecise = photo.gps_accuracy && photo.gps_accuracy > 30;
-  if (markersById[photo.id]) {
-    markersById[photo.id].setLatLng([photo.lat, photo.lng]);
-    markersById[photo.id].setIcon(makePinIcon(color, isImprecise));
-    return;
+  const isImprecise = !!(photo.gps_accuracy && photo.gps_accuracy > 30);
+  const look = `${color}|${isImprecise}`;
+  const existing = markersById[photo.id];
+  if (existing) {
+    const ll = existing.getLatLng();
+    if (ll.lat !== photo.lat || ll.lng !== photo.lng) existing.setLatLng([photo.lat, photo.lng]);
+    if (existing._gtLook !== look) {
+      existing.setIcon(makePinIcon(color, isImprecise));
+      existing._gtLook = look;
+    }
+    return null;
   }
   const marker = L.marker([photo.lat, photo.lng], {
     draggable: true,
     icon: makePinIcon(color, isImprecise),
-  }).addTo(map);
+  });
+  marker._gtLook = look;
 
   marker.on("click", () => {
     selectedIds.clear();
@@ -1879,11 +1951,14 @@ function addOrUpdateMarker(photo) {
   });
 
   markersById[photo.id] = marker;
+  return marker;
 }
 
 // Writes the location to `ids`. Returns true on success — commitPendingGeo uses
 // that to decide whether a staged batch can be cleared or has to stay put.
-async function geotag(ids, lat, lng, accuracy = null) {
+// `render: false` updates `photos` only; the caller re-renders once after a
+// batch of calls (commitPendingGeo commits one call per point).
+async function geotag(ids, lat, lng, accuracy = null, { render = true } = {}) {
   setStatus(`Geotagging ${ids.length} photo(s)…`);
   try {
     const res = await fetch("/api/geotag", {
@@ -1893,23 +1968,22 @@ async function geotag(ids, lat, lng, accuracy = null) {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const updated = await res.json();
+    const byId = new Map(photos.map((p) => [p.id, p]));
     updated.forEach((u) => {
-      const photo = photos.find((p) => p.id === u.id);
+      const photo = byId.get(u.id);
       if (photo) {
         photo.lat = u.lat;
         photo.lng = u.lng;
         photo.geotag_source = u.geotag_source;
         photo.gps_accuracy = u.gps_accuracy;
       }
-      addOrUpdateMarker({ id: u.id, lat: u.lat, lng: u.lng,
-        filename: photo?.filename || "", camera: photo?.camera,
-        gps_accuracy: u.gps_accuracy });
     });
     // applyFilters, not renderGrid — these photos just became geotagged, which
     // can move them out of the Show filter ("Not geotagged", "Mixed geotagged
     // days"). renderGrid alone re-draws the stale filteredPhotos, leaving them
-    // on screen until the dropdown is touched.
-    applyFilters();
+    // on screen until the dropdown is touched. Its renderMarkers pass is what
+    // pins the newly tagged photos (and moves re-tagged ones).
+    if (render) applyFilters();
     const accLog = accuracy ? ` (accuracy: ±${accuracy}m)` : "";
     setStatus(`Tagged ${updated.length} photo(s) at ${lat.toFixed(5)}, ${lng.toFixed(5)}${accLog}`);
     if (focusedPhotoId && ids.includes(focusedPhotoId)) showDetail(focusedPhotoId);
@@ -1933,7 +2007,7 @@ async function doRemoveGeotag() {
     ids.forEach((id) => {
       const photo = photos.find((p) => p.id === id);
       if (photo) { photo.lat = null; photo.lng = null; photo.geotag_source = "none"; }
-      if (markersById[id]) { markersById[id].remove(); delete markersById[id]; }
+      if (markersById[id]) { photoCluster.removeLayer(markersById[id]); delete markersById[id]; }
     });
     // Same reason as geotag(): losing a geotag can move a photo into or out of
     // the Show filter, so the filtered set has to be rebuilt, not just redrawn.
@@ -1946,7 +2020,7 @@ async function doRemoveGeotag() {
 }
 
 /* ── Ignore for geocoding (e.g. screenshots) ── */
-async function setGeocodeIgnored(ids, ignored) {
+async function setGeocodeIgnored(ids, ignored, { render = true } = {}) {
   if (!ids.length) return false;
   try {
     await fetch("/api/geotag/ignore", {
@@ -1958,7 +2032,7 @@ async function setGeocodeIgnored(ids, ignored) {
       const photo = photos.find((p) => p.id === id);
       if (photo) photo.geocode_ignored = ignored;
     });
-    applyFilters();
+    if (render) applyFilters();
     if (focusedPhotoId && ids.includes(focusedPhotoId)) showDetail(focusedPhotoId);
     return true;
   } catch (err) {
@@ -2299,9 +2373,18 @@ function bindTimeline() {
     onChange({ from, to }) {
       // A bound day is inclusive, so the end bound runs to that day's last
       // second; an unset bound falls back to the scope's own edge.
-      dateFilterLo = from ? Date.parse(`${from}T00:00:00Z`) / 1000 : dateRangeMin;
-      dateFilterHi = to ? Date.parse(`${to}T00:00:00Z`) / 1000 + 86399 : dateRangeMax;
-      applyFilters();
+      const lo = from ? Date.parse(`${from}T00:00:00Z`) / 1000 : dateRangeMin;
+      const hi = to ? Date.parse(`${to}T00:00:00Z`) / 1000 + 86399 : dateRangeMax;
+      // A scrubber drag commits on every pointermove, most of which land on the
+      // same day as the last one — those change nothing.
+      if (lo === dateFilterLo && hi === dateFilterHi) return;
+      dateFilterLo = lo;
+      dateFilterHi = hi;
+      // …and the rest arrive faster than a grid + map rebuild can finish, so
+      // they coalesce into one rebuild per frame. The bounds are stored above
+      // synchronously, so the frame always renders the latest edge, including
+      // the one the drag ended on.
+      scheduleApplyFilters();
     },
   });
   setTimelineAvailable(false);
@@ -2584,7 +2667,7 @@ async function commitPendingGeo(groups, what) {
     // of it, and no Recent entry, since it isn't a place anyone will reuse.
     if (g.ignore) {
       const ids = g.entries.map(e => e.photo.id);
-      if (await setGeocodeIgnored(ids, true)) {
+      if (await setGeocodeIgnored(ids, true, { render: false })) {
         ids.forEach(id => pendingGeo.delete(id));
         saved += ids.length;
       } else {
@@ -2600,7 +2683,7 @@ async function commitPendingGeo(groups, what) {
       byPoint.get(k).ids.push(e.photo.id);
     });
     for (const p of byPoint.values()) {
-      const ok = await geotag(p.ids, p.lat, p.lng, p.accuracy);
+      const ok = await geotag(p.ids, p.lat, p.lng, p.accuracy, { render: false });
       if (ok) {
         // Only clear what actually landed — a failed point stays staged.
         p.ids.forEach(id => pendingGeo.delete(id));
@@ -2614,7 +2697,10 @@ async function commitPendingGeo(groups, what) {
     }
   }
 
-  renderGrid();
+  // One render for the whole commit (the calls above only update `photos`).
+  // applyFilters rather than renderGrid: the committed photos changed bucket,
+  // so the Show filter has to be re-run, and their pins drawn.
+  applyFilters();
   if (failures.length) {
     setStatus(`Committed ${saved} of ${total} change(s). Still staged after failing: ` +
               failures.join(", ") + ".", true);

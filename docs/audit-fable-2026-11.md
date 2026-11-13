@@ -379,7 +379,7 @@ hundred RAW files is several GB in each. An all-missing selection returns 200 wi
 **P6 — Medium — Semantic `rank()` copies the whole matrix per query** [seen] — ✅ **DONE** (unfiltered path scores `mat @ q` in place; 100k × 768 synthetic: peak 308 MB → 0.4 MB, 96 ms → 8 ms per query)
 `semantic.py:264,275`. `mat[np.arange(len(ids))] @ q` — about 300 MB at 100k photos. Use `mat @ q`.
 
-**P7 — Medium — Geocode grid and map do not scale** [traced]
+**P7 — Medium — Geocode grid and map do not scale** [traced] — ✅ **DONE** (rAF-throttled scrubber, one render per commit, reused cells + `content-visibility`, saved pins clustered; 400-photo scratch run: scrubber drag 61 → 2 rebuilds, 20-point commit 21 → 1 renders)
 `web/app.js:1656-1792,1958-2015`. Every filter or stage rebuilds every cell; every geotagged photo is its own
 DOM marker with no clustering; the date scrubber triggers a full rebuild per `pointermove`; committing N
 points causes N full re-renders.

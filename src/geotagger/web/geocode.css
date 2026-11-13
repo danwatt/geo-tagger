@@ -1,0 +1,13 @@
+/* Geocode page (geocode.html / app.js). Shared grid + cell styles live in
+   theme.css / style.css; this file holds only what is specific to this page. */
+
+/* A loaded month can be thousands of cells. Off-screen ones skip style, layout
+   and paint until they scroll near the viewport. A cell is a fixed square
+   (aspect-ratio: 1, overflow: hidden in style.css), so nothing it draws is
+   clipped by the paint containment this implies, and the placeholder size only
+   has to be close: the grid track sets the width, aspect-ratio the height, and
+   `auto` remembers each cell's real size once it has been rendered. */
+#grid .thumb-cell {
+  content-visibility: auto;
+  contain-intrinsic-size: auto var(--face-size);
+}
