@@ -247,6 +247,96 @@ def test_download_zip_dedupes_duplicate_filenames(client, tmp_path):
     assert sorted(zf.namelist()) == ["same (1).jpg", "same.jpg"]
 
 
+def _zip_temp_files():
+    import tempfile
+    from pathlib import Path
+    return list(Path(tempfile.gettempdir()).glob("geotagger-zip-*.zip"))
+
+
+def test_download_zip_missing_file_skipped_and_reported(client, tmp_path):
+    import zipfile
+    from io import BytesIO
+
+    id1 = _add_real_file(tmp_path, "a.jpg", b"AAAA")
+    id2 = _add_real_file(tmp_path, "gone.jpg", b"GG")
+    (tmp_path / "gone.jpg").unlink()
+
+    r = client.post("/api/photos/download-zip", json={"photo_ids": [id1, id2, 99999]})
+    assert r.status_code == 200
+    assert r.headers["x-skipped-files"] == "2"
+    assert zipfile.ZipFile(BytesIO(r.content)).namelist() == ["a.jpg"]
+
+
+def test_download_zip_all_missing_404(client, tmp_path):
+    id1 = _add_real_file(tmp_path, "gone.jpg", b"GG")
+    (tmp_path / "gone.jpg").unlink()
+    r = client.post("/api/photos/download-zip", json={"photo_ids": [id1, 99999]})
+    assert r.status_code == 404
+    r = client.post("/api/photos/download-zip?check=1", json={"photo_ids": [id1]})
+    assert r.status_code == 404
+
+
+def test_download_zip_over_cap_413(client, tmp_path, monkeypatch):
+    from geotagger import config
+    id1 = _add_real_file(tmp_path, "a.jpg", b"A" * 600)
+    id2 = _add_real_file(tmp_path, "b.jpg", b"B" * 600)
+    monkeypatch.setattr(config, "ZIP_MAX_BYTES", 1000)
+    before = _zip_temp_files()
+    for url in ("/api/photos/download-zip", "/api/photos/download-zip?check=1"):
+        r = client.post(url, json={"photo_ids": [id1, id2]})
+        assert r.status_code == 413
+        assert "GEOTAGGER_ZIP_MAX_BYTES" in r.json()["detail"]
+    assert _zip_temp_files() == before  # rejected before any archive was built
+    # Under the cap it still works; 0 disables the cap.
+    assert client.post("/api/photos/download-zip", json={"photo_ids": [id1]}).status_code == 200
+    monkeypatch.setattr(config, "ZIP_MAX_BYTES", 0)
+    assert client.post("/api/photos/download-zip", json={"photo_ids": [id1, id2]}).status_code == 200
+
+
+def test_download_zip_check_reports_counts(client, tmp_path):
+    id1 = _add_real_file(tmp_path, "a.jpg", b"AAAA")
+    id2 = _add_real_file(tmp_path, "b.jpg", b"BB")
+    r = client.post("/api/photos/download-zip?check=1", json={"photo_ids": [id1, id2, 99999]})
+    assert r.status_code == 200
+    assert r.json() == {"count": 2, "total_bytes": 6, "skipped": 1}
+
+
+def test_download_zip_form_post(client, tmp_path):
+    """The browser's navigation download posts a urlencoded form, not JSON."""
+    import zipfile
+    from io import BytesIO
+
+    id1 = _add_real_file(tmp_path, "a.jpg", b"AAAA")
+    id2 = _add_real_file(tmp_path, "b.raw", b"BBBB")
+    r = client.post("/api/photos/download-zip",
+                    content=f"photo_ids={id1}%2C{id2}",
+                    headers={"Content-Type": "application/x-www-form-urlencoded"})
+    assert r.status_code == 200
+    assert 'attachment; filename="photos-2.zip"' in r.headers["content-disposition"]
+    assert sorted(zipfile.ZipFile(BytesIO(r.content)).namelist()) == ["a.jpg", "b.raw"]
+    bad = client.post("/api/photos/download-zip", content="photo_ids=1,abc",
+                      headers={"Content-Type": "application/x-www-form-urlencoded"})
+    assert bad.status_code == 400
+
+
+def test_download_zip_temp_file_removed_after_response(client, tmp_path):
+    id1 = _add_real_file(tmp_path, "a.jpg", b"AAAA")
+    before = set(_zip_temp_files())
+    r = client.post("/api/photos/download-zip", json={"photo_ids": [id1]})
+    assert r.status_code == 200
+    assert r.headers["content-length"] == str(len(r.content))
+    assert set(_zip_temp_files()) == before
+
+
+def test_download_zip_is_not_built_in_memory():
+    """Structural guard: the archive goes to a temp file, never a BytesIO."""
+    import inspect
+    from geotagger.services import zip_service
+    src = inspect.getsource(zip_service)
+    assert "BytesIO" not in src and "getvalue" not in src
+    assert "mkstemp" in src
+
+
 # ── Undo date commit: client-supplied snapshots reach ExifTool args ──
 
 def _snap(**over):

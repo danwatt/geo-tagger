@@ -343,6 +343,11 @@ WORKERS: int = get_workers()
 # any other Host header is refused to block DNS-rebinding attacks.
 ALLOWED_HOSTS = [h.strip().lower() for h in os.environ.get("GEOTAGGER_ALLOWED_HOSTS", "").split(",") if h.strip()]
 
+# Cap on the total size of originals one download-zip request may bundle. The archive is
+# built in a temp file (system temp dir), so this also bounds the scratch space a download
+# needs. Over the cap the route answers 413 instead of filling the disk. 0 = no limit.
+ZIP_MAX_BYTES = int(os.environ.get("GEOTAGGER_ZIP_MAX_BYTES", str(4 * 1024 ** 3)))
+
 # ── Face detection / recognition ──
 # InsightFace model pack ("buffalo_l" = SCRFD detector + ArcFace r50 embeddings).
 FACE_MODEL_NAME = os.environ.get("GEOTAGGER_FACE_MODEL", "buffalo_l")

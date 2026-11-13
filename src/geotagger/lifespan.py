@@ -63,6 +63,11 @@ async def lifespan(app):
     # Initialize thread pool
     init_executor(config.WORKERS)
 
+    # Archives a killed previous run left in the temp dir (download-zip cleans up
+    # after itself on every normal path; this only catches hard kills).
+    from geotagger.services import zip_service
+    zip_service.sweep_stale_temp()
+
     # Resolve tools/data default location (alongside the primary root's cache_dir)
     # before ExifTool starts, so it looks in the right place for the bundled binary.
     config.resolve_data_paths(_primary_root())

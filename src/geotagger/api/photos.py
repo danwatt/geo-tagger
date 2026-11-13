@@ -5,17 +5,16 @@ import asyncio
 import logging
 import re
 import time
-from io import BytesIO
 from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, field_validator
 
 from geotagger import index, thumbnails, serializers
 from geotagger.executor import get_executor
-from geotagger.services import photos_service
+from geotagger.services import photos_service, zip_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -478,43 +477,63 @@ class DownloadZipRequest(BaseModel):
     photo_ids: list[int]
 
 
-def _build_zip(photo_ids: list[int]) -> bytes:
-    """Zip up the original (full-quality, potentially RAW) files for the given
-    photo ids. Runs in the executor — reads whole files off disk. Duplicate
-    filenames (e.g. same name in different directories) get a numeric suffix
-    so nothing is silently overwritten inside the archive."""
-    import zipfile
+class _TempFileResponse(FileResponse):
+    """FileResponse that deletes its file when the response ends for any reason.
+    A BackgroundTask only runs after a *completed* send; a client that cancels
+    the download mid-stream would leak a multi-GB temp archive."""
 
-    buf = BytesIO()
-    used_names: dict[str, int] = {}
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
-        for pid in photo_ids:
-            row = index.get_photo(pid)
-            if not row:
-                continue
-            src = Path(index.photo_path(row))
-            if not src.is_file():
-                continue
-            name = row["filename"]
-            if name in used_names:
-                used_names[name] += 1
-                stem, ext = Path(name).stem, Path(name).suffix
-                name = f"{stem} ({used_names[name]}){ext}"
-            else:
-                used_names[name] = 0
-            zf.write(src, arcname=name)
-    return buf.getvalue()
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            zip_service.remove_quietly(self.path)
+
+
+async def _read_zip_ids(request: Request) -> list[int]:
+    """Photo ids from either a JSON body ({"photo_ids": [...]}) or a plain HTML
+    form post (``photo_ids`` = comma-separated ints). The form path exists so the
+    browser can stream the archive straight to disk via a navigation download
+    (no fetch/blob in the tab). Parsed by hand: FastAPI's form support needs
+    python-multipart, which isn't a dependency."""
+    ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    body = await request.body()
+    try:
+        if ctype == "application/x-www-form-urlencoded":
+            from urllib.parse import parse_qs
+            fields = parse_qs(body.decode("utf-8"), keep_blank_values=True)
+            raw = ",".join(fields.get("photo_ids", []))
+            return [int(x) for x in raw.split(",") if x.strip()]
+        return DownloadZipRequest.model_validate_json(body).photo_ids
+    except (ValueError, UnicodeDecodeError):  # pydantic's ValidationError is a ValueError
+        raise HTTPException(400, "photo_ids must be a list of integer photo ids")
 
 
 @router.post("/api/photos/download-zip")
-async def api_download_zip(req: DownloadZipRequest):
+async def api_download_zip(request: Request, check: bool = Query(False)):
     """Bundle the selected photos' original files (full quality, RAW included
-    as-is) into a ZIP archive for download."""
-    if not req.photo_ids:
+    as-is) into a ZIP archive for download.
+
+    The archive is built into a temp file and sent with a Content-Length — never
+    held in memory. Selections with no existing files are 404, selections over
+    GEOTAGGER_ZIP_MAX_BYTES are 413. ``?check=1`` runs just that validation and
+    returns the counts, so the page can surface an error before it commits to a
+    navigation download (which would otherwise replace the page with the error
+    JSON). Files missing from an otherwise valid selection are skipped; their
+    count is reported (``skipped`` / ``X-Skipped-Files``)."""
+    ids = await _read_zip_ids(request)
+    if not ids:
         raise HTTPException(400, "photo_ids must not be empty")
     loop = asyncio.get_running_loop()
-    data = await loop.run_in_executor(get_executor(), _build_zip, req.photo_ids)
-    return Response(
-        content=data, media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="photos-{len(req.photo_ids)}.zip"'},
+    executor = get_executor()
+    try:
+        plan = await loop.run_in_executor(executor, zip_service.plan_zip, ids)
+    except zip_service.ZipSelectionError as e:
+        raise HTTPException(404 if e.kind == "none_found" else 413, str(e))
+    if check:
+        return {"count": len(plan.members), "total_bytes": plan.total_bytes, "skipped": plan.skipped}
+    path = await loop.run_in_executor(executor, zip_service.build_zip, plan)
+    return _TempFileResponse(
+        path, media_type="application/zip",
+        filename=f"photos-{len(ids)}.zip",  # sets Content-Disposition: attachment
+        headers={"X-Skipped-Files": str(plan.skipped)},
     )

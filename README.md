@@ -528,6 +528,7 @@ live from the Settings page):
 | `GEOTAGGER_ALLOWED_HOSTS` | *(empty)* | Comma-separated extra hostnames the app may be reached by. `localhost`, IP addresses and this machine's hostname are always allowed; any other `Host` header gets a 403 (DNS-rebinding protection). Cross-origin non-GET requests are also refused |
 | `GEOTAGGER_CACHE_DIR` | *(none — see [Cache location](#cache-location))* | Directory for the database + thumbnails + tools/data |
 | `GEOTAGGER_WORKERS` | `4` | Thumbnail-generation worker threads |
+| `GEOTAGGER_ZIP_MAX_BYTES` | `4294967296` (4 GiB) | Largest total size of originals one "Download ZIP" may bundle (the archive is built in a temp file, so this is also the scratch space needed); larger selections are refused with 413. `0` = no limit |
 | `GEOTAGGER_NO_SCAN` | `0` | `1` = skip the startup scan |
 | `GEOTAGGER_FACE_PROVIDERS` / `GEOTAGGER_SEMANTIC_PROVIDERS` | `CUDAExecutionProvider,CPUExecutionProvider` | ONNX Runtime providers for face detection / text search, in preference order. CUDA comes from the `onnxruntime-gpu` wheels (no system CUDA install); without a usable NVIDIA GPU it falls back to CPU. `CPUExecutionProvider` alone forces CPU |
 | `GEOTAGGER_GEONAMES_DIR` | *(none — see [tools/data location](#where-downloaded-toolsdata-end-up))* | Directory holding the downloaded GeoNames files |

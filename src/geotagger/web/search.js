@@ -1105,22 +1105,38 @@ async function downloadSelected() {
   btn.disabled = true;
   btn.textContent = "⬇ Preparing…";
   try {
-    const res = await fetch("/api/photos/download-zip", {
+    // Preflight: the server validates the selection (files exist, under the size
+    // cap) without building anything. A navigation download can't report errors —
+    // a 404/413 would replace this page with raw JSON — so only submit once it passes.
+    const res = await fetch("/api/photos/download-zip?check=1", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ photo_ids: ids }),
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `photos-${ids.length}.zip`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-    setStatus(`Downloaded ${ids.length} photo(s).`);
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try { detail = (await res.json()).detail || detail; } catch (_) { /* non-JSON error body */ }
+      throw new Error(detail);
+    }
+    const info = await res.json();
+    // A plain form POST (navigation download): the response is an
+    // attachment, so the browser streams it to disk and the page stays put. The
+    // archive never passes through JS memory (it used to be a res.blob()).
+    const form = document.createElement("form");
+    form.method = "POST";
+    form.action = "/api/photos/download-zip";
+    form.style.display = "none";
+    const field = document.createElement("input");
+    field.type = "hidden";
+    field.name = "photo_ids";
+    field.value = ids.join(",");
+    form.appendChild(field);
+    document.body.appendChild(form);
+    form.submit();
+    form.remove();
+    const mb = (info.total_bytes / (1024 * 1024)).toFixed(1);
+    const skipped = info.skipped ? ` (${info.skipped} missing file(s) skipped)` : "";
+    setStatus(`Downloading ${info.count} photo(s), ${mb} MB${skipped}…`);
   } catch (e) {
     setStatus(`Download failed: ${e.message}`, true);
   } finally {
