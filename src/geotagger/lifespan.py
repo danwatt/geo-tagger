@@ -41,6 +41,8 @@ def _init_caches(root: Path) -> None:
     thumbnails.init_thumbs(root)
     faces.init_faces(root)
     semantic.init_semantic(root)
+    # The banner shows files that failed in earlier runs before any scan starts.
+    scanning.refresh_error_count()
 
 
 def _primary_root() -> Path | None:
@@ -100,14 +102,14 @@ async def lifespan(app):
                 print("Skipping scan (--no-scan), using existing database")
             else:
                 print(f"Initialized cache with {len(scan_dirs)} scan directories")
-                # A dedicated thread, NOT the shared request executor: a scan can
-                # run for minutes and must not occupy request workers. It uses the
-                # shared ExifTool session, so shutdown (below) joins it before the
-                # ExifTool context exits.
-                scan_thread = threading.Thread(
-                    target=scanning.run_scan, args=(scan_dirs, scan_cancel),
-                    name="startup-scan", daemon=True)
-                scan_thread.start()
+                # Everything the request handlers need (DB, thumbnails, faces,
+                # semantic, ExifTool) is initialized above, and the scan's own
+                # follow-ups (geocoding, prune) run inside it, so nothing here
+                # waits for it: requests are served at once, over partial data.
+                # It uses the shared ExifTool session, so shutdown (below) joins
+                # it before the ExifTool context exits.
+                scan_thread = scanning.start_background_scan(
+                    scan_dirs, scan_cancel, name="startup-scan")
         else:
             # Legacy: Auto-reconnect to the last scanned directory
             last_root = index.get_last_scan_root()

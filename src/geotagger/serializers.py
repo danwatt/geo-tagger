@@ -84,3 +84,15 @@ def format_crowd_group_label(ts: int | None) -> str:
         return "Unknown date"
     dt = epoch_to_wallclock(ts)  # pre-1970 safe, see format_photo_datetime
     return f"{dt.strftime('%B')} {dt.day}, {dt.year}"
+
+
+def scan_error_to_dict(r) -> dict:
+    """A scan_errors row; `path` joined the way the scan built dir/filename."""
+    import os
+    return {
+        "path": os.path.join(r["dir"], r["filename"]),
+        "dir": r["dir"], "filename": r["filename"],
+        "stage": r["stage"], "error": r["error"],
+        "first_seen": r["first_seen"], "last_seen": r["last_seen"],
+        "attempts": r["attempts"],
+    }

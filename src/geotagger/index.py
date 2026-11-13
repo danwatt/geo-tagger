@@ -1008,6 +1008,28 @@ def _init_db_locked(root: Path | None) -> sqlite3.Connection:
         )
     """)
 
+    # Per-file scan failures that left a file with no (or a stale) photos row —
+    # before this table such a file was silently absent and re-tried on every
+    # boot. Keyed like photos (dir, filename as the walk produced them). A row
+    # is cleared when the file later indexes OK or vanishes (scan prune).
+    # mtime/size are the file's stat at the failure; they are set only for a
+    # deterministic metadata-read failure (stage 'read'), and then an unchanged
+    # file is not re-read (see scanning.scan_directory). NULL = always retry.
+    _db.execute("""
+        CREATE TABLE IF NOT EXISTS scan_errors (
+            dir TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            stage TEXT NOT NULL,           -- 'stat' | 'read' | 'write'
+            error TEXT NOT NULL,
+            mtime REAL,
+            size INTEGER,
+            first_seen REAL NOT NULL,
+            last_seen REAL NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (dir, filename)
+        )
+    """)
+
     _db.commit()
     return _db
 
@@ -1870,6 +1892,64 @@ def relink_moved_photos(pairs: list[tuple[int, int]]) -> int:
     # coordinates didn't move (upsert_photo only bumps on a move).
     bump_geotag_generation()
     return len(pairs)
+
+
+# ── Scan errors ──
+# Written only by the scan's main thread, in a few short units per scan (never
+# per file); see the scan_errors table in init_db.
+
+def scan_errors_under_dir(root: str) -> dict[tuple[str, str], sqlite3.Row]:
+    """(dir, filename) -> (stage, mtime, size) of every recorded error under
+    `root`. One range read per scanned root, same prefix rule as photos_under_dir."""
+    clause, params = _under_dir_clause(root)
+    return {(r["dir"], r["filename"]): r for r in get_db().execute(
+        f"SELECT dir, filename, stage, mtime, size FROM scan_errors WHERE {clause}", params,
+    ).fetchall()}
+
+
+def record_scan_errors(entries: list[tuple[str, str, str, str, float | None, int | None]]) -> None:
+    """Upsert (dir, filename, stage, error, mtime, size) failures. A repeat
+    failure keeps first_seen and bumps attempts; stage/error/mtime/size are
+    replaced, so a 'read' row retried after the file changed records the new
+    stat (and is skipped again only while that stays unchanged)."""
+    if not entries:
+        return
+    now = time.time()
+    with transaction() as db:
+        db.executemany(
+            "INSERT INTO scan_errors (dir, filename, stage, error, mtime, size, first_seen, last_seen) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(dir, filename) DO UPDATE SET stage=excluded.stage, error=excluded.error, "
+            "mtime=excluded.mtime, size=excluded.size, last_seen=excluded.last_seen, "
+            "attempts=attempts + 1",
+            [(d, f, stage, err, mtime, size, now, now) for d, f, stage, err, mtime, size in entries],
+        )
+
+
+def clear_scan_errors(keys: list[tuple[str, str]]) -> None:
+    """Drop the error rows for these (dir, filename) keys (indexed OK, or gone)."""
+    if not keys:
+        return
+    with transaction() as db:
+        db.executemany("DELETE FROM scan_errors WHERE dir=? AND filename=?", keys)
+
+
+def clear_all_scan_errors() -> int:
+    """Forget every recorded failure, so the next scan retries all of them."""
+    with transaction() as db:
+        return db.execute("DELETE FROM scan_errors").rowcount
+
+
+def count_scan_errors() -> int:
+    return get_db().execute("SELECT COUNT(*) FROM scan_errors").fetchone()[0]
+
+
+def list_scan_errors(limit: int = 500, offset: int = 0) -> list[sqlite3.Row]:
+    """Most recently failed first."""
+    return get_db().execute(
+        "SELECT dir, filename, stage, error, first_seen, last_seen, attempts FROM scan_errors "
+        "ORDER BY last_seen DESC, dir, filename LIMIT ? OFFSET ?", (limit, offset),
+    ).fetchall()
 
 
 def delete_photos(photo_ids: list[int]) -> int:

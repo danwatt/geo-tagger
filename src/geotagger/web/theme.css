@@ -211,6 +211,23 @@ input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
 #scan-banner.scan-error { background: var(--surface-3); color: var(--danger-text); border-bottom-color: var(--danger); }
 #scan-banner .scan-banner-close { margin-left: auto; padding: 0 6px; line-height: 18px; }
 #scan-banner .scan-banner-close[hidden] { display: none; }
+#scan-banner.scan-issues { background: var(--surface-3); color: var(--text-muted); }
+#scan-banner .scan-banner-issues {
+  padding: 0 6px; line-height: 18px; font-size: 12px;
+  background: none; border: none; color: var(--warn); text-decoration: underline; cursor: pointer;
+}
+#scan-banner .scan-banner-issues[hidden] { display: none; }
+/* Expanded list of files the scan couldn't index (nav.js loadIssues). */
+#scan-issues {
+  max-height: 40vh; overflow: auto; flex-shrink: 0;
+  padding: 6px 10px; font-size: 12px;
+  background: var(--surface-2); color: var(--text); border-bottom: 1px solid var(--border);
+}
+#scan-issues[hidden] { display: none; }
+#scan-issues ul { margin: 4px 0 4px 16px; }
+#scan-issues .scan-issues-path { color: var(--text-strong); word-break: break-all; }
+#scan-issues .scan-issues-note { color: var(--text-muted); }
+#scan-issues .scan-issues-retry { margin-left: 8px; font-size: 11px; }
 
 /* ── Status bar (shared across photo + map pages) ── */
 #status-bar {

@@ -19,20 +19,40 @@ _scan_lock = threading.Lock()
 
 def _blank_state() -> dict:
     return {
-        "running": False, "root": None, "processed": 0, "total": 0,
-        "indexed": 0, "skipped": 0, "warnings": 0, "error": None,
+        "running": False, "root": None,
+        # None | "counting" (walking the tree) | "indexing" | "geocoding" | "pruning"
+        "phase": None,
+        "processed": 0, "total": 0, "indexed": 0, "skipped": 0,
+        # Files not re-read because they failed before and haven't changed.
+        "known_failed": 0,
+        "warnings": 0,
+        # Rows in the persisted scan_errors table (files that couldn't be
+        # indexed); kept here so polling never needs a COUNT query.
+        "errors": 0,
+        "error": None, "summary": None,
         "started_at": None, "finished_at": None,
     }
 
 
 _scan_state: dict = _blank_state()
 
+# Every warning of the most recent run, for GET /api/scan/errors (the console
+# shows only the first few per root). Bounded: a run where every file fails —
+# e.g. ExifTool missing — would otherwise hold one string per library file.
+_MAX_KEPT_WARNINGS = 5000
+_last_warnings: list[str] = []
+
+
+class ScanAlreadyRunning(RuntimeError):
+    """A second scan was requested while one is in progress."""
+
 
 def reset_scan_state() -> None:
     """Back to 'idle, never scanned' (app startup, and between tests)."""
-    global _scan_state
+    global _scan_state, _last_warnings
     with _scan_lock:
         _scan_state = _blank_state()
+        _last_warnings = []
 
 
 def get_scan_status() -> dict:
@@ -42,9 +62,52 @@ def get_scan_status() -> dict:
         return dict(_scan_state)
 
 
+def get_last_warnings() -> list[str]:
+    with _scan_lock:
+        return list(_last_warnings)
+
+
 def _update_scan_state(**fields) -> None:
     with _scan_lock:
         _scan_state.update(fields)
+
+
+def refresh_error_count() -> None:
+    """Re-read the persisted error count into the state (DB must be open)."""
+    _update_scan_state(errors=index.count_scan_errors())
+
+
+def _claim_scan() -> None:
+    """Mark a scan as running, atomically with the check that none is — the one
+    guard against two scans at once (two walks racing on the same rows, and a
+    prune deciding from a footprint the other scan is still changing)."""
+    global _last_warnings
+    with _scan_lock:
+        if _scan_state["running"]:
+            raise ScanAlreadyRunning("A library scan is already running")
+        _scan_state.update(running=True, root=None, phase=None, processed=0, total=0,
+                           indexed=0, skipped=0, known_failed=0, warnings=0, error=None,
+                           summary=None, started_at=time.time(), finished_at=None)
+        _last_warnings = []
+
+
+def start_background_scan(scan_dirs: list[Path], cancel: threading.Event,
+                          name: str = "scan") -> threading.Thread:
+    """Run a scan in a new dedicated thread and return it (the caller joins it
+    at shutdown after setting `cancel`). Raises ScanAlreadyRunning — before
+    starting anything — if a scan is in progress, so a route can answer 409.
+
+    A dedicated thread, NOT the shared request executor: a scan can run for
+    minutes to hours and must not occupy request workers. Daemon so a hung file
+    can't keep the process alive after a hard Ctrl-C; the lifespan still joins it."""
+    _claim_scan()
+    t = threading.Thread(target=_run_claimed_scan, args=(scan_dirs, cancel), name=name, daemon=True)
+    try:
+        t.start()
+    except BaseException:
+        _update_scan_state(running=False)
+        raise
+    return t
 
 
 # ── Batched index writes ──
@@ -84,15 +147,16 @@ class _UpsertBatch:
             return None
         return max(0.0, _SCAN_BATCH_SECONDS - (time.monotonic() - self._last_flush))
 
-    def flush(self) -> list[str]:
-        """Write the pending rows; return one warning per row that didn't make
-        it. Never raises (Exception) — a failed batch is reported, not fatal, as
-        a failed per-file upsert always was. (A file whose row didn't land has no
-        row afterwards; the prune step reads that from the DB, not from here.)"""
+    def flush(self) -> tuple[list[dict], dict[int, str]]:
+        """Write the pending rows; return (the rows, {position: warning} for
+        each row that didn't make it). Never raises (Exception) — a failed batch
+        is reported, not fatal, as a failed per-file upsert always was. (A file
+        whose row didn't land has no row afterwards; the prune step reads that
+        from the DB, not from here.)"""
         rows, self._rows = self._rows, []
         self._last_flush = time.monotonic()
         if not rows:
-            return []
+            return [], {}
         failed: dict[int, str] = {}  # row position -> warning
         try:
             with index.transaction():
@@ -109,7 +173,7 @@ class _UpsertBatch:
             # rolled back, so every row not already reported is lost too.
             for i, row in enumerate(rows):
                 failed.setdefault(i, f"Error processing {row['filename']}: {e}")
-        return list(failed.values())
+        return rows, failed
 
 
 class ScanFootprint:
@@ -133,18 +197,32 @@ class ScanFootprint:
 
 def run_scan(scan_dirs: list[Path], cancel: threading.Event | None = None) -> None:
     """Scan each directory in order, persist the scanned roots, then prune rows
-    for files that vanished from them (relink moves, delete the gone). Meant to
-    run in a dedicated background thread: it never raises — a failure is printed
-    to stderr and recorded in the scan state for the UI banner. A cancelled run
-    (shutdown) neither saves the roots nor prunes, since the scan is incomplete."""
-    _update_scan_state(running=True, root=None, processed=0, total=0, indexed=0,
-                       skipped=0, warnings=0, error=None,
-                       started_at=time.time(), finished_at=None)
+    for files that vanished from them (relink moves, delete the gone). Runs in
+    the calling thread (start_background_scan is the threaded entry point). It
+    never raises for a scan failure — that is printed to stderr and recorded in
+    the scan state for the UI banner — but raises ScanAlreadyRunning, without
+    doing anything, if another scan is in progress. A cancelled run (shutdown)
+    neither saves the roots nor prunes, since the scan is incomplete."""
+    _claim_scan()
+    _run_claimed_scan(scan_dirs, cancel)
+
+
+def _run_claimed_scan(scan_dirs: list[Path], cancel: threading.Event | None) -> None:
+    """run_scan's body; the caller has already _claim_scan()ed."""
+    t_start = time.time()
     error = None
     # Across all roots (unlike the per-root counters): per-file failures don't
     # fail the scan, so without this a run where every file errored — e.g.
     # ExifTool missing — would look like a clean finish to the UI.
     warning_count = 0
+    totals = {"processed": 0, "indexed": 0, "skipped": 0, "known_failed": 0}
+
+    def keep_warnings(ws: list[str]) -> None:
+        with _scan_lock:
+            room = _MAX_KEPT_WARNINGS - len(_last_warnings)
+            if room > 0:
+                _last_warnings.extend(ws[:room])
+
     try:
         # Taken before anything is inserted: ids above it are this run's new rows,
         # the only relink targets for a vanished one (see index.max_photo_id). The
@@ -162,11 +240,23 @@ def run_scan(scan_dirs: list[Path], cancel: threading.Event | None = None) -> No
             # Looked up on the module at call time (not bound at import) so tests
             # can substitute scan_directory.
             count, skipped, warnings = scan_directory(scan_dir, cancel=cancel, footprint=footprint)
+            totals["indexed"] += count
+            totals["skipped"] += skipped
+            s = get_scan_status()
+            if s["root"] == str(scan_dir):  # the per-root counters are this root's
+                totals["processed"] += s["processed"]
+                totals["known_failed"] += s["known_failed"]
             if warnings:
                 warning_count += len(warnings)
                 _update_scan_state(warnings=warning_count)
-                print(f"  Warnings: {len(warnings)}")
-                for w in warnings[:5]:  # Show first 5 warnings
+                keep_warnings(warnings)
+                # The console shows a sample; the full list is one request away
+                # (and the files that couldn't be indexed persist in the DB).
+                shown = warnings[:5]
+                print(f"  Warnings: {len(warnings)}"
+                      + (f" (first {len(shown)} below; all at GET /api/scan/errors)"
+                         if len(warnings) > len(shown) else ""))
+                for w in shown:
                     print(f"    {w}")
         if cancel is None or not cancel.is_set():
             index.save_last_scan_roots([str(d) for d in scan_dirs])
@@ -174,17 +264,53 @@ def run_scan(scan_dirs: list[Path], cancel: threading.Event | None = None) -> No
             # to another is inserted by the later root's scan, and per-root
             # pruning would already have deleted its old row.
             if index.get_db() is scan_db:
+                _update_scan_state(phase="pruning", root=None)
                 prune_warnings = _prune_vanished(footprints, max_id)
+                _prune_scan_errors(footprints)
                 if prune_warnings:
                     warning_count += len(prune_warnings)
                     _update_scan_state(warnings=warning_count)
+                    keep_warnings(prune_warnings)
             else:
                 print("  Not pruning: the database was replaced during the scan.")
     except Exception as e:
         error = str(e) or type(e).__name__
         print(f"ERROR: background scan failed: {e}", file=sys.stderr)
     finally:
-        _update_scan_state(running=False, root=None, error=error, finished_at=time.time())
+        try:
+            errors = index.count_scan_errors()
+        except Exception:
+            errors = get_scan_status()["errors"]
+        cancelled = cancel is not None and cancel.is_set()
+        summary = (f"{'Cancelled' if cancelled else 'Failed' if error else 'Finished'} in "
+                   f"{time.time() - t_start:.0f}s: {totals['processed']} file(s) processed, "
+                   f"{totals['indexed']} indexed, {totals['skipped']} unchanged, "
+                   f"{warning_count} warning(s), {errors} file(s) could not be indexed")
+        if totals["known_failed"]:
+            summary += f" ({totals['known_failed']} unchanged since a previous failure, not retried)"
+        print(f"Scan {summary[0].lower()}{summary[1:]}")
+        if errors:
+            print("  Files that could not be indexed are listed at GET /api/scan/errors "
+                  "(and from the scan banner in the UI).")
+        _update_scan_state(running=False, root=None, phase=None, error=error, errors=errors,
+                           summary=summary, finished_at=time.time())
+
+
+def _failure_is_transient(e: BaseException) -> bool:
+    """Whether a failed metadata read may say nothing about the file itself, so
+    it must be retried even if the file is unchanged. Opt-in the other way
+    round: only failures known to come from the file's bytes are permanent —
+    ExifTool rejecting it or returning unusable output, our parsing of that
+    output, and a timeout (a file that hangs ExifTool tends to hang it every
+    time, and each retry costs the whole watchdog deadline). Anything else —
+    a locked file, a dropped drive, ExifTool dying — is retried."""
+    from exiftool.exceptions import ExifToolExecuteException
+    from geotagger import exiftool_session
+    # ExifTool missing/not started: every file fails, and none of them is bad.
+    if not exiftool_session.exiftool_status()["ok"]:
+        return True
+    return not isinstance(e, (exiftool_session.ExifToolTimeout, ExifToolExecuteException,
+                              ValueError, TypeError))
 
 
 def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: bool = True,
@@ -204,7 +330,14 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
         return cancel is not None and cancel.is_set()
 
     # total stays 0 until the file walk below finishes (the UI shows "counting files").
-    _update_scan_state(root=str(root), processed=0, total=0, indexed=0, skipped=0)
+    _update_scan_state(root=str(root), phase="counting", processed=0, total=0, indexed=0,
+                       skipped=0, known_failed=0)
+    # Persisted per-file failures (see the scan_errors table): new/repeated
+    # ones to record and recovered/known ones to clear, written by this thread
+    # alongside the row batches — never one write per file.
+    new_errors: list[tuple[str, str, str, str, float | None, int | None]] = []
+    cleared_errors: list[tuple[str, str]] = []
+    known_errors: dict = {}
 
     warnings: list[str] = []
     count = 0
@@ -251,6 +384,8 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
             files_to_process.append((p, media_type, stat, sc_path_str, sc_mtime))
         except Exception as e:
             read_errors.append(f"Error reading {p.name}: {e}")
+            # No stat to compare against, so always retried (mtime/size NULL).
+            new_errors.append((str(p.parent), p.name, "stat", str(e) or type(e).__name__, None, None))
     warnings.extend(scanner.find_sidecar_collisions(media))
     warnings.extend(read_errors)
     if footprint is not None:
@@ -261,7 +396,8 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
             footprint.seen.setdefault(str(p.parent), {})[p.name] = sizes.get(p)
         footprint.media_count = len(media)
 
-    _update_scan_state(total=len(files_to_process))
+    total_files = len(files_to_process)
+    _update_scan_state(total=total_files, phase="indexing")
 
     # One batched lookup for the whole tree instead of a point SELECT per file
     # in the workers. Same inputs and rule as index.is_fresh. The rows are read
@@ -271,9 +407,36 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
     if not cancelled():
         flags = index.fresh_flags([(str(p.parent), p.name, stat.st_mtime, sc_path_str, sc_mtime)
                                    for p, _, stat, sc_path_str, sc_mtime in files_to_process])
+        # Also one range read per root (usually empty).
+        known_errors = index.scan_errors_under_dir(str(root))
     else:
         flags = [False] * len(files_to_process)
-    files_to_process = [(*f, fresh) for f, fresh in zip(files_to_process, flags)]
+
+    # Files whose metadata read failed before and that haven't changed since
+    # (same mtime AND size) are not re-read: such a failure is a property of
+    # the bytes (corrupt/unsupported file, an ExifTool hang), so retrying it on
+    # every boot only re-spends the read — or the whole watchdog deadline — to
+    # get the same error. Any change to the file retries it. Transient causes
+    # are recorded without a stat (see _failure_is_transient) and so always
+    # retried, and DELETE /api/scan/errors forces a retry of everything.
+    known_bad = 0
+    todo = []
+    for f, fresh in zip(files_to_process, flags):
+        p, _, stat, _, _ = f
+        key = (str(p.parent), p.name)
+        known = known_errors.get(key)
+        if known is not None:
+            if fresh:
+                cleared_errors.append(key)  # indexed OK since (e.g. by a web request)
+            elif (known["stage"] == "read" and known["mtime"] == stat.st_mtime
+                    and known["size"] == stat.st_size):
+                known_bad += 1
+                continue
+        todo.append((*f, fresh))
+    files_to_process = todo
+    # Counted as processed up front: nothing more happens to them this run.
+    total_processed = known_bad
+    _update_scan_state(processed=total_processed, known_failed=known_bad)
 
     def update_display():
         """Update the progress display with all worker statuses."""
@@ -287,7 +450,7 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
             sys.stdout.write("\r")  # Start of line
 
         # Print overall progress
-        msg = f"  Progress: {total_processed}/{len(files_to_process)} files"
+        msg = f"  Progress: {total_processed}/{total_files} files"
         if generate_thumbnails:
             msg += f" ({thumbs_generated} thumbs generated, {thumbs_cached} cached)"
         else:
@@ -316,6 +479,7 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
         thumb_generated = False
         thumb_cached = False
         error_msg = None
+        failure = None  # the exception that left this file with no row
 
         try:
             # Update status: indexing
@@ -370,10 +534,11 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
 
         except Exception as e:
             error_msg = f"Error processing {p.name}: {e}"
+            failure = e
 
         # A failure after the metadata read (thumbnail) still keeps the row, as
         # it did when the worker wrote it before thumbnailing.
-        return row, was_skipped, thumb_generated, thumb_cached, error_msg, worker_id
+        return row, was_skipped, thumb_generated, thumb_cached, error_msg, worker_id, failure, file_info
 
     # Process files with a thread pool
     max_workers = config.WORKERS
@@ -386,14 +551,38 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
 
     def flush_batch() -> None:
         nonlocal count
-        failures = batch.flush()
-        if failures:
+        rows, failed = batch.flush()
+        if failed:
             with lock:
                 # Counted as indexed when the worker finished; a row that didn't
                 # land wasn't.
-                count -= len(failures)
-                warnings.extend(failures)
+                count -= len(failed)
+                warnings.extend(failed.values())
                 _update_scan_state(indexed=count)
+        for i, row in enumerate(rows):
+            key = (row["dir_"], row["filename"])
+            if i in failed:
+                # A DB-side failure (disk full, I/O) says nothing about the
+                # file: no stat, so it is always retried.
+                new_errors.append((*key, "write", failed[i], None, None))
+            elif key in known_errors:
+                cleared_errors.append(key)
+        write_errors()
+
+    def write_errors() -> None:
+        """Persist the pending error changes. Best-effort: failing to record a
+        diagnostic must not fail the scan (the warning list still has it)."""
+        if not (new_errors or cleared_errors):
+            return
+        recorded, cleared = list(new_errors), list(cleared_errors)
+        new_errors.clear()
+        cleared_errors.clear()
+        try:
+            index.clear_scan_errors(cleared)
+            index.record_scan_errors(recorded)
+            refresh_error_count()
+        except Exception as e:
+            warnings.append(f"Could not record scan errors: {e}")
 
     def handle_result(future) -> None:
         nonlocal count, skipped, thumbs_generated, thumbs_cached, total_processed
@@ -402,9 +591,16 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
         result = future.result()
         if result is None:  # skipped due to cancel: not "processed"
             return
-        row, was_skipped, thumb_gen, thumb_cach, error, worker_id = result
+        row, was_skipped, thumb_gen, thumb_cach, error, worker_id, failure, file_info = result
         if row is not None:
             batch.add(row)
+        elif failure is not None:
+            p, _, stat, _, _, _ = file_info
+            msg = str(failure) or type(failure).__name__
+            if _failure_is_transient(failure):
+                new_errors.append((str(p.parent), p.name, "read", msg, None, None))
+            else:
+                new_errors.append((str(p.parent), p.name, "read", msg, stat.st_mtime, stat.st_size))
 
         with lock:
             if row is not None:
@@ -452,7 +648,9 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
                         # Per result, not per wait(): one wake-up can return
                         # many finished files, and the row bound is the lock-
                         # hold bound.
-                        if batch.due():
+                        # The error bound: a run where every file fails has no
+                        # rows to flush, and the banner's count should still move.
+                        if batch.due() or len(new_errors) >= _SCAN_BATCH_ROWS:
                             flush_batch()
                     if batch.due():  # time bound expired with nothing finished
                         flush_batch()
@@ -483,6 +681,7 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
     # Reverse-geocode any newly-indexed photos that have coordinates (DB only;
     # sidecars are written on demand via /api/geocode/export-sidecars).
     if geocode.is_available() and not cancelled():
+        _update_scan_state(phase="geocoding")
         try:
             pending = index.count_photos_needing_geocode()
             if pending:
@@ -518,6 +717,29 @@ _PRUNE_GUARD_FLOOR = 20
 # a relink is an upsert per pair, a delete is set-based and cheaper.
 _RELINK_BATCH = _SCAN_BATCH_ROWS
 _DELETE_BATCH = 1000
+
+
+def _prune_scan_errors(footprints: list[ScanFootprint]) -> None:
+    """Drop recorded scan errors for files a complete walk no longer saw. Same
+    root/subdirectory guards as _prune_vanished, though nothing of value is lost
+    if one goes wrongly: the file would simply be re-read and re-recorded."""
+    import os
+    gone: list[tuple[str, str]] = []
+    for fp in footprints:
+        if not fp.complete or fp.media_count == 0 or fp.root in fp.unreadable:
+            continue
+        guards = tuple(d if d.endswith(os.sep) else d + os.sep for d in fp.unreadable)
+        for d, name in index.scan_errors_under_dir(fp.root):
+            if name in fp.seen.get(d, ()):
+                continue
+            if guards and (d + os.sep).startswith(guards):
+                continue
+            gone.append((d, name))
+    if gone:
+        try:
+            index.clear_scan_errors(gone)
+        except Exception as e:
+            print(f"  Could not clear scan errors of vanished files: {e}")
 
 
 def _pair_moves(vanished: list, candidates: list) -> tuple[list[tuple[int, int]], int]:

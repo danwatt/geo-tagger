@@ -35,9 +35,9 @@ class TestScanState:
     def test_initial_state_shape(self):
         s = scanning.get_scan_status()
         assert s == {
-            "running": False, "root": None, "processed": 0, "total": 0,
-            "indexed": 0, "skipped": 0, "warnings": 0, "error": None,
-            "started_at": None, "finished_at": None,
+            "running": False, "root": None, "phase": None, "processed": 0, "total": 0,
+            "indexed": 0, "skipped": 0, "known_failed": 0, "warnings": 0, "errors": 0,
+            "error": None, "summary": None, "started_at": None, "finished_at": None,
         }
 
     def test_get_returns_a_copy(self):
@@ -152,8 +152,9 @@ class TestStatusEndpoint:
         r = client.get("/api/scan/status")
         assert r.status_code == 200
         body = r.json()
-        assert set(body) == {"running", "root", "processed", "total", "indexed",
-                             "skipped", "warnings", "error", "started_at", "finished_at"}
+        assert set(body) == {"running", "root", "phase", "processed", "total", "indexed",
+                             "skipped", "known_failed", "warnings", "errors", "error",
+                             "summary", "started_at", "finished_at"}
         assert body["running"] is False and body["error"] is None
 
     def test_reflects_state(self, client):

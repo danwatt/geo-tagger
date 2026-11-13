@@ -36,6 +36,43 @@ async def api_scan_status():
     return scanning.get_scan_status()
 
 
+@router.get("/api/scan/errors")
+async def api_scan_errors(limit: int = 500, offset: int = 0):
+    """Files the scan could not index (persisted across runs, newest failure
+    first) plus every warning of the most recent run (in memory only — the
+    console prints just a sample). One small indexed read; not polled."""
+    from geotagger import scanning, serializers
+    try:
+        limit = max(1, min(limit, 5000))
+        offset = max(0, offset)
+        rows = index.list_scan_errors(limit, offset)
+        return {
+            "count": index.count_scan_errors(),
+            "errors": [serializers.scan_error_to_dict(r) for r in rows],
+            "warnings": scanning.get_last_warnings(),
+        }
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@router.delete("/api/scan/errors")
+async def api_clear_scan_errors():
+    """Forget recorded failures so the next scan retries every one of them,
+    including unchanged files it would otherwise skip. Refused during a scan,
+    whose snapshot of the table would make the result confusing."""
+    from geotagger import scanning
+    try:
+        if scanning.get_scan_status()["running"]:
+            raise HTTPException(409, "A library scan is running; try again when it finishes")
+        cleared = index.clear_all_scan_errors()
+        scanning.refresh_error_count()
+        return {"cleared": cleared}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 @router.get("/api/settings")
 async def api_get_settings():
     """The safe-to-tune-live subset of config.py knobs (face matching/clustering

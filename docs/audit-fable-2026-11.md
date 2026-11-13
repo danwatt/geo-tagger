@@ -166,7 +166,7 @@ on thumbnail; a moved file becomes a new row and loses its faces and DB-only geo
 *Fix:* after a successful scan, diff the rows under the root against the seen set, re-link by `checksum`, and
 delete or flag the rest (cleaning faces and embeddings explicitly, since foreign keys are off).
 
-**S3 — Medium — The whole scan runs inside the lifespan before the server accepts requests** [traced]
+**S3 — Medium — The whole scan runs inside the lifespan before the server accepts requests** [traced] — ✅ **DONE** (background thread + `/api/scan/status` were already in `1f4d7c4`; now `scan_errors` table, unchanged known-bad files skipped, `GET/DELETE /api/scan/errors`, nav banner lists failures; no manual rescan route)
 `lifespan.py:82-88`. On first run the port does not answer for minutes to hours. Only the first five warnings
 print, and a file whose metadata read fails is silently absent and retried every boot.
 *Fix:* run the scan as a background task with a status endpoint; persist per-file scan errors.

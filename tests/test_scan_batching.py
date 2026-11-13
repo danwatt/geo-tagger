@@ -205,7 +205,9 @@ class TestBatchedWrites:
 
         count, skipped, warnings = _scan(lib)
 
-        assert batch_spy == [5]  # one unit for all five
+        # One unit for all five; the failed row's scan_errors record is a
+        # separate (upsert-free) unit after it.
+        assert [g for g in batch_spy if g] == [5]
         assert _indexed_names(db) == ["p0.jpg", "p1.jpg", "p3.jpg", "p4.jpg"]
         assert count == 4
         assert warnings == ["Error processing p2.jpg: bad row"]
