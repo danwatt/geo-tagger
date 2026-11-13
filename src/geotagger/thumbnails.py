@@ -372,10 +372,22 @@ def _make_thumbnail(path: Path, max_size: int, is_video: bool = False,
     skips the *display* rotation afterwards — set by ``get_preview``'s canonical,
     orientation-independent rendition."""
     img = _open_image(path, full_decode=full_decode, orientation=orientation)
+    if img.format in ("JPEG", "MPO"):
+        # Downscale a still-lazy JPEG BEFORE convert()/transpose, which force a full-
+        # resolution decode and so forfeit libjpeg's DCT-domain scaling. thumbnail()
+        # calls draft() itself (to 2x the target, then a LANCZOS resize with an exact
+        # box), so decode runs at 1/2, 1/4 or 1/8 scale and the final size is still
+        # computed from the ORIGINAL dimensions -- identical to the old output. The
+        # mode is left alone (draft(None, ...)) so CMYK/L files still go through the
+        # convert("RGB") below. A square box makes doing this before the orientation
+        # transpose safe (width/height swap doesn't change what fits). Gated to JPEG:
+        # draft is a no-op elsewhere, and palette/alpha images must be converted to RGB
+        # before resizing (a P-mode resize silently falls back to NEAREST).
+        img.thumbnail((max_size, max_size), Image.LANCZOS)
     img = img.convert("RGB")
     if not sensor_space:
         img = apply_orientation(img, orientation)
-    img.thumbnail((max_size, max_size), Image.LANCZOS)
+    img.thumbnail((max_size, max_size), Image.LANCZOS)  # no-op if the JPEG path already fit it
 
     if is_video:
         _stamp_play_icon(img)

@@ -372,7 +372,7 @@ names. No archive is extracted to disk. Download URLs are fixed HTTPS constants.
 hundred RAW files is several GB in each. An all-missing selection returns 200 with an empty zip.
 *Fix:* cap by total bytes, stream from a temp file, and use a plain navigation download.
 
-**P5 — Medium — Full-resolution JPEG decode before downscale** [traced]
+**P5 — Medium — Full-resolution JPEG decode before downscale** [traced] — ✅ **Done** (`thumbnail()` now runs before `convert()` for JPEG/MPO so Pillow's own draft engages; 24 MP → 256 px: ~110 ms → ~40 ms)
 `thumbnails.py:255-259`. `convert("RGB")` runs before `thumbnail()`, forfeiting Pillow's DCT draft mode.
 *Fix:* `img.draft("RGB", (max, max))` first.
 

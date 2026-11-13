@@ -694,3 +694,73 @@ class TestEmbeddedPreviewSelection:
         assert single is not None and len(single) > 100
         assert single == per_tag
         assert Image.open(io.BytesIO(single)).size == (160, 120)
+
+
+# ── JPEG draft-mode downscale (audit P5) ──
+
+def _legacy_thumbnail_size(path, max_size, orientation=None, sensor_space=False):
+    """Output size of the pre-P5 sequence: full decode, convert, rotate, thumbnail."""
+    img = Image.open(path).convert("RGB")
+    if not sensor_space:
+        img = thumbnails.apply_orientation(img, orientation)
+    img.thumbnail((max_size, max_size), Image.LANCZOS)
+    return img.size
+
+
+class TestJpegDraftDownscale:
+    @pytest.mark.parametrize("src", [(4000, 3000), (3000, 4000), (4001, 2999), (1500, 1499), (5000, 700)])
+    @pytest.mark.parametrize("orientation", [None, 1, 3, 6, 8])
+    @pytest.mark.parametrize("sensor_space", [False, True])
+    def test_dimensions_match_legacy(self, tmp_path, src, orientation, sensor_space):
+        path = _make_photo(tmp_path, size=src)
+        data = thumbnails._make_thumbnail(path, 400, orientation=orientation, sensor_space=sensor_space)
+        got = Image.open(io.BytesIO(data)).size
+        assert got == _legacy_thumbnail_size(path, 400, orientation, sensor_space)
+
+    def test_draft_engaged_for_jpeg(self, tmp_path, monkeypatch):
+        path = _make_photo(tmp_path, size=(4000, 3000))
+        seen = []
+        from PIL import JpegImagePlugin
+        orig = JpegImagePlugin.JpegImageFile.draft
+
+        def spy(self, mode, size):
+            before = self.size
+            res = orig(self, mode, size)
+            seen.append((before, self.size))
+            return res
+
+        # JpegImageFile overrides draft, so patch the subclass attribute.
+        monkeypatch.setattr(JpegImagePlugin.JpegImageFile, "draft", spy)
+        thumbnails._make_thumbnail(path, 400)
+        assert seen and seen[0][0] == (4000, 3000)
+        assert seen[0][1][0] < 4000  # decoder scale actually reduced
+
+    def test_oriented_pixels_still_upright(self, tmp_path):
+        # Left half red, right half blue; orientation 6 (rotate 90 CW) puts red on top.
+        path = tmp_path / "lr.jpg"
+        img = Image.new("RGB", (2000, 1000), (0, 0, 255))
+        ImageDraw.Draw(img).rectangle([0, 0, 999, 999], fill=(255, 0, 0))
+        img.save(path, "JPEG", quality=95)
+        out = Image.open(io.BytesIO(thumbnails._make_thumbnail(path, 200, orientation=6))).convert("RGB")
+        assert out.size == (100, 200)
+        top, bottom = out.getpixel((50, 20)), out.getpixel((50, 180))
+        assert top[0] > 200 and top[2] < 60
+        assert bottom[2] > 200 and bottom[0] < 60
+
+    @pytest.mark.parametrize("mode", ["CMYK", "L"])
+    def test_non_rgb_jpeg_comes_out_rgb(self, tmp_path, mode):
+        path = tmp_path / f"{mode}.jpg"
+        Image.new(mode, (3000, 2000)).save(path, "JPEG")
+        out = Image.open(io.BytesIO(thumbnails._make_thumbnail(path, 300)))
+        assert out.mode == "RGB" and out.size == (300, 200)
+
+    def test_png_path_unaffected(self, tmp_path):
+        path = tmp_path / "p.png"
+        Image.new("RGBA", (1200, 800), (10, 200, 30, 128)).save(path)
+        out = Image.open(io.BytesIO(thumbnails._make_thumbnail(path, 300)))
+        assert out.size == (300, 200)
+
+    def test_small_jpeg_not_upscaled(self, tmp_path):
+        path = _make_photo(tmp_path, size=(40, 30))
+        out = Image.open(io.BytesIO(thumbnails._make_thumbnail(path, 400)))
+        assert out.size == (40, 30)
