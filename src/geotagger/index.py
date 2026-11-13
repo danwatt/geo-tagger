@@ -1,3 +1,5 @@
+import logging
+import re
 import sqlite3
 import threading
 import time
@@ -7,6 +9,8 @@ from pathlib import Path
 from geotagger.config import CACHE_DIR_NAME, get_cache_dir, get_state_dir
 from geotagger.db_timing import TimedConnection
 from geotagger.timeutil import has_date
+
+logger = logging.getLogger(__name__)
 
 _db: sqlite3.Connection | None = None
 _db_path: Path | None = None
@@ -172,9 +176,10 @@ def transaction() -> Iterator[sqlite3.Connection]:
 # derived column here AND to the SETs that write it (update_geotag, _LOCATION_SQL).
 # Writers that clear the set build their SET fragment from DERIVED_LOCATION_CLEAR_SQL
 # so they cannot drift; test_index.py asserts _LOCATION_SQL writes the same set.
-# loc_landmark / loc_landmark_type are deliberately absent: they are only in the
-# migration-rebuild CREATE TABLE, nothing writes or reads them, and fresh databases
-# don't have them, so naming them here would break fresh installs.
+# loc_landmark / loc_landmark_type are deliberately absent: the old `path`-column
+# rebuild's hand-written CREATE TABLE added them (with face_count and
+# faces_processed_at) to the DBs it migrated, always NULL — nothing writes or reads
+# them, fresh databases don't have them, so naming them here would break fresh installs.
 DERIVED_LOCATION_COLUMNS = (
     "loc_city", "loc_state", "loc_county", "loc_country", "loc_country_code",
     "loc_sublocation", "loc_postal_code", "geocoded_at",
@@ -195,6 +200,319 @@ def _coords_moved(old: tuple, new: tuple) -> bool:
         return old != new
     return (abs(new[0] - old[0]) > _COORD_EPSILON_DEG
             or abs(new[1] - old[1]) > _COORD_EPSILON_DEG)
+
+
+# ── photos schema ──
+# The base photos columns: the fresh-install CREATE TABLE and the `path`-column
+# rebuild's new table both come from this one text, so they cannot drift. Columns
+# added later are NOT listed here — they come from the additive ADD COLUMN guards
+# in _init_db_locked, which run after the rebuild and fill in whatever the table
+# still lacks.
+_PHOTOS_BASE_COLUMNS = """
+    id INTEGER PRIMARY KEY,
+    filename TEXT NOT NULL,
+    dir TEXT NOT NULL,
+    ext TEXT NOT NULL,
+    media_type TEXT NOT NULL,
+    mtime REAL NOT NULL,
+    size INTEGER NOT NULL,
+    lat REAL,
+    lng REAL,
+    geotag_source TEXT NOT NULL DEFAULT 'none',
+    sidecar_path TEXT,
+    sidecar_mtime REAL,
+    camera TEXT,
+    scanned_at REAL NOT NULL,
+    UNIQUE(dir, filename)
+"""
+
+
+# ── Table rebuilds ──
+# Schema changes SQLite's ALTER TABLE can't make (dropping a UNIQUE column,
+# retargeting a foreign key) use its documented 12-step rebuild
+# (sqlite.org/lang_altertable.html#otheralter): FKs off, one transaction, create
+# the NEW table under a temporary name, copy, drop the old, rename the new into
+# place, recreate the old table's indexes/triggers, check FKs, commit.
+#
+# Two details matter, both measured on the bundled SQLite 3.49:
+# - Python's sqlite3 (legacy transaction mode, which this connection uses) opens no
+#   implicit transaction for DDL, so a RENAME/CREATE outside an explicit BEGIN
+#   commits on its own. The old rebuild ran that way and a crash mid-copy left an
+#   empty `photos` beside the real rows in `photos_old`, with nothing to undo it.
+#   SQLite DDL itself IS transactional: inside BEGIN it all rolls back.
+# - Renaming a table rewrites every other table's FOREIGN KEY that names it
+#   (legacy_alter_table is off). So renaming the OLD table away (photos ->
+#   photos_old) silently repointed faces.photo_id at photos_old, and the DROP then
+#   left it dangling. Renaming the NEW table into place touches no reference,
+#   because nothing refers to the temporary name.
+
+def _q(name: str) -> str:
+    """Quote an identifier read back from the schema (table/column names)."""
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _table_names(db: sqlite3.Connection) -> set[str]:
+    return {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+
+
+def _row_count(db: sqlite3.Connection, table: str) -> int:
+    return db.execute(f"SELECT COUNT(*) FROM {_q(table)}").fetchone()[0]
+
+
+@contextmanager
+def _schema_rebuild_tx(db: sqlite3.Connection) -> Iterator[None]:
+    """One explicit IMMEDIATE transaction around a table rebuild, with foreign-key
+    enforcement off for its duration (restored after).
+
+    Not index.transaction(): the rebuilds run inside init_db, which holds the write
+    lock but deliberately runs on the raw connection, and transaction() would JOIN
+    an already-open implicit transaction rather than refuse it. PRAGMA foreign_keys
+    is a silent no-op inside a transaction, so it has to be switched here, outside
+    the BEGIN. (The app never turns FKs on, so in practice this just reads 0.)
+    """
+    if db.in_transaction:
+        # Callers run before any DML in init_db, so nothing can be pending. Refuse
+        # rather than commit or swallow somebody's half-done work into the rebuild.
+        raise RuntimeError("table rebuild started inside an open transaction")
+    fk_was_on = bool(db.execute("PRAGMA foreign_keys").fetchone()[0])
+    if fk_was_on:
+        db.execute("PRAGMA foreign_keys=OFF")
+    try:
+        # IMMEDIATE: take the write lock before reading the table being rebuilt, so
+        # another process (a script) can't write rows between our copy and drop.
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+            db.commit()
+        except BaseException:
+            db.rollback()
+            raise
+    finally:
+        if fk_was_on:
+            db.execute("PRAGMA foreign_keys=ON")
+
+
+def _fk_violations(db: sqlite3.Connection) -> set[tuple[str, int | None]]:
+    """(table, rowid) of every row violating a declared FOREIGN KEY. FKs are never
+    enforced in this DB, so orphans can legitimately exist before a rebuild; the
+    rebuild only has to not ADD any."""
+    return {(r[0], r[1]) for r in db.execute("PRAGMA foreign_key_check")}
+
+
+def _swap_in_rebuilt_table(db: sqlite3.Connection, table: str, new_table: str,
+                           copy_cols: list[str]) -> None:
+    """Steps 5-10 of the rebuild: copy `copy_cols` from `table` into the already
+    created `new_table`, drop `table`, rename `new_table` to `table`, recreate the
+    indexes/triggers `table` had, and verify. Caller holds _schema_rebuild_tx, so
+    any failure here rolls the whole rebuild back.
+
+    Both tables this is used for (photos, faces) have an INTEGER PRIMARY KEY, which
+    is the rowid, so copying it keeps every id — and with it faces.photo_id,
+    photos_spatial, photo_embeddings, face_embeddings — exactly as it was."""
+    before = _fk_violations(db)
+    # Indexes and triggers die with DROP TABLE; save their SQL to recreate on the
+    # renamed table (sql IS NULL = the UNIQUE/PK autoindexes, rebuilt by the new
+    # table's own constraints). With FKs off, DROP TABLE fires no DELETE triggers,
+    # so photos_spatial / photo_embeddings rows survive it untouched.
+    saved = [r[0] for r in db.execute(
+        "SELECT sql FROM sqlite_master WHERE tbl_name=? AND type IN ('index', 'trigger') "
+        "AND sql IS NOT NULL ORDER BY type, name", (table,))]
+    col_list = ", ".join(_q(c) for c in copy_cols)
+    db.execute(f"INSERT INTO {_q(new_table)} ({col_list}) SELECT {col_list} FROM {_q(table)}")
+    old_n, new_n = _row_count(db, table), _row_count(db, new_table)
+    if old_n != new_n:
+        raise RuntimeError(f"rebuild of {table} copied {new_n} of {old_n} rows")
+    db.execute(f"DROP TABLE {_q(table)}")
+    db.execute(f"ALTER TABLE {_q(new_table)} RENAME TO {_q(table)}")
+    for sql in saved:
+        db.execute(sql)
+    added = _fk_violations(db) - before
+    if added:
+        raise RuntimeError(f"rebuild of {table} would add foreign-key violations: "
+                           f"{sorted(added)[:10]}")
+
+
+def _recover_interrupted_photos_rebuild(db: sqlite3.Connection) -> None:
+    """Repair what the old, non-atomic `path` rebuild leaves after a crash mid-copy:
+    a `photos_old` holding the real rows (and the indexes/triggers, and the faces FK,
+    which followed its rename) beside a new `photos`. Runs before anything else
+    touches photos. Rules:
+
+    - photos missing or empty: the copy never finished and nothing has been
+      written since. Drop the empty table and rename photos_old back — exactly the
+      pre-migration state, ids untouched; the rename also moves faces' FK and the
+      triggers back onto photos. The (now atomic) migration then reruns.
+    - photos has rows (e.g. a rescan after the crash, which assigns fresh ids that
+      faces.photo_id does not know): ambiguous. Both tables are kept. photos_old is
+      dropped only on proof it holds nothing photos lacks: every photos_old column
+      but `path` (derivable from dir + filename) exists in photos, and
+      ``photos_old EXCEPT photos`` over those columns, id included, is empty — i.e.
+      each old row survives identically, under the same id.
+    - a leftover `photos_new` (the new rebuild's temporary name) can only exist if
+      something committed part of a rebuild outside its transaction; dropped if
+      empty, otherwise left alone with a warning.
+    """
+    tables = _table_names(db)
+    if "photos_new" in tables:
+        if _row_count(db, "photos_new") == 0:
+            with _schema_rebuild_tx(db):
+                db.execute("DROP TABLE photos_new")
+            logger.warning("Dropped an empty leftover photos_new table (interrupted rebuild).")
+        else:
+            logger.warning(
+                f"Leftover table photos_new holds {_row_count(db, 'photos_new')} rows; "
+                "left untouched. Back up index.db and inspect it before removing it.")
+    if "photos_old" not in tables:
+        return
+
+    old_n = _row_count(db, "photos_old")
+    cur_n = _row_count(db, "photos") if "photos" in tables else 0
+    if cur_n == 0:
+        with _schema_rebuild_tx(db):
+            # Re-checked under the write lock: a script could have inserted since.
+            if "photos" in tables:
+                if _row_count(db, "photos") != 0:
+                    raise RuntimeError("photos gained rows during recovery; not touching it")
+                db.execute("DROP TABLE photos")
+            db.execute("ALTER TABLE photos_old RENAME TO photos")
+        logger.warning(f"Recovered an interrupted photos rebuild: restored {old_n} rows "
+                       "from photos_old with their original ids.")
+        return
+
+    if _photos_old_is_redundant(db):
+        with _schema_rebuild_tx(db):
+            db.execute("DROP TABLE photos_old")
+        logger.warning(f"Dropped photos_old: all {old_n} of its rows exist identically "
+                       f"(same ids) in photos ({cur_n} rows).")
+        return
+
+    # Ambiguous. Keep both tables and every row. Only move the derived schema
+    # objects off photos_old: its indexes/triggers kept their names through the
+    # rename, so init_db's CREATE ... IF NOT EXISTS has been skipping them for the
+    # live photos table, leaving it with no R*Tree sync at all. Dropping them loses
+    # no data, and the R*Tree is rebuilt from photos (photos_old keeps its own
+    # lat/lng columns, so nothing is lost there either).
+    with _schema_rebuild_tx(db):
+        for kind, name in db.execute(
+                "SELECT type, name FROM sqlite_master WHERE tbl_name='photos_old' "
+                "AND type IN ('index', 'trigger') AND sql IS NOT NULL").fetchall():
+            db.execute(f"DROP {kind.upper()} {_q(name)}")
+        if "photos_spatial" in tables:
+            db.execute("DELETE FROM photos_spatial")
+            db.execute("INSERT INTO photos_spatial (id, min_lat, max_lat, min_lng, max_lng) "
+                       "SELECT id, lat, lat, lng, lng FROM photos "
+                       "WHERE lat IS NOT NULL AND lng IS NOT NULL")
+    logger.warning(
+        f"Database holds BOTH photos ({cur_n} rows) and photos_old ({old_n} rows), left by "
+        "an interrupted schema migration. Face/person tags may point at photos_old's ids. "
+        "Both tables were kept unchanged; nothing was deleted. Back up index.db before "
+        "doing anything else, then compare the two tables (e.g. with the sqlite3 shell) "
+        "and decide which to keep.")
+
+
+def _photos_old_is_redundant(db: sqlite3.Connection) -> bool:
+    """True only when every photos_old row exists identically, same id, in photos
+    (see _recover_interrupted_photos_rebuild for why that is the proof needed)."""
+    old_cols = [r[1] for r in db.execute("PRAGMA table_info(photos_old)") if r[1] != "path"]
+    cur_cols = {r[1] for r in db.execute("PRAGMA table_info(photos)")}
+    if "id" not in old_cols or any(c not in cur_cols for c in old_cols):
+        return False
+    cl = ", ".join(_q(c) for c in old_cols)
+    return db.execute(
+        f"SELECT 1 FROM (SELECT {cl} FROM photos_old EXCEPT SELECT {cl} FROM photos) LIMIT 1"
+    ).fetchone() is None
+
+
+def _migrate_photos_off_path(db: sqlite3.Connection) -> None:
+    """One-time migration off `path`, which just duplicated `dir` + filename on every
+    row (and every write). ALTER TABLE DROP COLUMN refuses a UNIQUE column (the old
+    schema had `path TEXT UNIQUE NOT NULL`), so the table is rebuilt.
+
+    The new table is the base schema plus every other column the old table has,
+    declared as it was there — and nothing else: columns the old table lacks are
+    left to the ADD COLUMN guards that run next. So this block never needs editing
+    when a column is added, and no data column is dropped except `path`."""
+    info = db.execute("PRAGMA table_info(photos)").fetchall()
+    if "path" not in {r[1] for r in info}:
+        return
+    if "photos_new" in _table_names(db):
+        raise RuntimeError(
+            "Can't migrate photos off its `path` column: a non-empty leftover table "
+            "photos_new is in the way. Back up index.db and inspect photos_new.")
+    t0 = time.time()
+    with _schema_rebuild_tx(db):
+        db.execute(f"CREATE TABLE photos_new ({_PHOTOS_BASE_COLUMNS})")
+        base_cols = {r[1] for r in db.execute("PRAGMA table_info(photos_new)")}
+        for _cid, name, type_, notnull, default, _pk in info:
+            if name == "path" or name in base_cols:
+                continue
+            col = f"{_q(name)} {type_}"
+            if notnull:
+                col += " NOT NULL"
+            if default is not None:
+                col += f" DEFAULT {default}"  # dflt_value is already SQL text
+            db.execute(f"ALTER TABLE photos_new ADD COLUMN {col}")
+        _swap_in_rebuilt_table(db, "photos", "photos_new",
+                               [r[1] for r in info if r[1] != "path"])
+    logger.info(f"Migrated photos off its path column in {(time.time() - t0) * 1000:.2f}ms")
+
+
+def _repoint_foreign_keys_off_photos_old(db: sqlite3.Connection) -> None:
+    """Every DB the old rebuild migrated was left with faces.photo_id declared as
+    REFERENCES "photos_old"(id) — a table that then no longer existed (see the Table
+    rebuilds note). Harmless while FKs stay unenforced, but any statement run with
+    foreign_keys=ON fails on it ("no such table: main.photos_old"). Retarget such
+    references at photos by rebuilding the referencing table (the 12-step route;
+    PRAGMA writable_schema could edit the text in place, but a typo there corrupts
+    the schema, while a rebuild is checked and rolls back).
+
+    Skipped while photos_old still exists: then the reference may be the right one.
+    A failure here only logs: the dangling reference does no harm today, and the
+    rebuild rolls back, leaving the DB as it was."""
+    tables = _table_names(db)
+    if "photos_old" in tables or "photos" not in tables:
+        return
+    for table in sorted(tables):
+        fks = [tuple(r) for r in db.execute("SELECT * FROM pragma_foreign_key_list(?)", (table,))]
+        if not any(fk[2].lower() == "photos_old" for fk in fks):
+            continue
+        try:
+            _repoint_table(db, table, fks, tables)
+            logger.warning(f"Repointed {table}'s foreign key from photos_old to photos.")
+        except (sqlite3.Error, RuntimeError) as e:
+            logger.warning(f"Could not repoint {table}'s foreign key off photos_old "
+                           f"(left unchanged): {e}")
+
+
+def _repoint_table(db: sqlite3.Connection, table: str, fks: list[tuple],
+                   tables: set[str]) -> None:
+    new_table = f"{table}_new"
+    if new_table in tables:
+        raise RuntimeError(f"{new_table} already exists")
+    sql = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+                     (table,)).fetchone()[0]
+    # The rename wrote the target back as "photos_old" (quoted); accept any quoting.
+    new_sql, n_refs = re.subn(
+        r'REFERENCES\s+(?:"photos_old"|`photos_old`|\[photos_old\]|photos_old\b)',
+        "REFERENCES photos", sql, flags=re.IGNORECASE)
+    new_sql, n_head = re.subn(
+        r'^\s*CREATE\s+TABLE\s+(?:"(?:[^"]|"")+"|`[^`]+`|\[[^\]]+\]|[^\s(]+)',
+        f"CREATE TABLE {_q(new_table)}", new_sql, count=1, flags=re.IGNORECASE)
+    if n_refs == 0 or n_head != 1:
+        raise RuntimeError("couldn't locate the reference in the table's SQL")
+    cols = [tuple(r) for r in db.execute(f"PRAGMA table_info({_q(table)})")]
+    expected_fks = [fk[:2] + (("photos",) if fk[2].lower() == "photos_old" else (fk[2],)) + fk[3:]
+                    for fk in fks]
+    with _schema_rebuild_tx(db):
+        db.execute(new_sql)
+        # The text edit must have changed the FK target and nothing else.
+        if [tuple(r) for r in db.execute(f"PRAGMA table_info({_q(new_table)})")] != cols:
+            raise RuntimeError("rewritten table's columns differ")
+        got_fks = [tuple(r) for r in db.execute("SELECT * FROM pragma_foreign_key_list(?)",
+                                                (new_table,))]
+        if got_fks != expected_fks:
+            raise RuntimeError(f"rewritten table's foreign keys differ: {got_fks}")
+        _swap_in_rebuilt_table(db, table, new_table, [c[1] for c in cols])
 
 
 def init_db(root: Path | None = None) -> sqlite3.Connection:
@@ -258,25 +576,13 @@ def _init_db_locked(root: Path | None) -> sqlite3.Connection:
     # 64 MB page cache — default 2 MB is far too small for 93K embedding blobs.
     # Negative value = kibibytes; positive = pages (4 KB each).
     _db.execute("PRAGMA cache_size = -65536")
-    _db.execute("""
-        CREATE TABLE IF NOT EXISTS photos (
-            id INTEGER PRIMARY KEY,
-            filename TEXT NOT NULL,
-            dir TEXT NOT NULL,
-            ext TEXT NOT NULL,
-            media_type TEXT NOT NULL,
-            mtime REAL NOT NULL,
-            size INTEGER NOT NULL,
-            lat REAL,
-            lng REAL,
-            geotag_source TEXT NOT NULL DEFAULT 'none',
-            sidecar_path TEXT,
-            sidecar_mtime REAL,
-            camera TEXT,
-            scanned_at REAL NOT NULL,
-            UNIQUE(dir, filename)
-        )
-    """)
+    # Table rebuilds first, before any DML opens an implicit transaction: each runs
+    # in its own explicit one (see _schema_rebuild_tx). Recovery must precede the
+    # CREATE, which would otherwise make an empty photos beside a lone photos_old.
+    _recover_interrupted_photos_rebuild(_db)
+    _db.execute(f"CREATE TABLE IF NOT EXISTS photos ({_PHOTOS_BASE_COLUMNS})")
+    _migrate_photos_off_path(_db)
+    _repoint_foreign_keys_off_photos_old(_db)
     # Migrate existing DBs that predate added columns
     cols = {r[1] for r in _db.execute("PRAGMA table_info(photos)").fetchall()}
     if "camera" not in cols:
@@ -366,63 +672,6 @@ def _init_db_locked(root: Path | None) -> sqlite3.Connection:
     _db.execute("DROP TABLE IF EXISTS photo_exif")
     if "exif_json" in cols:
         _db.execute("ALTER TABLE photos DROP COLUMN exif_json")
-
-    # One-time migration off `path`, which just duplicated `dir` + filename on
-    # every row (and every write). SQLite's ALTER TABLE DROP COLUMN refuses a
-    # UNIQUE column, so the table is rebuilt instead. Recomputed fresh here (not
-    # the `cols` above, which predates the ADD COLUMN guards and the exif_json
-    # drop) so the copy carries exactly the columns now on the table. Renaming
-    # photos also silently drops the indexes/triggers bound to it (verified:
-    # SQLite moves them to the new name, then discards them with the DROP TABLE
-    # below) — harmless, since every one of them is recreated with IF NOT EXISTS
-    # further down this function.
-    photos_cols = [r[1] for r in _db.execute("PRAGMA table_info(photos)").fetchall()]
-    if "path" in photos_cols:
-        keep_cols = [c for c in photos_cols if c != "path"]
-        col_list = ", ".join(keep_cols)
-        _db.execute("ALTER TABLE photos RENAME TO photos_old")
-        _db.execute("""
-            CREATE TABLE photos (
-                id INTEGER PRIMARY KEY,
-                filename TEXT NOT NULL,
-                dir TEXT NOT NULL,
-                ext TEXT NOT NULL,
-                media_type TEXT NOT NULL,
-                mtime REAL NOT NULL,
-                size INTEGER NOT NULL,
-                lat REAL,
-                lng REAL,
-                geotag_source TEXT NOT NULL DEFAULT 'none',
-                sidecar_path TEXT,
-                sidecar_mtime REAL,
-                camera TEXT,
-                scanned_at REAL NOT NULL,
-                photo_datetime INTEGER,
-                gps_accuracy REAL,
-                orientation INTEGER,
-                checksum TEXT,
-                face_count INTEGER,
-                faces_scanned_at REAL,
-                faces_processed_at REAL,
-                faces_det_dimension INTEGER,
-                loc_city TEXT,
-                loc_state TEXT,
-                loc_county TEXT,
-                loc_country TEXT,
-                loc_country_code TEXT,
-                loc_sublocation TEXT,
-                loc_postal_code TEXT,
-                loc_landmark TEXT,
-                loc_landmark_type TEXT,
-                geocoded_at REAL,
-                geocode_ignored INTEGER NOT NULL DEFAULT 0,
-                date_precision TEXT,
-                geotag_removed INTEGER NOT NULL DEFAULT 0,
-                UNIQUE(dir, filename)
-            )
-        """)
-        _db.execute(f"INSERT INTO photos ({col_list}) SELECT {col_list} FROM photos_old")
-        _db.execute("DROP TABLE photos_old")
 
     _db.execute("""
         CREATE TABLE IF NOT EXISTS places (

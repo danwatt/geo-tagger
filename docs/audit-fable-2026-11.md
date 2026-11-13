@@ -75,7 +75,7 @@ original gets its coordinates back. Behaviour differs depending on whether a sid
 stay, so place names are stale forever. A changed file likewise keeps its old faces, `faces_scanned_at` and embedding.
 *Fix:* null `geocoded_at` and `loc_*` in the upsert when coordinates differ; reset scan markers when `checksum` changes.
 
-**D6 — Medium — The `path`-column table rebuild is not atomic** [run, for the DDL behaviour]
+**D6 — Medium — The `path`-column table rebuild is not atomic** [run, for the DDL behaviour] — ✅ **DONE** (create-copy-drop-rename in one explicit transaction; startup recovers a leftover `photos_old`; a `faces` FK left pointing at `photos_old` by the old migration is repaired by a checked one-time rebuild of `faces`)
 `index.py:158-202`. Python's `sqlite3` does not open a transaction for DDL, so `ALTER TABLE … RENAME` and
 `CREATE TABLE` commit immediately. A crash during the copy leaves an empty `photos` plus an orphaned
 `photos_old`, and the next start does not recover it; a rescan then assigns new ids while `faces.photo_id`
