@@ -40,6 +40,9 @@ _lock = threading.Lock()
 _state = "unloaded"
 _error: str | None = None
 _conn: sqlite3.Connection | None = None
+# Whether the open DB carries the ZCTA layer. Probed once in _load(): the schema can't
+# change while the connection is open, so it isn't re-checked on every lookup.
+_zctas_present = False
 
 
 def is_available() -> bool:
@@ -53,32 +56,32 @@ def status() -> dict:
     _ensure_loaded()
     st = {"available": is_available(), "state": _state, "error": _error,
           "places": 0, "by_kind": {}, "source": None, "zctas": 0, "zip_names": 0}
-    if _state == "ready" and _conn is not None:
-        try:
-            st["places"] = _conn.execute("SELECT COUNT(*) FROM places").fetchone()[0]
-            st["by_kind"] = {
-                (r["kind"] or "other"): r["n"] for r in _conn.execute(
-                    "SELECT kind, COUNT(*) AS n FROM places GROUP BY kind ORDER BY n DESC"
-                ).fetchall()
-            }
-            row = _conn.execute("SELECT value FROM meta WHERE key='source'").fetchone()
-            st["source"] = row[0] if row else None
-            # A DB built before the ZCTA layer existed has neither table.
-            if _has_zctas():
-                st["zctas"] = _conn.execute("SELECT COUNT(*) FROM zctas").fetchone()[0]
-                st["zip_names"] = _conn.execute("SELECT COUNT(*) FROM zip_places").fetchone()[0]
-        except Exception:
-            pass
+    # Held for the whole block so reset() can't close the handle mid-query.
+    with _lock:
+        if _state == "ready" and _conn is not None:
+            try:
+                st["places"] = _conn.execute("SELECT COUNT(*) FROM places").fetchone()[0]
+                st["by_kind"] = {
+                    (r["kind"] or "other"): r["n"] for r in _conn.execute(
+                        "SELECT kind, COUNT(*) AS n FROM places GROUP BY kind ORDER BY n DESC"
+                    ).fetchall()
+                }
+                row = _conn.execute("SELECT value FROM meta WHERE key='source'").fetchone()
+                st["source"] = row[0] if row else None
+                # A DB built before the ZCTA layer existed has neither table.
+                if _zctas_present:
+                    st["zctas"] = _conn.execute("SELECT COUNT(*) FROM zctas").fetchone()[0]
+                    st["zip_names"] = _conn.execute("SELECT COUNT(*) FROM zip_places").fetchone()[0]
+            except Exception:
+                pass
     return st
 
 
-def _has_zctas() -> bool:
-    """Whether the open DB carries the ZCTA layer. Older builds (places only) don't,
-    and the app must keep working against one rather than erroring on every lookup."""
-    if _conn is None:
-        return False
+def _probe_zctas(conn: sqlite3.Connection) -> bool:
+    """Whether the DB carries the ZCTA layer. Older builds (places only) don't, and the
+    app must keep working against one rather than erroring on every lookup."""
     try:
-        return _conn.execute(
+        return conn.execute(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('zctas','zip_places')"
         ).fetchone()[0] == 2
     except Exception:
@@ -87,7 +90,7 @@ def _has_zctas() -> bool:
 
 def _load():
     """Open the read-only connection. Idempotent; call via _ensure_loaded()."""
-    global _state, _error, _conn
+    global _state, _error, _conn, _zctas_present
     if _state != "unloaded":
         return
     if not is_available():
@@ -101,6 +104,7 @@ def _load():
         _conn = sqlite3.connect(uri, uri=True, check_same_thread=False, factory=TimedConnection)
         _conn.row_factory = sqlite3.Row
         n = _conn.execute("SELECT COUNT(*) FROM places").fetchone()[0]
+        _zctas_present = _probe_zctas(_conn)
         _state = "ready"
         logger.info("Census places ready: %d polygons from %s", n, config.CENSUS_DB_PATH)
     except Exception as e:  # noqa: BLE001 — degrade gracefully, never crash startup
@@ -119,7 +123,7 @@ def reset():
     """Drop the open handle and go back to "unloaded", so the next lookup reopens
     whatever is on disk. Needed before a (re)build replaces the file — Windows
     won't let it be replaced while this connection holds it open."""
-    global _state, _error, _conn
+    global _state, _error, _conn, _zctas_present
     with _lock:
         if _conn is not None:
             try:
@@ -127,6 +131,7 @@ def reset():
             except Exception:
                 pass
         _conn = None
+        _zctas_present = False
         _state = "unloaded"
         _error = None
 
@@ -135,10 +140,13 @@ def _containing_rows(lat: float, lng: float) -> list[sqlite3.Row]:
     """All place rows whose polygon actually contains the point. R*Tree bbox
     prefilter (cheap, indexed) then exact point-in-polygon on the survivors."""
     _ensure_loaded()
-    if _state != "ready" or _conn is None:
-        return []
     with _lock:
-        candidates = _conn.execute(
+        # _conn is re-read under the lock: reset() on another thread can set it to None
+        # after _ensure_loaded() returns, so an earlier read could race that.
+        conn = _conn
+        if _state != "ready" or conn is None:
+            return []
+        candidates = conn.execute(
             """SELECT p.id, p.geoid, p.name, p.name_lsad, p.kind, p.state_name, p.area, p.rings
                FROM places_spatial s JOIN places p ON p.id = s.id
                WHERE s.min_lat <= ? AND s.max_lat >= ?
@@ -185,10 +193,12 @@ def postal_lookup(lat: float | None, lng: float | None) -> dict | None:
     if lat is None or lng is None:
         return None
     _ensure_loaded()
-    if _state != "ready" or _conn is None or not _has_zctas():
-        return None
     with _lock:
-        candidates = _conn.execute(
+        # Re-read under the lock, same reason as _containing_rows().
+        conn = _conn
+        if _state != "ready" or conn is None or not _zctas_present:
+            return None
+        candidates = conn.execute(
             """SELECT z.id, z.zip, z.area, z.rings, p.city, p.state, p.state_code
                FROM zctas_spatial s
                JOIN zctas z ON z.id = s.id
@@ -222,15 +232,17 @@ def places_in_bbox(min_lat: float, max_lat: float, min_lng: float, max_lng: floa
     Each place dict carries name/kind/geoid/area + `polygons` in the stored ring
     format ([[outer,[holes]], ...], ring = [[lat,lng],...])."""
     _ensure_loaded()
-    if _state != "ready" or _conn is None:
-        return [], 0
     with _lock:
-        total = _conn.execute(
+        # Re-read under the lock, same reason as _containing_rows().
+        conn = _conn
+        if _state != "ready" or conn is None:
+            return [], 0
+        total = conn.execute(
             """SELECT COUNT(*) FROM places_spatial s
                WHERE s.min_lat <= ? AND s.max_lat >= ? AND s.min_lng <= ? AND s.max_lng >= ?""",
             (max_lat, min_lat, max_lng, min_lng),
         ).fetchone()[0]
-        rows = _conn.execute(
+        rows = conn.execute(
             """SELECT p.id, p.geoid, p.name, p.name_lsad, p.kind, p.state_name, p.area, p.rings
                FROM places_spatial s JOIN places p ON p.id = s.id
                WHERE s.min_lat <= ? AND s.max_lat >= ? AND s.min_lng <= ? AND s.max_lng >= ?
@@ -261,15 +273,17 @@ def zctas_in_bbox(min_lat: float, max_lat: float, min_lng: float, max_lng: float
     crosswalk city joined in so the map can label it "77070 Houston" rather than a bare
     number. Empty when the DB predates the ZCTA layer."""
     _ensure_loaded()
-    if _state != "ready" or _conn is None or not _has_zctas():
-        return [], 0
     with _lock:
-        total = _conn.execute(
+        # Re-read under the lock, same reason as _containing_rows().
+        conn = _conn
+        if _state != "ready" or conn is None or not _zctas_present:
+            return [], 0
+        total = conn.execute(
             """SELECT COUNT(*) FROM zctas_spatial s
                WHERE s.min_lat <= ? AND s.max_lat >= ? AND s.min_lng <= ? AND s.max_lng >= ?""",
             (max_lat, min_lat, max_lng, min_lng),
         ).fetchone()[0]
-        rows = _conn.execute(
+        rows = conn.execute(
             """SELECT z.id, z.zip, z.area, z.rings, p.city, p.state, p.state_code
                FROM zctas_spatial s
                JOIN zctas z ON z.id = s.id

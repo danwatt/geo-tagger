@@ -424,6 +424,79 @@ class TestPostalLookup:
         assert st["zctas"] == 0
 
 
+class _ClearConnOnFirstQuery:
+    """Stands in for the module's _conn. On its first execute() it does the step of
+    reset() that breaks readers (sets the module's _conn to None) just before the query
+    runs, i.e. the window between a lookup's availability check and its read."""
+
+    def __init__(self, real):
+        self._real = real
+        self.armed = True
+
+    def execute(self, sql, *args):
+        if self.armed:
+            self.armed = False
+            census_places._conn = None
+        return self._real.execute(sql, *args)
+
+
+class TestZctaProbeAndReset:
+    def test_zcta_probe_runs_once_at_load_not_per_lookup(self, census_db):
+        census_db([], zctas=[{"zip": "77070", "polygons": _rect(30, 31, -96, -95)}])
+        census_places.reset()
+        census_places._ensure_loaded()
+        assert census_places._zctas_present is True
+
+        statements = []
+        census_places._conn.set_trace_callback(statements.append)
+        try:
+            for _ in range(5):
+                assert census_places.postal_lookup(30.5, -95.5)["postal_code"] == "77070"
+        finally:
+            census_places._conn.set_trace_callback(None)
+        # The trace must actually fire, or the absence check below proves nothing.
+        assert any("zctas_spatial" in s for s in statements)
+        assert not [s for s in statements if "sqlite_master" in s]
+
+    def test_lookup_racing_reset_between_check_and_read_does_not_raise(self, census_db):
+        census_db([], zctas=[{"zip": "77070", "city": "Houston",
+                              "polygons": _rect(30, 31, -96, -95)}])
+        census_places.reset()
+        census_places._ensure_loaded()
+        real = census_places._conn
+        census_places._conn = _ClearConnOnFirstQuery(real)
+        try:
+            # The handle was cleared mid-lookup; the lookup holds its own reference from
+            # inside the lock, so it completes with the correct answer instead of raising
+            # AttributeError on None.
+            got = census_places.postal_lookup(30.5, -95.5)
+        finally:
+            census_places._conn = real
+        assert got["postal_code"] == "77070"
+
+    @pytest.mark.parametrize("lookup, not_available", [
+        (lambda: census_places.lookup(30.5, -95.5), None),
+        (lambda: census_places.postal_lookup(30.5, -95.5), None),
+        (lambda: census_places.places_in_bbox(30, 31, -96, -95), ([], 0)),
+        (lambda: census_places.zctas_in_bbox(30, 31, -96, -95), ([], 0)),
+    ], ids=["lookup", "postal_lookup", "places_in_bbox", "zctas_in_bbox"])
+    def test_reset_before_locked_read_returns_not_available(
+            self, census_db, monkeypatch, lookup, not_available):
+        # reset() runs after _ensure_loaded() has returned, so the locked section finds
+        # no connection and must return the same result as "DB absent".
+        census_db([{"name": "Bigtown", "polygons": _rect(30, 31, -96, -95)}],
+                  zctas=[{"zip": "77070", "polygons": _rect(30, 31, -96, -95)}])
+        census_places.reset()
+        real_ensure = census_places._ensure_loaded
+
+        def ensure_then_reset():
+            real_ensure()
+            census_places.reset()
+
+        monkeypatch.setattr(census_places, "_ensure_loaded", ensure_then_reset)
+        assert lookup() == not_available
+
+
 class TestPlacesInBbox:
     def test_empty_when_unavailable(self):
         assert census_places.places_in_bbox(30, 31, -96, -95) == ([], 0)
