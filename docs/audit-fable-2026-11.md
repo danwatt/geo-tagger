@@ -70,7 +70,7 @@ sessions, and never anchor a route.
 original gets its coordinates back. Behaviour differs depending on whether a sidecar exists.
 *Fix:* store `sc.name if sc.exists() else None`, and persist an explicit "removed" marker that `upsert_photo` honours.
 
-**D5 — Medium — `upsert_photo` changes coordinates without invalidating derived data** [traced]
+**D5 — Medium — `upsert_photo` changes coordinates without invalidating derived data** [traced] — ✅ **DONE** (moved coordinates clear `loc_*`/`geocoded_at`; changed checksum drops the semantic embedding. Faces deliberately NOT re-queued: a face rescan would delete manual person tags)
 `index.py:608-622`. When a sidecar is edited externally, `lat`/`lng` update but `loc_*` and `geocoded_at`
 stay, so place names are stale forever. A changed file likewise keeps its old faces, `faces_scanned_at` and embedding.
 *Fix:* null `geocoded_at` and `loc_*` in the upsert when coordinates differ; reset scan markers when `checksum` changes.

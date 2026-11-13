@@ -180,6 +180,21 @@ DERIVED_LOCATION_COLUMNS = (
     "loc_sublocation", "loc_postal_code", "geocoded_at",
 )
 DERIVED_LOCATION_CLEAR_SQL = ", ".join(f"{c}=NULL" for c in DERIVED_LOCATION_COLUMNS)
+# Coordinate moves smaller than this (degrees, ~1 cm) are float noise, not a new
+# position. It absorbs ExifTool's XMP round-trip: a sidecar written from a
+# full-precision float (a map click) reads back ~1e-10 deg off, as degrees +
+# decimal minutes, so a forced re-read of a photo tagged here must not throw away
+# its place names. Re-reads of one unchanged sidecar are bit-identical (measured).
+_COORD_EPSILON_DEG = 1e-7
+
+
+def _coords_moved(old: tuple, new: tuple) -> bool:
+    """Whether a stored (lat, lng) pair changed enough to invalidate what was derived
+    from it. Gaining or losing coordinates always counts."""
+    if None in old or None in new:
+        return old != new
+    return (abs(new[0] - old[0]) > _COORD_EPSILON_DEG
+            or abs(new[1] - old[1]) > _COORD_EPSILON_DEG)
 
 
 def init_db(root: Path | None = None) -> sqlite3.Connection:
@@ -870,11 +885,13 @@ def upsert_photo(
         # _row_is_fresh would read as "never read". `keep` and `removed` can't
         # both hold: update_geotag sets 'database' only with coordinates.
         removed = "photos.geotag_removed = 1 AND excluded.geotag_source <> 'sidecar'"
-        # Coordinates before/after, to bump the geotag generation only when they
-        # really move: a rescan of touched-but-otherwise-unchanged files (or new
-        # photos without GPS) must not throw away the hotspot clustering per file.
-        # The lookup rides the UNIQUE(dir, filename) index the upsert needs anyway.
-        old = db.execute("SELECT lat, lng FROM photos WHERE dir=? AND filename=?",
+        # Coordinates (and checksum) before/after: to bump the geotag generation only
+        # when coordinates really move — a rescan of touched-but-otherwise-unchanged
+        # files (or new photos without GPS) must not throw away the hotspot
+        # clustering per file — and to invalidate what was derived from the old
+        # position or bytes (below). The lookup rides the UNIQUE(dir, filename)
+        # index the upsert needs anyway.
+        old = db.execute("SELECT lat, lng, checksum FROM photos WHERE dir=? AND filename=?",
                          (dir_, filename)).fetchone()
         new = db.execute(f"""
             INSERT INTO photos
@@ -902,10 +919,33 @@ def upsert_photo(
                 orientation=excluded.orientation,
                 checksum=excluded.checksum,
                 scanned_at=excluded.scanned_at
-            RETURNING lat, lng
+            RETURNING id, lat, lng
         """, (filename, dir_, ext, media_type, mtime, size, lat, lng,
               geotag_source, sidecar_path, sidecar_mtime, camera, photo_datetime,
               gps_accuracy, orientation, checksum, time.time())).fetchone()
+        # Stored coordinates moved (RETURNING is what was actually stored, after
+        # `keep`/`removed`): the place names belong to the old position, so clear
+        # them and geocoded_at and the geocode backfill resolves the new one, instead
+        # of an externally edited sidecar keeping the old names forever (audit D5).
+        # A follow-up UPDATE for just the moved rows rather than a CASE per derived
+        # column inside the upsert: this connection runs with cached_statements=0,
+        # so every execute re-prepares, and eight copies of the "did it move" CASE
+        # tripled the per-row cost of every scan upsert (~100 -> ~300 µs, measured)
+        # to serve the rare row that actually moved. Same transaction, so the
+        # pair is atomic. A new row (old is None) has nothing to clear.
+        if old is not None and _coords_moved((old["lat"], old["lng"]), (new["lat"], new["lng"])):
+            db.execute(f"UPDATE photos SET {DERIVED_LOCATION_CLEAR_SQL} WHERE id=?", (new["id"],))
+        # The file's bytes changed (both hashes known and different): drop the
+        # semantic embedding so the backfill (get_unembedded_photo_ids) re-embeds
+        # the new pixels; it holds no user data. NULL -> hash is a first hashing,
+        # not a change. Faces are deliberately NOT re-queued: replace_faces deletes
+        # every detected face, person assignments included, and a checksum also
+        # changes when only metadata inside the file was rewritten, so resetting
+        # faces_scanned_at here would silently destroy manual tags. Thumbnails need
+        # nothing: their cache key includes mtime and size.
+        if (old is not None and old["checksum"] is not None and checksum is not None
+                and old["checksum"] != checksum):
+            db.execute("DELETE FROM photo_embeddings WHERE photo_id=?", (new["id"],))
     # RETURNING reports what was actually stored, i.e. after the `keep` rule.
     if (new["lat"], new["lng"]) != ((old["lat"], old["lng"]) if old else (None, None)):
         bump_geotag_generation()
