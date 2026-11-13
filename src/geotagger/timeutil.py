@@ -7,8 +7,10 @@ time.gmtime()/localtime() raise OSError [Errno 22] for negative values on
 Windows, with or without a tz. Epoch + timedelta and calendar.timegm are pure
 Python arithmetic and handle any year datetime can represent.
 
-Undated is stored as 0 (no date tag read) or NULL (unparseable date, or rows
-from before the column existed); both mean the same thing. The one value this
+Undated is stored as 0 (read, but no date tag parsed) or NULL (never read: rows
+from before the column existed, or from before unparseable dates were stored as
+0); both mean the same thing for display. NULL also makes index._row_is_fresh
+re-read the file, which is how old rows get repaired to 0. The one value this
 convention can't represent is a photo taken at exactly 1970-01-01 00:00:00,
 which reads as undated — accepted, since no real camera clock lands there except
 by being unset. The SQL twin of has_date() is index.HAS_DATE_SQL.

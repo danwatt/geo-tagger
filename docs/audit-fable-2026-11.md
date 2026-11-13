@@ -152,7 +152,7 @@ between the check and the lock.
 ## Scanning and indexing
 
 <a id="s1"></a>
-**S1 — High — Unparseable dates make a file permanently stale** [seen]
+**S1 — High — Unparseable dates make a file permanently stale** [seen] — ✅ **DONE** (`sidecar._pick_datetime` tries each candidate; sub-seconds and `Z`/`±hh:mm` accepted, offset ignored; none parse = 0 = fresh; legacy NULL rows re-read once)
 `sidecar.py:123-127`, `index.py:1075`. `_parse_exif_datetime` returns `None` for any truthy but unparseable
 value, and `is_fresh` treats `None` as "never read". Triggers include `QuickTime:CreateDate` of
 `0000:00:00 00:00:00` (common in videos), sub-seconds, and timezone suffixes. Those files get two ExifTool

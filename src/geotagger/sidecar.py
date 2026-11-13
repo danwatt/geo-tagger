@@ -1,5 +1,6 @@
 import calendar
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from geotagger.config import SIDECAR_MODE
@@ -11,16 +12,51 @@ from geotagger.timeutil import epoch_to_wallclock, wallclock_to_epoch  # noqa: F
 logger = logging.getLogger(__name__)
 
 
+# ExifTool's 'YYYY:MM:DD HH:MM:SS', optionally followed by sub-seconds ('.123')
+# and/or a UTC offset ('Z', '+05:30', '-0800'). XMP dates and newer cameras'
+# EXIF carry both suffixes; strptime on the bare format rejected them, which
+# left the row's date NULL and so permanently stale (audit S1).
+_EXIF_DT_RE = re.compile(
+    r"(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})"
+    r"(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?"
+)
+
+
 def _parse_exif_datetime(s: str) -> int | None:
-    """Parse '2024:10:02 14:23:45' → Unix timestamp, or None."""
+    """Parse '2024:10:02 14:23:45' → photo_datetime epoch, or None if unparseable.
+
+    The offset suffix is matched but deliberately ignored: photo_datetime is the
+    camera's wall clock (stored as if UTC, see timeutil), so the wall-clock part
+    is kept as written rather than converted to UTC. All-zero placeholders
+    ('0000:00:00 00:00:00', common in QuickTime CreateDate) and other impossible
+    values fail datetime() and return None, so read_metadata moves on to the
+    next candidate tag."""
     if not s:
         return None
-    try:
-        # ExifTool format: 'YYYY:MM:DD HH:MM:SS'
-        dt = datetime.strptime(s.strip(), "%Y:%m:%d %H:%M:%S")
-        return wallclock_to_epoch(dt)
-    except Exception:
+    m = _EXIF_DT_RE.fullmatch(s.strip())
+    if not m:
         return None
+    try:
+        return wallclock_to_epoch(datetime(*(int(g) for g in m.groups())))
+    except ValueError:  # year 0, month 13, Feb 30, …
+        return None
+
+
+def _pick_datetime(candidates: list) -> int:
+    """First candidate (in priority order) that parses, else 0.
+
+    Each one is parsed in turn rather than taking the first truthy value: a
+    present-but-garbage tag (a zeroed QuickTime CreateDate, say) must not hide
+    a good one further down. 0 — not None — when nothing parses: it means "read,
+    undated" (timeutil.has_date), whereas NULL means "never read" to
+    index._row_is_fresh, which would re-read and re-hash the file every scan."""
+    for raw in candidates:
+        if raw is None:
+            continue
+        ts = _parse_exif_datetime(str(raw))
+        if ts is not None:
+            return ts
+    return 0
 
 
 def _coerce_orientation(raw) -> int:
@@ -153,11 +189,12 @@ def read_metadata(image_path: Path) -> dict:
     # read" to index.is_fresh, which would re-scan scans/screenshots every boot.
     camera = f"{make} {model}".strip()
 
-    raw_dt = (sidecar_dt
-              or row.get("EXIF:DateTimeOriginal")
-              or row.get("XMP:DateTimeOriginal")
-              or row.get("QuickTime:CreateDate"))
-    photo_datetime = _parse_exif_datetime(str(raw_dt)) if raw_dt else 0
+    photo_datetime = _pick_datetime([
+        sidecar_dt,
+        row.get("EXIF:DateTimeOriginal"),
+        row.get("XMP:DateTimeOriginal"),
+        row.get("QuickTime:CreateDate"),
+    ])
 
     if gps_accuracy <= 0 and not gps_void:
         raw_acc = row.get("EXIF:GPSHPositioningError") or row.get("XMP:GPSHPositioningError")

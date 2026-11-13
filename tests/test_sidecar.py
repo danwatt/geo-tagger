@@ -48,6 +48,98 @@ class TestParseExifDatetime:
     def test_none_for_garbage(self):
         assert sidecar._parse_exif_datetime("not a date") is None
 
+    # Audit S1: these used to return None, leaving photo_datetime NULL and the
+    # file re-read on every scan.
+    _WALL = calendar.timegm((2024, 10, 2, 14, 23, 45, 0, 0, 0))
+
+    def test_sub_seconds_are_tolerated(self):
+        assert sidecar._parse_exif_datetime("2024:10:02 14:23:45.123") == self._WALL
+
+    @pytest.mark.parametrize("suffix", ["Z", "+05:30", "-08:00", "+0530"])
+    def test_offset_is_ignored_wall_clock_kept(self, suffix):
+        # photo_datetime is wall-clock-as-UTC: the offset is not applied.
+        assert sidecar._parse_exif_datetime(f"2024:10:02 14:23:45{suffix}") == self._WALL
+
+    def test_sub_seconds_and_offset_together(self):
+        assert sidecar._parse_exif_datetime("2024:10:02 14:23:45.50+05:30") == self._WALL
+
+    def test_zero_date_is_unparseable(self):
+        assert sidecar._parse_exif_datetime("0000:00:00 00:00:00") is None
+
+    def test_impossible_date_is_unparseable(self):
+        assert sidecar._parse_exif_datetime("2024:02:30 10:00:00") is None
+
+    def test_trailing_junk_is_unparseable(self):
+        assert sidecar._parse_exif_datetime("2024:10:02 14:23:45 garbage") is None
+
+
+class TestPickDatetime:
+    _WALL = calendar.timegm((2019, 1, 2, 3, 4, 5, 0, 0, 0))
+
+    def test_zero_date_falls_through_to_next_candidate(self):
+        assert sidecar._pick_datetime(
+            [None, "0000:00:00 00:00:00", None, "2019:01:02 03:04:05"]) == self._WALL
+
+    def test_first_parseable_candidate_wins(self):
+        assert sidecar._pick_datetime(
+            ["2019:01:02 03:04:05", "2000:01:01 00:00:00"]) == self._WALL
+
+    def test_all_garbage_is_zero_not_none(self):
+        assert sidecar._pick_datetime(["0000:00:00 00:00:00", "junk", ""]) == 0
+
+    def test_no_candidates_is_zero(self):
+        assert sidecar._pick_datetime([None, None]) == 0
+
+
+class TestUnparseableDateIsFresh:
+    """End to end: a file whose only date tag is a zeroed placeholder is stored
+    as 0 and counts as fresh on the next scan, instead of NULL (never read)."""
+
+    def test_zero_embedded_date_falls_through_to_embedded_xmp(self, et_session, sample_image):
+        et = exiftool_session.get_et()
+        et.execute("-overwrite_original", "-EXIF:DateTimeOriginal=0000:00:00 00:00:00",
+                   "-XMP:DateTimeOriginal=2019:01:02 03:04:05", str(sample_image))
+        # Guard the premise: the zeroed tag really is there (and truthy), so this
+        # exercises the fall-through rather than a missing tag.
+        assert et.get_tags([str(sample_image)], tags=["EXIF:DateTimeOriginal"])[0]             .get("EXIF:DateTimeOriginal") == "0000:00:00 00:00:00"
+        assert sidecar.read_metadata(sample_image)["photo_datetime"] == \
+            calendar.timegm((2019, 1, 2, 3, 4, 5, 0, 0, 0))
+
+    def test_all_garbage_stores_zero_and_is_fresh_on_rescan(self, db, et_session, sample_image):
+        from geotagger import index
+        et = exiftool_session.get_et()
+        et.execute("-overwrite_original", "-EXIF:DateTimeOriginal=0000:00:00 00:00:00",
+                   str(sample_image))
+        meta = sidecar.read_metadata(sample_image)
+        assert meta["photo_datetime"] == 0
+
+        st = sample_image.stat()
+        d, name = str(sample_image.parent), sample_image.name
+        index.upsert_photo(
+            filename=name, dir_=d, ext=".jpg", media_type="image",
+            mtime=st.st_mtime, size=st.st_size, lat=meta["lat"], lng=meta["lng"],
+            geotag_source=meta["geotag_source"], sidecar_path=None, sidecar_mtime=None,
+            camera=meta["camera"], photo_datetime=meta["photo_datetime"],
+            gps_accuracy=meta["gps_accuracy"], orientation=meta["orientation"],
+        )
+        assert index.is_fresh(d, name, st.st_mtime, None, None)
+        assert index.fresh_flags([(d, name, st.st_mtime, None, None)]) == [True]
+
+    def test_legacy_null_row_is_stale_then_repaired(self, db, et_session, sample_image):
+        """Rows already stuck at NULL by the old parser are re-read once (NULL is
+        "never read") and the re-read stores 0, after which they are fresh."""
+        from geotagger import index
+        st = sample_image.stat()
+        d, name = str(sample_image.parent), sample_image.name
+        kw = dict(filename=name, dir_=d, ext=".jpg", media_type="image",
+                  mtime=st.st_mtime, size=st.st_size, lat=None, lng=None,
+                  geotag_source="none", sidecar_path=None, sidecar_mtime=None,
+                  camera="", gps_accuracy=-1.0, orientation=1)
+        index.upsert_photo(**kw, photo_datetime=None)
+        assert not index.is_fresh(d, name, st.st_mtime, None, None)
+        index.upsert_photo(**kw, photo_datetime=sidecar.read_metadata(sample_image)["photo_datetime"])
+        assert index.is_fresh(d, name, st.st_mtime, None, None)
+
 
 # ── round-trip through a real exiftool process + sidecar file ──
 
