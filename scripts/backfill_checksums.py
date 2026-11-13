@@ -49,9 +49,8 @@ def main():
     index.init_db(root)
 
     if args.rescan:
-        db = index.get_db()
-        db.execute("UPDATE photos SET checksum=NULL")
-        db.commit()
+        with index.transaction() as db:
+            db.execute("UPDATE photos SET checksum=NULL")
 
     pending = index.get_photos_missing_checksum(args.limit or None)
     if not pending:

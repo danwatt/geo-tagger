@@ -102,10 +102,9 @@ def main():
             print(f"  … and {len(todo) - 50} more")
         return
 
-    db = index.get_db()
-    cleared = db.execute("SELECT COUNT(*) FROM geocode_cache").fetchone()[0]
-    db.execute("DELETE FROM geocode_cache")
-    db.commit()
+    with index.transaction() as db:
+        cleared = db.execute("SELECT COUNT(*) FROM geocode_cache").fetchone()[0]
+        db.execute("DELETE FROM geocode_cache")
     print(f"Cleared {cleared:,} cached geocode lookup(s) (stale now that new place data is available).")
 
     print(f"Re-geocoding {len(todo)} photo(s)…")

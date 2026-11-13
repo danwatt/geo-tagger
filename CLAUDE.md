@@ -67,7 +67,11 @@ don't.
     optional override params (see `faces.py`).
 - **SQLite**: `sqlite3.Row` row factory (access columns by name), always parameterized queries
   (`?` placeholders — never f-string user data into SQL; f-strings you see only interpolate
-  fixed clause fragments), explicit `db.commit()` after writes, WAL mode. Schema lives in
+  fixed clause fragments), WAL mode. **Every write goes through
+  `with index.transaction() as db:`** — one shared connection, so block holds global write lock,
+  commits on exit, rolls back on exception; never call `db.commit()` yourself. Re-entrant
+  (nested = savepoint; wrap several `index.*` writes to make one unit). DB work only inside —
+  no ExifTool/hashing/detection under it. Reads stay plain `get_db().execute(…)`. Schema lives in
   `index.init_db()`; **migrations additive**, done in-code via `PRAGMA table_info` +
   `ALTER TABLE ADD COLUMN` guards. Add columns same way — never assume fresh DB.
 - **Local imports**: heavy or rarely-used modules (`bisect`, `json as _json`, `datetime`,

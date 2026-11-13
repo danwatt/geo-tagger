@@ -48,12 +48,11 @@ def update_photo_times(updates: dict[int, int]) -> int:
         # Update database. Keep sidecar tracking current so the next scan
         # doesn't consider this row stale and re-derive photo_datetime from
         # the (uncorrected) embedded EXIF, clobbering this offset.
-        db = index.get_db()
-        db.execute(
-            "UPDATE photos SET photo_datetime=?, sidecar_path=?, sidecar_mtime=? WHERE id=?",
-            (new_dt, sc.name, sc_mtime, photo_id),
-        )
-        db.commit()
+        with index.transaction() as db:
+            db.execute(
+                "UPDATE photos SET photo_datetime=?, sidecar_path=?, sidecar_mtime=? WHERE id=?",
+                (new_dt, sc.name, sc_mtime, photo_id),
+            )
 
         updated += 1
 

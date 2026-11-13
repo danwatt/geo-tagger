@@ -86,7 +86,6 @@ def delete_photos(photo_ids: list[int]) -> dict[str, int]:
     photos_spatial is the one exception: index.init_db installs an AFTER DELETE
     trigger on photos that prunes the R*Tree entry.
     """
-    db = index.get_db()
     counts = {"faces": 0, "face_embeddings": 0, "face_negatives": 0,
               "places_cleared": 0, "photos": 0}
 
@@ -94,31 +93,33 @@ def delete_photos(photo_ids: list[int]) -> dict[str, int]:
         batch = photo_ids[i:i + CHUNK]
         ph = ",".join("?" * len(batch))
 
-        face_ids = [r[0] for r in db.execute(
-            f"SELECT id FROM faces WHERE photo_id IN ({ph})", batch
-        ).fetchall()]
-        if face_ids:
-            fph = ",".join("?" * len(face_ids))
-            counts["face_negatives"] += db.execute(
-                f"DELETE FROM face_negatives WHERE face_id IN ({fph})", face_ids
-            ).rowcount
-            counts["face_embeddings"] += db.execute(
-                f"DELETE FROM face_embeddings WHERE face_id IN ({fph})", face_ids
-            ).rowcount
-            counts["faces"] += db.execute(
-                f"DELETE FROM faces WHERE id IN ({fph})", face_ids
+        # One unit per chunk: a failure midway rolls the chunk back rather than
+        # leaving faces deleted for photos that still exist.
+        with index.transaction() as db:
+            face_ids = [r[0] for r in db.execute(
+                f"SELECT id FROM faces WHERE photo_id IN ({ph})", batch
+            ).fetchall()]
+            if face_ids:
+                fph = ",".join("?" * len(face_ids))
+                counts["face_negatives"] += db.execute(
+                    f"DELETE FROM face_negatives WHERE face_id IN ({fph})", face_ids
+                ).rowcount
+                counts["face_embeddings"] += db.execute(
+                    f"DELETE FROM face_embeddings WHERE face_id IN ({fph})", face_ids
+                ).rowcount
+                counts["faces"] += db.execute(
+                    f"DELETE FROM faces WHERE id IN ({fph})", face_ids
+                ).rowcount
+
+            # A place pointing at a deleted photo would render a broken cover image.
+            counts["places_cleared"] += db.execute(
+                f"UPDATE places SET representative_photo_id=NULL "
+                f"WHERE representative_photo_id IN ({ph})", batch
             ).rowcount
 
-        # A place pointing at a deleted photo would render a broken cover image.
-        counts["places_cleared"] += db.execute(
-            f"UPDATE places SET representative_photo_id=NULL "
-            f"WHERE representative_photo_id IN ({ph})", batch
-        ).rowcount
-
-        counts["photos"] += db.execute(
-            f"DELETE FROM photos WHERE id IN ({ph})", batch
-        ).rowcount
-        db.commit()
+            counts["photos"] += db.execute(
+                f"DELETE FROM photos WHERE id IN ({ph})", batch
+            ).rowcount
 
     index.bump_faces_generation()
     return counts

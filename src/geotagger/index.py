@@ -1,5 +1,8 @@
 import sqlite3
+import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from geotagger.config import CACHE_DIR_NAME, get_cache_dir, get_state_dir
 from geotagger.db_timing import TimedConnection
@@ -42,8 +45,108 @@ def bump_geotag_generation():
     _geotag_generation += 1
 
 
+# ── Transactions ──
+# The connection is ONE handle shared by the event loop, the executor threads and
+# the scan workers, and SQLite transactions are per connection, not per thread.
+# Unserialized, thread B's commit would persist thread A's half-finished
+# multi-statement write, and a write that raised midway would leave its
+# statements pending for the next unrelated commit to persist. So every write
+# goes through transaction(): one re-entrant lock makes write units mutually
+# exclusive, and each unit ends in exactly one COMMIT or ROLLBACK.
+_tx_lock = threading.RLock()
+# Nesting depth of transaction() on the thread holding _tx_lock (only ever
+# touched under the lock). 0 = no unit open.
+_tx_depth = 0
+
+
+@contextmanager
+def transaction() -> Iterator[sqlite3.Connection]:
+    """The one way to write: ``with index.transaction() as db: ...``.
+
+    Holds the write lock for the block, commits on a clean exit and rolls back
+    if the block raises — so the unit is all-or-nothing and no other thread's
+    write (or commit) can land inside it. Reads the unit depends on belong
+    inside the block too (read-then-write is then atomic, and ``lastrowid`` is
+    this thread's own).
+
+    Re-entrant: a write helper may call another, and a caller may wrap several
+    index.* writes to make them one unit. Only the outermost block commits; an
+    inner block is a SAVEPOINT, so an inner failure the caller chooses to catch
+    undoes just the inner block's statements.
+
+    Keep the block to DB work. The lock is global: ExifTool, hashing, face
+    detection or any other slow call inside it stalls every other writer.
+
+    Reads outside a block are not serialized against writers — same connection,
+    so they can observe a unit's uncommitted statements. That state is never
+    persisted unless the unit commits; a read that must not see it takes the
+    block too.
+    """
+    global _tx_depth
+    with _tx_lock:
+        db = get_db()
+        depth = _tx_depth
+        outermost = depth == 0
+        savepoint = f"tx{depth}"
+        if not outermost:
+            db.execute(f"SAVEPOINT {savepoint}")
+        elif not db.in_transaction:
+            # Explicit, not sqlite3's implicit BEGIN-before-DML: a nested
+            # SAVEPOINT opened before the first DML would otherwise *be* the
+            # transaction, and releasing it would commit mid-unit. IMMEDIATE
+            # takes the write lock up front, so a unit that reads then writes
+            # can't hit SQLITE_BUSY on the upgrade when a script in another
+            # process has written in between.
+            db.execute("BEGIN IMMEDIATE")
+        # else: statements are already pending from code that wrote through
+        # get_db() without committing (scripts, tests). Join them — they
+        # commit or roll back with this unit, as they did with the next commit.
+        _tx_depth = depth + 1
+        try:
+            yield db
+            if outermost:
+                db.commit()
+            else:
+                db.execute(f"RELEASE {savepoint}")
+        except BaseException:
+            # Also reached when the COMMIT itself fails (disk full, busy):
+            # without the rollback the unit would stay open and ride the next
+            # commit.
+            try:
+                if outermost:
+                    db.rollback()
+                else:
+                    db.execute(f"ROLLBACK TO {savepoint}")
+                    db.execute(f"RELEASE {savepoint}")
+            except sqlite3.Error:
+                pass  # e.g. connection closed under us — surface the original error
+            # Helpers inside the unit may already have bumped a generation and
+            # let a cache rebuild from rows that no longer exist.
+            bump_faces_generation()
+            bump_geotag_generation()
+            raise
+        finally:
+            _tx_depth = depth
+
+
 def init_db(root: Path | None = None) -> sqlite3.Connection:
     """Initialize the database. If CACHE_DIR is set, use that; otherwise use root / CACHE_DIR_NAME."""
+    # Under the write lock so a (re)open can't swap the connection out from
+    # under another thread's open unit. The schema/migration body itself runs
+    # in SQLite's autocommit mode with one commit at the end, not transaction():
+    # PRAGMA journal_mode can't run inside a transaction.
+    with _tx_lock:
+        try:
+            return _init_db_locked(root)
+        except BaseException:
+            # Don't leave a failed migration's DML pending for the first
+            # unrelated write to commit.
+            if _db is not None and _db.in_transaction:
+                _db.rollback()
+            raise
+
+
+def _init_db_locked(root: Path | None) -> sqlite3.Connection:
     global _db, _db_path
     # A different DB is a different set of geotags, whatever the old one held.
     bump_geotag_generation()
@@ -58,7 +161,16 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     _db_path = cache_dir / "index.db"
-    _db = sqlite3.connect(str(_db_path), check_same_thread=False, factory=TimedConnection)
+    # cached_statements=0: the sqlite3 module caches prepared statements per
+    # connection keyed on SQL text, so two threads running the same query at
+    # once share ONE statement — the second execute resets and rebinds it under
+    # the first thread's cursor, which then returns the other thread's rows or
+    # raises "bad parameter or other API misuse" (measured: a few wrong results
+    # per 20K point SELECTs across 6 threads, 0 with the cache off). Reads are
+    # not serialized by transaction(), so each cursor must own its statement.
+    # Costs a re-prepare per query, ~2 µs on a point SELECT.
+    _db = sqlite3.connect(str(_db_path), check_same_thread=False, factory=TimedConnection,
+                          cached_statements=0)
     _db.row_factory = sqlite3.Row
     # Registered once per connection, here and nowhere else. The connection is
     # shared across threads, and SQLite refuses to redefine a user function while
@@ -561,21 +673,24 @@ def close_db() -> None:
     connection is shared across threads, and a query on a closed connection
     raises ProgrammingError."""
     global _db, _db_path
-    db = _db
-    # Drop the handle first so a late get_db() fails with the clear
-    # "not initialized" error rather than handing out a closed connection.
-    _db = None
-    _db_path = None
-    if db is None:
-        return
-    try:
-        # Fold the WAL back into the main file so a clean exit leaves a single
-        # self-contained index.db. Best-effort: SQLite checkpoints on the last
-        # close anyway, and a busy checkpoint must not stop the close.
-        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    except sqlite3.Error:
-        pass
-    db.close()
+    # Under the write lock: waits out a unit another thread still has open
+    # rather than closing the connection in the middle of it.
+    with _tx_lock:
+        db = _db
+        # Drop the handle first so a late get_db() fails with the clear
+        # "not initialized" error rather than handing out a closed connection.
+        _db = None
+        _db_path = None
+        if db is None:
+            return
+        try:
+            # Fold the WAL back into the main file so a clean exit leaves a single
+            # self-contained index.db. Best-effort: SQLite checkpoints on the last
+            # close anyway, and a busy checkpoint must not stop the close.
+            db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error:
+            pass
+        db.close()
     bump_geotag_generation()  # nothing cached from this DB is valid for the next
 
 
@@ -591,6 +706,14 @@ def vacuum_if_needed(min_free_ratio: float = 0.1, target_page_size: int = 0) -> 
     roughly one DB's worth of free disk space alongside it for the rewrite.
     Must run before any other connection/transaction touches the DB.
     """
+    # Holds the write lock but deliberately not transaction(): VACUUM (and
+    # PRAGMA journal_mode) refuse to run inside a transaction. The lock keeps
+    # any writer from opening one on the shared connection meanwhile.
+    with _tx_lock:
+        return _vacuum_if_needed_locked(min_free_ratio, target_page_size)
+
+
+def _vacuum_if_needed_locked(min_free_ratio: float, target_page_size: int) -> dict:
     db = get_db()
     page_count = db.execute("PRAGMA page_count").fetchone()[0]
     freelist_count = db.execute("PRAGMA freelist_count").fetchone()[0]
@@ -640,48 +763,47 @@ def upsert_photo(
     gps_accuracy: float | None = None, orientation: int | None = None,
     checksum: str | None = None,
 ):
-    db = get_db()
-    # A hand-placed geotag with WRITE_XMP_ON_GEOTAG off exists only in this row
-    # (geotag_source='database'), so a rescan must not replace it with what the
-    # file says — the file has no GPS, or the embedded GPS the user overrode.
-    # Only a sidecar wins: that is the durable form of a geotag (sidecar export,
-    # or another tool). SET expressions all see the pre-update row, so the
-    # `photos.geotag_source` test is consistent across the four columns.
-    # gps_accuracy falls back to the file's value because update_geotag leaves
-    # it NULL when none was given, and is_fresh reads NULL as "never read".
-    keep = "photos.geotag_source = 'database' AND excluded.geotag_source <> 'sidecar'"
-    # Coordinates before/after, to bump the geotag generation only when they
-    # really move: a rescan of touched-but-otherwise-unchanged files (or new
-    # photos without GPS) must not throw away the hotspot clustering per file.
-    # The lookup rides the UNIQUE(dir, filename) index the upsert needs anyway.
-    old = db.execute("SELECT lat, lng FROM photos WHERE dir=? AND filename=?",
-                     (dir_, filename)).fetchone()
-    new = db.execute(f"""
-        INSERT INTO photos
-            (filename, dir, ext, media_type, mtime, size, lat, lng,
-             geotag_source, sidecar_path, sidecar_mtime, camera, photo_datetime,
-             gps_accuracy, orientation, checksum, scanned_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(dir, filename) DO UPDATE SET
-            ext=excluded.ext,
-            media_type=excluded.media_type, mtime=excluded.mtime, size=excluded.size,
-            lat=CASE WHEN {keep} THEN photos.lat ELSE excluded.lat END,
-            lng=CASE WHEN {keep} THEN photos.lng ELSE excluded.lng END,
-            geotag_source=CASE WHEN {keep} THEN photos.geotag_source
-                               ELSE excluded.geotag_source END,
-            gps_accuracy=CASE WHEN {keep}
-                              THEN COALESCE(photos.gps_accuracy, excluded.gps_accuracy)
-                              ELSE excluded.gps_accuracy END,
-            sidecar_path=excluded.sidecar_path, sidecar_mtime=excluded.sidecar_mtime,
-            camera=excluded.camera, photo_datetime=excluded.photo_datetime,
-            orientation=excluded.orientation,
-            checksum=excluded.checksum,
-            scanned_at=excluded.scanned_at
-        RETURNING lat, lng
-    """, (filename, dir_, ext, media_type, mtime, size, lat, lng,
-          geotag_source, sidecar_path, sidecar_mtime, camera, photo_datetime,
-          gps_accuracy, orientation, checksum, time.time())).fetchone()
-    db.commit()
+    with transaction() as db:
+        # A hand-placed geotag with WRITE_XMP_ON_GEOTAG off exists only in this row
+        # (geotag_source='database'), so a rescan must not replace it with what the
+        # file says — the file has no GPS, or the embedded GPS the user overrode.
+        # Only a sidecar wins: that is the durable form of a geotag (sidecar export,
+        # or another tool). SET expressions all see the pre-update row, so the
+        # `photos.geotag_source` test is consistent across the four columns.
+        # gps_accuracy falls back to the file's value because update_geotag leaves
+        # it NULL when none was given, and is_fresh reads NULL as "never read".
+        keep = "photos.geotag_source = 'database' AND excluded.geotag_source <> 'sidecar'"
+        # Coordinates before/after, to bump the geotag generation only when they
+        # really move: a rescan of touched-but-otherwise-unchanged files (or new
+        # photos without GPS) must not throw away the hotspot clustering per file.
+        # The lookup rides the UNIQUE(dir, filename) index the upsert needs anyway.
+        old = db.execute("SELECT lat, lng FROM photos WHERE dir=? AND filename=?",
+                         (dir_, filename)).fetchone()
+        new = db.execute(f"""
+            INSERT INTO photos
+                (filename, dir, ext, media_type, mtime, size, lat, lng,
+                 geotag_source, sidecar_path, sidecar_mtime, camera, photo_datetime,
+                 gps_accuracy, orientation, checksum, scanned_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(dir, filename) DO UPDATE SET
+                ext=excluded.ext,
+                media_type=excluded.media_type, mtime=excluded.mtime, size=excluded.size,
+                lat=CASE WHEN {keep} THEN photos.lat ELSE excluded.lat END,
+                lng=CASE WHEN {keep} THEN photos.lng ELSE excluded.lng END,
+                geotag_source=CASE WHEN {keep} THEN photos.geotag_source
+                                   ELSE excluded.geotag_source END,
+                gps_accuracy=CASE WHEN {keep}
+                                  THEN COALESCE(photos.gps_accuracy, excluded.gps_accuracy)
+                                  ELSE excluded.gps_accuracy END,
+                sidecar_path=excluded.sidecar_path, sidecar_mtime=excluded.sidecar_mtime,
+                camera=excluded.camera, photo_datetime=excluded.photo_datetime,
+                orientation=excluded.orientation,
+                checksum=excluded.checksum,
+                scanned_at=excluded.scanned_at
+            RETURNING lat, lng
+        """, (filename, dir_, ext, media_type, mtime, size, lat, lng,
+              geotag_source, sidecar_path, sidecar_mtime, camera, photo_datetime,
+              gps_accuracy, orientation, checksum, time.time())).fetchone()
     # RETURNING reports what was actually stored, i.e. after the `keep` rule.
     if (new["lat"], new["lng"]) != ((old["lat"], old["lng"]) if old else (None, None)):
         bump_geotag_generation()
@@ -690,17 +812,16 @@ def upsert_photo(
 def update_geotag(photo_id: int, lat: float | None, lng: float | None,
                   geotag_source: str, sidecar_path: str, sidecar_mtime: float | None,
                   gps_accuracy: float | None = None):
-    db = get_db()
-    # Coordinates changed, so any previously-derived location names are stale.
-    # Clear them and reset geocoded_at so the point is re-geocoded; the caller
-    # repopulates them (api_geotag does this immediately after).
-    db.execute("""
-        UPDATE photos SET lat=?, lng=?, gps_accuracy=?, geotag_source=?, sidecar_path=?, sidecar_mtime=?,
-            loc_city=NULL, loc_state=NULL, loc_county=NULL, loc_country=NULL,
-            loc_country_code=NULL, geocoded_at=NULL
-        WHERE id=?
-    """, (lat, lng, gps_accuracy, geotag_source, sidecar_path, sidecar_mtime, photo_id))
-    db.commit()
+    with transaction() as db:
+        # Coordinates changed, so any previously-derived location names are stale.
+        # Clear them and reset geocoded_at so the point is re-geocoded; the caller
+        # repopulates them (api_geotag does this immediately after).
+        db.execute("""
+            UPDATE photos SET lat=?, lng=?, gps_accuracy=?, geotag_source=?, sidecar_path=?, sidecar_mtime=?,
+                loc_city=NULL, loc_state=NULL, loc_county=NULL, loc_country=NULL,
+                loc_country_code=NULL, geocoded_at=NULL
+            WHERE id=?
+        """, (lat, lng, gps_accuracy, geotag_source, sidecar_path, sidecar_mtime, photo_id))
     bump_geotag_generation()
 
 
@@ -710,12 +831,11 @@ def set_geocode_ignored(photo_ids: list[int], ignored: bool):
     Show filter and geotagged/not-geotagged stats."""
     if not photo_ids:
         return
-    db = get_db()
-    db.executemany(
-        "UPDATE photos SET geocode_ignored=? WHERE id=?",
-        [(1 if ignored else 0, pid) for pid in photo_ids],
-    )
-    db.commit()
+    with transaction() as db:
+        db.executemany(
+            "UPDATE photos SET geocode_ignored=? WHERE id=?",
+            [(1 if ignored else 0, pid) for pid in photo_ids],
+        )
 
 
 def assign_approximate_date(photo_id: int, photo_datetime: int | None, precision: str | None,
@@ -724,12 +844,11 @@ def assign_approximate_date(photo_id: int, photo_datetime: int | None, precision
     approximate). Used by both Assign approximate date and the filename/folder
     date-guess commit/undo. Bumping faces_generation is the caller's job (the
     services do it once for the whole batch)."""
-    db = get_db()
-    db.execute(
-        "UPDATE photos SET photo_datetime=?, date_precision=?, sidecar_path=?, sidecar_mtime=? WHERE id=?",
-        (photo_datetime, precision, sidecar_path, sidecar_mtime, photo_id),
-    )
-    db.commit()
+    with transaction() as db:
+        db.execute(
+            "UPDATE photos SET photo_datetime=?, date_precision=?, sidecar_path=?, sidecar_mtime=? WHERE id=?",
+            (photo_datetime, precision, sidecar_path, sidecar_mtime, photo_id),
+        )
 
 
 def _day_start_ts(day: str) -> int | None:
@@ -983,9 +1102,8 @@ def set_checksums(rows: list[tuple[str, int]]):
     matching the UPDATE's ``?`` order so the caller can pass cursor tuples directly."""
     if not rows:
         return
-    db = get_db()
-    db.executemany("UPDATE photos SET checksum=? WHERE id=?", rows)
-    db.commit()
+    with transaction() as db:
+        db.executemany("UPDATE photos SET checksum=? WHERE id=?", rows)
 
 
 # ── Orientation backfill ──
@@ -1012,9 +1130,8 @@ def set_orientations(rows: list[tuple[int, int]]):
     photo_id), matching the UPDATE's ``?`` order."""
     if not rows:
         return
-    db = get_db()
-    db.executemany("UPDATE photos SET orientation=? WHERE id=?", rows)
-    db.commit()
+    with transaction() as db:
+        db.executemany("UPDATE photos SET orientation=? WHERE id=?", rows)
 
 
 def get_photos_in_bbox(min_lat: float, max_lat: float, min_lng: float, max_lng: float) -> list[sqlite3.Row]:
@@ -1223,20 +1340,18 @@ def get_place_stats() -> dict[int, dict]:
 
 def create_place(name: str, place_type: str, bounds: str) -> int:
     """Create a new place and return its ID."""
-    db = get_db()
-    cursor = db.execute(
-        "INSERT INTO places (name, type, bounds, created_at) VALUES (?, ?, ?, ?)",
-        (name, place_type, bounds, time.time())
-    )
-    db.commit()
+    with transaction() as db:
+        cursor = db.execute(
+            "INSERT INTO places (name, type, bounds, created_at) VALUES (?, ?, ?, ?)",
+            (name, place_type, bounds, time.time())
+        )
     return cursor.lastrowid
 
 
 def delete_place(place_id: int):
     """Delete a place by ID."""
-    db = get_db()
-    db.execute("DELETE FROM places WHERE id=?", (place_id,))
-    db.commit()
+    with transaction() as db:
+        db.execute("DELETE FROM places WHERE id=?", (place_id,))
 
 
 def update_place(place_id: int, bounds: str | None = None, name: str | None = None):
@@ -1252,16 +1367,14 @@ def update_place(place_id: int, bounds: str | None = None, name: str | None = No
     if not sets:
         return
     params.append(place_id)
-    db = get_db()
-    db.execute(f"UPDATE places SET {', '.join(sets)} WHERE id=?", params)
-    db.commit()
+    with transaction() as db:
+        db.execute(f"UPDATE places SET {', '.join(sets)} WHERE id=?", params)
 
 
 def set_place_representative(place_id: int, photo_id: int | None):
     """Set (or clear, with photo_id=None) a place's representative photo."""
-    db = get_db()
-    db.execute("UPDATE places SET representative_photo_id=? WHERE id=?", (photo_id, place_id))
-    db.commit()
+    with transaction() as db:
+        db.execute("UPDATE places SET representative_photo_id=? WHERE id=?", (photo_id, place_id))
 
 
 # ── Reverse geocoding ──
@@ -1283,38 +1396,36 @@ def get_cached_geocode(qlat: int, qlng: int) -> dict | None:
 
 def put_cached_geocode(qlat: int, qlng: int, loc: dict, source: str = "local"):
     """Cache a location result for quantized coords."""
-    db = get_db()
-    db.execute(
-        """INSERT OR REPLACE INTO geocode_cache
-               (qlat, qlng, city, sublocation, postal_code, state, county, country,
-                country_code, source, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (qlat, qlng, loc.get("city"), loc.get("sublocation"), loc.get("postal_code"),
-         loc.get("state"), loc.get("county"), loc.get("country"), loc.get("country_code"),
-         source, time.time()),
-    )
-    db.commit()
+    with transaction() as db:
+        db.execute(
+            """INSERT OR REPLACE INTO geocode_cache
+                   (qlat, qlng, city, sublocation, postal_code, state, county, country,
+                    country_code, source, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (qlat, qlng, loc.get("city"), loc.get("sublocation"), loc.get("postal_code"),
+             loc.get("state"), loc.get("county"), loc.get("country"), loc.get("country_code"),
+             source, time.time()),
+        )
 
 
 def update_photo_location(photo_id: int, loc: dict | None):
     """Store reverse-geocoded place names on a photo. geocoded_at is always set
     (so a no-match isn't retried endlessly); loc=None records 'looked up, no match'."""
-    db = get_db()
-    if loc is None:
-        db.execute(
-            "UPDATE photos SET loc_city=NULL, loc_sublocation=NULL, loc_postal_code=NULL, "
-            "loc_state=NULL, loc_county=NULL, loc_country=NULL, loc_country_code=NULL, "
-            "geocoded_at=? WHERE id=?",
-            (time.time(), photo_id),
-        )
-    else:
-        db.execute(
-            "UPDATE photos SET loc_city=?, loc_sublocation=?, loc_postal_code=?, loc_state=?, "
-            "loc_county=?, loc_country=?, loc_country_code=?, geocoded_at=? WHERE id=?",
-            (loc.get("city"), loc.get("sublocation"), loc.get("postal_code"), loc.get("state"),
-             loc.get("county"), loc.get("country"), loc.get("country_code"), time.time(), photo_id),
-        )
-    db.commit()
+    with transaction() as db:
+        if loc is None:
+            db.execute(
+                "UPDATE photos SET loc_city=NULL, loc_sublocation=NULL, loc_postal_code=NULL, "
+                "loc_state=NULL, loc_county=NULL, loc_country=NULL, loc_country_code=NULL, "
+                "geocoded_at=? WHERE id=?",
+                (time.time(), photo_id),
+            )
+        else:
+            db.execute(
+                "UPDATE photos SET loc_city=?, loc_sublocation=?, loc_postal_code=?, loc_state=?, "
+                "loc_county=?, loc_country=?, loc_country_code=?, geocoded_at=? WHERE id=?",
+                (loc.get("city"), loc.get("sublocation"), loc.get("postal_code"), loc.get("state"),
+                 loc.get("county"), loc.get("country"), loc.get("country_code"), time.time(), photo_id),
+            )
 
 
 def get_photos_needing_geocode(limit: int | None = None) -> list[sqlite3.Row]:
@@ -1381,13 +1492,12 @@ def store_embeddings(rows: list[tuple[int, bytes | None]], model: str):
     transaction."""
     if not rows:
         return
-    db = get_db()
-    now = time.time()
-    db.executemany(
-        "INSERT OR REPLACE INTO photo_embeddings (photo_id, model, vec, created_at) VALUES (?, ?, ?, ?)",
-        [(pid, model, vec, now) for pid, vec in rows],
-    )
-    db.commit()
+    with transaction() as db:
+        now = time.time()
+        db.executemany(
+            "INSERT OR REPLACE INTO photo_embeddings (photo_id, model, vec, created_at) VALUES (?, ?, ?, ?)",
+            [(pid, model, vec, now) for pid, vec in rows],
+        )
 
 
 def embedding_signature(model: str) -> tuple[int, float]:
@@ -1454,37 +1564,36 @@ def replace_faces(photo_id: int, faces: list[dict], det_dimension: int | None = 
     faces will appear in the suggestion matrix on the next full rebuild (triggered
     by the next label/ignore action by the user).
     """
-    db = get_db()
-    # Capture old face IDs so we can prune them from the in-memory cache below.
-    old_ids = [r[0] for r in db.execute(
-        "SELECT id FROM faces WHERE photo_id=? AND source='detected'", (photo_id,)
-    ).fetchall()]
-    if old_ids:
-        # Rescan mints new face ids, so negatives keyed on the old ones would
-        # otherwise dangle (FKs aren't enforced — no cascade). Known, accepted
-        # limitation: a rescan drops negatives, same as it already drops
-        # assignments (see docstring above).
-        placeholders = ','.join('?' * len(old_ids))
-        db.execute(f"DELETE FROM face_negatives WHERE face_id IN ({placeholders})", old_ids)
-        db.execute(f"DELETE FROM face_embeddings WHERE face_id IN ({placeholders})", old_ids)
-    db.execute("DELETE FROM faces WHERE photo_id=? AND source='detected'", (photo_id,))
-    now = time.time()
-    new_ids = []
-    for f in faces:
-        cur = db.execute(
-            """INSERT INTO faces (photo_id, person_id, bbox, det_score, source, created_at)
-               VALUES (?, NULL, ?, ?, 'detected', ?)""",
-            (photo_id, f["bbox"], f["det_score"], now),
-        )
-        new_ids.append(cur.lastrowid)
-    if new_ids:
-        db.executemany(
-            "INSERT INTO face_embeddings (face_id, embedding) VALUES (?, ?)",
-            [(fid, f["embedding"]) for fid, f in zip(new_ids, faces)],
-        )
-    db.execute("UPDATE photos SET faces_scanned_at=?, faces_det_dimension=? WHERE id=?",
-               (now, det_dimension, photo_id))
-    db.commit()
+    with transaction() as db:
+        # Capture old face IDs so we can prune them from the in-memory cache below.
+        old_ids = [r[0] for r in db.execute(
+            "SELECT id FROM faces WHERE photo_id=? AND source='detected'", (photo_id,)
+        ).fetchall()]
+        if old_ids:
+            # Rescan mints new face ids, so negatives keyed on the old ones would
+            # otherwise dangle (FKs aren't enforced — no cascade). Known, accepted
+            # limitation: a rescan drops negatives, same as it already drops
+            # assignments (see docstring above).
+            placeholders = ','.join('?' * len(old_ids))
+            db.execute(f"DELETE FROM face_negatives WHERE face_id IN ({placeholders})", old_ids)
+            db.execute(f"DELETE FROM face_embeddings WHERE face_id IN ({placeholders})", old_ids)
+        db.execute("DELETE FROM faces WHERE photo_id=? AND source='detected'", (photo_id,))
+        now = time.time()
+        new_ids = []
+        for f in faces:
+            cur = db.execute(
+                """INSERT INTO faces (photo_id, person_id, bbox, det_score, source, created_at)
+                   VALUES (?, NULL, ?, ?, 'detected', ?)""",
+                (photo_id, f["bbox"], f["det_score"], now),
+            )
+            new_ids.append(cur.lastrowid)
+        if new_ids:
+            db.executemany(
+                "INSERT INTO face_embeddings (face_id, embedding) VALUES (?, ?)",
+                [(fid, f["embedding"]) for fid, f in zip(new_ids, faces)],
+            )
+        db.execute("UPDATE photos SET faces_scanned_at=?, faces_det_dimension=? WHERE id=?",
+                   (now, det_dimension, photo_id))
     # Prune replaced faces from the cache (re-tags to current generation in place).
     if old_ids:
         from geotagger import faces as _faces
@@ -1501,23 +1610,22 @@ def delete_photo_faces(photo_ids: list[int]) -> int:
     """
     if not photo_ids:
         return 0
-    db = get_db()
-    placeholders = ",".join("?" * len(photo_ids))
-    old_ids = [r[0] for r in db.execute(
-        f"SELECT id FROM faces WHERE photo_id IN ({placeholders})", photo_ids
-    ).fetchall()]
-    if old_ids:
-        # FKs aren't enforced (no cascade) — drop negatives and embeddings
-        # explicitly, same as replace_faces does for a routine rescan.
-        fplaceholders = ",".join("?" * len(old_ids))
-        db.execute(f"DELETE FROM face_negatives WHERE face_id IN ({fplaceholders})", old_ids)
-        db.execute(f"DELETE FROM face_embeddings WHERE face_id IN ({fplaceholders})", old_ids)
-        db.execute(f"DELETE FROM faces WHERE id IN ({fplaceholders})", old_ids)
-    db.executemany(
-        "UPDATE photos SET faces_scanned_at=NULL, faces_det_dimension=NULL WHERE id=?",
-        [(pid,) for pid in photo_ids],
-    )
-    db.commit()
+    with transaction() as db:
+        placeholders = ",".join("?" * len(photo_ids))
+        old_ids = [r[0] for r in db.execute(
+            f"SELECT id FROM faces WHERE photo_id IN ({placeholders})", photo_ids
+        ).fetchall()]
+        if old_ids:
+            # FKs aren't enforced (no cascade) — drop negatives and embeddings
+            # explicitly, same as replace_faces does for a routine rescan.
+            fplaceholders = ",".join("?" * len(old_ids))
+            db.execute(f"DELETE FROM face_negatives WHERE face_id IN ({fplaceholders})", old_ids)
+            db.execute(f"DELETE FROM face_embeddings WHERE face_id IN ({fplaceholders})", old_ids)
+            db.execute(f"DELETE FROM faces WHERE id IN ({fplaceholders})", old_ids)
+        db.executemany(
+            "UPDATE photos SET faces_scanned_at=NULL, faces_det_dimension=NULL WHERE id=?",
+            [(pid,) for pid in photo_ids],
+        )
     bump_faces_generation()
     if old_ids:
         from geotagger import faces as _faces
@@ -1542,19 +1650,18 @@ def add_manual_face(photo_id: int, bbox: str, person_id: int | None = None,
     recognition gallery and the unlabeled suggestion queue, both of which inner-join
     face_embeddings.
     """
-    db = get_db()
-    now = time.time()
-    cur = db.execute(
-        """INSERT INTO faces (photo_id, person_id, bbox, det_score, source,
-                              created_at, assigned_at)
-           VALUES (?, ?, ?, ?, 'manual', ?, ?)""",
-        (photo_id, person_id, bbox, det_score, now, now if person_id else None),
-    )
-    face_id = cur.lastrowid
-    if embedding is not None:
-        db.execute("INSERT INTO face_embeddings (face_id, embedding) VALUES (?, ?)",
-                   (face_id, embedding))
-    db.commit()
+    with transaction() as db:
+        now = time.time()
+        cur = db.execute(
+            """INSERT INTO faces (photo_id, person_id, bbox, det_score, source,
+                                  created_at, assigned_at)
+               VALUES (?, ?, ?, ?, 'manual', ?, ?)""",
+            (photo_id, person_id, bbox, det_score, now, now if person_id else None),
+        )
+        face_id = cur.lastrowid
+        if embedding is not None:
+            db.execute("INSERT INTO face_embeddings (face_id, embedding) VALUES (?, ?)",
+                       (face_id, embedding))
     bump_faces_generation()
     return face_id
 
@@ -1564,16 +1671,15 @@ def delete_manual_face(face_id: int) -> bool:
     False (deleting nothing) for a detected face: those are removed by rescanning
     or hidden with ignore, never deleted piecemeal, since the next scan would just
     re-detect them."""
-    db = get_db()
-    row = db.execute("SELECT source FROM faces WHERE id=?", (face_id,)).fetchone()
-    if not row or row["source"] != "manual":
-        return False
-    # FKs aren't enforced (no cascade) — clear the satellites explicitly, same as
-    # replace_faces / delete_photo_faces do.
-    db.execute("DELETE FROM face_negatives WHERE face_id=?", (face_id,))
-    db.execute("DELETE FROM face_embeddings WHERE face_id=?", (face_id,))
-    db.execute("DELETE FROM faces WHERE id=?", (face_id,))
-    db.commit()
+    with transaction() as db:
+        row = db.execute("SELECT source FROM faces WHERE id=?", (face_id,)).fetchone()
+        if not row or row["source"] != "manual":
+            return False
+        # FKs aren't enforced (no cascade) — clear the satellites explicitly, same as
+        # replace_faces / delete_photo_faces do.
+        db.execute("DELETE FROM face_negatives WHERE face_id=?", (face_id,))
+        db.execute("DELETE FROM face_embeddings WHERE face_id=?", (face_id,))
+        db.execute("DELETE FROM faces WHERE id=?", (face_id,))
     bump_faces_generation()
     from geotagger import faces as _faces
     _faces.drop_from_unlabeled_cache([face_id])
@@ -1676,15 +1782,14 @@ def set_person_representatives(person_id: int, representative_ids: list[int]):
     labeled faces, everyone else representative=0. Recomputed from scratch each
     call (safe to re-run any time — after retagging, or after tuning the dedup
     settings)."""
-    db = get_db()
-    db.execute("UPDATE faces SET representative=0 WHERE person_id=?", (person_id,))
-    if representative_ids:
-        placeholders = ",".join("?" * len(representative_ids))
-        db.execute(
-            f"UPDATE faces SET representative=1 WHERE id IN ({placeholders})",
-            representative_ids,
-        )
-    db.commit()
+    with transaction() as db:
+        db.execute("UPDATE faces SET representative=0 WHERE person_id=?", (person_id,))
+        if representative_ids:
+            placeholders = ",".join("?" * len(representative_ids))
+            db.execute(
+                f"UPDATE faces SET representative=1 WHERE id IN ({placeholders})",
+                representative_ids,
+            )
 
 
 def _photo_ids_in_window(start_ts: int | None, end_ts: int | None) -> list[int]:
@@ -1885,21 +1990,20 @@ def assign_faces(face_ids: list[int], person_id: int | None):
     """
     if not face_ids:
         return
-    db = get_db()
-    now = time.time() if person_id is not None else None
-    db.executemany(
-        "UPDATE faces SET person_id=?, ignored=0, come_back=0, come_back_at=NULL, "
-        "assigned_at=? WHERE id=?",
-        [(person_id, now, fid) for fid in face_ids],
-    )
-    if person_id is not None:
-        # A face can't be both "assigned to P" and "not P" — drop that conflict.
-        # Other persons' negatives on these faces are left intact.
+    with transaction() as db:
+        now = time.time() if person_id is not None else None
         db.executemany(
-            "DELETE FROM face_negatives WHERE face_id=? AND person_id=?",
-            [(fid, person_id) for fid in face_ids],
+            "UPDATE faces SET person_id=?, ignored=0, come_back=0, come_back_at=NULL, "
+            "assigned_at=? WHERE id=?",
+            [(person_id, now, fid) for fid in face_ids],
         )
-    db.commit()
+        if person_id is not None:
+            # A face can't be both "assigned to P" and "not P" — drop that conflict.
+            # Other persons' negatives on these faces are left intact.
+            db.executemany(
+                "DELETE FROM face_negatives WHERE face_id=? AND person_id=?",
+                [(fid, person_id) for fid in face_ids],
+            )
     bump_faces_generation()
     if person_id is not None:  # labeled faces leave the unlabeled queue
         from geotagger import faces as _faces
@@ -1915,20 +2019,19 @@ def set_faces_ignored(face_ids: list[int], ignored: bool):
     """
     if not face_ids:
         return
-    db = get_db()
-    now = time.time()
-    if ignored:
-        db.executemany(
-            "UPDATE faces SET ignored=1, person_id=NULL, assigned_at=NULL, ignored_at=?, "
-            "come_back=0, come_back_at=NULL WHERE id=?",
-            [(now, fid) for fid in face_ids],
-        )
-    else:
-        db.executemany(
-            "UPDATE faces SET ignored=0, ignored_at=NULL WHERE id=?",
-            [(fid,) for fid in face_ids],
-        )
-    db.commit()
+    with transaction() as db:
+        now = time.time()
+        if ignored:
+            db.executemany(
+                "UPDATE faces SET ignored=1, person_id=NULL, assigned_at=NULL, ignored_at=?, "
+                "come_back=0, come_back_at=NULL WHERE id=?",
+                [(now, fid) for fid in face_ids],
+            )
+        else:
+            db.executemany(
+                "UPDATE faces SET ignored=0, ignored_at=NULL WHERE id=?",
+                [(fid,) for fid in face_ids],
+            )
     bump_faces_generation()
     if ignored:  # ignored faces leave the unlabeled queue (restore re-adds → rebuild)
         from geotagger import faces as _faces
@@ -1946,20 +2049,19 @@ def set_faces_come_back(face_ids: list[int], come_back: bool):
     """
     if not face_ids:
         return
-    db = get_db()
-    now = time.time()
-    if come_back:
-        db.executemany(
-            "UPDATE faces SET come_back=1, come_back_at=?, person_id=NULL, assigned_at=NULL, "
-            "ignored=0, ignored_at=NULL WHERE id=?",
-            [(now, fid) for fid in face_ids],
-        )
-    else:
-        db.executemany(
-            "UPDATE faces SET come_back=0, come_back_at=NULL WHERE id=?",
-            [(fid,) for fid in face_ids],
-        )
-    db.commit()
+    with transaction() as db:
+        now = time.time()
+        if come_back:
+            db.executemany(
+                "UPDATE faces SET come_back=1, come_back_at=?, person_id=NULL, assigned_at=NULL, "
+                "ignored=0, ignored_at=NULL WHERE id=?",
+                [(now, fid) for fid in face_ids],
+            )
+        else:
+            db.executemany(
+                "UPDATE faces SET come_back=0, come_back_at=NULL WHERE id=?",
+                [(fid,) for fid in face_ids],
+            )
     bump_faces_generation()
     if come_back:  # come-back faces leave the unlabeled queue (restore re-adds → rebuild)
         from geotagger import faces as _faces
@@ -2044,23 +2146,22 @@ def ignore_unlabeled_in_photos(photo_ids: list[int]) -> int:
     given photos. Returns the count of faces newly ignored."""
     if not photo_ids:
         return 0
-    db = get_db()
-    face_ids = [
-        r[0]
-        for r in db.execute(
-            f"SELECT id FROM faces WHERE photo_id IN ({','.join('?' * len(photo_ids))})"
-            " AND person_id IS NULL AND ignored = 0 AND come_back = 0",
-            photo_ids,
-        ).fetchall()
-    ]
-    if not face_ids:
-        return 0
-    now = time.time()
-    db.executemany(
-        "UPDATE faces SET ignored=1, person_id=NULL, assigned_at=NULL, ignored_at=? WHERE id=?",
-        [(now, fid) for fid in face_ids],
-    )
-    db.commit()
+    with transaction() as db:
+        face_ids = [
+            r[0]
+            for r in db.execute(
+                f"SELECT id FROM faces WHERE photo_id IN ({','.join('?' * len(photo_ids))})"
+                " AND person_id IS NULL AND ignored = 0 AND come_back = 0",
+                photo_ids,
+            ).fetchall()
+        ]
+        if not face_ids:
+            return 0
+        now = time.time()
+        db.executemany(
+            "UPDATE faces SET ignored=1, person_id=NULL, assigned_at=NULL, ignored_at=? WHERE id=?",
+            [(now, fid) for fid in face_ids],
+        )
     bump_faces_generation()
     from geotagger import faces as _faces
     _faces.drop_from_unlabeled_cache(face_ids)
@@ -2082,17 +2183,16 @@ def assign_face(face_id: int, person_id: int | None):
     the face states (labeled / unlabeled / ignored / come-back) mutually
     exclusive.
     """
-    db = get_db()
-    now = time.time() if person_id is not None else None
-    db.execute(
-        "UPDATE faces SET person_id=?, ignored=0, come_back=0, come_back_at=NULL, "
-        "assigned_at=? WHERE id=?",
-        (person_id, now, face_id))
-    if person_id is not None:
-        # A face can't be both "assigned to P" and "not P" — drop that conflict.
-        db.execute("DELETE FROM face_negatives WHERE face_id=? AND person_id=?",
-                   (face_id, person_id))
-    db.commit()
+    with transaction() as db:
+        now = time.time() if person_id is not None else None
+        db.execute(
+            "UPDATE faces SET person_id=?, ignored=0, come_back=0, come_back_at=NULL, "
+            "assigned_at=? WHERE id=?",
+            (person_id, now, face_id))
+        if person_id is not None:
+            # A face can't be both "assigned to P" and "not P" — drop that conflict.
+            db.execute("DELETE FROM face_negatives WHERE face_id=? AND person_id=?",
+                       (face_id, person_id))
     bump_faces_generation()
     if person_id is not None:  # labeled face leaves the unlabeled queue
         from geotagger import faces as _faces
@@ -2109,14 +2209,13 @@ def add_face_negatives(face_ids: list[int], person_id: int):
     """Record 'these faces are NOT person_id'. Idempotent."""
     if not face_ids:
         return
-    db = get_db()
-    now = time.time()
-    db.executemany(
-        "INSERT OR IGNORE INTO face_negatives (face_id, person_id, created_at) "
-        "VALUES (?, ?, ?)",
-        [(fid, person_id, now) for fid in face_ids],
-    )
-    db.commit()
+    with transaction() as db:
+        now = time.time()
+        db.executemany(
+            "INSERT OR IGNORE INTO face_negatives (face_id, person_id, created_at) "
+            "VALUES (?, ?, ?)",
+            [(fid, person_id, now) for fid in face_ids],
+        )
     bump_faces_generation()   # invalidate gallery/score caches so the mask applies
 
 
@@ -2124,12 +2223,11 @@ def remove_face_negatives(face_ids: list[int], person_id: int):
     """Undo: allow person_id to be suggested for these faces again."""
     if not face_ids:
         return
-    db = get_db()
-    db.executemany(
-        "DELETE FROM face_negatives WHERE face_id=? AND person_id=?",
-        [(fid, person_id) for fid in face_ids],
-    )
-    db.commit()
+    with transaction() as db:
+        db.executemany(
+            "DELETE FROM face_negatives WHERE face_id=? AND person_id=?",
+            [(fid, person_id) for fid in face_ids],
+        )
     bump_faces_generation()
 
 
@@ -2156,20 +2254,21 @@ def get_person(person_id: int) -> sqlite3.Row | None:
 
 
 def create_person(name: str) -> int:
-    db = get_db()
-    cursor = db.execute(
-        "INSERT INTO persons (name, created_at) VALUES (?, ?)", (name, time.time())
-    )
-    db.commit()
+    with transaction() as db:
+        cursor = db.execute(
+            "INSERT INTO persons (name, created_at) VALUES (?, ?)", (name, time.time())
+        )
     return cursor.lastrowid
 
 
 def get_or_create_person(name: str) -> int:
-    db = get_db()
-    row = db.execute("SELECT id FROM persons WHERE name=?", (name,)).fetchone()
-    if row:
-        return row["id"]
-    return create_person(name)
+    # Lookup and insert in one unit, or two threads naming the same new person
+    # would both miss and both insert.
+    with transaction() as db:
+        row = db.execute("SELECT id FROM persons WHERE name=?", (name,)).fetchone()
+        if row:
+            return row["id"]
+        return create_person(name)
 
 
 def get_persons(start_ts: int | None = None,
@@ -2217,43 +2316,38 @@ def get_persons(start_ts: int | None = None,
 
 def set_person_birth_date(person_id: int, birth_date: str | None):
     """Set (or clear, with None) a person's ISO YYYY-MM-DD birth date."""
-    db = get_db()
-    db.execute("UPDATE persons SET birth_date=? WHERE id=?", (birth_date, person_id))
-    db.commit()
+    with transaction() as db:
+        db.execute("UPDATE persons SET birth_date=? WHERE id=?", (birth_date, person_id))
     bump_faces_generation()  # gallery birth_times feed suggestion scores
 
 
 def set_person_not_before(person_id: int, not_before: str | None):
     """Set (or clear, with None) a person's ISO YYYY-MM-DD not-before date —
     photos taken before this date never match this person."""
-    db = get_db()
-    db.execute("UPDATE persons SET not_before=? WHERE id=?", (not_before, person_id))
-    db.commit()
+    with transaction() as db:
+        db.execute("UPDATE persons SET not_before=? WHERE id=?", (not_before, person_id))
     bump_faces_generation()  # gallery not_before_times feed suggestion scores
 
 
 def set_person_not_after(person_id: int, not_after: str | None):
     """Set (or clear, with None) a person's ISO YYYY-MM-DD not-after date —
     photos taken after this date never match this person."""
-    db = get_db()
-    db.execute("UPDATE persons SET not_after=? WHERE id=?", (not_after, person_id))
-    db.commit()
+    with transaction() as db:
+        db.execute("UPDATE persons SET not_after=? WHERE id=?", (not_after, person_id))
     bump_faces_generation()  # gallery not_after_times feed suggestion scores
 
 
 def rename_person(person_id: int, name: str):
     """Rename a person; bumps the face-recognition generation."""
-    db = get_db()
-    db.execute("UPDATE persons SET name=? WHERE id=?", (name, person_id))
-    db.commit()
+    with transaction() as db:
+        db.execute("UPDATE persons SET name=? WHERE id=?", (name, person_id))
     bump_faces_generation()
 
 
 def set_person_family(person_id: int, family_id: int | None):
     """Assign (or clear, with None) a person's family membership."""
-    db = get_db()
-    db.execute("UPDATE persons SET family_id=? WHERE id=?", (family_id, person_id))
-    db.commit()
+    with transaction() as db:
+        db.execute("UPDATE persons SET family_id=? WHERE id=?", (family_id, person_id))
 
 
 # ── Families ──
@@ -2268,44 +2362,40 @@ def get_families() -> list[sqlite3.Row]:
 
 
 def create_family(name: str) -> int:
-    db = get_db()
-    cursor = db.execute(
-        "INSERT INTO families (name, created_at) VALUES (?, ?)", (name, time.time())
-    )
-    db.commit()
+    with transaction() as db:
+        cursor = db.execute(
+            "INSERT INTO families (name, created_at) VALUES (?, ?)", (name, time.time())
+        )
     return cursor.lastrowid
 
 
 def rename_family(family_id: int, name: str):
-    db = get_db()
-    db.execute("UPDATE families SET name=? WHERE id=?", (name, family_id))
-    db.commit()
+    with transaction() as db:
+        db.execute("UPDATE families SET name=? WHERE id=?", (name, family_id))
 
 
 def delete_family(family_id: int):
     """Delete a family; its members stay, with no family."""
-    db = get_db()
-    # FKs aren't enforced (no PRAGMA foreign_keys=ON), so ON DELETE SET NULL
-    # never fires — detach the members explicitly, before the parent row goes
-    # and in the same transaction.
-    db.execute("UPDATE persons SET family_id=NULL WHERE family_id=?", (family_id,))
-    db.execute("DELETE FROM families WHERE id=?", (family_id,))
-    db.commit()
+    with transaction() as db:
+        # FKs aren't enforced (no PRAGMA foreign_keys=ON), so ON DELETE SET NULL
+        # never fires — detach the members explicitly, before the parent row goes
+        # and in the same transaction.
+        db.execute("UPDATE persons SET family_id=NULL WHERE family_id=?", (family_id,))
+        db.execute("DELETE FROM families WHERE id=?", (family_id,))
 
 
 def delete_person(person_id: int):
-    db = get_db()
-    # FKs aren't enforced (no PRAGMA foreign_keys=ON), so neither the cascade
-    # nor ON DELETE SET NULL fires — do both explicitly before the parent row
-    # goes, in the same transaction. Faces left pointing at the dead id would
-    # drop out of every queue, and persons.id has no AUTOINCREMENT, so the next
-    # person created could reuse the id and inherit them.
-    db.execute("DELETE FROM face_negatives WHERE person_id=?", (person_id,))
-    db.execute(
-        "UPDATE faces SET person_id=NULL, assigned_at=NULL, representative=0 "
-        "WHERE person_id=?", (person_id,))
-    db.execute("DELETE FROM persons WHERE id=?", (person_id,))
-    db.commit()
+    with transaction() as db:
+        # FKs aren't enforced (no PRAGMA foreign_keys=ON), so neither the cascade
+        # nor ON DELETE SET NULL fires — do both explicitly before the parent row
+        # goes, in the same transaction. Faces left pointing at the dead id would
+        # drop out of every queue, and persons.id has no AUTOINCREMENT, so the next
+        # person created could reuse the id and inherit them.
+        db.execute("DELETE FROM face_negatives WHERE person_id=?", (person_id,))
+        db.execute(
+            "UPDATE faces SET person_id=NULL, assigned_at=NULL, representative=0 "
+            "WHERE person_id=?", (person_id,))
+        db.execute("DELETE FROM persons WHERE id=?", (person_id,))
     bump_faces_generation()  # their faces revert to unlabeled
 
 
@@ -2314,13 +2404,12 @@ def delete_person(person_id: int):
 def record_dataset_download(dataset: str, region: str | None, url: str | None,
                              size_bytes: int | None, records_loaded: int | None):
     """Log a completed reference-dataset download (see dataset_downloads table)."""
-    db = get_db()
-    db.execute(
-        "INSERT INTO dataset_downloads (dataset, region, url, downloaded_at, size_bytes, records_loaded) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (dataset, region, url, time.time(), size_bytes, records_loaded),
-    )
-    db.commit()
+    with transaction() as db:
+        db.execute(
+            "INSERT INTO dataset_downloads (dataset, region, url, downloaded_at, size_bytes, records_loaded) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (dataset, region, url, time.time(), size_bytes, records_loaded),
+        )
 
 
 def get_dataset_downloads(dataset: str | None = None) -> list[sqlite3.Row]:
@@ -2340,16 +2429,14 @@ def get_all_settings() -> dict[str, str]:
 
 
 def set_setting(key: str, value: str):
-    db = get_db()
-    db.execute(
-        "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-        (key, value, time.time()),
-    )
-    db.commit()
+    with transaction() as db:
+        db.execute(
+            "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+            (key, value, time.time()),
+        )
 
 
 def delete_setting(key: str):
-    db = get_db()
-    db.execute("DELETE FROM settings WHERE key=?", (key,))
-    db.commit()
+    with transaction() as db:
+        db.execute("DELETE FROM settings WHERE key=?", (key,))

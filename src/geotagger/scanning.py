@@ -111,6 +111,10 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
     # files on a 4-worker scan of small JPEGs, 0 with this lock). The DB calls
     # are microseconds next to the ExifTool read, checksum and thumbnail, which
     # stay parallel, so serializing them costs nothing measurable.
+    # index.transaction() now serializes the writes themselves; this lock is kept
+    # because it also keeps the is_fresh read off the connection while another
+    # worker's upsert is mid-statement. Never hold it (or a transaction) across
+    # the ExifTool read / checksum / thumbnail below.
     db_lock = threading.Lock()
 
     # Track what each worker is processing

@@ -51,9 +51,8 @@ def main():
     start_et()
 
     if args.rescan:
-        db = index.get_db()
-        db.execute("UPDATE photos SET faces_scanned_at=NULL WHERE media_type='image'")
-        db.commit()
+        with index.transaction() as db:
+            db.execute("UPDATE photos SET faces_scanned_at=NULL WHERE media_type='image'")
 
     pending = index.get_unscanned_photo_ids()
     if args.limit:
