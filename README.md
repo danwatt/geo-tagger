@@ -149,6 +149,14 @@ road passing through the visible map area. Scanning a state extract takes a few 
 those raw downloads have been deleted to reclaim disk, the card says so — re-download a region
 (with "force") to restore them.
 
+Each extract is **compacted** right after it downloads: everything the app can't use (unnamed
+buildings, driveways, sidewalks, power lines, edit history, …) is stripped, which shrinks the
+cached file by roughly 85% and makes street searches several times faster, without changing
+what the places database or the street search return. Named rivers, lakes, peaks and points of
+interest are kept for future features. Extracts downloaded before this existed can be compacted
+in one go with `uv run python scripts/compact_osm_pbf.py --root "D:\Photos"`; set
+`GEOTAGGER_OSM_COMPACT_PBF=0` to keep the raw GeoFabrik files instead.
+
 ### 5. Install US Census boundaries (optional — fills OSM's gaps in the US)
 
 US unincorporated areas have no OSM city boundary at all, so photos there fall through to

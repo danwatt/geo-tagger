@@ -264,6 +264,22 @@ def _download_pbf(url: str, dest: Path, label: str, progress_cb) -> None:
     progress_cb(f"Downloaded {label} ({dest.stat().st_size / 1e6:.0f} MB)")
 
 
+def _compact_pbf(dest: Path, progress_cb) -> None:
+    """Shrink a cached extract in place (osm_compact.py) before it's merged. Covers
+    both a fresh download and an older, still-raw cached file; an already compacted
+    one is a header-read no-op. Best-effort: the raw file works just as well, only
+    bigger and slower, so a failure here (e.g. Windows refusing the swap while a
+    street search has the file open) must not fail the whole download job."""
+    if not config.OSM_COMPACT_PBF:
+        return
+    from geotagger import osm_compact
+    try:
+        osm_compact.compact(dest, progress_cb=progress_cb)
+    except Exception:  # noqa: BLE001 — fall back to the uncompacted file
+        logger.warning("Could not compact %s — keeping the full extract", dest, exc_info=True)
+        progress_cb(f"{dest.name}: compaction failed, keeping the full extract")
+
+
 def _run_osm_download_and_merge(keys: list[str], force: bool = False):
     def progress(message: str):
         with _osm_lock:
@@ -283,6 +299,7 @@ def _run_osm_download_and_merge(keys: list[str], force: bool = False):
                 _download_pbf(region["url"], dest, region["name"], progress)
             else:
                 progress(f"{region['name']}: using cached download ({dest.stat().st_size / 1e6:.0f} MB)")
+            _compact_pbf(dest, progress)
             pbf_paths.append(dest)
 
         summary = build_or_append(config.OSM_DB_PATH, pbf_paths, append=True, progress_cb=progress)

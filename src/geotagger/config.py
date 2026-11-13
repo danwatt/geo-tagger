@@ -170,6 +170,12 @@ def get_pbf_cache_dir() -> Path:
     return OSM_DB_PATH.parent / "pbf-cache"
 
 
+# Strip each downloaded extract down to the objects the app can use (see
+# osm_compact.py) before it's merged — roughly an 85% smaller cache and faster
+# street searches. Set to 0 to keep the raw GeoFabrik files untouched.
+OSM_COMPACT_PBF = os.environ.get("GEOTAGGER_OSM_COMPACT_PBF", "1").lower() in ("1", "true", "yes", "on")
+
+
 # ── OSM street search (on-demand, over the cached .osm.pbf extracts) ──
 # Max ways one search returns before it stops scanning and reports "truncated".
 # Each way is a street *segment* (OSM splits a road at every junction/tag change),
