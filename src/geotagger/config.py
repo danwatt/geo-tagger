@@ -343,6 +343,13 @@ def get_workers() -> int:
 
 
 WORKERS: int = get_workers()
+# After a complete scan, rows for files that vanished from a scanned root are
+# relinked (moved: same checksum) or deleted (gone). Deleting drops DB-only data —
+# face tags, a database-only geotag — so a run that would delete more than this
+# fraction of a root's rows is refused as "probably a half-mounted or emptied
+# drive, not a real cleanup" (see scanning._prune_vanished). 0 disables deletes
+# entirely (moves are still relinked); 1 trusts every scan.
+SCAN_PRUNE_MAX_FRACTION = float(os.environ.get("GEOTAGGER_SCAN_PRUNE_MAX_FRACTION", "0.5"))
 # Extra DNS names the app may be reached by (comma-separated, case-insensitive), on top of
 # localhost / IP literals / this machine's hostname which middleware.RequestGuard always
 # allows. Needed only when serving under another name (reverse proxy, mDNS alias, ...);

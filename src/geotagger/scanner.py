@@ -16,7 +16,7 @@ def file_checksum(path: Path, _chunk: int = 1 << 20) -> str:
     return h.hexdigest()
 
 
-def walk_media(root: Path, cancel=None):
+def walk_media(root: Path, cancel=None, unreadable: list[str] | None = None):
     """Yield (path, media_type, xmp_names) for every supported file under root, in
     ONE tree walk that never enters the cache directory.
 
@@ -33,7 +33,11 @@ def walk_media(root: Path, cancel=None):
     Like rglob it lists symlinks (a link to a media file is yielded) but never
     descends into a symlinked directory, and an unreadable directory is skipped,
     not fatal. `cancel` is checked once per directory so a cancelled scan stops
-    walking promptly."""
+    walking promptly.
+
+    `unreadable`, if given, collects the path of every directory that could not
+    be listed (the root included). Skipping one is harmless for indexing but not
+    for pruning: its files went unseen, which must not read as "deleted"."""
     stack = [str(root)]
     while stack:
         if cancel is not None and cancel.is_set():
@@ -60,7 +64,10 @@ def walk_media(root: Path, cancel=None):
                     elif ext in IMAGE_EXTENSIONS or ext in VIDEO_EXTENSIONS:
                         files.append((entry.path, ext))
         except OSError:
-            continue  # PermissionError etc.: skip this directory, keep walking
+            # PermissionError etc.: skip this directory, keep walking
+            if unreadable is not None:
+                unreadable.append(dir_path)
+            continue
         xmp_names = frozenset(xmp)
         for path, ext in files:
             yield Path(path), ("image" if ext in IMAGE_EXTENSIONS else "video"), xmp_names

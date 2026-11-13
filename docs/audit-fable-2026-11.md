@@ -160,7 +160,7 @@ calls and a full SHA-256 on every startup. The `or` chain also stops at the firs
 instead of trying the next candidate.
 *Fix:* parse each candidate in turn, store 0 when none parse, and tolerate `.ss` and `±hh:mm`/`Z` suffixes.
 
-**S2 — Medium — The scan never prunes vanished files** [traced]
+**S2 — Medium — The scan never prunes vanished files** [traced] — ✅ **DONE** (after a complete `run_scan`: unique-checksum moves relink keeping the old id; vanished rows deleted with faces/embeddings; skipped for missing/empty/unlistable roots and when more than `GEOTAGGER_SCAN_PRUNE_MAX_FRACTION` of a root vanishes; thumbnail cache files not cleaned)
 `scanning.py:31-38`. There is no `DELETE FROM photos` in `src/`. Deleted or moved files stay as rows that 500
 on thumbnail; a moved file becomes a new row and loses its faces and DB-only geotag.
 *Fix:* after a successful scan, diff the rows under the root against the seen set, re-link by `checksum`, and

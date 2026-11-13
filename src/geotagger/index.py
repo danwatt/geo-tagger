@@ -1732,6 +1732,176 @@ def _row_is_fresh(row, mtime: float, sidecar_path: str | None, sidecar_mtime: fl
     return True
 
 
+# ── Pruning vanished files ──
+# Used by scanning._prune_vanished after a complete scan. The scan decides WHICH
+# rows vanished (it alone knows what the walk saw); these helpers only read the
+# candidates and carry out the relink/delete as batched write units.
+
+def max_photo_id() -> int:
+    """Highest photos.id (0 when empty). Taken before a scan, it splits "rows this
+    scan inserted" (id above it) from rows that existed already: photos is
+    INTEGER PRIMARY KEY without AUTOINCREMENT, so a new row always gets
+    MAX(id)+1, and nothing deletes photos while a scan runs (the prune itself
+    runs after it)."""
+    return get_db().execute("SELECT COALESCE(MAX(id), 0) FROM photos").fetchone()[0]
+
+
+def _under_dir_clause(root: str) -> tuple[str, list[str]]:
+    """WHERE fragment matching rows whose `dir` is `root` or below it.
+
+    `dir` holds str(p.parent) exactly as the walk produced it from str(root), so
+    a plain BINARY prefix is the right test — the same no-normalisation rule as
+    fresh_flags. A row stored under a different spelling of the root (other case,
+    other separators) is deliberately NOT matched: it is left alone rather than
+    risk pruning it. A range rather than LIKE: LIKE is case-insensitive, treats
+    `_`/`%` in folder names as wildcards, and can't use the UNIQUE(dir, filename)
+    index; `dir >= p AND dir < p'` (p' = p with its last char bumped) can."""
+    import os
+    prefix = root if root.endswith(os.sep) else root + os.sep
+    upper = prefix[:-1] + chr(ord(prefix[-1]) + 1)
+    return "(dir = ? OR (dir >= ? AND dir < ?))", [root, prefix, upper]
+
+
+def photos_under_dir(root: str) -> list[sqlite3.Row]:
+    """(id, dir, filename, checksum, size) of every row under `root`. One indexed
+    range read for the whole tree; the caller splits pre-existing from new rows
+    by id (see max_photo_id)."""
+    clause, params = _under_dir_clause(root)
+    return get_db().execute(
+        f"SELECT id, dir, filename, checksum, size FROM photos WHERE {clause}", params,
+    ).fetchall()
+
+
+def new_photos_with_checksums(checksums: list[str], min_id: int) -> list[sqlite3.Row]:
+    """(id, dir, filename, checksum) of rows inserted after `min_id` whose checksum
+    is one of `checksums` — the relink candidates for vanished rows. Anywhere in
+    the library, not just under one root: a file moved between two scanned roots
+    is still a move."""
+    if not checksums:
+        return []
+    import json as _json
+    return get_db().execute(
+        "SELECT id, dir, filename, checksum FROM photos "
+        "WHERE id > ? AND checksum IN (SELECT value FROM json_each(?))",
+        (min_id, _json.dumps(checksums)),
+    ).fetchall()
+
+
+def _delete_faces_of(db: sqlite3.Connection, photo_ids_json: str) -> list[int]:
+    """Delete every face of these photos with its satellites; returns the face ids.
+    FKs aren't enforced (no cascade), so face_negatives/face_embeddings go
+    explicitly, as in delete_photo_faces. Caller holds the transaction."""
+    face_ids = [r[0] for r in db.execute(
+        "SELECT id FROM faces WHERE photo_id IN (SELECT value FROM json_each(?))",
+        (photo_ids_json,),
+    ).fetchall()]
+    if face_ids:
+        fjson = ids_json(face_ids)
+        db.execute("DELETE FROM face_negatives WHERE face_id IN (SELECT value FROM json_each(?))", (fjson,))
+        db.execute("DELETE FROM face_embeddings WHERE face_id IN (SELECT value FROM json_each(?))", (fjson,))
+        db.execute("DELETE FROM faces WHERE id IN (SELECT value FROM json_each(?))", (fjson,))
+    return face_ids
+
+
+def relink_moved_photos(pairs: list[tuple[int, int]]) -> int:
+    """Carry each (old_id, new_id) pair's row over to the new path: the OLD row is
+    kept (moved to the new row's dir/filename) and the scan's freshly inserted
+    duplicate is deleted. Returns the number of pairs relinked.
+
+    Keeping the old id is what makes the move lossless without enumerating
+    DB-only state: faces (person tags, representative flags, ignore/come-back),
+    face negatives, the semantic embedding, places.representative_photo_id, the
+    database-only geotag, geotag_removed, geocode_ignored, date_precision and
+    faces_scanned_at all key on, or live in, that row. Copying them the other way
+    would have to name every one — and miss the next one added.
+
+    The new row's values are what the file says (a fresh INSERT applies none of
+    upsert_photo's keep rules), so after the move they are re-applied through
+    upsert_photo itself: the same `keep`/`removed` geotag rules, coordinate-move
+    and checksum invalidation as any rescan. The one override is photo_datetime
+    under a non-NULL date_precision: an approximate date the user assigned is
+    not in the file's EXIF, and date_precision would otherwise describe a date
+    the row no longer holds.
+
+    Any faces/embedding the duplicate picked up mid-scan (a face scan racing the
+    file scan) are detections of the same bytes the old row's faces came from,
+    so they go with it."""
+    if not pairs:
+        return 0
+    new_ids = [n for _, n in pairs]
+    with transaction() as db:
+        new_rows = {r["id"]: r for r in db.execute(
+            "SELECT * FROM photos WHERE id IN (SELECT value FROM json_each(?))",
+            (ids_json(new_ids),),
+        ).fetchall()}
+        old_rows = {r["id"]: r for r in db.execute(
+            "SELECT id, photo_datetime, date_precision FROM photos "
+            "WHERE id IN (SELECT value FROM json_each(?))",
+            (ids_json([o for o, _ in pairs]),),
+        ).fetchall()}
+        pairs = [(o, n) for o, n in pairs if o in old_rows and n in new_rows]
+        if not pairs:
+            return 0
+        _delete_faces_of(db, ids_json([n for _, n in pairs]))
+        # Before the moves: UNIQUE(dir, filename) — the duplicate holds the path.
+        # The delete triggers clear its R*Tree and photo_embeddings rows.
+        db.execute("DELETE FROM photos WHERE id IN (SELECT value FROM json_each(?))",
+                   (ids_json([n for _, n in pairs]),))
+        db.executemany("UPDATE photos SET dir=?, filename=? WHERE id=?",
+                       [(new_rows[n]["dir"], new_rows[n]["filename"], o) for o, n in pairs])
+        for o, n in pairs:
+            nr, orow = new_rows[n], old_rows[o]
+            upsert_photo(
+                filename=nr["filename"], dir_=nr["dir"], ext=nr["ext"],
+                media_type=nr["media_type"], mtime=nr["mtime"], size=nr["size"],
+                lat=nr["lat"], lng=nr["lng"], geotag_source=nr["geotag_source"],
+                sidecar_path=nr["sidecar_path"], sidecar_mtime=nr["sidecar_mtime"],
+                camera=nr["camera"],
+                photo_datetime=(orow["photo_datetime"] if orow["date_precision"] is not None
+                                else nr["photo_datetime"]),
+                gps_accuracy=nr["gps_accuracy"], orientation=nr["orientation"],
+                checksum=nr["checksum"],
+            )
+    # Photo times feed the face caches (age-aware scoring), and the re-read may
+    # have changed one. A plain bump — not drop_from_unlabeled_cache for the
+    # duplicate's faces, which re-tags the cache as current and would mask that.
+    bump_faces_generation()
+    # The duplicate's own point left the geotagged set even when the kept row's
+    # coordinates didn't move (upsert_photo only bumps on a move).
+    bump_geotag_generation()
+    return len(pairs)
+
+
+def delete_photos(photo_ids: list[int]) -> int:
+    """Hard-delete photo rows for files that no longer exist, with everything
+    keyed on them. Returns the number of rows deleted.
+
+    FKs aren't enforced in this DB, so the faces cascade is done by hand
+    (_delete_faces_of). photos_spatial and photo_embeddings go via their AFTER
+    DELETE triggers. places.representative_photo_id is a soft reference; it is
+    cleared so a place doesn't point at a photo id a later insert could reuse."""
+    if not photo_ids:
+        return 0
+    pjson = ids_json(photo_ids)
+    with transaction() as db:
+        had_coords = db.execute(
+            "SELECT EXISTS(SELECT 1 FROM photos WHERE lat IS NOT NULL "
+            "AND id IN (SELECT value FROM json_each(?)))", (pjson,),
+        ).fetchone()[0]
+        face_ids = _delete_faces_of(db, pjson)
+        db.execute("UPDATE places SET representative_photo_id=NULL "
+                   "WHERE representative_photo_id IN (SELECT value FROM json_each(?))", (pjson,))
+        deleted = db.execute("DELETE FROM photos WHERE id IN (SELECT value FROM json_each(?))",
+                             (pjson,)).rowcount
+    if face_ids:
+        bump_faces_generation()
+        from geotagger import faces as _faces
+        _faces.drop_from_unlabeled_cache(face_ids)
+    if had_coords:
+        bump_geotag_generation()
+    return deleted
+
+
 # ── Places ──
 
 def get_places() -> list[sqlite3.Row]:

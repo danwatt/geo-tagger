@@ -87,7 +87,8 @@ class _UpsertBatch:
     def flush(self) -> list[str]:
         """Write the pending rows; return one warning per row that didn't make
         it. Never raises (Exception) — a failed batch is reported, not fatal, as
-        a failed per-file upsert always was."""
+        a failed per-file upsert always was. (A file whose row didn't land has no
+        row afterwards; the prune step reads that from the DB, not from here.)"""
         rows, self._rows = self._rows, []
         self._last_flush = time.monotonic()
         if not rows:
@@ -111,11 +112,31 @@ class _UpsertBatch:
         return list(failed.values())
 
 
+class ScanFootprint:
+    """What one root's scan saw, for the post-run prune (_prune_vanished).
+
+    Filled in by scan_directory. `complete` turns True only when that scan ran to
+    the end uncancelled and without raising; anything else — including a
+    substituted scan_directory that never touches it — leaves it False, and a
+    root that isn't complete is never pruned."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = str(root)
+        # dir -> {filename: size} for every media file the walk listed, keyed
+        # exactly as upsert_photo stores dir/filename (str(p.parent), p.name).
+        # size is None when the stat failed.
+        self.seen: dict[str, dict[str, int | None]] = {}
+        self.unreadable: list[str] = []  # directories the walk couldn't list
+        self.media_count = 0
+        self.complete = False
+
+
 def run_scan(scan_dirs: list[Path], cancel: threading.Event | None = None) -> None:
-    """Scan each directory in order, then persist the scanned roots. Meant to run
-    in a dedicated background thread: it never raises — a failure is printed to
-    stderr and recorded in the scan state for the UI banner. A cancelled run
-    (shutdown) does not save the roots, since the scan is incomplete."""
+    """Scan each directory in order, persist the scanned roots, then prune rows
+    for files that vanished from them (relink moves, delete the gone). Meant to
+    run in a dedicated background thread: it never raises — a failure is printed
+    to stderr and recorded in the scan state for the UI banner. A cancelled run
+    (shutdown) neither saves the roots nor prunes, since the scan is incomplete."""
     _update_scan_state(running=True, root=None, processed=0, total=0, indexed=0,
                        skipped=0, warnings=0, error=None,
                        started_at=time.time(), finished_at=None)
@@ -125,13 +146,22 @@ def run_scan(scan_dirs: list[Path], cancel: threading.Event | None = None) -> No
     # ExifTool missing — would look like a clean finish to the UI.
     warning_count = 0
     try:
+        # Taken before anything is inserted: ids above it are this run's new rows,
+        # the only relink targets for a vanished one (see index.max_photo_id). The
+        # connection object too — a backup restore mid-run swaps the DB, and the
+        # snapshot (and the walk's diff against it) would then describe another one.
+        max_id = index.max_photo_id()
+        scan_db = index.get_db()
+        footprints: list[ScanFootprint] = []
         for scan_dir in scan_dirs:
             if cancel is not None and cancel.is_set():
                 break
             print(f"Scanning {scan_dir}...")
+            footprint = ScanFootprint(scan_dir)
+            footprints.append(footprint)
             # Looked up on the module at call time (not bound at import) so tests
             # can substitute scan_directory.
-            count, skipped, warnings = scan_directory(scan_dir, cancel=cancel)
+            count, skipped, warnings = scan_directory(scan_dir, cancel=cancel, footprint=footprint)
             if warnings:
                 warning_count += len(warnings)
                 _update_scan_state(warnings=warning_count)
@@ -140,6 +170,16 @@ def run_scan(scan_dirs: list[Path], cancel: threading.Event | None = None) -> No
                     print(f"    {w}")
         if cancel is None or not cancel.is_set():
             index.save_last_scan_roots([str(d) for d in scan_dirs])
+            # After ALL roots, not per root: a file moved from one scanned root
+            # to another is inserted by the later root's scan, and per-root
+            # pruning would already have deleted its old row.
+            if index.get_db() is scan_db:
+                prune_warnings = _prune_vanished(footprints, max_id)
+                if prune_warnings:
+                    warning_count += len(prune_warnings)
+                    _update_scan_state(warnings=warning_count)
+            else:
+                print("  Not pruning: the database was replaced during the scan.")
     except Exception as e:
         error = str(e) or type(e).__name__
         print(f"ERROR: background scan failed: {e}", file=sys.stderr)
@@ -148,11 +188,16 @@ def run_scan(scan_dirs: list[Path], cancel: threading.Event | None = None) -> No
 
 
 def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: bool = True,
-                   cancel: threading.Event | None = None) -> tuple[int, int, list[str]]:
+                   cancel: threading.Event | None = None,
+                   footprint: ScanFootprint | None = None) -> tuple[int, int, list[str]]:
     """Scan a single directory and return (count, skipped, warnings).
 
     `cancel`, if set mid-scan, stops further files from being picked up (tasks
-    already running finish); the partial counts are returned as usual."""
+    already running finish); the partial counts are returned as usual.
+
+    `footprint`, if given, records what the walk saw (for run_scan's prune) and
+    is marked complete only if the scan wasn't cancelled. scan_directory itself
+    never deletes anything."""
     from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
     def cancelled() -> bool:
@@ -185,7 +230,8 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
     files_to_process = []
     media: list[tuple[Path, str]] = []
     read_errors: list[str] = []
-    for p, media_type, xmp_names in scanner.walk_media(root, cancel=cancel):
+    unreadable = footprint.unreadable if footprint is not None else None
+    for p, media_type, xmp_names in scanner.walk_media(root, cancel=cancel, unreadable=unreadable):
         if cancelled():
             break
         media.append((p, media_type))
@@ -207,6 +253,13 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
             read_errors.append(f"Error reading {p.name}: {e}")
     warnings.extend(scanner.find_sidecar_collisions(media))
     warnings.extend(read_errors)
+    if footprint is not None:
+        # Every listed file counts as seen, including ones whose stat failed: the
+        # file is there, so its row must not be pruned.
+        sizes = {p: stat.st_size for p, _, stat, _, _ in files_to_process}
+        for p, _ in media:
+            footprint.seen.setdefault(str(p.parent), {})[p.name] = sizes.get(p)
+        footprint.media_count = len(media)
 
     _update_scan_state(total=len(files_to_process))
 
@@ -412,6 +465,9 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
     finally:
         flush_batch()
 
+    if footprint is not None and not cancelled():
+        footprint.complete = True
+
     # Clear worker lines and print final stats
     if show_progress:
         sys.stdout.write(f"\033[{max_workers + 1}A")  # Move up
@@ -439,3 +495,213 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
             warnings.append(f"Geocoding failed: {e}")
 
     return count, skipped, warnings
+
+
+# ── Pruning vanished files (audit S2) ──
+# Rows for files that are gone used to stay forever (500 on thumbnail), and a
+# moved file became a fresh row, losing its faces and any DB-only geotag. After
+# a complete run, each pre-existing row under a scanned root that the walk did
+# not see is either relinked to this run's new row for the same bytes (a move)
+# or deleted (gone). Deleting destroys DB-only user data, so a doubt about
+# whether the file is really gone resolves to "keep the row": a stale row is a
+# cosmetic bug, a wrongly deleted one is not.
+#
+# Thumbnail cache files of deleted rows are left in place: they are keyed on a
+# hash of path+mtime+size (plus orientation variants), nothing reads them once
+# the row is gone, and they cost a few KB each.
+
+# Below this many deletions in a root the fraction guard doesn't apply — small
+# libraries legitimately lose most of a handful of files at once. The "walk saw
+# nothing" guard still covers a root that vanished wholesale.
+_PRUNE_GUARD_FLOOR = 20
+# Rows per write unit. Each unit holds the global write lock (see _UpsertBatch);
+# a relink is an upsert per pair, a delete is set-based and cheaper.
+_RELINK_BATCH = _SCAN_BATCH_ROWS
+_DELETE_BATCH = 1000
+
+
+def _pair_moves(vanished: list, candidates: list) -> tuple[list[tuple[int, int]], int]:
+    """Match vanished rows to this run's new rows by checksum. Returns
+    ((old_id, new_id) pairs, number of vanished rows left unpaired although a
+    same-checksum new row existed).
+
+    A checksum shared by exactly one vanished and one new row is a move.
+    Identical files (several copies of one photo) make a tie; it is broken only
+    by an identical filename that is unique on both sides — a moved folder of
+    duplicates keeps its names. Anything still tied is left unpaired rather than
+    guessed: relinking the wrong copy would put one copy's face tags and
+    DB-only geotag on another copy's path."""
+    from collections import Counter, defaultdict
+    by_sum_new: dict[str, list] = defaultdict(list)
+    for r in candidates:
+        by_sum_new[r["checksum"]].append(r)
+    by_sum_old: dict[str, list] = defaultdict(list)
+    for r in vanished:
+        if r["checksum"] is not None:
+            by_sum_old[r["checksum"]].append(r)
+    pairs: list[tuple[int, int]] = []
+    ambiguous = 0
+    for checksum, olds in by_sum_old.items():
+        news = by_sum_new.get(checksum)
+        if not news:
+            continue
+        if len(olds) == 1 and len(news) == 1:
+            pairs.append((olds[0]["id"], news[0]["id"]))
+            continue
+        old_names = Counter(r["filename"] for r in olds)
+        new_by_name: dict[str, list] = defaultdict(list)
+        for r in news:
+            new_by_name[r["filename"]].append(r)
+        for r in olds:
+            match = new_by_name.get(r["filename"], [])
+            if old_names[r["filename"]] == 1 and len(match) == 1:
+                pairs.append((r["id"], match[0]["id"]))
+            else:
+                ambiguous += 1
+    return pairs, ambiguous
+
+
+def _prune_vanished(footprints: list[ScanFootprint], max_id: int) -> list[str]:
+    """Relink moved files and delete vanished ones under the roots that were
+    scanned completely; prints a one-line summary and returns warnings.
+
+    A root is skipped entirely (nothing relinked or deleted under it) when its
+    scan didn't complete, the root is missing or unlistable now (unplugged
+    drive) or was unlistable during the walk, or the walk found no media at all.
+    Within a root, a vanished row is kept when it is under a subdirectory the
+    walk couldn't list, or when it might be the source of a file this run saw but
+    couldn't fully index (no row, or no checksum to relink by — matched on file
+    size, which a move preserves). Finally, a root whose deletions exceed
+    config.SCAN_PRUNE_MAX_FRACTION of its rows keeps them all, loudly. Relinks
+    are never refused: they lose nothing.
+
+    A vanished row with an ambiguous checksum match (see _pair_moves) is deleted
+    like any other unmatched row — the next run would see no new row to match
+    it to anyway — and counted in a warning."""
+    import os
+    t0 = time.time()
+    warnings: list[str] = []
+    vanished: dict[int, object] = {}       # id -> row (deduped across nested roots)
+    vanished_root: dict[int, str] = {}
+    existing_per_root: dict[str, int] = {}
+    blocked_roots: set[str] = set()        # roots where nothing may be deleted
+    # Sizes of seen files that have no row, or no checksum: a vanished row of
+    # that size may be one of them, moved, and must wait for a run that indexes it.
+    unindexed_sizes: set[int] = set()
+    new_sizes: set[int] = set()            # sizes of this run's new rows
+
+    for fp in footprints:
+        if not fp.complete:
+            continue
+        root = Path(fp.root)
+        try:
+            root_ok = root.is_dir()
+        except OSError:
+            root_ok = False
+        reason = None
+        if not root_ok:
+            reason = "the folder is missing or unreadable"
+        elif fp.root in fp.unreadable:
+            reason = "the folder could not be listed"
+        elif fp.media_count == 0:
+            reason = "no media files were found (unmounted or emptied drive?)"
+        if reason:
+            warnings.append(f"Not pruning {fp.root}: {reason}")
+            continue
+        guards = tuple(d if d.endswith(os.sep) else d + os.sep for d in fp.unreadable)
+        rows = index.photos_under_dir(fp.root)
+        row_keys: set[tuple[str, str]] = set()
+        existing = 0
+        for r in rows:
+            row_keys.add((r["dir"], r["filename"]))
+            if r["id"] > max_id:  # inserted by this run
+                new_sizes.add(r["size"])
+                if r["checksum"] is None:
+                    unindexed_sizes.add(r["size"])
+                continue
+            existing += 1
+            seen_dir = fp.seen.get(r["dir"])
+            if seen_dir is not None and r["filename"] in seen_dir:
+                continue  # still there
+            if guards and (r["dir"] + os.sep).startswith(guards):
+                continue  # under a directory the walk couldn't list: unknown, keep
+            if r["id"] not in vanished:
+                vanished[r["id"]] = r
+                vanished_root[r["id"]] = fp.root
+        existing_per_root[fp.root] = existing_per_root.get(fp.root, 0) + existing
+        # Seen files the index has no row for (failed metadata read or upsert).
+        for d, names in fp.seen.items():
+            for name, size in names.items():
+                if (d, name) in row_keys:
+                    continue
+                if size is None:
+                    # Not even a size to match on: any vanished row could be it.
+                    blocked_roots.add(fp.root)
+                    warnings.append(f"Not removing vanished files under {fp.root}: "
+                                    f"{Path(d) / name} could not be read")
+                else:
+                    unindexed_sizes.add(size)
+
+    relinked = removed = kept = ambiguous = 0
+    if vanished:
+        rows = list(vanished.values())
+
+        # ── Relink moves ──
+        checksums = sorted({r["checksum"] for r in rows if r["checksum"] is not None})
+        candidates = index.new_photos_with_checksums(checksums, max_id)
+        pairs, ambiguous = _pair_moves(rows, candidates)
+        if ambiguous:
+            warnings.append(f"{ambiguous} vanished file(s) match several identical new "
+                            f"files; removed rather than relinked to a guess")
+        for start in range(0, len(pairs), _RELINK_BATCH):
+            relinked += index.relink_moved_photos(pairs[start:start + _RELINK_BATCH])
+        paired = {o for o, _ in pairs}
+
+        # ── Delete the rest ──
+        delete_by_root: dict[str, list[int]] = {}
+        for r in rows:
+            if r["id"] in paired:
+                continue
+            root_str = vanished_root[r["id"]]
+            # Possibly moved to a file this run couldn't index (or, for a row from
+            # before checksums, can't verify): keep it for a later run to settle.
+            if (root_str in blocked_roots or r["size"] in unindexed_sizes
+                    or (r["checksum"] is None and r["size"] in new_sizes)):
+                kept += 1
+                continue
+            delete_by_root.setdefault(root_str, []).append(r["id"])
+
+        to_delete: list[int] = []
+        for root_str, ids in delete_by_root.items():
+            existing = existing_per_root.get(root_str, 0)
+            if config.SCAN_PRUNE_MAX_FRACTION <= 0:
+                kept += len(ids)  # deletes disabled; moves above still relinked
+                continue
+            if len(ids) > _PRUNE_GUARD_FLOOR and len(ids) > config.SCAN_PRUNE_MAX_FRACTION * existing:
+                kept += len(ids)
+                msg = (f"Refusing to remove {len(ids)} of {existing} indexed file(s) under "
+                       f"{root_str}: more than {config.SCAN_PRUNE_MAX_FRACTION:.0%} vanished at "
+                       f"once. If they really are gone, raise GEOTAGGER_SCAN_PRUNE_MAX_FRACTION "
+                       f"and rescan.")
+                print(f"WARNING: {msg}", file=sys.stderr)
+                warnings.append(msg)
+                continue
+            to_delete.extend(ids)
+
+        for start in range(0, len(to_delete), _DELETE_BATCH):
+            removed += index.delete_photos(to_delete[start:start + _DELETE_BATCH])
+
+        if relinked or removed:
+            # Cached work-queue batches / hotspot clusters were built over the old
+            # rows and would offer deleted ids or stale points.
+            from geotagger.services import hotspots_service, work_queue_service
+            hotspots_service.invalidate()
+            work_queue_service.invalidate()
+
+    msg = f"  Pruned: relinked {relinked} moved file(s), removed {removed} vanished file(s)"
+    if kept:
+        msg += f", kept {kept} unconfirmed"
+    print(f"{msg} ({(time.time() - t0) * 1000:.0f}ms)")
+    for w in warnings:
+        print(f"  {w}")
+    return warnings
