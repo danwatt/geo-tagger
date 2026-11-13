@@ -346,7 +346,7 @@ search with the offline `/api/search/locations` and vendor the rest. Add `integr
 `web/photo-faces.js:25,75`. `photo-faces.html?photo_id=1&back=javascript:…` runs script in the app origin when
 Back is clicked. *Fix:* accept only same-origin paths.
 
-**X4 — Medium — Two unescaped filenames in HTML sinks** [traced]
+**X4 — Medium — Two unescaped filenames in HTML sinks** [traced] — ✅ **Done** (both escaped; sweep of other HTML sinks found none)
 `web/timesync.js:107-110` (`title="${item.filename}"`) and `web/roadtrip.js:626` (dormant). Missed by the
 recent XSS sweep.
 

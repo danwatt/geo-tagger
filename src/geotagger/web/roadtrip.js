@@ -618,7 +618,7 @@
         dashArray: p.method === "extrapolated" ? "3,3" : null,
       });
       m.bindTooltip(
-        `${c.filename}<br>${fmtTime(c.photo_datetime)}<br>` +
+        `${escapeHtml(c.filename)}<br>${fmtTime(c.photo_datetime)}<br>` +
         `${p.method} · ±${fmtDistance(p.accuracy_m)} · gap ${fmtDuration(p.gap_sec)}`,
         { direction: "top", opacity: 0.95 });
       m.on("click", () => {

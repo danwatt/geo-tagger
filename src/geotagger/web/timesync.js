@@ -84,7 +84,7 @@ function initTimeline() {
 
       return `<img src="/api/thumbnail/${item.photoId}"
                    class="${shiftedClass}"
-                   title="${item.filename}"
+                   title="${escapeHtml(item.filename)}"
                    style="border: 2px solid ${camColor(item.camera)}"/>`;
     },
   };
