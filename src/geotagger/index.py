@@ -179,6 +179,14 @@ def _init_db_locked(root: Path | None) -> sqlite3.Connection:
     from geotagger.search_locations import place_distance
     _db.create_function("search_place_distance", 4, place_distance, deterministic=True)
     _db.execute("PRAGMA journal_mode=WAL")
+    # NORMAL, not the default FULL: in WAL mode FULL fsyncs the WAL on every
+    # commit, NORMAL only at checkpoints. WAL + NORMAL can't corrupt the DB; a
+    # power cut (not an app crash) may lose the last few commits, which a scan
+    # simply redoes and a UI edit's sidecar (the durable copy of a geotag)
+    # already holds. Per-connection, so it never needs re-applying after the
+    # journal_mode switches in vacuum_if_needed (which raises it to FULL for the
+    # rollback-journal rebuild, where NORMAL is not corruption-safe).
+    _db.execute("PRAGMA synchronous=NORMAL")
     # 64 MB page cache — default 2 MB is far too small for 93K embedding blobs.
     # Negative value = kibibytes; positive = pages (4 KB each).
     _db.execute("PRAGMA cache_size = -65536")
@@ -728,6 +736,10 @@ def _vacuum_if_needed_locked(min_free_ratio: float, target_page_size: int) -> di
         # PRAGMA page_size only takes effect via the following VACUUM, and
         # SQLite silently ignores it while journal_mode=WAL — drop to the
         # rollback journal for the rebuild, then restore WAL below.
+        # synchronous=NORMAL (set in init_db) is only corruption-safe under
+        # WAL; with the rollback journal a power cut mid-rebuild could corrupt
+        # the file, so use FULL for the duration.
+        db.execute("PRAGMA synchronous=FULL")
         db.execute("PRAGMA journal_mode=DELETE")
         db.execute(f"PRAGMA page_size={int(target_page_size)}")
     try:
@@ -738,6 +750,7 @@ def _vacuum_if_needed_locked(min_free_ratio: float, target_page_size: int) -> di
         # silently run on the rollback journal — readers blocking writers.
         if resize:
             db.execute("PRAGMA journal_mode=WAL")
+            db.execute("PRAGMA synchronous=NORMAL")
     # VACUUM's rewrite is one big WAL transaction; left alone, the -wal file sits
     # at roughly the DB's own size until some later write happens to trigger
     # SQLite's normal auto-checkpoint. TRUNCATE folds it back into the main file
@@ -1224,12 +1237,61 @@ def save_last_scan_root(root: str):
     save_last_scan_roots([root])
 
 
+_FRESH_COLS = "mtime, sidecar_path, sidecar_mtime, camera, photo_datetime, gps_accuracy, orientation"
+
+# Directories per `dir IN (…)` query in fresh_flags. Well under SQLite's
+# host-parameter limit (999 on older builds); each chunk is one indexed query.
+_FRESH_DIR_CHUNK = 500
+
+
 def is_fresh(dir_: str, filename: str, mtime: float, sidecar_path: str | None, sidecar_mtime: float | None) -> bool:
-    """Return True if the indexed row is up-to-date (no re-scan needed)."""
+    """Return True if the indexed row is up-to-date (no re-scan needed). One
+    point query; a scan checks many files at once with fresh_flags instead."""
     row = get_db().execute(
-        "SELECT mtime, sidecar_path, sidecar_mtime, camera, photo_datetime, gps_accuracy, orientation "
-        "FROM photos WHERE dir=? AND filename=?", (dir_, filename)
+        f"SELECT {_FRESH_COLS} FROM photos WHERE dir=? AND filename=?", (dir_, filename)
     ).fetchone()
+    return _row_is_fresh(row, mtime, sidecar_path, sidecar_mtime)
+
+
+def fresh_flags(entries: list[tuple[str, str, float, str | None, float | None]]) -> list[bool]:
+    """is_fresh for many files at once: entries are (dir, filename, mtime,
+    sidecar_path, sidecar_mtime), the result is aligned with them.
+
+    One indexed `dir IN (…)` query per _FRESH_DIR_CHUNK distinct directories
+    instead of one query per file — a rescan of an unchanged library otherwise
+    spends its time on 100Ks of point SELECTs. `dir` is compared exactly as
+    is_fresh's `dir=?` does (BINARY collation on the same str(p.parent)
+    strings), so no case/separator normalisation creeps in.
+
+    Memory: only one chunk's rows are held at a time (a dict entry of
+    (dir, filename) -> small Row per photo, a few hundred bytes each, so even
+    one chunk spanning a 500K-photo library stays ~100 MB transient); what is
+    kept is one bool per entry. Reads outside a transaction like any other
+    read, so a concurrent unit's uncommitted rows may be seen — as with
+    is_fresh."""
+    by_dir: dict[str, list[int]] = {}
+    for i, e in enumerate(entries):
+        by_dir.setdefault(e[0], []).append(i)
+    flags = [False] * len(entries)
+    dirs = list(by_dir)
+    db = get_db()
+    for start in range(0, len(dirs), _FRESH_DIR_CHUNK):
+        chunk = dirs[start:start + _FRESH_DIR_CHUNK]
+        placeholders = ",".join("?" * len(chunk))
+        rows = {(r["dir"], r["filename"]): r for r in db.execute(
+            f"SELECT dir, filename, {_FRESH_COLS} FROM photos WHERE dir IN ({placeholders})",
+            chunk,
+        ).fetchall()}
+        for d in chunk:
+            for i in by_dir[d]:
+                _, filename, mtime, sidecar_path, sidecar_mtime = entries[i]
+                flags[i] = _row_is_fresh(rows.get((d, filename)), mtime, sidecar_path, sidecar_mtime)
+    return flags
+
+
+def _row_is_fresh(row, mtime: float, sidecar_path: str | None, sidecar_mtime: float | None) -> bool:
+    """The freshness rule shared by is_fresh and fresh_flags (row has
+    _FRESH_COLS, or is None when the file isn't indexed)."""
     if not row:
         return False
     if abs(row["mtime"] - mtime) > 1:

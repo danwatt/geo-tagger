@@ -355,7 +355,7 @@ names. No archive is extracted to disk. Download URLs are fixed HTTPS constants.
 
 ## Performance
 
-**P1 — Medium — Scan does one query and one fsync per file** [traced]
+**P1 — Medium — Scan does one query and one fsync per file** [traced] — ✅ **Done** (`synchronous=NORMAL`, `fresh_flags` preload, 200-row / 1 s batches; 3000-file synthetic scan 7.5 s → 1.6 s)
 `index.py:626`, `scanning.py:88`. `upsert_photo` commits per row at the default `synchronous=FULL`.
 *Fix:* `PRAGMA synchronous=NORMAL`, preload existing rows in one query, batch commits.
 

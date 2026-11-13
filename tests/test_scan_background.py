@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from geotagger import config, index, scanning
+from geotagger import config, index, scanning, sidecar
 
 
 @pytest.fixture(autouse=True)
@@ -127,13 +127,13 @@ class TestCancel:
         cancel = threading.Event()
         monkeypatch.setattr(config, "WORKERS", 1)
 
-        real_is_fresh = index.is_fresh
+        real_read = sidecar.read_metadata
 
-        def cancelling_is_fresh(*a, **kw):
+        def cancelling_read(*a, **kw):
             cancel.set()  # first file in flight trips the cancel
-            return real_is_fresh(*a, **kw)
+            return real_read(*a, **kw)
 
-        monkeypatch.setattr(index, "is_fresh", cancelling_is_fresh)
+        monkeypatch.setattr(sidecar, "read_metadata", cancelling_read)
         scanning.scan_directory(scan_root, show_progress=False, cancel=cancel)
         s = scanning.get_scan_status()
         assert s["total"] == 6

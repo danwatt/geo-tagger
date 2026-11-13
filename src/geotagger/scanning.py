@@ -47,6 +47,70 @@ def _update_scan_state(**fields) -> None:
         _scan_state.update(fields)
 
 
+# ── Batched index writes ──
+# One transaction per scanned file meant one COMMIT (and, before
+# synchronous=NORMAL, one fsync) per file. Rows are instead collected on the
+# scan's main thread and written in short units. The row bound caps the lock
+# hold: a unit holds index.transaction()'s global write lock, so a web request
+# that writes (a geotag, a face label) waits out the whole flush — 200 upserts
+# are a few tens of ms — and readers on the shared connection see the unit's
+# rows before they're committed. The time bound keeps rows behind slow files
+# (big videos) from sitting unwritten, invisible to the grid, for long. Rows
+# wait in plain memory, not under the lock, so only the flush itself blocks.
+_SCAN_BATCH_ROWS = 200
+_SCAN_BATCH_SECONDS = 1.0
+
+
+class _UpsertBatch:
+    """Pending index.upsert_photo kwargs, flushed as one write unit. Only ever
+    touched from the scan's main thread, so it needs no lock of its own."""
+
+    def __init__(self) -> None:
+        self._rows: list[dict] = []
+        self._last_flush = time.monotonic()
+
+    def add(self, row: dict) -> None:
+        self._rows.append(row)
+
+    def due(self) -> bool:
+        return bool(self._rows) and (
+            len(self._rows) >= _SCAN_BATCH_ROWS
+            or time.monotonic() - self._last_flush >= _SCAN_BATCH_SECONDS)
+
+    def wait_timeout(self) -> float | None:
+        """How long the result loop may block before a time-based flush is due
+        (None = nothing pending, block until the next file finishes)."""
+        if not self._rows:
+            return None
+        return max(0.0, _SCAN_BATCH_SECONDS - (time.monotonic() - self._last_flush))
+
+    def flush(self) -> list[str]:
+        """Write the pending rows; return one warning per row that didn't make
+        it. Never raises (Exception) — a failed batch is reported, not fatal, as
+        a failed per-file upsert always was."""
+        rows, self._rows = self._rows, []
+        self._last_flush = time.monotonic()
+        if not rows:
+            return []
+        failed: dict[int, str] = {}  # row position -> warning
+        try:
+            with index.transaction():
+                for i, row in enumerate(rows):
+                    try:
+                        # Nested unit = SAVEPOINT: a bad row is rolled back alone
+                        # and its batch neighbours still commit.
+                        with index.transaction():
+                            index.upsert_photo(**row)
+                    except Exception as e:
+                        failed[i] = f"Error processing {row['filename']}: {e}"
+        except Exception as e:
+            # The COMMIT itself failed (disk full, I/O error): the whole unit was
+            # rolled back, so every row not already reported is lost too.
+            for i, row in enumerate(rows):
+                failed.setdefault(i, f"Error processing {row['filename']}: {e}")
+        return list(failed.values())
+
+
 def run_scan(scan_dirs: list[Path], cancel: threading.Event | None = None) -> None:
     """Scan each directory in order, then persist the scanned roots. Meant to run
     in a dedicated background thread: it never raises — a failure is printed to
@@ -89,7 +153,7 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
 
     `cancel`, if set mid-scan, stops further files from being picked up (tasks
     already running finish); the partial counts are returned as usual."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
     def cancelled() -> bool:
         return cancel is not None and cancel.is_set()
@@ -104,18 +168,13 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
     thumbs_generated = 0
     thumbs_cached = 0
     lock = threading.Lock()
-    # index.get_db() is ONE sqlite3 connection shared by every thread, and
-    # sqlite3 connections are not safe to drive from several threads at once:
-    # one worker's commit lands in the middle of another's statement and the
-    # file fails with "bad parameter or other API misuse" (measured: ~5-7% of
-    # files on a 4-worker scan of small JPEGs, 0 with this lock). The DB calls
-    # are microseconds next to the ExifTool read, checksum and thumbnail, which
-    # stay parallel, so serializing them costs nothing measurable.
-    # index.transaction() now serializes the writes themselves; this lock is kept
-    # because it also keeps the is_fresh read off the connection while another
-    # worker's upsert is mid-statement. Never hold it (or a transaction) across
-    # the ExifTool read / checksum / thumbnail below.
-    db_lock = threading.Lock()
+    # Workers never touch the DB: freshness is decided up front (fresh_flags,
+    # below) and the rows they produce are written by this thread in batches
+    # (_UpsertBatch). That also retires the old per-worker db_lock, which kept
+    # one worker's read off the shared connection while another's write was
+    # mid-statement. No transaction is ever open across the ExifTool read /
+    # checksum / thumbnail.
+    batch = _UpsertBatch()
 
     # Track what each worker is processing
     worker_status = {}  # worker_id -> (filename, stage)
@@ -136,6 +195,18 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
             warnings.append(f"Error reading {p.name}: {e}")
 
     _update_scan_state(total=len(files_to_process))
+
+    # One batched lookup for the whole tree instead of a point SELECT per file
+    # in the workers. Same inputs and rule as index.is_fresh. The rows are read
+    # now rather than as each file comes up, which only matters for a row a web
+    # request rewrites mid-scan; its sidecar stat above is equally old, so
+    # comparing the two snapshots is at least consistent.
+    if not cancelled():
+        flags = index.fresh_flags([(str(p.parent), p.name, stat.st_mtime, sc_path_str, sc_mtime)
+                                   for p, _, stat, sc_path_str, sc_mtime in files_to_process])
+    else:
+        flags = [False] * len(files_to_process)
+    files_to_process = [(*f, fresh) for f, fresh in zip(files_to_process, flags)]
 
     def update_display():
         """Update the progress display with all worker statuses."""
@@ -168,12 +239,12 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
         """Process a single file: index and generate thumbnail."""
         worker_id = threading.get_ident() % 1000  # Use last 3 digits of thread ID
 
-        p, media_type, stat, sc_path_str, sc_mtime = file_info
+        p, media_type, stat, sc_path_str, sc_mtime, fresh = file_info
 
         if cancelled():  # queued before cancel was set; skip without touching anything
             return None
 
-        was_indexed = False
+        row = None  # upsert_photo kwargs, written by the main thread's batch
         was_skipped = False
         thumb_generated = False
         thumb_cached = False
@@ -185,8 +256,6 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
                 worker_status[worker_id] = (p.name, "Indexing")
                 update_display()
 
-            with db_lock:
-                fresh = index.is_fresh(str(p.parent), p.name, stat.st_mtime, sc_path_str, sc_mtime)
             if fresh:
                 was_skipped = True
             else:
@@ -200,18 +269,16 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
                 except Exception as e:
                     checksum = None
                     error_msg = f"Error checksumming {p.name}: {e}"
-                with db_lock:
-                    index.upsert_photo(
-                        filename=p.name, dir_=str(p.parent),
-                        ext=p.suffix.lower(), media_type=media_type,
-                        mtime=stat.st_mtime, size=stat.st_size,
-                        lat=meta["lat"], lng=meta["lng"], geotag_source=meta["geotag_source"],
-                        sidecar_path=sc_path_str, sidecar_mtime=sc_mtime,
-                        camera=meta["camera"], photo_datetime=meta["photo_datetime"],
-                        gps_accuracy=meta["gps_accuracy"], orientation=meta["orientation"],
-                        checksum=checksum,
-                    )
-                was_indexed = True
+                row = dict(
+                    filename=p.name, dir_=str(p.parent),
+                    ext=p.suffix.lower(), media_type=media_type,
+                    mtime=stat.st_mtime, size=stat.st_size,
+                    lat=meta["lat"], lng=meta["lng"], geotag_source=meta["geotag_source"],
+                    sidecar_path=sc_path_str, sidecar_mtime=sc_mtime,
+                    camera=meta["camera"], photo_datetime=meta["photo_datetime"],
+                    gps_accuracy=meta["gps_accuracy"], orientation=meta["orientation"],
+                    checksum=checksum,
+                )
 
             # Generate thumbnail if requested
             if generate_thumbnails:
@@ -237,7 +304,9 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
         except Exception as e:
             error_msg = f"Error processing {p.name}: {e}"
 
-        return was_indexed, was_skipped, thumb_generated, thumb_cached, error_msg, worker_id
+        # A failure after the metadata read (thumbnail) still keeps the row, as
+        # it did when the worker wrote it before thumbnailing.
+        return row, was_skipped, thumb_generated, thumb_cached, error_msg, worker_id
 
     # Process files with a thread pool
     max_workers = config.WORKERS
@@ -248,42 +317,86 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
         for i in range(max_workers):
             print(f"    Worker {i}: Idle".ljust(100))
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(process_file, f): f for f in files_to_process}
-
-        for future in as_completed(futures):
-            if cancelled():
-                # Drop everything not yet started; running tasks finish on exit.
-                for f in futures:
-                    f.cancel()
-            if future.cancelled():
-                continue
-            result = future.result()
-            if result is None:  # skipped due to cancel: not "processed"
-                continue
-            was_indexed, was_skipped, thumb_gen, thumb_cach, error, worker_id = result
-
+    def flush_batch() -> None:
+        nonlocal count
+        failures = batch.flush()
+        if failures:
             with lock:
-                if was_indexed:
-                    count += 1
-                if was_skipped:
+                # Counted as indexed when the worker finished; a row that didn't
+                # land wasn't.
+                count -= len(failures)
+                warnings.extend(failures)
+                _update_scan_state(indexed=count)
+
+    def handle_result(future) -> None:
+        nonlocal count, skipped, thumbs_generated, thumbs_cached, total_processed
+        if future.cancelled():
+            return
+        result = future.result()
+        if result is None:  # skipped due to cancel: not "processed"
+            return
+        row, was_skipped, thumb_gen, thumb_cach, error, worker_id = result
+        if row is not None:
+            batch.add(row)
+
+        with lock:
+            if row is not None:
+                count += 1
+            if was_skipped:
                     skipped += 1
-                if thumb_gen:
-                    thumbs_generated += 1
-                if thumb_cach:
-                    thumbs_cached += 1
-                if error:
-                    warnings.append(error)
+            if thumb_gen:
+                thumbs_generated += 1
+            if thumb_cach:
+                thumbs_cached += 1
+            if error:
+                warnings.append(error)
 
-                total_processed += 1
-                # In-memory only — no extra DB/I/O per file.
-                _update_scan_state(processed=total_processed, indexed=count, skipped=skipped)
+            total_processed += 1
+            # In-memory only — no extra DB/I/O per file.
+            _update_scan_state(processed=total_processed, indexed=count, skipped=skipped)
 
-                # Remove this worker from status (it's now idle)
-                if worker_id in worker_status:
-                    del worker_status[worker_id]
+            # Remove this worker from status (it's now idle)
+            if worker_id in worker_status:
+                del worker_status[worker_id]
 
-                update_display()
+            update_display()
+
+    # try/finally: the last partial batch is written however the loop ends —
+    # all files done, cancelled (running tasks' rows still arrive below), or an
+    # exception out of the loop itself.
+    try:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            not_done = {executor.submit(process_file, f) for f in files_to_process}
+            try:
+                while not_done:
+                    # wait(), not as_completed(): it also wakes when a pending
+                    # batch's time bound expires with no file finished since.
+                    done, not_done = wait(not_done, timeout=batch.wait_timeout(),
+                                          return_when=FIRST_COMPLETED)
+                    if cancelled():
+                        # Drop everything not yet started; running tasks finish,
+                        # and their rows still arrive (and are written) here.
+                        # Cancelled futures count as done, so the next wait()
+                        # returns them.
+                        for f in not_done:
+                            f.cancel()
+                    for future in done:
+                        handle_result(future)
+                        # Per result, not per wait(): one wake-up can return
+                        # many finished files, and the row bound is the lock-
+                        # hold bound.
+                        if batch.due():
+                            flush_batch()
+                    if batch.due():  # time bound expired with nothing finished
+                        flush_batch()
+            except BaseException:
+                # Otherwise the executor's exit would still work through every
+                # queued file before the exception could surface.
+                for f in not_done:
+                    f.cancel()
+                raise
+    finally:
+        flush_batch()
 
     # Clear worker lines and print final stats
     if show_progress:
