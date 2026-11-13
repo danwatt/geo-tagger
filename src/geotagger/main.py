@@ -6,7 +6,10 @@ row->JSON shaping in geotagger.serializers."""
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from geotagger.lifespan import lifespan
@@ -22,8 +25,17 @@ logging.basicConfig(
 _WEB_DIR = Path(__file__).parent / "web"
 
 
+async def _validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """422 without echoing each error's `input`: FastAPI's default handler includes
+    the offending value, and a body carrying NaN/Infinity makes that response
+    unserializable, turning a clean rejection into a 500."""
+    errors = [{k: v for k, v in e.items() if k not in ("input", "ctx")} for e in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Geo-Tagger", lifespan=lifespan)
+    app.add_exception_handler(RequestValidationError, _validation_error)
     # Host/Origin guard against DNS rebinding + cross-site writes (see middleware.py).
     app.add_middleware(RequestGuard)
     for router in ROUTERS:

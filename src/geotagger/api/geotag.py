@@ -4,6 +4,7 @@ the time-neighbor location guesser."""
 import asyncio
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from geotagger import index
@@ -16,9 +17,9 @@ router = APIRouter()
 
 class GeotagRequest(BaseModel):
     ids: list[int]
-    lat: float
-    lng: float
-    gps_accuracy: float | None = None
+    lat: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    lng: float = Field(ge=-180, le=180, allow_inf_nan=False)
+    gps_accuracy: float | None = Field(None, ge=0, allow_inf_nan=False)
 
 class RemoveGeotagRequest(BaseModel):
     ids: list[int]
@@ -33,16 +34,31 @@ class ProposeRequest(BaseModel):
     limit: int = Field(3, ge=1, le=50)
 
 
+def _batch_response(ids: list[int], out: dict):
+    """200 with the {results, written, failed, not_found} breakdown when anything
+    was written (or nothing was asked). When every requested photo was refused the
+    breakdown comes back under the same body with an error status, so a client that
+    only checks `res.ok` can't mistake total failure for success: 502 when ExifTool
+    or the DB failed some photo, 404 when the ids simply don't exist."""
+    if ids and not out["written"]:
+        return JSONResponse(out, status_code=502 if out["failed"] else 404)
+    return out
+
+
 @router.post("/api/geotag")
 async def api_geotag(req: GeotagRequest):
     # The whole batch runs in the executor: a commit is one ExifTool round-trip per
     # photo (plus the geocoder's one-time KD-tree load), which would otherwise stall
     # the event loop for the length of a several-hundred-photo commit.
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        get_executor(), geotag_service.write_geotag,
-        req.ids, req.lat, req.lng, req.gps_accuracy,
-    )
+    try:
+        out = await loop.run_in_executor(
+            get_executor(), geotag_service.write_geotag,
+            req.ids, req.lat, req.lng, req.gps_accuracy,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _batch_response(req.ids, out)
 
 
 @router.post("/api/geotag/ignore")
@@ -159,7 +175,8 @@ async def api_guess(photo_id: int, window: int = 900):
 @router.post("/api/geotag/remove")
 async def api_geotag_remove(req: RemoveGeotagRequest):
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
+    out = await loop.run_in_executor(
         get_executor(), geotag_service.remove_geotag, req.ids,
     )
+    return _batch_response(req.ids, out)
 

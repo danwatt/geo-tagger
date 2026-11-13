@@ -1956,8 +1956,29 @@ function addOrUpdateMarker(photo) {
   return marker;
 }
 
-// Writes the location to `ids`. Returns true on success — commitPendingGeo uses
-// that to decide whether a staged batch can be cleared or has to stay put.
+// Parses a /api/geotag[/remove] reply. The server answers 200 with a
+// {results, written, failed, not_found} breakdown, or the same body under 502/404
+// when nothing at all was written; anything else (400/422/500) has no `written`.
+async function readBatchReply(res) {
+  const out = await res.json().catch(() => null);
+  if (!out || !Array.isArray(out.written)) {
+    throw new Error(out && typeof out.detail === "string" ? out.detail : `HTTP ${res.status}`);
+  }
+  return out;
+}
+
+// "2 failed: <first reason>" for the status line, or "" when everything landed.
+function batchProblems(out) {
+  const bad = out.failed.length + out.not_found.length;
+  if (!bad) return "";
+  const first = out.failed.length ? out.failed[0].error : "photo not found";
+  return `${bad} failed: ${first}`;
+}
+
+// Writes the location to `ids`. Returns {written, error}, or null when the request
+// itself failed — commitPendingGeo clears from its staged set only the ids in
+// `written`, so a photo that failed stays staged. `error` is the problem summary
+// ("2 failed: <reason>") or "".
 // `render: false` updates `photos` only; the caller re-renders once after a
 // batch of calls (commitPendingGeo commits one call per point).
 async function geotag(ids, lat, lng, accuracy = null, { render = true } = {}) {
@@ -1968,10 +1989,9 @@ async function geotag(ids, lat, lng, accuracy = null, { render = true } = {}) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids, lat, lng, gps_accuracy: accuracy }),
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const updated = await res.json();
+    const out = await readBatchReply(res);
     const byId = new Map(photos.map((p) => [p.id, p]));
-    updated.forEach((u) => {
+    out.results.forEach((u) => {
       const photo = byId.get(u.id);
       if (photo) {
         photo.lat = u.lat;
@@ -1987,12 +2007,17 @@ async function geotag(ids, lat, lng, accuracy = null, { render = true } = {}) {
     // pins the newly tagged photos (and moves re-tagged ones).
     if (render) applyFilters();
     const accLog = accuracy ? ` (accuracy: ±${accuracy}m)` : "";
-    setStatus(`Tagged ${updated.length} photo(s) at ${lat.toFixed(5)}, ${lng.toFixed(5)}${accLog}`);
+    const problems = batchProblems(out);
+    if (problems) {
+      setStatus(`Tagged ${out.written.length} of ${ids.length}; ${problems}`, true);
+    } else {
+      setStatus(`Tagged ${out.written.length} photo(s) at ${lat.toFixed(5)}, ${lng.toFixed(5)}${accLog}`);
+    }
     if (focusedPhotoId && ids.includes(focusedPhotoId)) showDetail(focusedPhotoId);
-    return true;
+    return { written: out.written, error: problems };
   } catch (err) {
     setStatus("Geotag error: " + err.message, true);
-    return false;
+    return null;
   }
 }
 
@@ -2001,12 +2026,14 @@ async function doRemoveGeotag() {
   const ids = [...selectedIds];
   setStatus(`Removing geotag from ${ids.length} photo(s)…`);
   try {
-    await fetch("/api/geotag/remove", {
+    const res = await fetch("/api/geotag/remove", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids }),
     });
-    ids.forEach((id) => {
+    const out = await readBatchReply(res);
+    // Only photos the server actually cleared lose their pin; failed ones keep it.
+    out.written.forEach((id) => {
       const photo = photos.find((p) => p.id === id);
       if (photo) { photo.lat = null; photo.lng = null; photo.geotag_source = "none"; }
       if (markersById[id]) { photoCluster.removeLayer(markersById[id]); delete markersById[id]; }
@@ -2014,7 +2041,12 @@ async function doRemoveGeotag() {
     // Same reason as geotag(): losing a geotag can move a photo into or out of
     // the Show filter, so the filtered set has to be rebuilt, not just redrawn.
     applyFilters();
-    setStatus(`Removed geotag from ${ids.length} photo(s)`);
+    const problems = batchProblems(out);
+    if (problems) {
+      setStatus(`Removed geotag from ${out.written.length} of ${ids.length}; ${problems}`, true);
+    } else {
+      setStatus(`Removed geotag from ${out.written.length} photo(s)`);
+    }
     if (focusedPhotoId && ids.includes(focusedPhotoId)) showDetail(focusedPhotoId);
   } catch (err) {
     setStatus("Remove error: " + err.message, true);
@@ -2685,16 +2717,19 @@ async function commitPendingGeo(groups, what) {
       byPoint.get(k).ids.push(e.photo.id);
     });
     for (const p of byPoint.values()) {
-      const ok = await geotag(p.ids, p.lat, p.lng, p.accuracy, { render: false });
-      if (ok) {
-        // Only clear what actually landed — a failed point stays staged.
-        p.ids.forEach(id => pendingGeo.delete(id));
-        saved += p.ids.length;
+      const done = await geotag(p.ids, p.lat, p.lng, p.accuracy, { render: false });
+      const landed = done ? done.written : [];
+      // Only clear what actually landed — failed photos (or a failed point) stay staged.
+      landed.forEach(id => pendingGeo.delete(id));
+      saved += landed.length;
+      if (landed.length) {
         // A committed point is a location the user demonstrably uses — it heads
         // the location picker's Recent list from here on.
         rememberLocation(p.lat, p.lng, p.accuracy, g.label);
-      } else {
-        failures.push(`${g.label} (${p.lat.toFixed(4)}, ${p.lng.toFixed(4)})`);
+      }
+      if (landed.length < p.ids.length) {
+        const why = done && done.error ? ` — ${done.error}` : "";
+        failures.push(`${g.label} (${p.lat.toFixed(4)}, ${p.lng.toFixed(4)})${why}`);
       }
     }
   }

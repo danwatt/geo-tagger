@@ -197,7 +197,14 @@ def _location_args(location: dict | None) -> list[str]:
 
 def write_gps(image_path: Path, lat: float, lng: float, location: dict | None = None, gps_accuracy: float | None = None) -> Path:
     """Write GPS to sidecar (creating it if needed). When ``location`` is given,
-    its place names are written in the same pass. Returns sidecar path."""
+    its place names are written in the same pass. Returns sidecar path.
+    Raises ValueError for a point outside WGS84 range (or NaN/inf), so no caller can
+    put e.g. lat=999 into a sidecar."""
+    import math
+    if not (math.isfinite(lat) and math.isfinite(lng) and -90 <= lat <= 90 and -180 <= lng <= 180):
+        raise ValueError(f"invalid coordinates: lat={lat}, lng={lng}")
+    if gps_accuracy is not None and (not math.isfinite(gps_accuracy) or gps_accuracy < 0):
+        raise ValueError(f"invalid gps_accuracy: {gps_accuracy}")
     # Read existing coordinates before updating
     old_lat, old_lng, _ = read_gps(image_path)
 

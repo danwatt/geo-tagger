@@ -83,7 +83,7 @@ holds the old ones. The RENAME also rewrites the `faces` foreign key to point at
 Only affects databases old enough to need this migration.
 *Fix:* explicit `BEGIN IMMEDIATE`/`COMMIT`, create-copy-drop-rename order, and detect a leftover `photos_old` at startup.
 
-**D7 — Medium — Batch geotag writes are non-atomic and report nothing on partial failure** [traced]
+**D7 — Medium — Batch geotag writes are non-atomic and report nothing on partial failure** [traced] — ✅ **DONE** (coordinates range-checked at API, service and sidecar; per-photo isolation; response is `{results, written, failed, not_found}`; 502/404 when nothing was written; invalidation in `finally`)
 `services/geotag_service.py:27-80`, `api/geotag.py:35-44`. One ExifTool error mid-batch returns 500 after
 earlier photos were written; cache invalidation after the loop is skipped; unknown ids are silently dropped;
 `lat`/`lng` have no range validation, so `lat=999` reaches XMP.

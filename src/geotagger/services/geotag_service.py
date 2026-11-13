@@ -2,15 +2,58 @@
 the executor instead of running ExifTool on the event loop."""
 
 import bisect
+import logging
+import math
 from pathlib import Path
 
 from geotagger import config, index, sidecar, geocode
-from geotagger.exiftool_session import get_et_lock
+from geotagger.exiftool_session import ExifToolDied, ExifToolTimeout, get_et_lock
 from geotagger.services import hotspots_service
+
+logger = logging.getLogger(__name__)
+
+
+def validate_point(lat: float, lng: float, gps_accuracy: float | None = None) -> None:
+    """Raise ValueError unless this is a real WGS84 point. The API validates the
+    same bounds at the request boundary; this is the guard for non-API callers, so
+    no path can put `lat=999` (or NaN) into a sidecar."""
+    for name, v in (("lat", lat), ("lng", lng)):
+        if not isinstance(v, (int, float)) or not math.isfinite(v):
+            raise ValueError(f"{name} must be a finite number")
+    if not -90 <= lat <= 90:
+        raise ValueError("lat must be between -90 and 90")
+    if not -180 <= lng <= 180:
+        raise ValueError("lng must be between -180 and 180")
+    if gps_accuracy is not None and (not math.isfinite(gps_accuracy) or gps_accuracy < 0):
+        raise ValueError("gps_accuracy must be a non-negative finite number")
+
+
+def _short_error(e: Exception) -> str:
+    """A one-line reason safe to show in the UI (no traceback, no long reprs)."""
+    if isinstance(e, ExifToolTimeout):
+        return "ExifTool timed out"
+    if isinstance(e, ExifToolDied):
+        return "ExifTool stopped"
+    if isinstance(e, FileNotFoundError):
+        return "file not found"
+    if isinstance(e, PermissionError):
+        return "permission denied"
+    msg = (str(e) or type(e).__name__).splitlines()[0]
+    return msg[:160]
+
+
+def _invalidate_caches() -> None:
+    """Drop what was derived from the old coordinates. update_geotag already bumped
+    the geotag generation the hotspot cache keys on; dropping it here just frees the
+    old clustering now rather than on the next palette request."""
+    hotspots_service.invalidate()
+    # Local import: work_queue_service imports this module for its proposals.
+    from geotagger.services import work_queue_service
+    work_queue_service.invalidate()
 
 
 def write_geotag(photo_ids: list[int], lat: float, lng: float,
-                 gps_accuracy: float | None = None) -> list[dict]:
+                 gps_accuracy: float | None = None) -> dict:
     """Write one shared point to every photo in `photo_ids`. Blocking; runs in the
     executor. Reverse-geocodes the point once (the geocoder's first call loads a
     KD-tree) and reuses the result for the whole batch — every photo lands on the
@@ -19,74 +62,105 @@ def write_geotag(photo_ids: list[int], lat: float, lng: float,
 
     The ExifTool lock is taken per file rather than around the whole loop so a
     large commit doesn't starve thumbnail/preview requests for its full duration.
-    """
-    loc = geocode.lookup(lat, lng)
-    lock = get_et_lock()
 
-    results = []
-    for photo_id in photo_ids:
-        row = index.get_photo(photo_id)
-        if not row:
-            continue
-        p = Path(index.photo_path(row))
-        if config.WRITE_XMP_ON_GEOTAG:
-            with lock:
-                sidecar.write_gps(p, lat, lng, location=loc, gps_accuracy=gps_accuracy)
-            source = "sidecar"
-        else:
-            # DB-only: leave any existing sidecar untouched.
-            source = "database"
-        # Either way record whatever is actually on disk, as the scan will see it,
-        # so a later scan's freshness check (index.is_fresh) doesn't see a mismatch
-        # and re-read the file over this.
-        sc_name, sc_mtime = sidecar.sidecar_tracking(p)
-        index.update_geotag(photo_id, lat, lng, source, sc_name, sc_mtime,
-                            gps_accuracy=gps_accuracy)
-        if loc is not None:
-            index.update_photo_location(photo_id, loc)
-        results.append({
-            "id": photo_id, "lat": lat, "lng": lng,
-            "geotag_source": source, "sidecar_path": sc_name,
-            "location": loc,
-            "gps_accuracy": gps_accuracy,
-        })
-    # New coordinates shift the palette. update_geotag already bumped the geotag
-    # generation the cache keys on; dropping it here just frees the old clustering
-    # now rather than on the next palette request.
-    hotspots_service.invalidate()
-    # Local import: work_queue_service imports this module for its proposals.
-    from geotagger.services import work_queue_service
-    work_queue_service.invalidate()
-    return results
+    Each photo is isolated: a failure (ExifTool error, missing file, timeout) is
+    reported in `failed` and the rest of the batch still runs. Sidecar first, then
+    the DB row, so a failed sidecar write leaves the row untouched; a DB failure
+    after a successful sidecar write is reported as failed and the next scan
+    reconciles — the row's sidecar_mtime no longer matches the file, so
+    index.is_fresh() is False and the file is re-read.
+
+    Returns {"results": [per-photo dicts for the written ones], "written": [ids],
+    "failed": [{"id", "error"}], "not_found": [ids]}. Raises ValueError for an
+    out-of-range point, before anything is touched."""
+    validate_point(lat, lng, gps_accuracy)
+    results: list[dict] = []
+    failed: list[dict] = []
+    not_found: list[int] = []
+    try:
+        loc = geocode.lookup(lat, lng)
+        lock = get_et_lock()
+        for photo_id in photo_ids:
+            row = index.get_photo(photo_id)
+            if not row:
+                not_found.append(photo_id)
+                continue
+            try:
+                p = Path(index.photo_path(row))
+                if config.WRITE_XMP_ON_GEOTAG:
+                    with lock:
+                        sidecar.write_gps(p, lat, lng, location=loc, gps_accuracy=gps_accuracy)
+                    source = "sidecar"
+                else:
+                    # DB-only: leave any existing sidecar untouched.
+                    source = "database"
+                # Either way record whatever is actually on disk, as the scan will see it,
+                # so a later scan's freshness check (index.is_fresh) doesn't see a mismatch
+                # and re-read the file over this.
+                sc_name, sc_mtime = sidecar.sidecar_tracking(p)
+                # One unit: update_geotag clears the derived place names and the
+                # follow-up repopulates them, so a failure between the two can't
+                # leave a tagged photo with its location columns wiped.
+                with index.transaction():
+                    index.update_geotag(photo_id, lat, lng, source, sc_name, sc_mtime,
+                                        gps_accuracy=gps_accuracy)
+                    if loc is not None:
+                        index.update_photo_location(photo_id, loc)
+            except Exception as e:
+                logger.exception("Geotag write failed for photo %s", photo_id)
+                failed.append({"id": photo_id, "error": _short_error(e)})
+                continue
+            results.append({
+                "id": photo_id, "lat": lat, "lng": lng,
+                "geotag_source": source, "sidecar_path": sc_name,
+                "location": loc,
+                "gps_accuracy": gps_accuracy,
+            })
+    finally:
+        # Even a partial (or aborted) batch moved coordinates.
+        _invalidate_caches()
+    return {"results": results, "written": [r["id"] for r in results],
+            "failed": failed, "not_found": not_found}
 
 
-def remove_geotag(photo_ids: list[int]) -> list[dict]:
+def remove_geotag(photo_ids: list[int]) -> dict:
     """Strip GPS from each photo's sidecar and clear it in the DB. Blocking.
 
     The removal must outlast a re-read even when the ORIGINAL has embedded GPS
     (which can't be stripped): update_geotag sets the DB marker upsert_photo
     honours, and the sidecar — when one exists, or is created here in
     sidecar-writing mode — carries sidecar.GPS_VOID, which also survives a DB
-    rebuild. In DB-only mode with no sidecar the DB marker is the only record."""
+    rebuild. In DB-only mode with no sidecar the DB marker is the only record.
+
+    Per-photo isolation and result shape as write_geotag."""
     lock = get_et_lock()
-    results = []
-    for photo_id in photo_ids:
-        row = index.get_photo(photo_id)
-        if not row:
-            continue
-        p = Path(index.photo_path(row))
-        with lock:
-            sidecar.remove_gps(p, create=config.WRITE_XMP_ON_GEOTAG)
-        sc_name, sc_mtime = sidecar.sidecar_tracking(p)
-        # gps_accuracy -1.0 ("none", as read_metadata reports it), not NULL, which
-        # the freshness check reads as "never read" and would re-read the file.
-        index.update_geotag(photo_id, None, None, "none", sc_name, sc_mtime, gps_accuracy=-1.0)
-        results.append({"id": photo_id, "geotag_source": "none"})
-    hotspots_service.invalidate()
-    # Local import: work_queue_service imports this module for its proposals.
-    from geotagger.services import work_queue_service
-    work_queue_service.invalidate()
-    return results
+    results: list[dict] = []
+    failed: list[dict] = []
+    not_found: list[int] = []
+    try:
+        for photo_id in photo_ids:
+            row = index.get_photo(photo_id)
+            if not row:
+                not_found.append(photo_id)
+                continue
+            try:
+                p = Path(index.photo_path(row))
+                with lock:
+                    sidecar.remove_gps(p, create=config.WRITE_XMP_ON_GEOTAG)
+                sc_name, sc_mtime = sidecar.sidecar_tracking(p)
+                # gps_accuracy -1.0 ("none", as read_metadata reports it), not NULL, which
+                # the freshness check reads as "never read" and would re-read the file.
+                index.update_geotag(photo_id, None, None, "none", sc_name, sc_mtime,
+                                    gps_accuracy=-1.0)
+            except Exception as e:
+                logger.exception("Geotag removal failed for photo %s", photo_id)
+                failed.append({"id": photo_id, "error": _short_error(e)})
+                continue
+            results.append({"id": photo_id, "geotag_source": "none"})
+    finally:
+        _invalidate_caches()
+    return {"results": results, "written": [r["id"] for r in results],
+            "failed": failed, "not_found": not_found}
 
 
 # ── Proposing a location for a selection ──
