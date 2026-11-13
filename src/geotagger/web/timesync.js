@@ -233,7 +233,7 @@ async function showMonthPicker() {
       list.appendChild(section);
     });
   } catch (err) {
-    list.innerHTML = `<p style='color:#f88'>Error: ${err.message}</p>`;
+    list.innerHTML = `<p style='color:#f88'>Error: ${escapeHtml(err.message)}</p>`;
   }
 }
 
@@ -455,7 +455,7 @@ function renderLegend() {
     const item = document.createElement("div");
     item.className = "cam-legend-item" + (hiddenCameras.has(cam) ? " dimmed" : "");
     item.title = `Click to hide/show ${cam}`;
-    item.innerHTML = `<div class="cam-legend-dot" style="background:${color}"></div><span>${cam}</span>`;
+    item.innerHTML = `<div class="cam-legend-dot" style="background:${escapeHtml(color)}"></div><span>${escapeHtml(cam)}</span>`;
     item.addEventListener("click", () => {
       hiddenCameras.has(cam) ? hiddenCameras.delete(cam) : hiddenCameras.add(cam);
       item.classList.toggle("dimmed");
@@ -562,8 +562,8 @@ function updateDetailPane() {
     : originalTime;
 
   table.innerHTML = `
-    <tr><td>Filename</td><td>${photo.filename}</td></tr>
-    <tr><td>Camera</td><td>${photo.camera || "Unknown"}</td></tr>
+    <tr><td>Filename</td><td>${escapeHtml(photo.filename)}</td></tr>
+    <tr><td>Camera</td><td>${escapeHtml(photo.camera || "Unknown")}</td></tr>
     <tr><td>Original time</td><td>${originalTime}</td></tr>
     ${offset !== 0 ? `<tr><td>Adjusted time</td><td>${adjustedTime} (${offset > 0 ? '+' : ''}${offset}s)</td></tr>` : ''}
     <tr><td>Location</td><td>${photo.lat != null ? `${photo.lat.toFixed(6)}, ${photo.lng.toFixed(6)}` : "Not geotagged"}</td></tr>

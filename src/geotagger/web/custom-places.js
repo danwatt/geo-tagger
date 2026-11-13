@@ -319,7 +319,7 @@ function renderSidebar() {
 
   if (!shown.length) {
     list.innerHTML = placeQuery
-      ? `<div id="no-places-hint">No place name matches “${escHtml(placeQuery)}”.</div>`
+      ? `<div id="no-places-hint">No place name matches “${escapeHtml(placeQuery)}”.</div>`
       : `<div id="no-places-hint">No places ${
           placeFilter === "with-photo" ? "have" : "are missing"} a representative photo.</div>`;
     return;
@@ -354,8 +354,8 @@ function renderSidebar() {
       <div class="place-item-main">
         ${repThumb}
         <div class="place-item-body">
-          <div class="place-item-name">${escHtml(p.name)}</div>
-          <div class="place-item-meta">${escHtml(placeMeta(p))}</div>
+          <div class="place-item-name">${escapeHtml(p.name)}</div>
+          <div class="place-item-meta">${escapeHtml(placeMeta(p))}</div>
         </div>
       </div>
       <div class="place-item-actions">
@@ -474,7 +474,7 @@ function applyPlaceLabels(force = false) {
     const shape = placeShapes[p.id];
     if (!shape) return;
     shape.unbindTooltip();
-    shape.bindTooltip(p.name, {
+    shape.bindTooltip(escapeHtml(p.name), {
       permanent, direction: "top", className: "place-label",
     });
   });
@@ -780,7 +780,7 @@ async function openRepPicker(place) {
     inside.reverse();                      // the endpoint sorts oldest-first
     renderRepPicker(inside.slice(0, REP_PICKER_LIMIT), inside.length);
   } catch (err) {
-    grid.innerHTML = `<div class="rep-picker-empty">Couldn't load photos: ${escHtml(err.message)}</div>`;
+    grid.innerHTML = `<div class="rep-picker-empty">Couldn't load photos: ${escapeHtml(err.message)}</div>`;
   }
 }
 
@@ -1035,7 +1035,7 @@ async function loadHotspots({ append = false } = {}) {
   }
   hotspots = [];
   renderHotspotShapes();
-  list.innerHTML = `<div class="hotspot-empty">Couldn't load hotspots: ${escHtml(failure.message)}</div>`;
+  list.innerHTML = `<div class="hotspot-empty">Couldn't load hotspots: ${escapeHtml(failure.message)}</div>`;
   document.getElementById("hotspot-count").textContent = "";
 }
 
@@ -1070,7 +1070,7 @@ function renderHotspotShapes() {
       radius: hotspotRadius,
       color: "#e0a040", weight: 2, fillOpacity: 0.12, dashArray: "5,4",
     });
-    circle.bindTooltip(`${h.label} · ${h.count} photo${h.count !== 1 ? "s" : ""}`,
+    circle.bindTooltip(`${escapeHtml(h.label)} ·${h.count} photo${h.count !== 1 ? "s" : ""}`,
                        { direction: "top" });
     circle.on("click", () => selectHotspot(i));
     circle.addTo(map);
@@ -1110,7 +1110,7 @@ function renderHotspotSidebar() {
     div.innerHTML = `
       ${thumb}
       <div class="hotspot-body">
-        <div class="hotspot-label">${escHtml(h.label)}</div>
+        <div class="hotspot-label">${escapeHtml(h.label)}</div>
         <div class="hotspot-meta">${h.count} photo${h.count !== 1 ? "s" : ""}${
           h.last_ts ? ` · last ${new Date(h.last_ts * 1000).toLocaleDateString()}` : ""}</div>
         <div class="hotspot-actions">
@@ -1430,14 +1430,6 @@ async function onDrawEnd(e) {
 }
 
 /* ── Helpers ── */
-function escHtml(str) {
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
 function setStatus(msg, isError = false) {
   const bar = document.getElementById("status-bar");
   bar.textContent = msg;

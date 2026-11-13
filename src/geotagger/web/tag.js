@@ -301,7 +301,7 @@ function renderPickerList(q) {
   matches.forEach((p) => {
     const row = document.createElement("button");
     row.className = "picker-item";
-    row.innerHTML = `<span>${p.name}</span><span class="picker-count">${p.face_count ?? ""}</span>`;
+    row.innerHTML = `<span>${escapeHtml(p.name)}</span><span class="picker-count">${escapeHtml(p.face_count ?? "")}</span>`;
     row.addEventListener("click", () => pickAssign({ person_id: p.id }, p.name));
     list.appendChild(row);
   });

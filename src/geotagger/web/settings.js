@@ -8,7 +8,7 @@ async function loadSettings() {
     const data = await res.json();
     renderSettings(data.settings);
   } catch (e) {
-    container.innerHTML = `<div class="setting-error">Error loading settings: ${e.message}</div>`;
+    container.innerHTML = `<div class="setting-error">Error loading settings: ${escapeHtml(e.message)}</div>`;
   }
 }
 

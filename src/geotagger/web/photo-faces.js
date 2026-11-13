@@ -184,7 +184,7 @@ async function loadPhotoMeta(photoId) {
       ["Dimensions", d.dimensions || "—"],
     ];
     document.getElementById("photo-meta").innerHTML =
-      rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
+      rows.map(([k, v]) => `<tr><td>${k}</td><td>${escapeHtml(v)}</td></tr>`).join("");
   } catch (_) { /* non-fatal */ }
 }
 

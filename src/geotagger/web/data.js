@@ -63,7 +63,7 @@ function renderFaceModel(m) {
   const el = document.getElementById("face-model-status");
   el.innerHTML = `
     <div class="data-file-row">
-      <span>${m.name}</span>
+      <span>${escapeHtml(m.name)}</span>
       <span class="${m.available ? "present" : "missing"}">
         ${m.available ? "installed" : "not downloaded"}
       </span>
@@ -77,7 +77,7 @@ function renderGeonames(g) {
   const el = document.getElementById("geonames-files");
   el.innerHTML = g.files.map((f) => `
     <div class="data-file-row">
-      <span>${f.name}</span>
+      <span>${escapeHtml(f.name)}</span>
       <span class="${f.present ? "present" : "missing"}">
         ${f.present ? fmtBytes(f.size) : "missing"}
       </span>
@@ -99,7 +99,7 @@ function renderOsm(o) {
     </div>
     ${categories.map(([category, n]) => `
       <div class="data-file-row data-file-subrow">
-        <span>${category}</span>
+        <span>${escapeHtml(category)}</span>
         <span>${n.toLocaleString()}</span>
       </div>
     `).join("")}
@@ -113,7 +113,7 @@ function renderOsm(o) {
 
   const groupSelect = document.getElementById("osm-group-select");
   groupSelect.innerHTML = osmGroups.map((g) =>
-    `<option value="${g.group}" ${g.group === osmActiveGroup ? "selected" : ""}>${g.label}</option>`
+    `<option value="${escapeHtml(g.group)}" ${g.group === osmActiveGroup ? "selected" : ""}>${escapeHtml(g.label)}</option>`
   ).join("");
 
   renderOsmCheckboxes();
@@ -124,14 +124,14 @@ function renderCensus(c) {
   const kinds = Object.entries(c.by_kind || {});
   document.getElementById("census-status").innerHTML = `
     <div class="data-file-row">
-      <span>Places DB${c.source ? ` <span class="data-file-note">(${c.source})</span>` : ""}</span>
+      <span>Places DB${c.source ? ` <span class="data-file-note">(${escapeHtml(c.source)})</span>` : ""}</span>
       <span class="${c.available ? "present" : "missing"}">
         ${c.available ? `${c.places.toLocaleString()} total` : "not built yet"}
       </span>
     </div>
     ${kinds.map(([kind, n]) => `
       <div class="data-file-row data-file-subrow">
-        <span>${kind}</span>
+        <span>${escapeHtml(kind)}</span>
         <span>${n.toLocaleString()}</span>
       </div>
     `).join("")}
@@ -157,8 +157,8 @@ function renderOsmCheckboxes() {
   if (!group) { picker.innerHTML = ""; return; }
   picker.innerHTML = group.items.map(({ key, name }) => `
     <label class="${osmIngested.has(key) ? "state-loaded" : ""}" title="${osmIngested.has(key) ? "Already merged" : ""}">
-      <input type="checkbox" value="${key}" ${osmSelectedRegions.has(key) ? "checked" : ""}>
-      ${name}${osmIngested.has(key) ? " ✓" : ""}
+      <input type="checkbox" value="${escapeHtml(key)}" ${osmSelectedRegions.has(key) ? "checked" : ""}>
+      ${escapeHtml(name)}${osmIngested.has(key) ? " ✓" : ""}
     </label>
   `).join("");
 }
@@ -412,7 +412,7 @@ async function renderSemantic(m) {
   } catch { /* the model row below still renders */ }
   el.innerHTML = `
     <div class="data-file-row">
-      <span>${m.name}</span>
+      <span>${escapeHtml(m.name)}</span>
       <span class="${m.available ? "present" : "missing"}">
         ${m.available ? fmtBytes(m.size_bytes) : "not downloaded"}
       </span>
@@ -591,7 +591,7 @@ async function loadStreetsStatus() {
           <span class="missing">none cached — street search unavailable</span>
         </div>
         <div class="data-file-row data-file-subrow">
-          <span>Expected in ${status.cache_dir}</span>
+          <span>Expected in ${escapeHtml(status.cache_dir)}</span>
         </div>
       `;
     } else {
@@ -602,7 +602,7 @@ async function loadStreetsStatus() {
         </div>
         ${status.files.map((f) => `
           <div class="data-file-row data-file-subrow">
-            <span>${f.label}</span>
+            <span>${escapeHtml(f.label)}</span>
             <span>${fmtBytes(f.size)}</span>
           </div>
         `).join("")}
@@ -704,14 +704,14 @@ function renderStreets(result) {
       const line = L.polyline(way.coords, {
         color: "#e0a040", weight: 4, opacity: 0.85,
       }).addTo(streetsLayer);
-      line.bindTooltip(`${way.name}${way.highway ? ` · ${way.highway}` : ""}`, { sticky: true });
+      line.bindTooltip(`${escapeHtml(way.name)}${way.highway ? ` · ${escapeHtml(way.highway)}` : ""}`, { sticky: true });
       group.lines.push(line);
     });
   });
 
   listEl.innerHTML = streetGroups.map((group, i) => `
     <div class="street-row" data-i="${i}">
-      <span>${group.key}</span>
+      <span>${escapeHtml(group.key)}</span>
       <span class="street-meta">${group.ways.length} segment${group.ways.length === 1 ? "" : "s"}</span>
     </div>
   `).join("");

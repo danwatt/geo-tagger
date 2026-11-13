@@ -1488,7 +1488,7 @@ function makeFaceCell(face) {
     chip.className = "face-untag";
     chip.title = `Click to un-tag ${face.person_name}`;
     chip.innerHTML =
-      `<span class="sug-name">${face.person_name}</span>` +
+      `<span class="sug-name">${escapeHtml(face.person_name)}</span>` +
       `<span class="untag-x">✕</span>`;
     chip.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -1533,8 +1533,8 @@ function makeSuggestChip(face) {
   chip.title = `Click to confirm: ${face.suggestion.person_name} (${face.suggestion.score})`;
   chip.innerHTML =
     `<span class="sug-check">✓</span>` +
-    `<span class="sug-name">${face.suggestion.person_name}?</span>` +
-    `<span class="sug-reject" title="Not ${face.suggestion.person_name}">✕</span>`;
+    `<span class="sug-name">${escapeHtml(face.suggestion.person_name)}?</span>` +
+    `<span class="sug-reject" title="Not ${escapeHtml(face.suggestion.person_name)}">✕</span>`;
   chip.addEventListener("click", (e) => {
     e.stopPropagation();
     if (e.target.closest(".sug-reject")) {
@@ -1554,8 +1554,8 @@ function makeAltChip(face, alt) {
   chip.title = `Click to tag as ${alt.person_name} instead (${alt.score})`;
   chip.innerHTML =
     `<span class="alt-arrow">→</span>` +
-    `<span class="sug-name">${alt.person_name}?</span>` +
-    `<span class="sug-reject" title="Not ${alt.person_name}">✕</span>`;
+    `<span class="sug-name">${escapeHtml(alt.person_name)}?</span>` +
+    `<span class="sug-reject" title="Not ${escapeHtml(alt.person_name)}">✕</span>`;
   chip.addEventListener("click", (e) => {
     e.stopPropagation();
     if (e.target.closest(".sug-reject")) {
@@ -2393,18 +2393,18 @@ function updateDetail() {
     ? "<i style='color:#999'>Ignored</i>"
     : face.come_back
       ? "<i style='color:#dab35a'>Come back later</i>"
-      : (face.person_name || "<i style='color:#777'>Unassigned</i>");
+      : (face.person_name ? escapeHtml(face.person_name) : "<i style='color:#777'>Unassigned</i>");
   const loc = face.location;
   const placeStr = loc
     ? [loc.city, loc.state, loc.country].filter(Boolean).join(", ")
     : null;
   const staged = pending.get(face.id);
   document.getElementById("detail-meta").innerHTML = `
-    <tr><td>Photo</td><td>${face.filename}</td></tr>
-    <tr><td>Taken</td><td>${when}</td></tr>
-    ${placeStr ? `<tr><td>Location</td><td>${placeStr}</td></tr>` : ""}
+    <tr><td>Photo</td><td>${escapeHtml(face.filename)}</td></tr>
+    <tr><td>Taken</td><td>${escapeHtml(when)}</td></tr>
+    ${placeStr ? `<tr><td>Location</td><td>${escapeHtml(placeStr)}</td></tr>` : ""}
     <tr><td>Person</td><td>${personCell}</td></tr>
-    ${staged ? `<tr><td>Staged</td><td><b style='color:var(--warn)'>→ ${pendingCellLabel(staged)}</b> (not saved)</td></tr>` : ""}
+    ${staged ? `<tr><td>Staged</td><td><b style='color:var(--warn)'>→ ${escapeHtml(pendingCellLabel(staged))}</b> (not saved)</td></tr>` : ""}
     <tr><td>Detection</td><td>${face.det_score.toFixed(3)}</td></tr>
   `;
   const detailIgnoreBtn = document.getElementById("detail-ignore-btn");
@@ -2426,7 +2426,7 @@ function updateDetail() {
     const primary = document.createElement("div");
     primary.className = "sug-primary";
     primary.innerHTML =
-      `<span class="sug-text">Looks like <b>${face.suggestion.person_name}</b> ` +
+      `<span class="sug-text">Looks like <b>${escapeHtml(face.suggestion.person_name)}</b> ` +
       `(${face.suggestion.score})</span>`;
     const confirmBtn = document.createElement("button");
     confirmBtn.className = "primary";

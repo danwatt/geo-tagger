@@ -380,14 +380,6 @@ let wqKind = "all";
 let wqOffset = 0;
 let wqTotal = 0;
 
-function escHtml(str) {
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
 // Green when nearly every member has a time-neighbour vote, amber when it's a
 // coin flip — the chip is what tells the user whether to expect one click or a
 // map drag.
@@ -408,14 +400,14 @@ function makeBatchRow(b) {
   // A batch with votes promises a place; folders and undated runs say so plainly
   // rather than pretending the map step isn't coming.
   const meta = b.proposal
-    ? `📍 ${escHtml(b.proposal.label)}` +
+    ? `📍 ${escapeHtml(b.proposal.label)}` +
       `<span class="${confClass(b.confidence)}">● ${Math.round(b.confidence * 100)}% have a guess</span>`
     : `<span class="wq-noguess">${b.start_ts ? "no guess" : "no date · no guess"}</span>`;
 
   row.innerHTML =
     `<div class="wq-thumbs">${thumbs}</div>` +
     `<div class="wq-body">` +
-      `<div class="wq-row-title">${escHtml(b.title)}</div>` +
+      `<div class="wq-row-title">${escapeHtml(b.title)}</div>` +
       `<div class="wq-row-meta">${meta}</div>` +
     `</div>` +
     `<div class="wq-count">${b.count.toLocaleString()} photo${b.count === 1 ? "" : "s"}</div>` +

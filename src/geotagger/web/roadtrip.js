@@ -265,7 +265,7 @@
                           iconSize: [22, 22], iconAnchor: [11, 11] }),
         zIndexOffset: 1000,
       });
-      m.bindTooltip(`${label === "A" ? "Trip start" : "Trip end"}: ${photo.filename}`,
+      m.bindTooltip(`${label === "A" ? "Trip start" : "Trip end"}: ${escapeHtml(photo.filename)}`,
                     { direction: "top", opacity: 0.95 });
       pins.push(m);
     };

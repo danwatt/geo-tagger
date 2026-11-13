@@ -161,12 +161,6 @@ function updatePersonModeVisibility() {
   }
 }
 
-function escapeHtml(s) {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
-}
-
 function wirePersonPicker() {
   const input = document.getElementById("person-picker-input");
   const suggestBox = document.getElementById("person-suggest");
@@ -1039,7 +1033,7 @@ function renderGuessDatesTable() {
         <td><input type="checkbox" data-idx="${i}" ${hasGuess ? "checked" : "disabled"}/></td>
         <td>${escapeHtml(row.filename)}</td>
         <td>${escapeHtml(formatGuessLabel(row.guess))}</td>
-        <td class="guess-source">${row.guess ? row.guess.source : ""}</td>
+        <td class="guess-source">${row.guess ? escapeHtml(row.guess.source) : ""}</td>
       </tr>`;
   }).join("");
 }

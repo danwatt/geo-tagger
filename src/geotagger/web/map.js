@@ -443,7 +443,7 @@ function zctaFeatureStyle() {
 
 function addZctaLabel(feature, layer) {
   const { zip, city } = feature.properties;
-  layer.bindTooltip(city ? `${zip} · ${city}` : zip, {
+  layer.bindTooltip(escapeHtml(city ? `${zip} · ${city}` : zip), {
     permanent: true,
     direction: "center",
     className: "zcta-label",
@@ -490,7 +490,7 @@ async function probePoint(e) {
 }
 
 function probeMessage(msg) {
-  return `<div class="map-popup"><div class="map-popup-meta">${escHtml(msg)}</div></div>`;
+  return `<div class="map-popup"><div class="map-popup-meta">${escapeHtml(msg)}</div></div>`;
 }
 
 // Header = the resolved place name; the labeled rows below are the exact fields
@@ -510,10 +510,10 @@ function renderProbe(data) {
     ["Country code", loc.country_code],
   ].filter(([, v]) => v) : [];
   const rows = fields.map(([k, v]) =>
-    `<div class="map-popup-field"><span class="map-popup-field-key">${k}</span>${escHtml(v)}</div>`
+    `<div class="map-popup-field"><span class="map-popup-field-key">${k}</span>${escapeHtml(v)}</div>`
   ).join("");
   return `<div class="map-popup map-popup-probe">
-    <div class="map-popup-name">${escHtml(name)}</div>
+    <div class="map-popup-name">${escapeHtml(name)}</div>
     <div class="map-popup-probe-label">Would be saved for a photo here:</div>
     ${rows || `<div class="map-popup-meta">(nothing — no location)</div>`}
     ${renderProbeSources(data.sources, loc)}
@@ -538,7 +538,7 @@ function renderProbeSources(sources, loc) {
   const rows = candidates.map(([k, v]) => {
     const won = v === winner ? " map-popup-source-win" : "";
     return `<div class="map-popup-field${won}">
-      <span class="map-popup-field-key">${k}</span>${escHtml(v)}</div>`;
+      <span class="map-popup-field-key">${k}</span>${escapeHtml(v)}</div>`;
   }).join("");
   return `<div class="map-popup-probe-label">City candidates, best first:</div>${rows}`;
 }
@@ -596,9 +596,9 @@ function placeIcon() {
 function renderPopup(place) {
   const region = [place.county, place.state].filter(Boolean).join(", ");
   return `<div class="map-popup">
-    <div class="map-popup-name">${escHtml(place.city || "(unnamed)")}</div>
-    ${region ? `<div class="map-popup-region">${escHtml(region)}</div>` : ""}
-    <div class="map-popup-country">${escHtml(place.country || place.country_code || "")}</div>
+    <div class="map-popup-name">${escapeHtml(place.city || "(unnamed)")}</div>
+    ${region ? `<div class="map-popup-region">${escapeHtml(region)}</div>` : ""}
+    <div class="map-popup-country">${escapeHtml(place.country || place.country_code || "")}</div>
     <div class="map-popup-meta">Population: ${place.population.toLocaleString()}</div>
     <div class="map-popup-meta">${place.lat.toFixed(4)}, ${place.lng.toFixed(4)}</div>
   </div>`;
@@ -612,14 +612,6 @@ function showHint(msg) {
 
 function hideHint() {
   document.getElementById("map-hint").classList.remove("visible");
-}
-
-function escHtml(str) {
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }
 
 function setStatus(msg, isError = false) {

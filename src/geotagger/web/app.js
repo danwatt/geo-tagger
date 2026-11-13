@@ -771,7 +771,7 @@ function renderPlaces() {
     }
 
     if (shape) {
-      shape.bindTooltip(p.name, { permanent: false, direction: "top" });
+      shape.bindTooltip(escapeHtml(p.name), { permanent: false, direction: "top" });
       shape.addTo(map);
       placeShapes[p.id] = shape;
     }
@@ -1485,7 +1485,7 @@ function renderLegend() {
     const item = document.createElement("div");
     item.className = "cam-legend-item" + (hiddenCameras.has(cam) ? " dimmed" : "");
     item.title = `Click to hide/show ${cam}`;
-    item.innerHTML = `<div class="cam-legend-dot" style="background:${color}"></div><span>${cam}</span>`;
+    item.innerHTML = `<div class="cam-legend-dot" style="background:${escapeHtml(color)}"></div><span>${escapeHtml(cam)}</span>`;
     item.addEventListener("click", () => {
       hiddenCameras.has(cam) ? hiddenCameras.delete(cam) : hiddenCameras.add(cam);
       item.classList.toggle("dimmed");
@@ -2227,11 +2227,12 @@ async function showDetail(id) {
       ["GPS accuracy", formatAccuracy(data.gps_accuracy)],
       ["Geotag source", data.geotag_source],
       ["Sidecar", data.sidecar_path ? data.sidecar_path.split(/[\\/]/).pop() : "none"],
-      ["Ignore for geocoding", `<label class="inline-toggle"><input type="checkbox" id="detail-ignore-chk" ${data.geocode_ignored ? "checked" : ""}/> not applicable (e.g. screenshot)</label>`],
+      // Third element marks a value that is our own trusted markup, not data.
+      ["Ignore for geocoding", `<label class="inline-toggle"><input type="checkbox" id="detail-ignore-chk" ${data.geocode_ignored ? "checked" : ""}/> not applicable (e.g. screenshot)</label>`, true],
     ];
     const table = document.getElementById("detail-meta");
-    table.innerHTML = rows.map(([k, v]) =>
-      `<tr><td>${k}</td><td>${v ?? "—"}</td></tr>`
+    table.innerHTML = rows.map(([k, v, isHtml]) =>
+      `<tr><td>${k}</td><td>${isHtml ? v : escapeHtml(v ?? "—")}</td></tr>`
     ).join("");
     document.getElementById("detail-ignore-chk").addEventListener("change", (e) => {
       setGeocodeIgnored([id], e.target.checked);
@@ -2279,8 +2280,8 @@ async function doGuess() {
       const direction = src.is_before ? "before" : "after";
       const popupHtml = `
         <div class="source-popup">
-          <img src="/api/thumbnail/${src.id}" alt="${src.filename}"/>
-          <div class="source-popup-label">${src.filename}</div>
+          <img src="/api/thumbnail/${src.id}" alt="${escapeHtml(src.filename)}"/>
+          <div class="source-popup-label">${escapeHtml(src.filename)}</div>
           <div class="source-popup-time">${mins} ${direction}</div>
         </div>`;
       const m = L.marker([src.lat, src.lng], { icon, interactive: true })
@@ -2704,7 +2705,7 @@ function renderPendingGeoMarkers() {
       icon: makePendingPinIcon(p.count),
       zIndexOffset: 500,   // staged pins sit above the saved ones
     }).addTo(map);
-    marker.bindTooltip(`Staged: ${p.count} photo(s) → ${p.label}`);
+    marker.bindTooltip(`Staged: ${p.count} photo(s) → ${escapeHtml(p.label)}`);
     pendingGeoMarkers.push(marker);
   });
 }
