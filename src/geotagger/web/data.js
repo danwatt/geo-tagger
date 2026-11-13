@@ -24,6 +24,7 @@ async function loadStatus() {
     renderOsm(data.osm);
     renderCensus(data.census);
     renderFaceModel(data.face_model);
+    await renderSemantic(data.semantic_model);
   } catch (e) {
     document.getElementById("geonames-error").textContent = e.message;
   }
@@ -392,6 +393,144 @@ async function startFaceModelDownload() {
     btn.disabled = false;
   }
 }
+
+// ── Text search model + indexing ──
+//
+// Download is the usual start-job-then-poll; indexing is the client batch loop
+// (POST a batch, read `remaining`, repeat) used by face detection on Home.
+
+let semanticPolling = false;
+let semanticIndexing = false;
+let semanticStopRequested = false;
+
+async function renderSemantic(m) {
+  const el = document.getElementById("semantic-status");
+  let idx = null;
+  try {
+    const res = await fetch("/api/semantic/status");
+    if (res.ok) idx = await res.json();
+  } catch { /* the model row below still renders */ }
+  el.innerHTML = `
+    <div class="data-file-row">
+      <span>${m.name}</span>
+      <span class="${m.available ? "present" : "missing"}">
+        ${m.available ? fmtBytes(m.size_bytes) : "not downloaded"}
+      </span>
+    </div>
+    ${idx ? `
+    <div class="data-file-row">
+      <span>Photos indexed</span>
+      <span class="${idx.remaining === 0 ? "present" : "missing"}">
+        ${idx.embedded.toLocaleString()} of ${idx.total.toLocaleString()}${idx.failed ? ` · ${idx.failed.toLocaleString()} unreadable` : ""}
+      </span>
+    </div>` : ""}
+  `;
+  document.getElementById("semantic-download-btn").textContent =
+    m.available ? "Re-download text search model" : "Download text search model";
+  const indexBtn = document.getElementById("semantic-index-btn");
+  if (!semanticIndexing) {
+    indexBtn.disabled = !m.available || !idx || idx.remaining === 0;
+    indexBtn.textContent = idx && idx.remaining > 0
+      ? `Index ${idx.remaining.toLocaleString()} photos` : "Index photos";
+  }
+}
+
+async function pollSemanticModel() {
+  if (semanticPolling) return;
+  semanticPolling = true;
+  const btn = document.getElementById("semantic-download-btn");
+  const progress = document.getElementById("semantic-progress");
+  const errorEl = document.getElementById("semantic-error");
+  try {
+    while (true) {
+      const res = await fetch("/api/data/semantic-model/download/status");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const job = await res.json();
+      progress.textContent = job.message || "";
+      if (job.error) { errorEl.textContent = job.error; break; }
+      if (job.done || !job.running) break;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  } catch (e) {
+    errorEl.textContent = e.message;
+  } finally {
+    semanticPolling = false;
+    btn.disabled = false;
+    await loadStatus();
+  }
+}
+
+async function startSemanticDownload() {
+  const btn = document.getElementById("semantic-download-btn");
+  const errorEl = document.getElementById("semantic-error");
+  errorEl.textContent = "";
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/data/semantic-model/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force: document.getElementById("semantic-force").checked }),
+    });
+    if (res.status !== 409 && !res.ok) throw new Error(`HTTP ${res.status}`);
+    pollSemanticModel();
+  } catch (e) {
+    errorEl.textContent = e.message;
+    btn.disabled = false;
+  }
+}
+
+async function runSemanticIndex() {
+  if (semanticIndexing) return;
+  semanticIndexing = true;
+  semanticStopRequested = false;
+  const btn = document.getElementById("semantic-index-btn");
+  const stopBtn = document.getElementById("semantic-stop-btn");
+  const progress = document.getElementById("semantic-progress");
+  const errorEl = document.getElementById("semantic-error");
+  errorEl.textContent = "";
+  btn.disabled = true;
+  stopBtn.style.display = "";
+  let failed = 0;
+  try {
+    let remaining = Infinity;
+    while (remaining > 0 && !semanticStopRequested) {
+      const t0 = performance.now();
+      const res = await fetch("/api/semantic/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 32 }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      remaining = data.remaining;
+      failed += data.errors.length;
+      const rate = data.processed / ((performance.now() - t0) / 1000);
+      btn.textContent = remaining > 0 ? `Indexing… ${remaining.toLocaleString()} left` : "Index photos";
+      progress.textContent = remaining > 0
+        ? `~${rate.toFixed(1)} photos/s · about ${Math.ceil(remaining / Math.max(rate, 0.1) / 60).toLocaleString()} min left`
+        : `Done.${failed ? ` ${failed} photo(s) couldn't be read.` : ""}`;
+    }
+    if (semanticStopRequested) progress.textContent = "Stopped — Index photos resumes where it left off.";
+  } catch (e) {
+    errorEl.textContent = e.message;
+  } finally {
+    semanticIndexing = false;
+    stopBtn.style.display = "none";
+    await loadStatus();
+  }
+}
+
+document.getElementById("semantic-download-btn").addEventListener("click", startSemanticDownload);
+document.getElementById("semantic-index-btn").addEventListener("click", runSemanticIndex);
+document.getElementById("semantic-stop-btn").addEventListener("click", () => { semanticStopRequested = true; });
+// Resume watching a download started before this page was (re)opened.
+fetch("/api/data/semantic-model/download/status")
+  .then((r) => (r.ok ? r.json() : null))
+  .then((job) => { if (job?.running) pollSemanticModel(); })
+  .catch(() => {});
 
 // ── Street search ──
 //

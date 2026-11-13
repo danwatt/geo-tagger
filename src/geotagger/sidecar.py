@@ -239,6 +239,66 @@ def remove_gps(image_path: Path) -> Path:
     return sc
 
 
+def read_sidecar_datetime_raw(image_path: Path) -> str | None:
+    """The literal ``XMP:DateTimeOriginal`` string currently in the sidecar, or
+    None if there's no sidecar or no such tag (i.e. the file's own embedded date,
+    or nothing, currently governs). Used to snapshot state before a batch date
+    write so Undo can restore it byte-for-byte, without reconstructing it from a
+    parsed/re-derived timestamp."""
+    sc = sidecar_path(image_path)
+    if not sc.exists():
+        return None
+    et = get_et()
+    with get_et_lock():
+        result = et.get_tags([str(sc)], tags=["XMP:DateTimeOriginal"])
+    return result[0].get("XMP:DateTimeOriginal") if result else None
+
+
+def write_datetime_raw(image_path: Path, exif_datetime: str | None) -> Path:
+    """Write (or clear, with None) the sidecar's XMP:DateTimeOriginal to an exact
+    literal EXIF-format string ('YYYY:MM:DD HH:MM:SS'). The one place that
+    actually calls ExifTool for this tag — write_datetime/write_approximate_date/
+    write_guessed_date all format a string and hand it here; Undo uses it
+    directly with a snapshot from read_sidecar_datetime_raw."""
+    et = get_et()
+    sc = sidecar_path(image_path)
+    with get_et_lock():
+        et.execute("-overwrite_original", f"-XMP:DateTimeOriginal={exif_datetime or ''}", str(sc))
+    return sc
+
+
+def write_guessed_date(image_path: Path, year: int, month: int, day: int) -> tuple[Path, int]:
+    """Write a fully-specified (exact day) date guessed from a filename's embedded
+    YYYYMMDD or a folder's full-date segment — see date_guess.py. Unlike
+    write_approximate_date, ``day`` is a real observed value, not a period-start
+    stand-in, so the caller should record date_precision=None (exact) for it.
+    Returns (sidecar_path, photo_datetime)."""
+    exif_datetime = f"{year:04d}:{month:02d}:{day:02d} 00:00:00"
+    timestamp = int(calendar.timegm(datetime(year, month, day).timetuple()))
+    sc = write_datetime_raw(image_path, exif_datetime)
+    logger.info(f"Set guessed date for {image_path.name}: {exif_datetime}")
+    return sc, timestamp
+
+
+def write_approximate_date(image_path: Path, year: int, month: int | None) -> tuple[Path, int]:
+    """Write a year- or month-precision date to the sidecar (creating it if needed).
+
+    Stores the first instant of the year/month — day 1, 00:00:00 — as the
+    conventional stand-in for "somewhere in this period". Built directly as an
+    EXIF-format string (not via write_datetime's fromtimestamp/strftime round trip,
+    which goes through the local timezone and can shift the calendar date), and the
+    returned timestamp is computed the same way _parse_exif_datetime will read it
+    back (UTC, via calendar.timegm) so a rescan reproduces exactly this value.
+    Returns (sidecar_path, photo_datetime).
+    """
+    exif_datetime = f"{year:04d}:{month or 1:02d}:01 00:00:00"
+    timestamp = int(calendar.timegm(datetime(year, month or 1, 1).timetuple()))
+    sc = write_datetime_raw(image_path, exif_datetime)
+    logger.info(f"Set approximate ({'month' if month else 'year'}-precision) date for "
+                f"{image_path.name}: {exif_datetime}")
+    return sc, timestamp
+
+
 def write_datetime(image_path: Path, timestamp: int) -> Path:
     """Write DateTimeOriginal to sidecar (creating it if needed). Returns sidecar path."""
     # Read existing timestamp from image metadata
@@ -248,15 +308,7 @@ def write_datetime(image_path: Path, timestamp: int) -> Path:
     # Convert Unix timestamp to EXIF format: "YYYY:MM:DD HH:MM:SS"
     dt = datetime.fromtimestamp(timestamp)
     exif_datetime = dt.strftime("%Y:%m:%d %H:%M:%S")
-
-    et = get_et()
-    sc = sidecar_path(image_path)
-    with get_et_lock():
-        et.execute(
-            "-overwrite_original",
-            f"-XMP:DateTimeOriginal={exif_datetime}",
-            str(sc),
-        )
+    sc = write_datetime_raw(image_path, exif_datetime)
 
     # Log the change
     if old_ts and old_ts != 0:

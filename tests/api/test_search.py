@@ -47,6 +47,20 @@ def test_search_date_range(client):
     assert [p["filename"] for p in r["photos"]] == ["early.jpg"]
 
 
+def test_search_undated_only(client):
+    _add("dated.jpg", dt=1000)
+    _add("undated.jpg", dt=None)
+    r = client.get("/api/search?undated=true").json()
+    assert [p["filename"] for p in r["photos"]] == ["undated.jpg"]
+
+
+def test_search_undated_ignores_date_range(client):
+    _add("dated.jpg", dt=946684800)
+    _add("undated.jpg", dt=None)
+    r = client.get("/api/search?undated=true&date_from=1999-01-01&date_to=1999-12-31").json()
+    assert [p["filename"] for p in r["photos"]] == ["undated.jpg"]
+
+
 def test_search_location_text(client):
     _add("paris.jpg", dt=1000, loc_city="Paris", loc_country="France")
     _add("tokyo.jpg", dt=1000, loc_city="Tokyo", loc_country="Japan")

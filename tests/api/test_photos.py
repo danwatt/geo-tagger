@@ -29,7 +29,7 @@ def test_photo_list_shape(client):
     p = client.get("/api/photos").json()[0]
     assert set(p) == {"id", "filename", "media_type", "lat", "lng", "geotag_source",
                       "camera", "photo_datetime", "gps_accuracy", "geocode_ignored",
-                      "dir", "location"}
+                      "date_precision", "dir", "location"}
 
 
 def test_ids_filter(client):
@@ -48,6 +48,26 @@ def test_ids_filter_overrides_other_filters(client):
 
 def test_ids_filter_invalid_400(client):
     assert client.get("/api/photos?ids=abc").status_code == 400
+
+
+def test_assign_date_rejects_empty_selection(client):
+    r = client.post("/api/photos/assign-date", json={"photo_ids": [], "year": 2020})
+    assert r.status_code == 400
+
+
+def test_assign_date_rejects_bad_year(client):
+    a = _add("a.jpg", dt=1000)
+    assert client.post("/api/photos/assign-date",
+                       json={"photo_ids": [a], "year": 1000}).status_code == 400
+    assert client.post("/api/photos/assign-date",
+                       json={"photo_ids": [a], "year": 3000}).status_code == 400
+
+
+def test_assign_date_rejects_bad_month(client):
+    a = _add("a.jpg", dt=1000)
+    r = client.post("/api/photos/assign-date",
+                    json={"photo_ids": [a], "year": 2020, "month": 13})
+    assert r.status_code == 400
 
 
 def test_by_area_radius(client):

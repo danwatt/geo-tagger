@@ -463,6 +463,7 @@ async def api_photo_faces(photo_id: int):
     if not photo:
         raise HTTPException(404)
     photo_dt = photo["photo_datetime"]
+    photo_precision = photo["date_precision"]
     gallery = faces.build_gallery()
     rows = index.get_faces_for_photo(photo_id)
     out = []
@@ -487,7 +488,8 @@ async def api_photo_faces(photo_id: int):
         if (r["person_id"] is None and not r["ignored"] and len(gallery) > 0
                 and r["embedding"] is not None):
             vec = faces.decode_embedding(r["embedding"])
-            match = faces.suggest_person(vec, photo_dt, gallery, exclude=set(negatives))
+            match = faces.suggest_person(vec, photo_dt, gallery, exclude=set(negatives),
+                                         date_precision=photo_precision)
             if match:
                 pid, score = match
                 person = index.get_db().execute(

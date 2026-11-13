@@ -31,7 +31,7 @@ class TestPhotoToDict:
             "id": pid, "filename": "p.jpg", "media_type": "image",
             "lat": 10.0, "lng": 20.0, "geotag_source": "sidecar",
             "camera": "Canon EOS", "photo_datetime": 1_600_000_000,
-            "gps_accuracy": 5.0, "geocode_ignored": False,
+            "gps_accuracy": 5.0, "geocode_ignored": False, "date_precision": None,
             "dir": ".", "location": None,
         }
 

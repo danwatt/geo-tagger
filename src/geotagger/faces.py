@@ -27,6 +27,12 @@ from geotagger.config import (
 
 YEAR_SECONDS = 365.25 * 86400
 
+# Extra age-tolerance (years) for a photo whose date is a manually-assigned
+# approximate one (see photos_service.assign_approximate_dates), on top of
+# config.FACE_BIRTH_TOLERANCE_YEARS — half the width of the period the true
+# date could fall anywhere within, since photo_datetime is pinned to its start.
+PRECISION_TOLERANCE_YEARS = {"year": 0.5, "month": 1 / 24}
+
 
 def _cfg(value, key: str):
     """Resolve an optional override: fall back to the live (possibly
@@ -72,6 +78,8 @@ def _get_app():
         if _model_dir is None:
             raise RuntimeError("Faces not initialized — call init_faces first")
         from insightface.app import FaceAnalysis
+        from geotagger import onnx_setup
+        onnx_setup.prepare(FACE_PROVIDERS)
         # Only load the detector + recognizer; skip gender/age and landmark
         # models we don't use, which cuts load time and memory.
         app = FaceAnalysis(
@@ -83,6 +91,8 @@ def _get_app():
         ctx_id = 0 if any("CUDA" in p for p in FACE_PROVIDERS) else -1
         app.prepare(ctx_id=ctx_id, det_size=(FACE_DET_SIZE, FACE_DET_SIZE),
                     det_thresh=FACE_DET_THRESHOLD)
+        det = app.models.get("detection")
+        _log.info(f"Face models on {onnx_setup.active_providers(det.session) if det else '?'}")
         _app = app
     return _app
 
@@ -596,7 +606,8 @@ def drop_from_unlabeled_cache(face_ids):
 
 
 def match_embedding(vec: np.ndarray, photo_datetime, gallery: Gallery,
-                    exclude: set[int] | None = None) -> list[tuple[int, float]]:
+                    exclude: set[int] | None = None,
+                    date_precision: str | None = None) -> list[tuple[int, float]]:
     """Rank persons for an embedding by best (age-adjusted) cosine similarity.
 
     Embeddings are L2-normalized, so the dot product is the cosine. When the
@@ -610,7 +621,10 @@ def match_embedding(vec: np.ndarray, photo_datetime, gallery: Gallery,
     Each person is scored by their single best example after adjustment.
     ``exclude`` is a set of person_ids to drop from the ranking entirely (this
     single face's negatives — the caller looks them up by face_id, since this
-    function only sees the embedding).
+    function only sees the embedding). ``date_precision`` ('year'/'month', from
+    the photo's date_precision column) widens the birth/window exclusion
+    tolerance and softens the age-gap penalty by PRECISION_TOLERANCE_YEARS, since
+    an approximate date's true day could fall anywhere in that period.
     """
     if len(gallery) == 0:
         return []
@@ -619,8 +633,9 @@ def match_embedding(vec: np.ndarray, photo_datetime, gallery: Gallery,
     scores = gallery._s_embs @ np.asarray(vec, dtype=np.float32)  # (N,) f32
 
     if photo_datetime:
+        unc       = np.float32(PRECISION_TOLERANCE_YEARS.get(date_precision, 0.0))
         tu_yr     = np.float32(float(photo_datetime) / YEAR_SECONDS)
-        tol       = np.float32(config.FACE_BIRTH_TOLERANCE_YEARS)
+        tol       = np.float32(config.FACE_BIRTH_TOLERANCE_YEARS) + unc
         has_birth = ~np.isnan(gallery._s_bt_yr)
         has_ft    = ~np.isnan(gallery._s_ft_yr)
         can_pen   = has_birth & has_ft
@@ -631,7 +646,7 @@ def match_embedding(vec: np.ndarray, photo_datetime, gallery: Gallery,
         has_na    = ~np.isnan(gallery._s_na_yr)
         excl     |= has_nb & (tu_yr < gallery._s_nb_yr - tol)
         excl     |= has_na & (tu_yr > gallery._s_na_yr + tol)
-        gap       = np.abs(age_u - age_f)
+        gap       = np.maximum(np.abs(age_u - age_f) - unc, np.float32(0.0))
         penalty   = np.minimum(gap, np.float32(config.FACE_AGE_PENALTY_CAP_YEARS))
         penalty  *= np.float32(config.FACE_AGE_PENALTY_PER_YEAR)
         np.subtract(scores, penalty, where=can_pen, out=scores)
@@ -658,12 +673,14 @@ def match_embedding(vec: np.ndarray, photo_datetime, gallery: Gallery,
 
 def suggest_person(vec: np.ndarray, photo_datetime, gallery: Gallery,
                    threshold: float | None = None,
-                   exclude: set[int] | None = None) -> tuple[int, float] | None:
+                   exclude: set[int] | None = None,
+                   date_precision: str | None = None) -> tuple[int, float] | None:
     """Return (person_id, score) if the top match clears the threshold, else None.
     Defaults to the live ``config.FACE_MATCH_THRESHOLD`` setting. ``exclude``
-    (person_ids) is forwarded to ``match_embedding``."""
+    (person_ids) and ``date_precision`` are forwarded to ``match_embedding``."""
     threshold = _cfg(threshold, "FACE_MATCH_THRESHOLD")
-    ranked = match_embedding(vec, photo_datetime, gallery, exclude=exclude)
+    ranked = match_embedding(vec, photo_datetime, gallery, exclude=exclude,
+                             date_precision=date_precision)
     if ranked and ranked[0][1] >= threshold:
         return ranked[0]
     return None

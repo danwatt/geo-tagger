@@ -124,6 +124,24 @@ class TestAgeMath:
         assert faces.suggest_person(g, ff.epoch(2005), gallery) is None
         assert faces.suggest_person(g, ff.epoch(2015), gallery) is None
 
+    def test_approximate_date_widens_exclusion_tolerance(self, db):
+        """A photo just past a not_after window is excluded when its date is
+        exact, but included once it's flagged as an approximate (year- or
+        month-precision) date — see faces.PRECISION_TOLERANCE_YEARS."""
+        rng = np.random.default_rng(7)
+        g = ff.unit_vectors(rng, 1)[0]
+        ff.seed_person(db, "Windowed", g[None, :], not_before="2010-01-01",
+                       not_after="2012-01-01", photo_datetimes=ff.epoch(2011))
+        gallery = faces.build_gallery()
+
+        # ~0.67yr past not_after: beyond the default 0.5yr tolerance...
+        past_window = ff.epoch(2012, 9)
+        assert faces.suggest_person(g, past_window, gallery) is None
+        # ...but within it once widened for a year-precision (+0.5yr) date.
+        assert faces.suggest_person(g, past_window, gallery, date_precision="year") is not None
+        # A month-precision date only widens by ~1/24yr — not enough here.
+        assert faces.suggest_person(g, past_window, gallery, date_precision="month") is None
+
 
 def _fixed_vec(theta_deg: float) -> np.ndarray:
     """A unit vector at exactly ``theta_deg`` in the plane of the first two

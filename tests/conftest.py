@@ -44,6 +44,62 @@ def db(tmp_path, monkeypatch):
     faces._gallery_cache = None
     faces._unlabeled_cache = None
     faces._suggested_scores_cache = None
+    _reset_semantic_state()
+
+
+@pytest.fixture
+def fake_semantic(tmp_path, monkeypatch):
+    """Semantic search without the real 1.4 GB model: placeholder model files (so
+    model_status() reports available) plus deterministic fake encoders. Images
+    embed by their mean colour and text by the colour words it mentions, so
+    "red" really does rank a red photo first. Photo previews are solid-colour
+    JPEGs chosen by filename prefix (red_*, green_*, blue_*, else grey)."""
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    from geotagger import semantic, thumbnails
+
+    semantic.init_semantic(tmp_path)
+    d = semantic._model_dir()
+    for rel in semantic.MODEL_FILES:
+        (d / rel).parent.mkdir(parents=True, exist_ok=True)
+        (d / rel).write_bytes(b"x")
+
+    def unit(v):
+        v = np.asarray(v, dtype=np.float32)
+        return v / np.linalg.norm(v)
+
+    def fake_image(img):
+        r, g, b = np.asarray(img.convert("RGB"), dtype=np.float32).reshape(-1, 3).mean(0) / 255
+        v = np.full(semantic.EMBED_DIM, 0.01, dtype=np.float32)
+        v[:3] = (r, g, b)
+        return unit(v)
+
+    def fake_text(text):
+        v = np.full(semantic.EMBED_DIM, 0.01, dtype=np.float32)
+        for i, word in enumerate(("red", "green", "blue")):
+            if word in text.lower():
+                v[i] = 1.0
+        return unit(v)
+
+    colours = {"red": (220, 20, 20), "green": (20, 200, 20), "blue": (20, 20, 220)}
+
+    def fake_preview(path, mtime, size, orientation=None):
+        name = str(path).replace("\\", "/").rsplit("/", 1)[-1]
+        if name.startswith("broken"):
+            raise OSError("cannot decode")
+        rgb = next((c for k, c in colours.items() if name.startswith(k)), (128, 128, 128))
+        buf = io.BytesIO()
+        Image.new("RGB", (32, 32), rgb).save(buf, "JPEG")
+        return buf.getvalue()
+
+    monkeypatch.setattr(semantic, "encode_image", fake_image)
+    monkeypatch.setattr(semantic, "encode_text", fake_text)
+    monkeypatch.setattr(thumbnails, "get_preview_oriented", fake_preview)
+    yield semantic
+    _reset_semantic_state()
 
 
 @pytest.fixture
@@ -275,3 +331,11 @@ def client(tmp_path, monkeypatch):
     faces._gallery_cache = None
     faces._unlabeled_cache = None
     faces._suggested_scores_cache = None
+    _reset_semantic_state()
+
+
+def _reset_semantic_state():
+    from geotagger import semantic
+    semantic._model_root = None
+    semantic._matrix_cache = None
+    semantic.reset_model()

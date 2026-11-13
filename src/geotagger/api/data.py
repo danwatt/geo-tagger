@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from geotagger import index
 from geotagger.executor import get_executor
 from geotagger.geometry import normalize_lng_bbox
-from geotagger.services import backup_service, data_service, streets_service
+from geotagger.services import backup_service, data_service, semantic_service, streets_service
 
 router = APIRouter()
 
@@ -43,6 +43,7 @@ async def api_data_status():
         "osm": data_service.osm_status(),
         "census": data_service.census_status(),
         "face_model": data_service.face_model_status(),
+        "semantic_model": semantic_service.model_status(),
     }
 
 

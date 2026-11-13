@@ -254,6 +254,84 @@ class TestUpdatePhotoTimes:
         assert photos_service.update_photo_times({pid: 10}) == 0
 
 
+class TestGuessDates:
+    def test_filename_guess(self, db):
+        pid = _add_photo(db, path="C:/Photos/Vacation/20111027-IMG_0015.JPG", photo_datetime=None)
+        out = photos_service.guess_dates([pid])
+        assert out == [{
+            "photo_id": pid, "filename": "20111027-IMG_0015.JPG", "current_datetime": None,
+            "guess": {"year": 2011, "month": 10, "day": 27, "precision": None, "source": "filename"},
+        }]
+
+    def test_folder_guess_when_no_filename_match(self, db):
+        pid = _add_photo(db, path="C:/Photos/2011-10/IMG_0015.JPG", photo_datetime=None)
+        out = photos_service.guess_dates([pid])
+        assert out[0]["guess"] == {"year": 2011, "month": 10, "day": None,
+                                   "precision": "month", "source": "folder"}
+
+    def test_no_guess_available(self, db):
+        pid = _add_photo(db, path="C:/Photos/Vacation/IMG_0015.JPG", photo_datetime=None)
+        out = photos_service.guess_dates([pid])
+        assert out[0]["guess"] is None
+
+    def test_missing_photo_skipped(self, db):
+        assert photos_service.guess_dates([999999]) == []
+
+
+class TestCommitAndUndoGuessedDates:
+    def test_commit_writes_sidecar_and_db_then_undo_restores(self, db, tmp_path, et_session):
+        img = _make_jpg(tmp_path / "20111027-IMG_0015.JPG")
+        pid = _add_photo(db, path=img, photo_datetime=None)
+
+        result = photos_service.commit_guessed_dates(
+            [{"photo_id": pid, "year": 2011, "month": 10, "day": 27, "precision": None}])
+        assert result["updated"] == 1
+        row = index.get_photo(pid)
+        assert row["date_precision"] is None
+        assert row["photo_datetime"] > 0
+        assert (tmp_path / "20111027-IMG_0015.xmp").exists()
+
+        reverted = photos_service.undo_date_commit(result["previous"])
+        assert reverted == 1
+        row = index.get_photo(pid)
+        assert row["photo_datetime"] is None or row["photo_datetime"] == 0
+        assert row["date_precision"] is None
+
+    def test_commit_approximate_precision_then_undo(self, db, tmp_path, et_session):
+        img = _make_jpg(tmp_path / "IMG_0015.jpg")
+        pid = _add_photo(db, path=img, photo_datetime=None)
+
+        result = photos_service.commit_guessed_dates(
+            [{"photo_id": pid, "year": 2011, "month": None, "day": None, "precision": "year"}])
+        assert index.get_photo(pid)["date_precision"] == "year"
+
+        photos_service.undo_date_commit(result["previous"])
+        row = index.get_photo(pid)
+        assert row["date_precision"] is None
+        assert row["photo_datetime"] is None or row["photo_datetime"] == 0
+
+    def test_undo_restores_a_prior_real_date_not_just_undated(self, db, tmp_path, et_session):
+        """Guessing over an already (wrongly) dated photo should be undoable
+        back to that prior exact date, not just to 'undated'."""
+        img = _make_jpg(tmp_path / "t.jpg")
+        pid = _add_photo(db, path=img, photo_datetime=1000)
+        from geotagger.sidecar import write_datetime
+        write_datetime(Path(img), 1000)  # give it a real sidecar-backed date first
+
+        result = photos_service.commit_guessed_dates(
+            [{"photo_id": pid, "year": 2011, "month": 10, "day": 27, "precision": None}])
+        assert index.get_photo(pid)["photo_datetime"] != 1000
+
+        photos_service.undo_date_commit(result["previous"])
+        assert index.get_photo(pid)["photo_datetime"] == 1000
+
+    def test_missing_photo_skipped(self, db):
+        assert photos_service.commit_guessed_dates(
+            [{"photo_id": 999999, "year": 2011, "month": None, "day": None, "precision": "year"}]
+        ) == {"updated": 0, "previous": []}
+        assert photos_service.undo_date_commit([]) == 0
+
+
 class TestScanFacesBatch:
     def test_missing_photo_is_skipped_without_the_model(self, db):
         # No InsightFace model needed: an unknown photo id short-circuits.

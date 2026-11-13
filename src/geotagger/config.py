@@ -360,12 +360,39 @@ FACE_BIRTH_TOLERANCE_YEARS = float(os.environ.get("GEOTAGGER_FACE_BIRTH_TOLERANC
 # example (prefers same-age examples), capped to avoid dominating the score.
 FACE_AGE_PENALTY_PER_YEAR = float(os.environ.get("GEOTAGGER_FACE_AGE_PENALTY_PER_YEAR", "0.02"))
 FACE_AGE_PENALTY_CAP_YEARS = float(os.environ.get("GEOTAGGER_FACE_AGE_PENALTY_CAP_YEARS", "10"))
-# ONNX Runtime execution providers (comma-separated). Default CPU everywhere.
-FACE_PROVIDERS = [
-    p.strip() for p in
-    os.environ.get("GEOTAGGER_FACE_PROVIDERS", "CPUExecutionProvider").split(",")
-    if p.strip()
-]
+# ONNX Runtime execution providers (comma-separated, in preference order). The
+# default tries CUDA first: onnxruntime-gpu falls back to the next provider in the
+# list (with a warning) when CUDA can't load, so CPU-only machines still work.
+# Set "CPUExecutionProvider" alone to force CPU.
+_DEFAULT_ONNX_PROVIDERS = "CUDAExecutionProvider,CPUExecutionProvider"
+
+
+def _providers(env_name: str) -> list[str]:
+    return [p.strip() for p in os.environ.get(env_name, _DEFAULT_ONNX_PROVIDERS).split(",")
+            if p.strip()]
+
+
+FACE_PROVIDERS = _providers("GEOTAGGER_FACE_PROVIDERS")
+
+# ── Semantic (text → photo) search ──
+# SigLIP 2 image/text embeddings, run on onnxruntime from Immich's pre-exported ONNX
+# files (see docs/SEMANTIC_SEARCH_PLAN.md §2 for the benchmark behind this choice).
+# The name is stored with every vector, so switching models (e.g. to the faster
+# "ViT-B-32-SigLIP2-256__webli") just marks everything as needing re-indexing.
+SEMANTIC_MODEL_NAME = os.environ.get("GEOTAGGER_SEMANTIC_MODEL", "ViT-B-16-SigLIP2__webli")
+# Base URL the one-shot Data Management download fetches the model files from;
+# "{name}" is replaced with SEMANTIC_MODEL_NAME.
+SEMANTIC_MODEL_URL = os.environ.get(
+    "GEOTAGGER_SEMANTIC_MODEL_URL", "https://huggingface.co/immich-app/{name}/resolve/main/")
+SEMANTIC_PROVIDERS = _providers("GEOTAGGER_SEMANTIC_PROVIDERS")
+# Text→image cosine cutoff. Measured on the prototype's hand-labeled set: 0.08 keeps
+# 99% of relevant photos but passes 6.8% of irrelevant ones; 0.10 keeps 92% / passes
+# 2.4%. Results are ranked, so the noise that does pass sinks to the bottom.
+SEMANTIC_MIN_SCORE = float(os.environ.get("GEOTAGGER_SEMANTIC_MIN_SCORE", "0.09"))
+# Image→image ("More like this") cosine cutoff — a different scale entirely: on
+# the sample set the median of *all* photo pairs is 0.64, so 0.5 matched nearly
+# everything. 0.8 kept 83% of same-subject pairs while passing 14% of all pairs.
+SEMANTIC_SIMILAR_MIN_SCORE = float(os.environ.get("GEOTAGGER_SEMANTIC_SIMILAR_MIN_SCORE", "0.8"))
 
 # ── Work queue (Home's ranked list of untagged batches) ──
 # Biggest gap between consecutive shots from one camera that still counts as the
@@ -462,6 +489,12 @@ SETTINGS_SPEC = [
     {"key": "FACE_AGE_PENALTY_CAP_YEARS", "type": "float", "min": 0.0, "max": 50.0, "step": 1.0,
      "group": "Age-aware matching", "label": "Age penalty cap (years)",
      "help": "Maximum age gap (in years) the penalty above scales with."},
+    {"key": "SEMANTIC_MIN_SCORE", "type": "float", "min": 0.0, "max": 0.3, "step": 0.005,
+     "group": "Text search", "label": "Minimum text-match score",
+     "help": "Photos scoring below this against a typed description are dropped. Lower = more results, more noise. SigLIP scores are small: relevant photos are typically 0.10–0.15."},
+    {"key": "SEMANTIC_SIMILAR_MIN_SCORE", "type": "float", "min": 0.0, "max": 1.0, "step": 0.01,
+     "group": "Text search", "label": "\"More like this\" minimum similarity",
+     "help": "Photo-to-photo similarity required for \"More like this\" results. Image-to-image scores run much higher than text-to-image."},
 ]
 
 # Snapshot of the env-resolved value for each tunable, captured before any DB

@@ -519,6 +519,7 @@ live from the Settings page):
 | `GEOTAGGER_CACHE_DIR` | *(none — see [Cache location](#cache-location))* | Directory for the database + thumbnails + tools/data |
 | `GEOTAGGER_WORKERS` | `4` | Thumbnail-generation worker threads |
 | `GEOTAGGER_NO_SCAN` | `0` | `1` = skip the startup scan |
+| `GEOTAGGER_FACE_PROVIDERS` / `GEOTAGGER_SEMANTIC_PROVIDERS` | `CUDAExecutionProvider,CPUExecutionProvider` | ONNX Runtime providers for face detection / text search, in preference order. CUDA comes from the `onnxruntime-gpu` wheels (no system CUDA install); without a usable NVIDIA GPU it falls back to CPU. `CPUExecutionProvider` alone forces CPU |
 | `GEOTAGGER_GEONAMES_DIR` | *(none — see [tools/data location](#where-downloaded-toolsdata-end-up))* | Directory holding the downloaded GeoNames files |
 | `GEOTAGGER_GEOCODE_PRECISION` | `4` | Decimal degrees of coordinate quantization for the geocode cache (4 ≈ 11 m) |
 | `GEOTAGGER_GEOCODE_POP_WEIGHT` | `1` | `0` = strict nearest-point GeoNames city (no population weighting) |

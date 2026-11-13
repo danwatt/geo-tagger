@@ -115,6 +115,13 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
     # them as if they were already geotagged.
     if "geocode_ignored" not in cols:
         _db.execute("ALTER TABLE photos ADD COLUMN geocode_ignored INTEGER NOT NULL DEFAULT 0")
+    # NULL = exact date (from EXIF/XMP or an exact sidecar correction). 'year'/'month'
+    # = manually assigned via Assign approximate date (photos_service.assign_approximate_dates),
+    # with photo_datetime holding the first instant of that year/month. Consumers that
+    # display or reason about the date (detail pane, age-aware face matching) should
+    # treat a non-NULL value as "approximate, don't trust the day/month".
+    if "date_precision" not in cols:
+        _db.execute("ALTER TABLE photos ADD COLUMN date_precision TEXT")
 
     # One-time cleanup: sidecar_path used to store the sidecar's full path;
     # it's now just the filename (the sidecar always sits next to the image,
@@ -187,6 +194,7 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
                 loc_landmark_type TEXT,
                 geocoded_at REAL,
                 geocode_ignored INTEGER NOT NULL DEFAULT 0,
+                date_precision TEXT,
                 UNIQUE(dir, filename)
             )
         """)
@@ -440,6 +448,27 @@ def init_db(root: Path | None = None) -> sqlite3.Connection:
         END
     """)
 
+    # Semantic-search vectors (geotagger.semantic): one SigLIP embedding per photo,
+    # fp16 bytes. A separate table rather than a photos column keeps hot photos rows
+    # small, and `model` lets a model swap coexist with old vectors until re-indexed.
+    # vec NULL = embedding was attempted and failed (unreadable file) — recorded so
+    # the batch loop doesn't retry it forever, same idea as faces_scanned_at.
+    _db.execute("""
+        CREATE TABLE IF NOT EXISTS photo_embeddings (
+            photo_id   INTEGER PRIMARY KEY,
+            model      TEXT NOT NULL,
+            vec        BLOB,
+            created_at REAL NOT NULL
+        )
+    """)
+    # FKs aren't enforced in this DB, so clean up via trigger like photos_spatial.
+    _db.execute("""
+        CREATE TRIGGER IF NOT EXISTS photo_embeddings_delete AFTER DELETE ON photos
+        BEGIN
+            DELETE FROM photo_embeddings WHERE photo_id = OLD.id;
+        END
+    """)
+
     # Dropped along with the photo_exif table above — a leftover trigger
     # referencing it would error on the next photo delete.
     _db.execute("DROP TRIGGER IF EXISTS photo_exif_delete")
@@ -598,6 +627,20 @@ def set_geocode_ignored(photo_ids: list[int], ignored: bool):
     db.commit()
 
 
+def assign_approximate_date(photo_id: int, photo_datetime: int | None, precision: str | None,
+                            sidecar_path: str | None, sidecar_mtime: float | None):
+    """Set photo_datetime + its precision flag (None=exact, 'year'/'month'=
+    approximate). Used by both Assign approximate date and the filename/folder
+    date-guess commit/undo. Bumping faces_generation is the caller's job (the
+    services do it once for the whole batch)."""
+    db = get_db()
+    db.execute(
+        "UPDATE photos SET photo_datetime=?, date_precision=?, sidecar_path=?, sidecar_mtime=? WHERE id=?",
+        (photo_datetime, precision, sidecar_path, sidecar_mtime, photo_id),
+    )
+    db.commit()
+
+
 def get_photos(geotagged: str = "all", bbox: str | None = None, date_from: str | None = None,
                date_to: str | None = None, undated: bool = False,
                dir: str | None = None, ids: list[int] | None = None) -> list[sqlite3.Row]:
@@ -707,6 +750,7 @@ def get_distinct_cameras() -> list[str]:
 
 
 def search_photos(date_from: str | None = None, date_to: str | None = None,
+                  undated: bool = False,
                   bbox: str | None = None, location: str | None = None,
                   person_ids: list[int] | None = None, person_mode: str = "all",
                   geotagged: str = "all", limit: int = 2000,
@@ -723,7 +767,9 @@ def search_photos(date_from: str | None = None, date_to: str | None = None,
     person_mode='all' requires every listed person to have an (assigned,
     non-ignored) face in the same photo (e.g. two people together);
     person_mode='any' matches a photo containing at least one of them.
-    Every criterion is optional and they combine with AND.
+    Every criterion is optional and they combine with AND. ``undated`` (no
+    timestamp at all) is mutually exclusive with date_from/date_to, which are
+    meaningless without a photo_datetime — same convention as get_photos.
     """
     db = get_db()
     clauses: list[str] = []
@@ -734,7 +780,9 @@ def search_photos(date_from: str | None = None, date_to: str | None = None,
     elif geotagged == "no":
         clauses.append("lat IS NULL AND geocode_ignored = 0")
 
-    if date_from:
+    if undated:
+        clauses.append("(photo_datetime IS NULL OR photo_datetime <= 0)")
+    elif date_from:
         # UTC via calendar.timegm — photo_datetime is stored as wall-clock-as-UTC;
         # local-time .timestamp() would shift the range by the local tz offset. See
         # get_photos for the full rationale.
@@ -746,7 +794,7 @@ def search_photos(date_from: str | None = None, date_to: str | None = None,
             params.append(ts)
         except ValueError:
             pass
-    if date_to:
+    if date_to and not undated:
         try:
             import calendar
             from datetime import datetime
@@ -1244,6 +1292,80 @@ def get_unscanned_photo_ids() -> list[int]:
         "SELECT id FROM photos WHERE media_type='image' AND faces_scanned_at IS NULL"
     ).fetchall()
     return [r["id"] for r in rows]
+
+
+# ── Semantic-search embeddings ──
+
+def get_unembedded_photo_ids(model: str) -> list[int]:
+    """Photos (images and videos — the preview path renders a video poster frame)
+    with no embedding row for ``model``. A row for a different model counts as
+    missing, so changing SEMANTIC_MODEL_NAME queues everything for re-indexing."""
+    rows = get_db().execute(
+        "SELECT p.id FROM photos p LEFT JOIN photo_embeddings e ON e.photo_id = p.id "
+        "WHERE e.photo_id IS NULL OR e.model != ? ORDER BY p.id",
+        (model,),
+    ).fetchall()
+    return [r["id"] for r in rows]
+
+
+def store_embeddings(rows: list[tuple[int, bytes | None]], model: str):
+    """Insert/replace one batch of (photo_id, fp16 bytes or None-for-failed) in one
+    transaction."""
+    if not rows:
+        return
+    db = get_db()
+    now = time.time()
+    db.executemany(
+        "INSERT OR REPLACE INTO photo_embeddings (photo_id, model, vec, created_at) VALUES (?, ?, ?, ?)",
+        [(pid, model, vec, now) for pid, vec in rows],
+    )
+    db.commit()
+
+
+def embedding_signature(model: str) -> tuple[int, float]:
+    """(count, latest created_at) of usable vectors — changes on any insert, re-embed
+    or delete, so semantic.get_matrix() can tell when its cache is stale without a
+    full reload."""
+    r = get_db().execute(
+        "SELECT COUNT(*) AS n, MAX(created_at) AS t FROM photo_embeddings "
+        "WHERE model = ? AND vec IS NOT NULL", (model,),
+    ).fetchone()
+    return int(r["n"]), float(r["t"] or 0.0)
+
+
+def load_embeddings(model: str):
+    """(photo ids int64[N] ascending, float32[N, D]) for every usable vector of
+    ``model``. One fp16 buffer join + a single astype, not N small arrays."""
+    import numpy as np
+    rows = get_db().execute(
+        "SELECT photo_id, vec FROM photo_embeddings WHERE model = ? AND vec IS NOT NULL "
+        "ORDER BY photo_id", (model,),
+    ).fetchall()
+    if not rows:
+        return np.zeros(0, dtype=np.int64), np.zeros((0, 0), dtype=np.float32)
+    ids = np.fromiter((r["photo_id"] for r in rows), dtype=np.int64, count=len(rows))
+    mat = np.frombuffer(b"".join(r["vec"] for r in rows), dtype=np.float16)
+    return ids, mat.reshape(len(rows), -1).astype(np.float32)
+
+
+def get_embedding(photo_id: int, model: str) -> bytes | None:
+    r = get_db().execute(
+        "SELECT vec FROM photo_embeddings WHERE photo_id = ? AND model = ?", (photo_id, model),
+    ).fetchone()
+    return r["vec"] if r else None
+
+
+def count_embeddings(model: str) -> dict[str, int]:
+    """Indexing progress for the status endpoint."""
+    db = get_db()
+    total = db.execute("SELECT COUNT(*) FROM photos").fetchone()[0]
+    r = db.execute(
+        "SELECT COUNT(*) AS done, SUM(vec IS NULL) AS failed FROM photo_embeddings e "
+        "JOIN photos p ON p.id = e.photo_id WHERE e.model = ?", (model,),
+    ).fetchone()
+    done = int(r["done"] or 0)
+    return {"total": int(total), "embedded": done - int(r["failed"] or 0),
+            "failed": int(r["failed"] or 0), "remaining": int(total) - done}
 
 
 def replace_faces(photo_id: int, faces: list[dict], det_dimension: int | None = None):

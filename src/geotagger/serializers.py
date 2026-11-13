@@ -15,6 +15,7 @@ def photo_to_dict(r) -> dict:
         "camera": r["camera"], "photo_datetime": r["photo_datetime"],
         "gps_accuracy": r["gps_accuracy"] if r["gps_accuracy"] and r["gps_accuracy"] > 0 else None,
         "geocode_ignored": bool(r["geocode_ignored"]),
+        "date_precision": r["date_precision"] if "date_precision" in r.keys() else None,
         "dir": r["dir"] if "dir" in r.keys() else None,
         "location": row_location(r),
     }
@@ -76,6 +77,21 @@ def person_name_map() -> dict[int, str]:
     """All person ids -> names in one query, for labeling a batch of suggestions."""
     return {r["id"]: r["name"]
             for r in index.get_db().execute("SELECT id, name FROM persons").fetchall()}
+
+
+def format_photo_datetime(ts: int | None, precision: str | None) -> str | None:
+    """Human-readable date for a photo, honest about precision: a manually
+    assigned year/month-precision date (see photos_service.assign_approximate_dates)
+    never claims a specific day it doesn't have."""
+    if not ts:
+        return None
+    from datetime import datetime, timezone
+    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    if precision == "year":
+        return f"~{dt.year}"
+    if precision == "month":
+        return f"~{dt.strftime('%B %Y')}"
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def format_crowd_group_label(ts: int) -> str:

@@ -18,6 +18,12 @@
 </div>
 
 <div id="search-form">
+  <div class="search-field search-field-text">
+    <label for="text-input">Describe</label>
+    <input type="search" id="text-input" placeholder="Describe the photo… e.g. sunset over a bridge" autocomplete="off"
+      maxlength="300" aria-describedby="text-help"/>
+    <span id="text-help">Ranks results by what's in the picture. Combines with the filters.</span>
+  </div>
   <div class="search-field search-field-location">
     <label for="location-input">Location</label>
     <input type="text" id="location-input" placeholder="Search saved places, cities, counties…" autocomplete="off"
@@ -41,6 +47,9 @@
   <div class="search-field search-field-dates">
     <label id="date-range-label">Date range</label>
     <div id="date-range" aria-labelledby="date-range-label"></div>
+    <label class="checkbox-label" id="undated-only-label">
+      <input type="checkbox" id="undated-only-checkbox"/> Undated only
+    </label>
   </div>
   <div class="search-field">
     <label for="geotagged-select">Geotagged</label>
@@ -81,6 +90,7 @@
   <div class="search-field">
     <label for="sort-select">Sort</label>
     <select id="sort-select">
+      <option value="relevance">Best match</option>
       <option value="date_asc">Date (oldest first)</option>
       <option value="date_desc">Date (newest first)</option>
       <option value="filename">Filename</option>
@@ -130,13 +140,20 @@
       </div>
       <div class="toolbar-spacer"></div>
       <div class="toolbar-group" id="handoff-group" style="display:none">
+        <button id="select-all-btn" title="Select every photo in the current results">☑ Select all</button>
         <button id="open-geocode-btn" title="Open these results in Geocode for location tagging">📍 Open in Geocode</button>
         <button id="open-people-btn" title="Open this person in People" style="display:none">🙂 Open in People</button>
       </div>
       <div class="toolbar-group" id="selection-group" style="display:none">
         <span id="selection-count"></span>
+        <button id="assign-date-btn" title="Assign an approximate (year or month) date to the selected photos">📅 Assign date…</button>
+        <button id="guess-dates-btn" title="Guess dates from filenames (YYYYMMDD) or folder names (YYYY or YYYY-MM)">🔍 Guess dates…</button>
         <button id="download-selected-btn" class="primary">⬇ Download ZIP</button>
         <button id="clear-selection-btn">Clear selection</button>
+      </div>
+      <div class="toolbar-group" id="date-undo-group" style="display:none">
+        <span id="date-undo-count"></span>
+        <button id="date-undo-btn">↩ Undo</button>
       </div>
     </div>
     <div id="grid"></div>
@@ -148,7 +165,56 @@
       <div id="detail-actions" style="display:none">
         <button id="view-fullsize-btn" title="Decode the RAW at full resolution and open it (with face boxes) in a new tab">🔍 View full size (RAW)</button>
       </div>
+      <div id="detail-similar">
+        <button id="similar-btn" title="Find visually similar photos (uses the text search index)">More like this</button>
+      </div>
       <table id="detail-meta"></table>
+    </div>
+  </div>
+</div>
+
+<div id="assign-date-modal" class="modal" style="display:none">
+  <div class="modal-content">
+    <span class="modal-close" id="assign-date-close">&times;</span>
+    <h2>Assign approximate date</h2>
+    <p id="assign-date-summary" style="color:#aaa; margin-bottom:16px"></p>
+    <div class="search-field">
+      <label for="assign-date-year">Year</label>
+      <input type="number" id="assign-date-year" min="1826" step="1"/>
+    </div>
+    <div class="search-field">
+      <label for="assign-date-month">Month (optional — leave blank for year-only precision)</label>
+      <select id="assign-date-month">
+        <option value="">— Year only —</option>
+        <option value="1">January</option><option value="2">February</option>
+        <option value="3">March</option><option value="4">April</option>
+        <option value="5">May</option><option value="6">June</option>
+        <option value="7">July</option><option value="8">August</option>
+        <option value="9">September</option><option value="10">October</option>
+        <option value="11">November</option><option value="12">December</option>
+      </select>
+    </div>
+    <div class="search-field search-field-actions">
+      <button id="assign-date-apply-btn" class="primary">Assign</button>
+      <button id="assign-date-cancel-btn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="guess-dates-modal" class="modal" style="display:none">
+  <div class="modal-content" style="max-width:700px">
+    <span class="modal-close" id="guess-dates-close">&times;</span>
+    <h2>Guess dates from filename/folder</h2>
+    <p id="guess-dates-summary" style="color:#aaa; margin-bottom:12px"></p>
+    <div id="guess-dates-table-wrap" style="max-height:50vh; overflow-y:auto">
+      <table id="guess-dates-table">
+        <thead><tr><th></th><th>Filename</th><th>Guessed date</th><th>Source</th></tr></thead>
+        <tbody id="guess-dates-tbody"></tbody>
+      </table>
+    </div>
+    <div class="search-field search-field-actions" style="margin-top:14px">
+      <button id="guess-dates-commit-btn" class="primary">Commit</button>
+      <button id="guess-dates-cancel-btn">Cancel</button>
     </div>
   </div>
 </div>

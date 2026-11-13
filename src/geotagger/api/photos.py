@@ -296,7 +296,11 @@ async def api_photo(photo_id: int):
         "geotag_source": row["geotag_source"],
         "sidecar_path": row["sidecar_path"],
         "camera": f"{extra.get('EXIF:Make', '')} {extra.get('EXIF:Model', '')}".strip() or None,
-        "datetime": extra.get("EXIF:DateTimeOriginal"),
+        # From the DB, not a live EXIF re-read: it already reflects any sidecar
+        # correction (Time Sync offset, or an assigned approximate date), and
+        # date_precision keeps an approximate date from claiming a day it doesn't have.
+        "datetime": serializers.format_photo_datetime(row["photo_datetime"], row["date_precision"]),
+        "date_precision": row["date_precision"],
         "dimensions": extra.get("Composite:ImageSize"),
         "gps_accuracy": row["gps_accuracy"] if row["gps_accuracy"] and row["gps_accuracy"] > 0 else None,
         "geocode_ignored": bool(row["geocode_ignored"]),
@@ -322,6 +326,101 @@ async def api_update_times(req: UpdateTimesRequest):
     loop = asyncio.get_running_loop()
     updated = await loop.run_in_executor(get_executor(), photos_service.update_photo_times, req.updates)
     return {"updated": updated}
+
+
+def _validate_year_month(year: int, month: int | None):
+    import datetime as _datetime
+    current_year = _datetime.date.today().year
+    if not (1826 <= year <= current_year):  # 1826: first known photograph
+        raise HTTPException(400, "year out of range")
+    if month is not None and not (1 <= month <= 12):
+        raise HTTPException(400, "month must be 1-12")
+
+
+class AssignDateRequest(BaseModel):
+    photo_ids: list[int]
+    year: int
+    month: int | None = None  # None = year precision, else month precision
+
+
+@router.post("/api/photos/assign-date")
+async def api_assign_date(req: AssignDateRequest):
+    """Assign an approximate (year or month precision) date to a folder/selection
+    of photos with no reliable EXIF date — see Search page's "Assign date…"."""
+    _validate_year_month(req.year, req.month)
+    if not req.photo_ids:
+        raise HTTPException(400, "no photos selected")
+
+    loop = asyncio.get_running_loop()
+    updated = await loop.run_in_executor(
+        get_executor(), photos_service.assign_approximate_dates,
+        req.photo_ids, req.year, req.month,
+    )
+    return {"updated": updated}
+
+
+class GuessDatesRequest(BaseModel):
+    photo_ids: list[int]
+
+
+@router.post("/api/photos/guess-dates")
+async def api_guess_dates(req: GuessDatesRequest):
+    """Best-effort date guess per photo (from filename/folder — see date_guess.py)
+    for the Search page's "Guess dates…" staging panel. Doesn't write anything;
+    the user reviews these before committing via /api/photos/commit-guessed-dates."""
+    if not req.photo_ids:
+        raise HTTPException(400, "no photos selected")
+    loop = asyncio.get_running_loop()
+    guesses = await loop.run_in_executor(get_executor(), photos_service.guess_dates, req.photo_ids)
+    return {"guesses": guesses}
+
+
+class DateGuessEntry(BaseModel):
+    photo_id: int
+    year: int
+    month: int | None = None
+    day: int | None = None
+    precision: str | None = None  # None = exact day, else 'month'/'year'
+
+
+class CommitGuessedDatesRequest(BaseModel):
+    entries: list[DateGuessEntry]
+
+
+@router.post("/api/photos/commit-guessed-dates")
+async def api_commit_guessed_dates(req: CommitGuessedDatesRequest):
+    """Write a batch of staged, user-reviewed date guesses. Returns ``previous``
+    snapshots (opaque to the client) — pass the whole thing back to
+    /api/photos/undo-date-commit to revert this exact batch."""
+    if not req.entries:
+        raise HTTPException(400, "no entries to commit")
+    for e in req.entries:
+        if e.precision not in (None, "month", "year"):
+            raise HTTPException(400, "precision must be null, 'month', or 'year'")
+        _validate_year_month(e.year, e.month)
+        if e.precision is None and (e.month is None or e.day is None):
+            raise HTTPException(400, "an exact (non-approximate) entry needs both month and day")
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        get_executor(), photos_service.commit_guessed_dates,
+        [e.model_dump() for e in req.entries],
+    )
+    return result
+
+
+class UndoDateCommitRequest(BaseModel):
+    previous: list[dict]  # opaque snapshots from a commit-guessed-dates response
+
+
+@router.post("/api/photos/undo-date-commit")
+async def api_undo_date_commit(req: UndoDateCommitRequest):
+    """Revert exactly the batch a prior /api/photos/commit-guessed-dates call made."""
+    if not req.previous:
+        raise HTTPException(400, "nothing to undo")
+    loop = asyncio.get_running_loop()
+    reverted = await loop.run_in_executor(get_executor(), photos_service.undo_date_commit, req.previous)
+    return {"reverted": reverted}
 
 
 class DownloadZipRequest(BaseModel):

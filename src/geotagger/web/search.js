@@ -29,6 +29,12 @@ function wireDateRangePicker() {
   dateRangePicker = createDateRangePicker({ root: document.getElementById("date-range") });
 }
 
+function wireUndatedOnlyCheckbox() {
+  document.getElementById("undated-only-checkbox").addEventListener("change", (e) => {
+    document.getElementById("date-range").classList.toggle("disabled", e.target.checked);
+  });
+}
+
 function wireLocationPicker() {
   const help = document.getElementById("location-help");
   const picker = createLocationPicker({
@@ -206,7 +212,8 @@ function wirePersonPicker() {
 
 function buildQuery() {
   const params = new URLSearchParams();
-  const { from: dateFrom, to: dateTo } = dateRangePicker.getRange();
+  const undatedOnly = document.getElementById("undated-only-checkbox").checked;
+  const { from: dateFrom, to: dateTo } = undatedOnly ? {} : dateRangePicker.getRange();
   const location = document.getElementById("location-input").value.trim();
   const geotagged = document.getElementById("geotagged-select").value;
   const personMode = document.getElementById("person-mode-select").value;
@@ -215,10 +222,19 @@ function buildQuery() {
   const gpsAccuracy = document.getElementById("gps-accuracy-select").value;
   const hasFaces = document.getElementById("has-faces-select").value;
   const sort = document.getElementById("sort-select").value;
+  const text = document.getElementById("text-input").value.trim();
 
-  if (dateFrom) params.set("date_from", dateFrom);
-  if (dateTo) params.set("date_to", dateTo);
-  if (dateFrom && dateTo && dateFrom > dateTo) throw new Error("From date must be on or before To date.");
+  // A typed description wins over a pending "More like this" — they're two
+  // different queries for the same ranking slot (the API rejects both at once).
+  if (text) params.set("text", text);
+  else if (similarTo) params.set("similar_to", similarTo.id);
+  if (undatedOnly) {
+    params.set("undated", "true");
+  } else {
+    if (dateFrom) params.set("date_from", dateFrom);
+    if (dateTo) params.set("date_to", dateTo);
+    if (dateFrom && dateTo && dateFrom > dateTo) throw new Error("From date must be on or before To date.");
+  }
   if (selectedLocation?.kind === "place") {
     params.set("place_id", selectedLocation.id);
     const nearbyMiles = Number(document.getElementById("nearby-select").value);
@@ -231,7 +247,13 @@ function buildQuery() {
   if (folder) params.set("dir", folder);
   if (gpsAccuracy !== "all") params.set("gps_accuracy", gpsAccuracy);
   if (hasFaces !== "all") params.set("has_faces", hasFaces);
-  if (sort !== "date_asc") params.set("sort", sort);
+  // "Best match" only means something with a ranking query; without one, fall
+  // back to the API's date default rather than sending a sort it would reject.
+  if (sort === "relevance") {
+    if (params.has("text") || params.has("similar_to")) params.set("sort", sort);
+  } else if (sort !== "date_asc" || params.has("text") || params.has("similar_to")) {
+    params.set("sort", sort);
+  }
   if (selectedPersons.length > 0) {
     params.set("person_ids", selectedPersons.map((p) => p.id).join(","));
     params.set("person_mode", personMode);
@@ -253,17 +275,65 @@ async function runSearch() {
   try {
     const params = buildQuery();
     const res = await fetch(`/api/search?${params.toString()}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      // 409/400 carry a human-readable reason (model not downloaded, photo not
+      // indexed yet) — show it instead of a bare status code.
+      const body = await res.json().catch(() => null);
+      throw new Error(body?.detail || `HTTP ${res.status}`);
+    }
     const data = await res.json();
     resultPhotos = data.photos;
+    rankedResults = params.has("text") || params.has("similar_to");
+    rankedBySort = rankedResults && (params.get("sort") || "relevance") === "relevance";
     buildHistogram();
     renderGrid();
-    summary.textContent = `${data.total.toLocaleString()} photo${data.total === 1 ? "" : "s"} found`;
+    const what = params.has("similar_to") ? ` similar to ${similarTo.filename}` : "";
+    summary.textContent = `${data.total.toLocaleString()} photo${data.total === 1 ? "" : "s"} found${what}`;
     refreshHandoffUI();
     setStatus("");
+    if (rankedResults) await noteIndexCoverage();
   } catch (e) {
     setStatus(`Search failed: ${e.message}`, true);
   }
+}
+
+/* ── Text search ("describe the photo") + More like this ── */
+
+// Photo picked via "More like this" — {id, filename} — until text is typed or Clear.
+let similarTo = null;
+let rankedResults = false;  // last results came from a text/similar query (have .score)
+let rankedBySort = false;   // ...and are ordered by score, so don't month-group them
+
+// Warn when results are partial because indexing hasn't finished; silent otherwise.
+async function noteIndexCoverage() {
+  try {
+    const res = await fetch("/api/semantic/status");
+    if (!res.ok) return;
+    const s = await res.json();
+    if (s.remaining > 0) {
+      setStatus(`${s.remaining.toLocaleString()} photos aren't indexed for text search yet — results are partial. Index them from Data Management.`);
+    }
+  } catch { /* status is a hint only */ }
+}
+
+function onTextInput() {
+  const text = document.getElementById("text-input").value.trim();
+  const sortSel = document.getElementById("sort-select");
+  if (text) {
+    similarTo = null;
+    if (sortSel.value === "date_asc") sortSel.value = "relevance";
+  } else if (!similarTo && sortSel.value === "relevance") {
+    sortSel.value = "date_asc";
+  }
+}
+
+function searchSimilar() {
+  const photo = resultPhotos.find((p) => p.id === focusedPhotoId);
+  if (focusedPhotoId == null) return;
+  similarTo = { id: focusedPhotoId, filename: photo?.filename || `photo ${focusedPhotoId}` };
+  document.getElementById("text-input").value = "";
+  document.getElementById("sort-select").value = "relevance";
+  runSearch();
 }
 
 /* ── Handoff: send the current results into Geocode or People, so Search can
@@ -692,6 +762,15 @@ function makeThumbCell(photo, idx) {
 
   cell.appendChild(img);
   cell.appendChild(name);
+  if (photo.score != null) {
+    // Raw cosine, not a percentage: SigLIP text scores sit around 0.10–0.15 for
+    // good matches, so a "%" would read as uniformly terrible.
+    const badge = document.createElement("div");
+    badge.className = "thumb-score";
+    badge.textContent = photo.score.toFixed(3);
+    badge.title = "Match score (higher = closer to the description)";
+    cell.appendChild(badge);
+  }
 
   cell.addEventListener("click", (e) => handleThumbClick(e, photo.id, idx));
   return cell;
@@ -704,6 +783,23 @@ function renderGrid() {
   const photos = filteredPhotos;
   if (photos.length === 0) {
     grid.innerHTML = `<div class="person-suggest-empty" style="grid-column:1/-1;padding:24px;text-align:center">No photos match these filters.</div>`;
+    return;
+  }
+
+  if (rankedBySort) {
+    // Score order is the point — month buckets would scatter the best matches.
+    const sec = document.createElement("div");
+    sec.className = "face-group-section group-tint-0";
+    sec.appendChild(faceGroupHeader({
+      title: similarTo && !document.getElementById("text-input").value.trim()
+        ? "Most similar" : "Best matches",
+      meta: `· ${photos.length} photo${photos.length !== 1 ? "s" : ""}, best first`,
+    }));
+    const cells = document.createElement("div");
+    cells.className = "face-group-cells";
+    photos.forEach((photo, idx) => cells.appendChild(makeThumbCell(photo, idx)));
+    sec.appendChild(cells);
+    grid.appendChild(sec);
     return;
   }
 
@@ -829,6 +925,188 @@ async function showDetail(id) {
   }
 }
 
+/* ── Select all ── */
+
+function selectAllResults() {
+  const source = filteredPhotos.length > 0 ? filteredPhotos : resultPhotos;
+  selectedIds = new Set(source.map((p) => p.id));
+  refreshSelectionUI();
+}
+
+/* ── Assign approximate date ── */
+
+function openAssignDateModal() {
+  if (selectedIds.size === 0) return;
+  document.getElementById("assign-date-summary").textContent =
+    `Assigning an approximate date to ${selectedIds.size} selected photo${selectedIds.size === 1 ? "" : "s"}.`;
+  document.getElementById("assign-date-year").value = "";
+  document.getElementById("assign-date-month").value = "";
+  document.getElementById("assign-date-modal").style.display = "flex";
+}
+
+function closeAssignDateModal() {
+  document.getElementById("assign-date-modal").style.display = "none";
+}
+
+async function applyAssignDate() {
+  const yearStr = document.getElementById("assign-date-year").value;
+  const monthStr = document.getElementById("assign-date-month").value;
+  const year = parseInt(yearStr);
+  if (!yearStr || isNaN(year)) {
+    alert("Please enter a year");
+    return;
+  }
+  const month = monthStr ? parseInt(monthStr) : null;
+  const ids = [...selectedIds];
+
+  const precisionLabel = month
+    ? `${MONTH_NAMES[month - 1]} ${year}`
+    : `${year} (year only)`;
+  if (!confirm(`Assign approximate date "${precisionLabel}" to ${ids.length} photo(s)? `
+             + `This overwrites any existing date on these photos.`)) {
+    return;
+  }
+
+  const btn = document.getElementById("assign-date-apply-btn");
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/photos/assign-date", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ photo_ids: ids, year, month }),
+    });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(detail.detail || `HTTP ${res.status}`);
+    }
+    const result = await res.json();
+    closeAssignDateModal();
+    setStatus(`Assigned approximate date to ${result.updated} photo(s).`);
+    await runSearch();
+  } catch (e) {
+    setStatus(`Assign date failed: ${e.message}`, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ── Guess dates from filename/folder, staged for review before committing ── */
+
+let stagedGuesses = [];       // [{photo_id, filename, guess}] from the last guess-dates fetch
+let lastCommitPrevious = null; // opaque snapshot from the last commit, for Undo
+
+function formatGuessLabel(guess) {
+  if (!guess) return "No date found";
+  if (guess.precision === "year") return `~${guess.year}`;
+  if (guess.precision === "month") return `~${MONTH_NAMES[guess.month - 1]} ${guess.year}`;
+  return `${MONTH_NAMES[guess.month - 1]} ${guess.day}, ${guess.year}`;
+}
+
+async function openGuessDatesModal() {
+  if (selectedIds.size === 0) return;
+  const modal = document.getElementById("guess-dates-modal");
+  const tbody = document.getElementById("guess-dates-tbody");
+  document.getElementById("guess-dates-summary").textContent =
+    `Checking filenames and folder names for ${selectedIds.size} selected photo(s)…`;
+  tbody.innerHTML = "";
+  modal.style.display = "flex";
+
+  try {
+    const res = await fetch("/api/photos/guess-dates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ photo_ids: [...selectedIds] }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    stagedGuesses = data.guesses;
+    const found = stagedGuesses.filter((g) => g.guess).length;
+    document.getElementById("guess-dates-summary").textContent =
+      `Found a guess for ${found} of ${stagedGuesses.length} photo(s). Review, uncheck any you don't `
+      + `want, then Commit. Photos with no guess are skipped.`;
+    renderGuessDatesTable();
+  } catch (e) {
+    document.getElementById("guess-dates-summary").textContent = `Failed to guess dates: ${e.message}`;
+  }
+}
+
+function renderGuessDatesTable() {
+  const tbody = document.getElementById("guess-dates-tbody");
+  tbody.innerHTML = stagedGuesses.map((row, i) => {
+    const hasGuess = !!row.guess;
+    return `
+      <tr class="${hasGuess ? "" : "no-guess"}">
+        <td><input type="checkbox" data-idx="${i}" ${hasGuess ? "checked" : "disabled"}/></td>
+        <td>${escapeHtml(row.filename)}</td>
+        <td>${escapeHtml(formatGuessLabel(row.guess))}</td>
+        <td class="guess-source">${row.guess ? row.guess.source : ""}</td>
+      </tr>`;
+  }).join("");
+}
+
+function closeGuessDatesModal() {
+  document.getElementById("guess-dates-modal").style.display = "none";
+}
+
+async function commitGuessDates() {
+  const checked = [...document.querySelectorAll("#guess-dates-tbody input[type=checkbox]:checked")]
+    .map((cb) => stagedGuesses[Number(cb.dataset.idx)]);
+  if (checked.length === 0) {
+    alert("No guesses selected to commit");
+    return;
+  }
+  const entries = checked.map((row) => ({
+    photo_id: row.photo_id, year: row.guess.year, month: row.guess.month,
+    day: row.guess.day, precision: row.guess.precision,
+  }));
+
+  const btn = document.getElementById("guess-dates-commit-btn");
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/photos/commit-guessed-dates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entries }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const result = await res.json();
+    closeGuessDatesModal();
+    lastCommitPrevious = result.previous;
+    document.getElementById("date-undo-count").textContent =
+      `Committed ${result.updated} guessed date(s).`;
+    document.getElementById("date-undo-group").style.display = "";
+    setStatus(`Committed ${result.updated} guessed date(s).`);
+    await runSearch();
+  } catch (e) {
+    setStatus(`Commit failed: ${e.message}`, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function undoDateCommit() {
+  if (!lastCommitPrevious) return;
+  const btn = document.getElementById("date-undo-btn");
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/photos/undo-date-commit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ previous: lastCommitPrevious }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const result = await res.json();
+    lastCommitPrevious = null;
+    document.getElementById("date-undo-group").style.display = "none";
+    setStatus(`Reverted ${result.reverted} date(s).`);
+    await runSearch();
+  } catch (e) {
+    setStatus(`Undo failed: ${e.message}`, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 /* ── Download selected as ZIP ── */
 
 async function downloadSelected() {
@@ -864,6 +1142,8 @@ async function downloadSelected() {
 
 function clearForm() {
   dateRangePicker.clear();
+  document.getElementById("undated-only-checkbox").checked = false;
+  document.getElementById("date-range").classList.remove("disabled");
   document.getElementById("location-input").value = "";
   resetLocationPicker();
   document.getElementById("geotagged-select").value = "all";
@@ -873,6 +1153,8 @@ function clearForm() {
   document.getElementById("gps-accuracy-select").value = "all";
   document.getElementById("has-faces-select").value = "all";
   document.getElementById("sort-select").value = "date_asc";
+  document.getElementById("text-input").value = "";
+  similarTo = null;
   selectedPersons = [];
   renderPersonChips();
   updatePersonModeVisibility();
@@ -1071,12 +1353,27 @@ window.addEventListener("resize", () => {
 });
 
 document.getElementById("search-btn").addEventListener("click", runSearch);
+document.getElementById("text-input").addEventListener("input", onTextInput);
+document.getElementById("text-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); runSearch(); }
+});
+document.getElementById("similar-btn").addEventListener("click", searchSimilar);
 document.getElementById("untagged-btn").addEventListener("click", runUntaggedSearch);
 document.getElementById("clear-btn").addEventListener("click", clearForm);
 document.getElementById("download-selected-btn").addEventListener("click", downloadSelected);
 document.getElementById("clear-selection-btn").addEventListener("click", clearSelection);
 document.getElementById("open-geocode-btn").addEventListener("click", openInGeocode);
 document.getElementById("open-people-btn").addEventListener("click", openInPeople);
+document.getElementById("select-all-btn").addEventListener("click", selectAllResults);
+document.getElementById("assign-date-btn").addEventListener("click", openAssignDateModal);
+document.getElementById("assign-date-close").addEventListener("click", closeAssignDateModal);
+document.getElementById("assign-date-cancel-btn").addEventListener("click", closeAssignDateModal);
+document.getElementById("assign-date-apply-btn").addEventListener("click", applyAssignDate);
+document.getElementById("guess-dates-btn").addEventListener("click", openGuessDatesModal);
+document.getElementById("guess-dates-close").addEventListener("click", closeGuessDatesModal);
+document.getElementById("guess-dates-cancel-btn").addEventListener("click", closeGuessDatesModal);
+document.getElementById("guess-dates-commit-btn").addEventListener("click", commitGuessDates);
+document.getElementById("date-undo-btn").addEventListener("click", undoDateCommit);
 document.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && document.activeElement &&
       document.activeElement.id !== "person-picker-input") {
@@ -1112,6 +1409,7 @@ async function applyPlaceIdFromUrl() {
 wirePersonPicker();
 wireLocationPicker();
 wireDateRangePicker();
+wireUndatedOnlyCheckbox();
 loadPersons();
 loadCameraFacet();
 loadFolderFacet();

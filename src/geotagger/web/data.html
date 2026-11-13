@@ -80,6 +80,25 @@
     <div id="face-model-error" class="data-error"></div>
   </div>
 
+  <div class="data-group" id="card-semantic">
+    <h2>Text search model</h2>
+    <p class="data-help">
+      SigLIP 2 image/text model (~1.4 GB) behind the Search page's
+      <em>Describe</em> box and <em>More like this</em>. Download it once, then
+      index your photos — roughly 2–10 photos/second on CPU, ~30/second on an
+      NVIDIA GPU (both faster once previews are cached, e.g. after face
+      detection), and only new photos need indexing
+      afterwards. Runs fully offline; nothing is written to your files.
+    </p>
+    <div id="semantic-status" class="data-files"></div>
+    <label class="force-label"><input type="checkbox" id="semantic-force"> Force re-download (ignore local cache)</label>
+    <button id="semantic-download-btn">Download text search model</button>
+    <button id="semantic-index-btn" disabled>Index photos</button>
+    <button id="semantic-stop-btn" style="display:none">Stop</button>
+    <div id="semantic-progress" class="data-progress"></div>
+    <div id="semantic-error" class="data-error"></div>
+  </div>
+
   <div class="data-group" id="card-osm">
     <h2>OSM places (city / park / venue polygons)</h2>
     <p class="data-help">

@@ -7,7 +7,7 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from geotagger import index, thumbnails, faces, config
+from geotagger import index, thumbnails, faces, semantic, config
 from geotagger.exiftool_session import lifespan as _et_lifespan
 from geotagger.executor import init_executor
 from geotagger.scanning import scan_directory
@@ -71,6 +71,7 @@ async def lifespan(app):
                 _auto_vacuum()
                 thumbnails.init_thumbs(primary_root)
                 faces.init_faces(primary_root)
+                semantic.init_semantic(primary_root)
 
                 if no_scan:
                     print(f"Skipping scan (--no-scan), using existing database")
@@ -102,6 +103,7 @@ async def lifespan(app):
                     _auto_vacuum()
                     thumbnails.init_thumbs(root)
                     faces.init_faces(root)
+                    semantic.init_semantic(root)
                     if no_scan:
                         print(f"Skipping scan (--no-scan), loaded index from {root}")
                     else:

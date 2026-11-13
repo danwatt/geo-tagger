@@ -16,6 +16,31 @@ def _upsert(db, path="p1.jpg", mtime=1000.0, sidecar_path=None, sidecar_mtime=No
     )
 
 
+class TestAssignApproximateDate:
+    def test_sets_datetime_precision_and_sidecar_tracking(self, db):
+        _upsert(db, photo_datetime=None, sidecar_path=None, sidecar_mtime=None)
+        pid = db.execute("SELECT id FROM photos WHERE filename='p1.jpg'").fetchone()[0]
+
+        index.assign_approximate_date(pid, 946684800, "year", "p1.xmp", 42.0)
+
+        row = index.get_photo(pid)
+        assert row["photo_datetime"] == 946684800
+        assert row["date_precision"] == "year"
+        assert row["sidecar_path"] == "p1.xmp"
+        assert row["sidecar_mtime"] == 42.0
+
+    def test_rescan_does_not_clear_precision_flag(self, db):
+        """A routine rescan (upsert_photo) doesn't touch date_precision — same
+        as geocode_ignored — so an assigned approximate date survives it."""
+        _upsert(db, photo_datetime=None)
+        pid = db.execute("SELECT id FROM photos WHERE filename='p1.jpg'").fetchone()[0]
+        index.assign_approximate_date(pid, 946684800, "year", "p1.xmp", 42.0)
+
+        _upsert(db, photo_datetime=946684800, sidecar_path="p1.xmp", sidecar_mtime=42.0)
+
+        assert index.get_photo(pid)["date_precision"] == "year"
+
+
 class TestIsFresh:
     def test_missing_row_is_not_fresh(self, db):
         assert index.is_fresh(".", "missing.jpg", 1000.0, None, None) is False
