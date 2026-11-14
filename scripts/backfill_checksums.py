@@ -9,7 +9,12 @@ only touches rows where checksum IS NULL.
 
 Run:  uv run python scripts/backfill_checksums.py
       uv run python scripts/backfill_checksums.py --cache-dir D:/path/.geotagger
-      uv run python scripts/backfill_checksums.py --rescan     # re-hash every file
+      uv run python scripts/backfill_checksums.py --rescan --dry-run  # preview the reset
+      uv run python scripts/backfill_checksums.py --rescan --yes      # re-hash every file
+
+--rescan clears every stored checksum before re-hashing, so it only runs with
+--yes; without it the script prints what it would clear and exits non-zero.
+--dry-run reports the counts and changes nothing.
 """
 import argparse
 import os
@@ -36,26 +41,46 @@ def resolve_root(args) -> Path | None:
     return Path(last)
 
 
-def main():
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Backfill file checksums across the library")
     parser.add_argument("--cache-dir", help="Cache dir holding index.db (the .geotagger folder)")
     parser.add_argument("--limit", type=int, default=0, help="Max files to hash (0 = all)")
-    parser.add_argument("--rescan", action="store_true", help="Re-hash even files that already have a checksum")
+    parser.add_argument("--rescan", action="store_true",
+                        help="Clear every stored checksum and re-hash all files (needs --yes)")
+    parser.add_argument("--yes", action="store_true", help="Confirm the --rescan reset")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Report what would be cleared and hashed and exit, changing nothing")
     parser.add_argument("--batch-size", type=int, default=100,
                         help="Rows per DB transaction — larger = fewer commits (default 100)")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     root = resolve_root(args)
     index.init_db(root)
 
+    # ── Reset gate ──
     if args.rescan:
+        n_set = index.get_db().execute(
+            "SELECT COUNT(*) FROM photos WHERE checksum IS NOT NULL").fetchone()[0]
+        summary = f"--rescan would clear {n_set} stored checksum(s) and re-hash every indexed file"
+        if args.dry_run:
+            n_all = index.get_db().execute("SELECT COUNT(*) FROM photos").fetchone()[0]
+            print(f"{summary} ({n_all} file(s)). Dry run — nothing changed.")
+            return 0
+        if not args.yes:
+            print(f"{summary}.\nRe-run with --yes to proceed (or --dry-run to preview).",
+                  file=sys.stderr)
+            return 2
         with index.transaction() as db:
-            db.execute("UPDATE photos SET checksum=NULL")
+            db.execute("UPDATE photos SET checksum=NULL WHERE checksum IS NOT NULL")
+        print(f"Cleared {n_set} stored checksum(s).")
 
     pending = index.get_photos_missing_checksum(args.limit or None)
+    if args.dry_run:
+        print(f"Would hash {len(pending)} file(s). Dry run — nothing changed.")
+        return 0
     if not pending:
         print("Nothing to do — every indexed file already has a checksum.")
-        return
+        return 0
 
     print(f"Hashing {len(pending)} file(s)…")
     t0 = time.time()
@@ -77,7 +102,8 @@ def main():
 
     dt = time.time() - t0
     print(f"\nDone: hashed {done} file(s) in {dt:.1f}s ({errors} errors).")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

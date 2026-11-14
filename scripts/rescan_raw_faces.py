@@ -13,7 +13,9 @@ script — the feature is temporary catch-up, not part of the app.
 SAFETY: re-detection replaces a photo's detected faces from scratch (``replace_faces``
 deletes + re-inserts), which discards any person assignments on that photo. So by default
 this script SKIPS any RAW that already has labeled faces. Pass ``--include-labeled`` to
-re-scan those too, knowingly discarding their existing tags.
+re-scan those too, knowingly discarding their existing tags; because that destroys tags
+it only runs with ``--yes`` (without it the script prints how many tags it would discard
+and exits non-zero — use ``--dry-run`` to preview).
 
 ``--thumbnails-only`` is a second, non-destructive mode: it does NOT touch any stored
 bbox/embedding/person assignment at all, and ignores ``--all``/``--target-dim``/
@@ -249,7 +251,7 @@ def rescan_detect(todo, dry_run: bool) -> None:
           f"({errors} errors, {fell_back} fell back to embedded preview).")
 
 
-def main():
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Re-scan RAW photos for faces at full LibRaw decode resolution")
     parser.add_argument("--cache-dir", help="Cache dir holding index.db (the .geotagger folder)")
@@ -264,7 +266,10 @@ def main():
     parser.add_argument("--decode-max", type=int, default=0,
                         help="Override FACE_DECODE_MAX_DIM for this run (0 = use the configured value)")
     parser.add_argument("--include-labeled", action="store_true",
-                        help="Also re-scan RAWs that already have labeled faces (DISCARDS those tags)")
+                        help="Also re-scan RAWs that already have labeled faces (DISCARDS those "
+                             "tags; needs --yes)")
+    parser.add_argument("--yes", action="store_true",
+                        help="Confirm an --include-labeled re-scan that discards person tags")
     parser.add_argument("--thumbnails-only", action="store_true",
                         help="Non-destructive: only rebuild cached preview/face-crop images from a "
                              "full decode. Never touches bbox/embedding/person assignments, so "
@@ -274,7 +279,7 @@ def main():
                              "(try a change against one folder before running it library-wide)")
     parser.add_argument("--dry-run", action="store_true",
                         help="List what would be processed and exit, changing nothing")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     root = resolve_root(args)
     index.init_db(root)
@@ -300,7 +305,7 @@ def main():
         print(f"RAW thumbnail rebuild (non-destructive), formats={sorted(config.RAW_EXTENSIONS)}"
               + (f", dir={dir_filter}" if dir_filter else ""))
         rebuild_thumbnails(todo, args.dry_run)
-        return
+        return 0
 
     # Destructive re-detect mode: force full RAW decode on for this run regardless
     # of the persisted/env value (get_detection_preview isn't disk-cached, so there's
@@ -315,8 +320,19 @@ def main():
     if skipped:
         print(f"Skipping {len(skipped)} RAW(s) with labeled faces "
               f"(use --include-labeled to re-scan them, discarding those tags).")
+    n_tags = sum(r["labeled"] for r in todo)
+    if n_tags:
+        warning = (f"--include-labeled would discard {n_tags} person tag(s) across "
+                   f"{sum(1 for r in todo if r['labeled'])} RAW photo(s).")
+        if args.dry_run:
+            print(warning)
+        elif not args.yes:
+            print(f"{warning}\nRe-run with --yes to proceed (or --dry-run to preview).",
+                  file=sys.stderr)
+            return 2
     rescan_detect(todo, args.dry_run)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
