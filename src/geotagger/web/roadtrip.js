@@ -551,27 +551,19 @@
     // Merged, not appended: the grid groups by *runs* of the same day, so two
     // separately-sorted blocks (tagged, then predicted) would render the trip's
     // days twice, out of order.
-    photos = data.photos.concat(data.candidates).sort((a, b) =>
+    const merged = data.photos.concat(data.candidates).sort((a, b) =>
       (a.photo_datetime || 0) - (b.photo_datetime || 0) || a.filename.localeCompare(b.filename));
-    photos.forEach((p) => camColor(p.camera));
 
-    // A new scope invalidates the other selectors, same as picking an area does.
-    selectedYear = null;
-    selectedMonth = null;
-    areaSelectParams = null;
-    dayIsolation = null;
-    mapDayOverride = null;
-    document.getElementById("selected-month-label").textContent =
-      activeTimeframe ? `Road trip · ${activeTimeframe.label}` : "Road trip";
+    // A new scope invalidates the other selectors, same as picking an area does —
+    // app.js's enterScope/setScopePhotos clear them and the per-scope state
+    // (date filter, selection, shift-click anchor) in one place.
+    enterScope("roadtrip",
+      activeTimeframe ? `Road trip · ${activeTimeframe.label}` : "Road trip");
     document.getElementById("selected-area-label").textContent =
       `Route: ${fmtDistance(data.route_length_m)} ± ${widthSelect.selectedOptions[0].textContent.replace("± ", "")}`;
-    if (typeof clearPlaceFilter === "function") clearPlaceFilter();
-
-    renderLegend();
-    buildHistogram();
-    // false: fit the route, not the photos — the corridor is the thing being
+    // No fitMap: fit the route, not the photos — the corridor is the thing being
     // worked on, and untagged photos have no coordinates to fit to anyway.
-    applyFilters(false);
+    setScopePhotos(merged);
     renderPredictions();
     if (routeLine) map.flyToBounds(routeLine.getBounds(), { padding: [50, 50], duration: 1.0 });
 

@@ -250,9 +250,10 @@ function bindToolbar() {
   document.getElementById("select-month-btn").addEventListener("click", showMonthPicker);
   document.getElementById("select-area-btn").addEventListener("click", startAreaSelection);
   function reloadCurrentView() {
+    // enterScope leaves exactly one of these set, so the order is only a tiebreak.
     if (batchScope) {
       loadPhotoScope(batchScope.url, batchScope.label, { timeline: batchScope.timeline });
-    } else if (selectedYear) {
+    } else if (selectedYear || undatedMode) {
       loadPhotos();
     } else if (areaSelectParams) {
       loadPhotosByArea(areaSelectParams.lat, areaSelectParams.lng, areaSelectParams.radius);
@@ -561,50 +562,18 @@ function renderPickerMonths(year) {
 }
 
 async function selectMonth(year, month) {
+  enterScope("month", `${MONTH_NAMES[month - 1]} ${year}`);
   selectedYear = year;
   selectedMonth = month;
-  dayIsolation = null;
-  mapDayOverride = null;   // new scope, so the "show this day" map override is stale
-  undatedMode = false;
   setTimelineAvailable(true);
-  hideMonthPicker();
-
-  // Clear area and place selections
-  areaSelectParams = null;
-  if (areaSelectCircle) {
-    map.removeLayer(areaSelectCircle);
-    areaSelectCircle = null;
-  }
-  document.getElementById("selected-area-label").textContent = "";
-  clearPlaceFilter();
-
-  // Update label
-  document.getElementById("selected-month-label").textContent =
-    `${MONTH_NAMES[month - 1]} ${year}`;
-
   // Load photos for this month (loadPhotos builds the timeline from them)
   await loadPhotos(true);
 }
 
 async function selectYear(year) {
+  enterScope("month", `${year} (all months)`);
   selectedYear = year;
-  selectedMonth = null;
-  dayIsolation = null;
-  mapDayOverride = null;   // new scope, so the "show this day" map override is stale
-  undatedMode = false;
   setTimelineAvailable(true);
-  hideMonthPicker();
-
-  areaSelectParams = null;
-  if (areaSelectCircle) {
-    map.removeLayer(areaSelectCircle);
-    areaSelectCircle = null;
-  }
-  document.getElementById("selected-area-label").textContent = "";
-  clearPlaceFilter();
-
-  document.getElementById("selected-month-label").textContent = `${year} (all months)`;
-
   await loadPhotos(true);
 }
 
@@ -613,24 +582,9 @@ async function selectYear(year) {
 // location if geotagged despite the missing date, else by containing directory
 // — see renderGrid's undatedSubGroups).
 async function selectUndated() {
-  selectedYear = null;
-  selectedMonth = null;
-  dayIsolation = null;
-  mapDayOverride = null;   // new scope, so the "show this day" map override is stale
+  enterScope("month", "Undated photos");
   undatedMode = true;
-  hideMonthPicker();
-
-  areaSelectParams = null;
-  if (areaSelectCircle) {
-    map.removeLayer(areaSelectCircle);
-    areaSelectCircle = null;
-  }
-  document.getElementById("selected-area-label").textContent = "";
-  clearPlaceFilter();
-
-  document.getElementById("selected-month-label").textContent = "Undated photos";
   setTimelineAvailable(false);
-
   await loadPhotos(true);
 }
 
@@ -710,19 +664,12 @@ function wireGeocodeLocationPicker() {
 }
 
 async function filterPhotosByRecordedLocation(location) {
-  selectedYear = selectedMonth = null;
-  undatedMode = false;
-  areaSelectParams = null;
-  if (areaSelectCircle) { map.removeLayer(areaSelectCircle); areaSelectCircle = null; }
-  if (placeFilterRect) { map.removeLayer(placeFilterRect); placeFilterRect = null; }
+  enterScope("location");
   placeFilterParams = { location };
-  document.getElementById("selected-month-label").textContent = "No month selected";
   document.getElementById("selected-area-label").textContent = location.label;
   document.getElementById("geocode-location-input").value = location.label;
   document.getElementById("place-buffer-select").hidden = true;
   document.getElementById("geocode-location-help").textContent = "Matches recorded photo locations; includes untagged candidates within the time window.";
-  dayIsolation = null;
-  mapDayOverride = null;
   const params = new URLSearchParams({
     location_fields: JSON.stringify(location.fields),
     window: document.getElementById("window-select").value,
@@ -731,11 +678,7 @@ async function filterPhotosByRecordedLocation(location) {
     setStatus(`Loading photos in ${location.label}…`);
     const data = await fetchPhotoScope(`/api/photos/by-location?${params}`);
     if (data === LATEST_ONLY_STALE) return;
-    photos = data;
-    photos.forEach(p => camColor(p.camera));
-    renderLegend();
-    buildHistogram();
-    applyFilters(true);
+    setScopePhotos(data, { fitMap: true });
     setStatus(`Loaded ${photos.length} photos in ${location.label}`);
   } catch (err) {
     setStatus("Load error: " + err.message, true);
@@ -771,23 +714,17 @@ function placeBboxWithBuffer(place, bufferMiles) {
 // over as the active view, clearing month/area selections like the other
 // selectors do.
 async function filterPhotosByPlace(place) {
+  enterScope("place");
   document.getElementById("geocode-location-input").value = place.name;
   document.getElementById("place-buffer-select").hidden = false;
   document.getElementById("geocode-location-help").textContent = "Matches saved bounds; includes untagged candidates within the time window.";
-  // Clear the other view modes
-  selectedYear = null;
-  selectedMonth = null;
-  undatedMode = false;
-  document.getElementById("selected-month-label").textContent = "No month selected";
-  areaSelectParams = null;
-  if (areaSelectCircle) { map.removeLayer(areaSelectCircle); areaSelectCircle = null; }
 
   const bufferMiles = parseFloat(document.getElementById("place-buffer-select").value) || 0;
   const box = placeBboxWithBuffer(place, bufferMiles);
   placeFilterParams = { placeId: place.id };
 
-  // Draw (and zoom to) the search bounds so the buffer is visible.
-  if (placeFilterRect) map.removeLayer(placeFilterRect);
+  // Draw (and zoom to) the search bounds so the buffer is visible. (enterScope
+  // already removed the previous rectangle.)
   placeFilterRect = L.rectangle([[box.min_lat, box.min_lng], [box.max_lat, box.max_lng]], {
     color: "#4a90d9", weight: 2, dashArray: "5,5", fillOpacity: 0.05,
   }).addTo(map);
@@ -801,8 +738,6 @@ async function filterPhotosByPlace(place) {
 }
 
 async function loadPhotosByBounds(box, label) {
-  dayIsolation = null;
-  mapDayOverride = null;   // new scope, so the "show this day" map override is stale
   const window = document.getElementById("window-select").value;
 
   try {
@@ -811,11 +746,7 @@ async function loadPhotosByBounds(box, label) {
       + `&min_lng=${box.min_lng}&max_lng=${box.max_lng}&geotagged=all&window=${window}`;
     const data = await fetchPhotoScope(url);
     if (data === LATEST_ONLY_STALE) return;
-    photos = data;
-    photos.forEach(p => camColor(p.camera));
-    renderLegend();
-    buildHistogram();
-    applyFilters(false);  // don't re-fit — we already zoomed to the bounds
+    setScopePhotos(data);  // no fitMap — we already zoomed to the bounds
 
     setStatus(`Loaded ${photos.length} photos in ${label}`);
   } catch (err) {
@@ -1108,10 +1039,9 @@ async function onAreaSelectEnd(e) {
     return;
   }
 
-  // Store the circle for display
-  if (areaSelectCircle) {
-    map.removeLayer(areaSelectCircle);
-  }
+  // The area takes over as the scope. Before adopting the new circle, because
+  // enterScope removes whatever area circle is up.
+  enterScope("area");
   areaSelectCircle = drawingShape;
   areaSelectCircle.setStyle({ color: "#4a90d9", weight: 2 });
 
@@ -1126,19 +1056,10 @@ async function onAreaSelectEnd(e) {
 
   // Store params for filter changes
   areaSelectParams = { lat: center.lat, lng: center.lng, radius: radius };
-
-  // Superseded by a newer scope load mid-flight: that scope owns the labels now.
-  if (!(await loadPhotosByArea(center.lat, center.lng, radius))) return;
-
-  // Update label
   document.getElementById("selected-area-label").textContent =
     `Area: ${(radius / 1000).toFixed(2)}km radius`;
 
-  // Clear month and place selections
-  selectedYear = null;
-  selectedMonth = null;
-  document.getElementById("selected-month-label").textContent = "No month selected";
-  clearPlaceFilter();
+  await loadPhotosByArea(center.lat, center.lng, radius);
 }
 
 function stopAreaSelection() {
@@ -1158,8 +1079,6 @@ function stopAreaSelection() {
 
 // Returns false when a newer scope load superseded this one (nothing applied).
 async function loadPhotosByArea(lat, lng, radius) {
-  dayIsolation = null;
-  mapDayOverride = null;   // new scope, so the "show this day" map override is stale
   const window = document.getElementById("window-select").value;
 
   try {
@@ -1167,13 +1086,7 @@ async function loadPhotosByArea(lat, lng, radius) {
     const data = await fetchPhotoScope(
       `/api/photos/by-area?lat=${lat}&lng=${lng}&radius=${radius}&geotagged=all&window=${window}`);
     if (data === LATEST_ONLY_STALE) return false;
-    photos = data;
-
-    // Pre-assign colors so the legend order is stable
-    photos.forEach(p => camColor(p.camera));
-    renderLegend();
-    buildHistogram();
-    applyFilters(true);
+    setScopePhotos(data, { fitMap: true });
 
     setStatus(`Loaded ${photos.length} photos in area`);
   } catch (err) {
@@ -1229,19 +1142,10 @@ async function loadPhotoScope(url, label = null, { timeline = true, fitMap = fal
   try {
     const data = await fetchPhotoScope(url);
     if (data === LATEST_ONLY_STALE) return;
-    photos = data;
-    // Pre-assign colors so the legend order is stable
-    photos.forEach(p => camColor(p.camera));
-    renderLegend();
-    if (timeline) {
-      buildHistogram();
-    } else {
-      setTimelineAvailable(false);  // no dates here — nothing to narrow
-    }
     if (label !== null) {
       document.getElementById("selected-month-label").textContent = label;
     }
-    applyFilters(fitMap);
+    setScopePhotos(data, { timeline, fitMap });
   } catch (err) {
     setStatus("Load error: " + err.message, true);
   }
@@ -1292,30 +1196,114 @@ function shortDir(dir) {
   return "…" + sep + parts.slice(-2).join(sep);
 }
 
-/* ── Batch scopes ──
- * A batch straddles months (and a folder has no dates at all), so neither
- * selectMonth nor selectUndated can express one — these load the scope directly
- * and clear the month/area/place state those views leave behind. */
-function clearScopeSelections() {
-  const dirSelect = document.getElementById("dir-select");
-  if (dirSelect) dirSelect.value = "";
+/* ── Scope changes ──
+ * The page has one loaded scope at a time, and several ways into it:
+ *   "month"    — month / year / Undated (selectMonth, selectYear, selectUndated;
+ *                also ?month=)
+ *   "batch"    — a work-queue outing's date range (openBatch; also ?batch=)
+ *   "dir"      — one folder (the folder facet, or a folder batch)
+ *   "ids"      — an explicit photo set (?ids= from Search)
+ *   "area"     — a circle drawn on the map
+ *   "place"    — a saved place's (buffered) bounds
+ *   "location" — a recorded location from the location picker
+ *   "roadtrip" — a route corridor (roadtrip.js, when it's loaded)
+ * Each keeps its own "what is loaded" variable, and reloadCurrentView re-runs
+ * whichever is set — so a scope that forgot to clear another's (batchScope was
+ * never nulled) made a Window/buffer change reload the *old* scope. Every entry
+ * point calls enterScope first, which clears all of them; the caller then sets
+ * its own. The data side of the reset — date filter, selection, shift-click
+ * anchor, detail focus — happens when the photos arrive, in setScopePhotos. */
+function enterScope(kind, label = "No month selected") {
+  // Any in-flight load is for the scope being left. The fetchPhotoScope loaders
+  // supersede each other anyway; this also covers loaders that fetch on their
+  // own (roadtrip) and so would otherwise be painted over by a slow older load.
+  fetchPhotoScope.cancel();
+  // Picking a scope by hand means the user has stopped being driven by the work
+  // queue — the banner would lie about what is loaded, and batchRemaining would
+  // read 0 for members that aren't loaded and auto-advance on the next commit.
+  // A batch's own loads ("batch", and "dir" for a folder batch) keep it; the
+  // folder facet exits the batch itself before loading.
+  if (activeBatch && kind !== "batch" && kind !== "dir") exitBatch();
+
   selectedYear = null;
   selectedMonth = null;
   undatedMode = false;
-  dayIsolation = null;
-  mapDayOverride = null;
+  batchScope = null;
+  const dirSelect = document.getElementById("dir-select");
+  if (dirSelect) dirSelect.value = "";
   areaSelectParams = null;
   if (areaSelectCircle) {
     map.removeLayer(areaSelectCircle);
     areaSelectCircle = null;
   }
-  document.getElementById("selected-area-label").textContent = "";
   clearPlaceFilter();
+  dayIsolation = null;
+  mapDayOverride = null;   // the "show this day" override was for the old scope
+  document.getElementById("selected-area-label").textContent = "";
+  document.getElementById("selected-month-label").textContent = label;
   hideMonthPicker();
 }
 
+// Back to "no date filter". setTimelineAvailable(false) clears the picker's UI
+// but, like setDates, never fires onChange — so the four bounds have to be
+// zeroed here, or the previous scope's range keeps filtering the new one (a
+// June 2019 range hid every photo of a 2021 folder). dateRangeMin === Max is
+// what applyFilters reads as "off".
+function resetDateFilter() {
+  dateRangeMin = dateRangeMax = 0;
+  dateFilterLo = dateFilterHi = 0;
+  setTimelineAvailable(false);
+}
+
+// Empty the detail pane (and what hangs off the focused photo: guess, accuracy
+// circle) — used when the focused photo isn't part of the new scope at all.
+function clearDetail() {
+  showDetail.cancel();
+  doGuess.cancel();
+  resetGuessButton();
+  dismissGuess();
+  focusedPhotoId = null;
+  showAccuracyCircle(null);
+  document.getElementById("detail-placeholder").style.display = "";
+  document.getElementById("detail-content").style.display = "none";
+}
+
+/* Adopt a freshly loaded scope's photos and render everything off them. The
+ * single landing point for every scope loader, so the per-scope resets can't be
+ * forgotten by one of them. `timeline` false means the scope has no usable dates
+ * (a folder): the date filter is switched off rather than left at the last
+ * scope's range. */
+function setScopePhotos(data, { timeline = true, fitMap = false } = {}) {
+  photos = data;
+  // Pre-assign colors so the legend order is stable
+  photos.forEach(p => camColor(p.camera));
+  renderLegend();
+  if (timeline) {
+    buildHistogram();   // resets the range to the new scope's own span
+  } else {
+    resetDateFilter();
+  }
+  // filteredPhotos is about to be rebuilt from different photos: an anchor
+  // index into the old array would point at an unrelated photo (or past the end).
+  lastClickedIndex = -1;
+  // Also on a same-scope reload (Window/buffer change): the day may be gone.
+  dayIsolation = null;
+  mapDayOverride = null;
+  // A focused photo from the old scope would keep feeding g/Guess and the detail
+  // pane while not being anywhere on the page. A staged one is still on the page
+  // (the staging area), so it keeps its preview.
+  if (focusedPhotoId != null && !pendingGeo.has(focusedPhotoId) &&
+      !photos.some(p => p.id === focusedPhotoId)) {
+    clearDetail();
+  }
+  applyFilters(fitMap);   // also prunes the selection to what's visible
+}
+
+/* ── Batch scopes ──
+ * A batch straddles months (and a folder has no dates at all), so neither
+ * selectMonth nor selectUndated can express one — these load the scope directly. */
 async function loadPhotosByDateRange(from, to, label) {
-  clearScopeSelections();
+  enterScope("batch", label);
   setTimelineAvailable(true);
   batchScope = { url: `/api/photos?geotagged=all&date_from=${from}&date_to=${to}`, label,
                  timeline: true };
@@ -1323,14 +1311,14 @@ async function loadPhotosByDateRange(from, to, label) {
 }
 
 async function loadPhotosByIds(ids, label) {
-  clearScopeSelections();
+  enterScope("ids", label);
   setTimelineAvailable(true);
   batchScope = { url: `/api/photos?ids=${ids.join(",")}`, label, timeline: true };
   await loadPhotoScope(batchScope.url, label, { timeline: true });
 }
 
 async function loadPhotosByDir(dir, label) {
-  clearScopeSelections();
+  enterScope("dir", label);
   const select = document.getElementById("dir-select");
   // A folder batch arriving from the queue should show up in the picker too.
   if (select && select.value !== dir) {
@@ -1374,6 +1362,9 @@ function applyFilters(fitMap = false) {
     cancelAnimationFrame(applyFiltersFrame);
     applyFiltersFrame = 0;
   }
+  // The shift-click / shift+j anchor is an index into filteredPhotos, which is
+  // about to be rebuilt — so carry it over by photo id, not by position.
+  const anchorId = filteredPhotos[lastClickedIndex]?.id;
   filteredPhotos = photos.filter(p => {
     if (hiddenCameras.has(p.camera || "Unknown")) return false;
     // Screenshots cuts across the buckets rather than being one of them — a
@@ -1388,9 +1379,28 @@ function applyFilters(fitMap = false) {
     }
     return true;
   });
+  lastClickedIndex = anchorId == null ? -1 : filteredPhotos.findIndex(p => p.id === anchorId);
+
+  // What you see is what you act on: L, I, drag, the context menu, Remove geotag
+  // and the propose bar all take the whole selection, so a selected photo a
+  // filter has just hidden would be tagged without ever being on screen. Hidden
+  // photos are deselected rather than kept-but-skipped — the "N selected" chip
+  // then always matches the highlighted cells, at the price of re-selecting
+  // after showing them again. Staged photos left the selection when they were
+  // staged, so they're never in here.
+  const visible = new Set(filteredPhotos.map(p => p.id));
+  let deselected = 0;
+  selectedIds.forEach((id) => {
+    if (!visible.has(id)) { selectedIds.delete(id); deselected++; }
+  });
+
   renderGrid();
   renderMarkers();
-  setStatus(`Showing ${filteredPhotos.length} of ${photos.length} photos`);
+  // Only on a change: the scrubber calls this every frame, and each call would
+  // otherwise re-arm the propose request.
+  if (deselected) refreshSelectionUI();
+  setStatus(`Showing ${filteredPhotos.length} of ${photos.length} photos` +
+            (deselected ? ` · deselected ${deselected} now hidden` : ""));
   if (fitMap) fitMapToPhotos();
 }
 
@@ -2459,9 +2469,7 @@ function bindTimeline() {
 function buildHistogram() {
   const tsList = photos.map(p => p.photo_datetime).filter(Boolean);  // keeps pre-1970 (negative)
   if (tsList.length < 2) {
-    setTimelineAvailable(false);
-    dateRangeMin = dateRangeMax = 0;
-    dateFilterLo = dateFilterHi = 0;
+    resetDateFilter();
     return;
   }
 
@@ -2986,10 +2994,11 @@ async function openBatch(batch) {
   // context, so the one filter that must be on is "Not tagged".
   setFilterToggle("untagged", true);
 
-  // Only what actually loaded — a member tagged between the queue build and now
-  // would otherwise sit in the selection invisibly.
-  const loaded = new Set(photos.map(p => p.id));
-  selectedIds = new Set(batch.photo_ids.filter(id => loaded.has(id)));
+  // Only what is actually on screen — a member tagged between the queue build and
+  // now, or one a camera/Screenshots filter hides, would otherwise sit in the
+  // selection invisibly (applyFilters keeps the same rule from here on).
+  const visible = new Set(filteredPhotos.map(p => p.id));
+  selectedIds = new Set(batch.photo_ids.filter(id => visible.has(id) && !pendingGeo.has(id)));
   lastClickedIndex = -1;
   proposeDismissedFor = "";      // a new batch is a new question
   refreshSelectionUI();          // → scheduleProposal(), which raises the propose bar

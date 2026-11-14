@@ -399,7 +399,7 @@ does one full rebuild per suggested person.
 ## Frontend bugs
 
 <a id="w1"></a>
-**W1 — High — A stale date filter hides every photo in folder scopes** [traced]
+**W1 — High — A stale date filter hides every photo in folder scopes** [traced] — ✅ **DONE** (`setScopePhotos` calls `resetDateFilter()` for scopes without a timeline)
 `web/app.js:1323-1327,1454-1457,2423-2428`. Folder scopes skip `buildHistogram()`, and
 `setTimelineAvailable(false)` never fires `onChange`, so the previous scope's date range stays active.
 Open June 2019, then a folder dated 2021: "Showing 0 of N".
@@ -426,7 +426,7 @@ year field runs a search behind the modal, clearing the selection, so Apply post
 `web/people-manage.js:310,326-329`, `api/faces.py:84-90`. `/api/persons` returns no `face_count`, so the
 warning branch never runs while the server unassigns every face. The Faces column always shows "—".
 
-**W6 — Medium — Scope state is not reset consistently** [traced]
+**W6 — Medium — Scope state is not reset consistently** [traced] — ✅ **DONE** (`enterScope()` clears every scope variable incl. `batchScope` and exits a batch; `applyFilters` prunes the selection to visible photos)
 `web/app.js:344-357,658-682,2885`. `batchScope` is never nulled, so changing a filter after visiting a folder
 reloads the old folder. `selectedIds` is never pruned, so `L`/`I` act on photos no longer visible.
 
@@ -445,7 +445,7 @@ the help modal. `people.js:1906` has the same order [seen; whether its guard pre
 **W10 — Medium — `loadFaces` and `loadPersons` never check `res.ok`** [traced]
 `web/people.js:507-508,712-714`. A 422 leaves `faces` undefined and every later handler throws.
 
-**W11 — Medium — Shift-click after a filter change reads past the array** [traced]
+**W11 — Medium — Shift-click after a filter change reads past the array** [traced] — ✅ **DONE** (anchor remapped by photo id in `applyFilters`, -1 when hidden)
 `web/app.js:1844-1850`. `lastClickedIndex` is not reset by `applyFilters`.
 
 **W12 — Medium — Search "untagged faces" mode leaves old results actionable** [traced]
