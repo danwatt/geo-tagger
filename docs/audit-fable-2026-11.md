@@ -227,7 +227,7 @@ runs on candidates that already passed the threshold.
 accepts as cached. No `Content-Length` or checksum check anywhere. A truncated model file feeds F1.
 *Fix:* `.part` plus `os.replace`, compare bytes to `Content-Length`, verify GeoFabrik's `.md5`.
 
-**G2 — High — `geocode_cache` is never invalidated** [traced]
+**G2 — High — `geocode_cache` is never invalidated** [traced] — ✅ **DONE** (OSM builds into `<db>.tmp` and swaps via `osm_places.replace_db` under its lock; cache rows carry `dataset_version` from dataset file size/mtime; every dataset job calls `geocode.datasets_changed()`, which purges other versions and re-queues city-less photos; geocode env knobs are not in the version)
 `osm_builder.py:312-337`, `geocode.py:806-821`, `index.py:1225-1252`. The OSM merge commits into the live DB
 while lookups run, so a point whose polygon is not inserted yet caches `city=None`. Nothing ever deletes from
 the cache, so pre-install answers are served forever for that cell.

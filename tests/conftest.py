@@ -158,8 +158,11 @@ def _isolate_osm_places(tmp_path, monkeypatch):
     Tests that want OSM data use the `osm_db` fixture, which repoints this."""
     monkeypatch.setattr(config, "OSM_DB_PATH", tmp_path / "__no_osm__.sqlite")
     _reset_osm_places_state()
+    # The memoized geocode-cache dataset version fingerprints these per-test paths.
+    geocode._cache_version = None
     yield
     _reset_osm_places_state()
+    geocode._cache_version = None
 
 
 @pytest.fixture

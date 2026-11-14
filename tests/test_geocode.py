@@ -716,7 +716,7 @@ class TestLookupCacheIntegration:
         _write_geonames_files(geonames_dir, [CITY_A])
         result = geocode.lookup(40.001, -74.001)
         qlat, qlng = geocode.quantize(40.001, -74.001)
-        assert index.get_cached_geocode(qlat, qlng) == result
+        assert index.get_cached_geocode(qlat, qlng, version=geocode.cache_version()) == result
 
     def test_lookup_reads_from_cache_before_the_kd_tree(self, geonames_dir, db):
         _write_geonames_files(geonames_dir, [CITY_A])
@@ -724,7 +724,7 @@ class TestLookupCacheIntegration:
         index.put_cached_geocode(qlat, qlng, {
             "city": "CachedCity", "state": None, "county": None,
             "country": None, "country_code": None,
-        })
+        }, version=geocode.cache_version())
         result = geocode.lookup(40.001, -74.001)
         assert result["city"] == "CachedCity"
 
@@ -734,8 +734,8 @@ class TestLookupCacheIntegration:
         index.put_cached_geocode(qlat, qlng, {
             "city": "CachedCity", "state": None, "county": None,
             "country": None, "country_code": None,
-        })
+        }, version=geocode.cache_version())
         result = geocode.lookup(40.001, -74.001, use_cache=False)
         assert result["city"] == "Testville"
         # The stale cache entry is left untouched, not overwritten.
-        assert index.get_cached_geocode(qlat, qlng)["city"] == "CachedCity"
+        assert index.get_cached_geocode(qlat, qlng, version=geocode.cache_version())["city"] == "CachedCity"

@@ -292,6 +292,26 @@ def process_file(db: sqlite3.Connection, pbf: Path, index: str,
             "seconds": round(time.time() - t0, 1)}
 
 
+def _remove_db_files(path: Path) -> None:
+    """Delete a SQLite file and any journal it left behind."""
+    for suffix in ("", "-journal", "-wal", "-shm"):
+        path.with_name(path.name + suffix).unlink(missing_ok=True)
+
+
+def _copy_db(src: Path, dest: Path) -> None:
+    """Copy the live DB into the build file with SQLite's backup API: a consistent
+    snapshot even while the app has it open read-only, unlike a byte copy."""
+    src_conn = sqlite3.connect(f"file:{src.as_posix()}?mode=ro", uri=True)
+    try:
+        dest_conn = sqlite3.connect(str(dest))
+        try:
+            src_conn.backup(dest_conn)
+        finally:
+            dest_conn.close()
+    finally:
+        src_conn.close()
+
+
 def build_or_append(db_path: Path, pbf_paths: list[Path], append: bool,
                      index: str = "flex_mem",
                      progress_cb: Callable[[str], None] | None = None) -> dict:
@@ -300,15 +320,36 @@ def build_or_append(db_path: Path, pbf_paths: list[Path], append: bool,
     is called with a short human-readable status line as each file is processed —
     used to drive a polling job-status endpoint.
 
-    Returns a summary: {"total_places": int, "regions": [{"file", "kept"}, ...]}."""
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    if db_path.exists() and not append:
-        db_path.unlink()
-        for suffix in ("-wal", "-shm"):
-            wal = db_path.with_name(db_path.name + suffix)
-            if wal.exists():
-                wal.unlink()
+    The work happens in a "<db>.tmp" file next to db_path (a copy of the live DB
+    when appending, since a merge is additive across regions), which is swapped in
+    only once complete (audit G2). Merging into the live file meant lookups during
+    a multi-minute merge saw a half-inserted region: a point whose city polygon
+    wasn't in yet resolved, and was cached, as "no city". The swap goes through
+    osm_places.replace_db, which closes the app's read handle under its lock.
 
+    Returns a summary: {"total_places": int, "regions": [{"file", "kept"}, ...]}."""
+    from geotagger import osm_places
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = db_path.with_name(db_path.name + ".tmp")
+    _remove_db_files(tmp_path)  # a build a crash or failed swap left behind
+    try:
+        if append and db_path.exists():
+            if progress_cb:
+                progress_cb(f"Copying {db_path.name} to merge into…")
+            _copy_db(db_path, tmp_path)
+        summary = _build_into(tmp_path, pbf_paths, index, progress_cb)
+    except BaseException:
+        # A half-built file is useless and can be GBs; the live DB is untouched.
+        _remove_db_files(tmp_path)
+        raise
+    osm_places.replace_db(tmp_path, db_path)
+    return summary
+
+
+def _build_into(db_path: Path, pbf_paths: list[Path], index: str,
+                progress_cb: Callable[[str], None] | None) -> dict:
+    """Run the merge into the (temp) DB at db_path. See build_or_append."""
     db = sqlite3.connect(str(db_path))
     try:
         init_db(db)

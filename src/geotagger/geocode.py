@@ -790,6 +790,90 @@ def _merged_lookup(lat: float, lng: float) -> dict | None:
     }
 
 
+# ── Cache versioning (audit G2) ──
+# geocode_cache rows are stamped with the version of the datasets that produced
+# them, and a read only accepts a row with the current version. A dataset change
+# therefore retires the whole cache at once: stale rows are ignored and lazily
+# overwritten, never served. A version instead of a bare DELETE also covers
+# (a) a lookup in flight across the change, whose late write carries the old
+# version and is ignored, and (b) datasets rebuilt by the CLI scripts while the
+# app was stopped: the version is derived from the files themselves, so the
+# next start notices without being told.
+#
+# Bump when the merge logic changes answers for unchanged data.
+_CACHE_LOGIC_VERSION = 1
+_version_lock = threading.Lock()
+_cache_version: str | None = None
+
+
+def _dataset_files() -> list[Path]:
+    """Every file whose contents can change a lookup()'s answer."""
+    return [config.OSM_DB_PATH, config.CENSUS_DB_PATH, _cities_file(),
+            config.GEONAMES_DIR / "admin1CodesASCII.txt",
+            config.GEONAMES_DIR / "admin2Codes.txt",
+            config.GEONAMES_DIR / "countryInfo.txt"]
+
+
+def _compute_cache_version() -> str:
+    """Fingerprint of the installed datasets: (path, size, mtime) per file, so an
+    install, rebuild, merge or removal of any of them changes it. Every builder
+    and downloader swaps in a new file, so changed data always has a new mtime."""
+    import hashlib
+    parts: list[str] = [f"logic={_CACHE_LOGIC_VERSION}"]
+    for path in _dataset_files():
+        try:
+            st = path.stat()
+            parts.append(f"{path}|{st.st_size}|{st.st_mtime_ns}")
+        except OSError:
+            parts.append(f"{path}|absent")
+    return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
+def cache_version() -> str:
+    """Current dataset version for geocode_cache rows. Computed once, since
+    stat'ing six files per lookup would cost more than the lookup; recomputed by
+    datasets_changed()."""
+    global _cache_version
+    if _cache_version is None:
+        with _version_lock:
+            if _cache_version is None:
+                _cache_version = _compute_cache_version()
+    return _cache_version
+
+
+def datasets_changed() -> dict:
+    """Call after any job that may have changed a geocoding dataset (OSM merge,
+    Census build, GeoNames download), whether or not it succeeded: a failed
+    GeoNames download can still have replaced some of its files. The caller must
+    already have made the new data visible to lookups (osm_places.replace_db,
+    census_places.reset()), so any lookup that reads the new version also reads
+    the new data. A no-op when no file actually changed.
+
+    When one did: deletes cache rows of other versions and re-queues photos whose
+    earlier lookup found no city (geocoded_at -> NULL), so the next scan/backfill
+    retries exactly the answers a new dataset can fill in. Photos that already have
+    a city keep it: re-resolving those is the explicit whole-library
+    scripts/regeocode.py, not something a download should do on its own."""
+    global _cache_version
+    with _version_lock:
+        old = _cache_version
+        new = _compute_cache_version()
+        _cache_version = new
+    if old == new:
+        return {"changed": False, "purged": 0, "requeued": 0}
+    from geotagger import index
+    try:
+        with index.transaction():
+            purged = index.purge_geocode_cache(keep_version=new)
+            requeued = index.requeue_cityless_geocodes()
+    except RuntimeError:
+        # Main DB not initialized (raw CLI use): nothing cached to retire.
+        return {"changed": True, "purged": 0, "requeued": 0}
+    logger.info("Geocoding datasets changed: purged %d cached lookups, re-queued %d "
+                "photos with no city", purged, requeued)
+    return {"changed": True, "purged": purged, "requeued": requeued}
+
+
 def lookup(lat: float | None, lng: float | None, use_cache: bool = True) -> dict | None:
     """Reverse-geocode a coordinate to
     {city, sublocation, postal_code, state, county, country, country_code}.
@@ -804,19 +888,22 @@ def lookup(lat: float | None, lng: float | None, use_cache: bool = True) -> dict
     if lat is None or lng is None:
         return None
     qlat, qlng = quantize(lat, lng)
-    if use_cache:
+    # Read once, before the lookup: if the datasets change mid-lookup, this result
+    # is written under the old version and never served.
+    version = cache_version() if use_cache else None
+    if version is not None:
         try:
             from geotagger import index
-            cached = index.get_cached_geocode(qlat, qlng)
+            cached = index.get_cached_geocode(qlat, qlng, version=version)
             if cached is not None:
                 return cached
         except Exception:
             pass
     result = _merged_lookup(lat, lng)
-    if use_cache and result is not None:
+    if version is not None and result is not None:
         try:
             from geotagger import index
-            index.put_cached_geocode(qlat, qlng, result)
+            index.put_cached_geocode(qlat, qlng, result, version=version)
         except Exception:
             pass
     return result

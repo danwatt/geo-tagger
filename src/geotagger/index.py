@@ -743,6 +743,12 @@ def _init_db_locked(root: Path | None) -> sqlite3.Connection:
     # simply have NULL here — a stale-but-valid result, refreshed by scripts/regeocode.py.
     if "postal_code" not in cache_cols:
         _db.execute("ALTER TABLE geocode_cache ADD COLUMN postal_code TEXT")
+    # Dataset version a row was computed against (geocode.cache_version, audit G2).
+    # Reads only accept the current version, so rows from before this column
+    # existed (NULL) are recomputed once: they may hold exactly the stale
+    # pre-install answers G2 describes.
+    if "dataset_version" not in cache_cols:
+        _db.execute("ALTER TABLE geocode_cache ADD COLUMN dataset_version TEXT")
 
     # Life Contexts (time+place polygons) were removed. Migrations are otherwise
     # additive, but leaving these tables behind would keep every existing DB
@@ -2218,12 +2224,14 @@ def set_place_representative(place_id: int, photo_id: int | None):
 
 # ── Reverse geocoding ──
 
-def get_cached_geocode(qlat: int, qlng: int) -> dict | None:
-    """Return a cached location for quantized coords, or None on a miss."""
+def get_cached_geocode(qlat: int, qlng: int, *, version: str) -> dict | None:
+    """Return a cached location for quantized coords, or None on a miss. A row
+    computed against other datasets (any version but geocode.cache_version()) is
+    a miss."""
     row = get_db().execute(
         "SELECT city, sublocation, postal_code, state, county, country, country_code "
-        "FROM geocode_cache WHERE qlat=? AND qlng=?",
-        (qlat, qlng),
+        "FROM geocode_cache WHERE qlat=? AND qlng=? AND dataset_version=?",
+        (qlat, qlng, version),
     ).fetchone()
     if row is None:
         return None
@@ -2233,18 +2241,41 @@ def get_cached_geocode(qlat: int, qlng: int) -> dict | None:
             "country": row["country"], "country_code": row["country_code"]}
 
 
-def put_cached_geocode(qlat: int, qlng: int, loc: dict, source: str = "local"):
-    """Cache a location result for quantized coords."""
+def put_cached_geocode(qlat: int, qlng: int, loc: dict, *, version: str,
+                       source: str = "local"):
+    """Cache a location result for quantized coords, stamped with the dataset
+    version it was computed against."""
     with transaction() as db:
         db.execute(
             """INSERT OR REPLACE INTO geocode_cache
                    (qlat, qlng, city, sublocation, postal_code, state, county, country,
-                    country_code, source, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    country_code, source, created_at, dataset_version)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (qlat, qlng, loc.get("city"), loc.get("sublocation"), loc.get("postal_code"),
              loc.get("state"), loc.get("county"), loc.get("country"), loc.get("country_code"),
-             source, time.time()),
+             source, time.time(), version),
         )
+
+
+def purge_geocode_cache(keep_version: str) -> int:
+    """Delete cache rows of any other dataset version. Reads already ignore them;
+    this only stops the table carrying dead rows. Returns the number deleted."""
+    with transaction() as db:
+        return db.execute(
+            "DELETE FROM geocode_cache WHERE dataset_version IS NOT ?", (keep_version,)
+        ).rowcount
+
+
+def requeue_cityless_geocodes() -> int:
+    """Mark photos whose reverse geocode found no city as not yet geocoded, so the
+    next backfill retries them against new datasets. Their loc_* values stay as
+    they are until that retry overwrites them. Returns the number re-queued."""
+    with transaction() as db:
+        return db.execute(
+            "UPDATE photos SET geocoded_at=NULL "
+            "WHERE geocoded_at IS NOT NULL AND loc_city IS NULL "
+            "AND lat IS NOT NULL AND lng IS NOT NULL"
+        ).rowcount
 
 
 def _location_params(photo_id: int, loc: dict | None, now: float) -> tuple:

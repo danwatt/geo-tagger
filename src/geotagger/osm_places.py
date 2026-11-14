@@ -21,8 +21,10 @@ the app keeps working, falling back to GeoNames.
 
 import json
 import logging
+import os
 import sqlite3
 import threading
+from pathlib import Path
 
 from geotagger import config
 from geotagger.geometry import point_in_polygon
@@ -53,16 +55,18 @@ def status() -> dict:
     _ensure_loaded()
     st = {"available": is_available(), "state": _state, "error": _error,
           "places": 0, "by_category": {}}
-    if _state == "ready" and _conn is not None:
-        try:
-            st["places"] = _conn.execute("SELECT COUNT(*) FROM places").fetchone()[0]
-            st["by_category"] = {
-                r["category"]: r["n"] for r in _conn.execute(
-                    "SELECT category, COUNT(*) AS n FROM places GROUP BY category ORDER BY n DESC"
-                ).fetchall()
-            }
-        except Exception:
-            pass
+    # Held for the whole block so replace_db() can't close the handle mid-query.
+    with _lock:
+        if _state == "ready" and _conn is not None:
+            try:
+                st["places"] = _conn.execute("SELECT COUNT(*) FROM places").fetchone()[0]
+                st["by_category"] = {
+                    r["category"]: r["n"] for r in _conn.execute(
+                        "SELECT category, COUNT(*) AS n FROM places GROUP BY category ORDER BY n DESC"
+                    ).fetchall()
+                }
+            except Exception:
+                pass
     return st
 
 
@@ -98,6 +102,52 @@ def _ensure_loaded():
             _load()
 
 
+def _close_locked():
+    """Drop the open handle and go back to "unloaded" so the next lookup reopens
+    whatever is on disk. Caller holds _lock."""
+    global _state, _error, _conn
+    if _conn is not None:
+        try:
+            _conn.close()
+        except Exception:
+            pass
+    _conn = None
+    _state = "unloaded"
+    _error = None
+
+
+def reset():
+    """Close the handle and forget the load state (the next lookup reopens the
+    file). Mirrors census_places.reset()."""
+    with _lock:
+        _close_locked()
+
+
+def replace_db(src: Path, dest: Path) -> None:
+    """Atomically swap a finished build (`src`) in as the places DB at `dest`.
+
+    Close and replace happen under one hold of _lock: a lookup that slipped in
+    between them would reopen the old file, and Windows refuses to replace a file
+    that is open. Every lookup therefore runs entirely against the old DB or the
+    new one, never a half-built one. Afterwards the state is "unloaded", so the
+    next lookup opens the new file, even on a first install.
+
+    Only this process's handle can be closed. Another process with the file open
+    (a running app, when this is the CLI) makes the replace fail on Windows: that
+    is reported as a RuntimeError and the completed build stays at `src`."""
+    with _lock:
+        _close_locked()
+        try:
+            os.replace(src, dest)
+        except PermissionError as e:
+            raise RuntimeError(
+                f"Built {src.name} but could not replace {dest.name}: another process "
+                "has it open (a running geotagger instance?). Stop it and rename the "
+                ".tmp file over the old one, or run the merge from the app's Data "
+                f"Management page instead. ({e})"
+            ) from e
+
+
 def point_in_multipolygon(lat: float, lng: float, polygons: list) -> bool:
     """Containment test for our stored ring format: [[outer, [hole,...]], ...],
     each ring [[lat, lng], ...]. Inside iff the point is inside some polygon's
@@ -114,10 +164,13 @@ def _containing_rows(lat: float, lng: float) -> list[sqlite3.Row]:
     """All place rows whose polygon actually contains the point. R*Tree bbox
     prefilter (cheap, indexed) then exact point-in-polygon on the survivors."""
     _ensure_loaded()
-    if _state != "ready" or _conn is None:
-        return []
     with _lock:
-        candidates = _conn.execute(
+        # _conn is re-read under the lock: replace_db() on another thread can close
+        # it after _ensure_loaded() returns.
+        conn = _conn
+        if _state != "ready" or conn is None:
+            return []
+        candidates = conn.execute(
             """SELECT p.id, p.name, p.category, p.admin_level, p.rank, p.area, p.rings
                FROM places_spatial s JOIN places p ON p.id = s.id
                WHERE s.min_lat <= ? AND s.max_lat >= ?
@@ -176,17 +229,18 @@ def places_in_bbox(min_lat: float, max_lat: float, min_lng: float, max_lng: floa
     boundaries. Each place dict carries name/category/rank/area + `polygons` in the
     stored ring format ([[outer,[holes]], ...], ring = [[lat,lng],...])."""
     _ensure_loaded()
-    if _state != "ready" or _conn is None:
-        return [], 0
     category_filter = "" if include_buildings else "AND p.category != 'building'"
     with _lock:
-        total = _conn.execute(
+        conn = _conn  # re-read under the lock, as in _containing_rows
+        if _state != "ready" or conn is None:
+            return [], 0
+        total = conn.execute(
             f"""SELECT COUNT(*) FROM places_spatial s JOIN places p ON p.id = s.id
                WHERE s.min_lat <= ? AND s.max_lat >= ? AND s.min_lng <= ? AND s.max_lng >= ?
                {category_filter}""",
             (max_lat, min_lat, max_lng, min_lng),
         ).fetchone()[0]
-        rows = _conn.execute(
+        rows = conn.execute(
             f"""SELECT p.id, p.name, p.category, p.admin_level, p.rank, p.area, p.rings
                FROM places_spatial s JOIN places p ON p.id = s.id
                WHERE s.min_lat <= ? AND s.max_lat >= ? AND s.min_lng <= ? AND s.max_lng >= ?

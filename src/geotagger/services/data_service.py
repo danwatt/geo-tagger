@@ -24,9 +24,10 @@ re-downloading blind.
 import logging
 import re
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 
-from geotagger import config, downloads, index
+from geotagger import config, downloads, geocode, index
 from geotagger.osm_builder import build_or_append
 
 logger = logging.getLogger(__name__)
@@ -147,6 +148,24 @@ def _count_lines(path: Path) -> int | None:
         return None
 
 
+@contextmanager
+def _geocoding_dataset_job():
+    """Wrap a job that can change a geocoding dataset (audit G2). Pins the
+    pre-job cache version first, so the comparison afterwards sees a real change
+    and not just a version this process had never computed; then, however the job
+    ends, retires geocode_cache rows and re-queues city-less photos if any dataset
+    file changed (geocode.datasets_changed). That runs after the job has made its
+    new data visible, which each job body does before returning."""
+    geocode.cache_version()
+    try:
+        yield
+    finally:
+        try:
+            geocode.datasets_changed()
+        except Exception:  # noqa: BLE001 — never mask the job's own outcome
+            logger.exception("Could not invalidate the geocode cache after a dataset job")
+
+
 # ── GeoNames download job ──
 _geonames_lock = threading.Lock()
 _geonames_job: dict = {"running": False, "done": False, "error": None, "message": ""}
@@ -169,6 +188,11 @@ def geonames_job_status() -> dict:
 
 
 def _run_geonames_download(force: bool = False):
+    with _geocoding_dataset_job():
+        _geonames_download(force)
+
+
+def _geonames_download(force: bool):
     try:
         config.GEONAMES_DIR.mkdir(parents=True, exist_ok=True)
         for name, url, is_zip in GEONAMES_FILES:
@@ -235,8 +259,11 @@ def _ingested_region_keys() -> list[str]:
     import sqlite3
     try:
         conn = sqlite3.connect(f"file:{config.OSM_DB_PATH.as_posix()}?mode=ro", uri=True)
-        row = conn.execute("SELECT value FROM meta WHERE key='regions'").fetchone()
-        conn.close()
+        try:
+            row = conn.execute("SELECT value FROM meta WHERE key='regions'").fetchone()
+        finally:
+            # Always closed: a leaked handle would block the next merge's swap on Windows.
+            conn.close()
         files = [r["file"] for r in json.loads(row[0])] if row else []
         return [f.replace("-latest.osm.pbf", "") for f in files]
     except Exception:
@@ -319,6 +346,11 @@ def _compact_pbf(dest: Path, progress_cb) -> None:
 
 
 def _run_osm_download_and_merge(keys: list[str], force: bool = False):
+    with _geocoding_dataset_job():
+        _osm_download_and_merge(keys, force)
+
+
+def _osm_download_and_merge(keys: list[str], force: bool):
     def progress(message: str):
         with _osm_lock:
             _osm_job["message"] = message
@@ -354,6 +386,7 @@ def _run_osm_download_and_merge(keys: list[str], force: bool = False):
                 _download_pbf(region["url"], dest, region["name"], progress)
             pbf_paths.append(dest)
 
+        # Builds into a temp copy and swaps it in, reopening osm_places (G2).
         summary = build_or_append(config.OSM_DB_PATH, pbf_paths, append=True, progress_cb=progress)
         by_file = {r["file"]: r["kept"] for r in summary["regions"]}
         for region, dest in zip(regions, pbf_paths):
@@ -417,6 +450,11 @@ def census_job_status() -> dict:
 
 
 def _run_census_download(force: bool = False):
+    with _geocoding_dataset_job():
+        _census_download(force)
+
+
+def _census_download(force: bool):
     from geotagger import census_builder, census_places
 
     def progress(message: str):
@@ -459,6 +497,10 @@ def _run_census_download(force: bool = False):
         census_places.reset()
         summary = census_builder.build(config.CENSUS_DB_PATH, zip_path, zcta_path,
                                        postal_path, progress_cb=progress)
+        # A lookup during the build may have reopened the old file; on POSIX the
+        # replace succeeded anyway and that handle still reads the old data. Drop it
+        # so lookups see the new build before the cache version moves on (G2).
+        census_places.reset()
         index.record_dataset_download(
             dataset="census_places", region="us", url=url,
             size_bytes=sum(p.stat().st_size for p in (zip_path, zcta_path, postal_path)),
