@@ -38,6 +38,20 @@ def _make_jpg(path) -> str:
     return str(path)
 
 
+def _rect(min_lat, max_lat, min_lng, max_lng):
+    """One rectangular polygon (no holes) in the OSM/Census stored ring format."""
+    outer = [[min_lat, min_lng], [max_lat, min_lng], [max_lat, max_lng], [min_lat, max_lng]]
+    return [[outer, []]]
+
+
+def _place_tags(sc) -> dict:
+    from geotagger import exiftool_session
+    # pyexiftool's "-G" returns family-0 prefixes ("XMP:City").
+    return exiftool_session.get_et().get_tags([str(sc)], tags=[
+        "XMP-photoshop:City", "XMP-photoshop:State",
+        "XMP-photoshop:Country", "XMP-iptcCore:CountryCode"])[0]
+
+
 def _write_geonames(dir_):
     (dir_ / "cities500.txt").write_text(
         "\t".join(["1", "Testville", "Testville", "", "40.0", "-74.0", "P", "PPL",
@@ -64,6 +78,29 @@ class TestGeocodePending:
         assert res["available"] is False
         assert res["processed"] == 0
         assert res["remaining"] == 1
+
+    # ── Any one dataset is enough (audit G7) ──
+
+    def test_osm_only_install_geocodes(self, db, geonames_dir, osm_db):
+        osm_db([dict(name="OsmCity", category="city", admin_level=8, area=1.0,
+                     polygons=_rect(39.9, 40.1, -74.1, -73.9))])
+        pid = _add_photo(db, lat=40.0, lng=-74.0)
+        res = geocode_service.geocode_pending()
+        assert res == {"processed": 1, "matched": 1, "available": True, "remaining": 0}
+        row = index.get_photo(pid)
+        assert row["loc_city"] == "OsmCity"
+        assert row["loc_country_code"] is None    # OSM has no country polygons
+        assert index.count_geocoded_photos() == 1  # a city alone counts as geocoded
+
+    def test_census_only_install_geocodes_with_us_country(self, db, geonames_dir, census_db):
+        census_db([{"name": "CensusPlace", "polygons": _rect(39.9, 40.1, -74.1, -73.9)}])
+        pid = _add_photo(db, lat=40.0, lng=-74.0)
+        res = geocode_service.geocode_pending()
+        assert (res["available"], res["matched"]) == (True, 1)
+        row = index.get_photo(pid)
+        assert row["loc_city"] == "CensusPlace"
+        assert row["loc_state"] == "Texas"
+        assert (row["loc_country_code"], row["loc_country"]) == ("US", "United States")
 
     def test_respects_limit(self, db, geonames_dir):
         _write_geonames(geonames_dir)
@@ -102,6 +139,32 @@ class TestExportToSidecars:
         assert res["written"] == 1
         assert (tmp_path / "e2.xmp").exists()
         assert index.get_photo(pid)["geotag_source"] == "sidecar"
+
+    def test_writes_city_without_country_code(self, db, tmp_path, et_session):
+        """An OSM-only answer (city, no country) is still exported (audit G7);
+        the tags with no value are simply not present."""
+        img = _make_jpg(tmp_path / "e3.jpg")
+        pid = _add_photo(db, path=img, lat=1.0, lng=2.0)
+        db.execute("UPDATE photos SET loc_city=? WHERE id=?", ("OsmCity", pid))
+        db.commit()
+
+        assert geocode_service.export_to_sidecars()["written"] == 1
+        tags = _place_tags(tmp_path / "e3.xmp")
+        assert tags.get("XMP:City") == "OsmCity"
+        assert not tags.get("XMP:Country")
+        assert not tags.get("XMP:CountryCode")
+
+    def test_unresolved_photo_keeps_existing_place_tags(self, db, tmp_path, et_session):
+        """Nothing resolved in the DB -> the sidecar's place names are left alone."""
+        from geotagger import sidecar
+        img = _make_jpg(tmp_path / "e4.jpg")
+        sidecar.write_gps(Path(img), 1.0, 2.0, location={"city": "Kept", "country_code": "US"})
+        _add_photo(db, path=img, lat=1.0, lng=2.0)
+
+        assert geocode_service.export_to_sidecars()["written"] == 1
+        tags = _place_tags(tmp_path / "e4.xmp")
+        assert tags.get("XMP:City") == "Kept"
+        assert tags.get("XMP:CountryCode") == "US"
 
     def test_noop_when_nothing_geotagged(self, db, et_session):
         _add_photo(db)  # no lat/lng

@@ -91,8 +91,19 @@ def _signature() -> tuple:
 
 
 def is_available() -> bool:
-    """True if the GeoNames data has been downloaded."""
+    """True if the GeoNames data has been downloaded. GeoNames-only: gate the
+    GeoNames-specific features (Places DB markers/cells) on this, and anything that
+    just needs *a* lookup to answer on any_available()."""
     return _cities_file().exists()
+
+
+def any_available() -> bool:
+    """True if at least one reverse-geocoding dataset is installed — OSM polygons,
+    US Census places, or GeoNames. lookup() resolves from whichever are present
+    (see _merged_lookup), so an OSM- or Census-only install still geocodes; gating
+    the backfill on GeoNames alone left such installs never geocoding (audit G7)."""
+    from geotagger import census_places, osm_places
+    return is_available() or osm_places.is_available() or census_places.is_available()
 
 
 def status() -> dict:
@@ -980,7 +991,10 @@ def _merged_lookup(lat: float, lng: float) -> dict | None:
         admin = {
             "state": state,
             "county": place.get("county"),
-            "country": t.country_names.get(cc) if t is not None else None,
+            # Country names live in GeoNames' countryInfo.txt; a Census-only install
+            # still knows the code, so name it from the static table (audit G7).
+            "country": ((t.country_names.get(cc) if t is not None else None)
+                        or _CONTAINMENT_COUNTRY_NAMES.get(cc)),
             "country_code": cc,
         }
     else:
@@ -1009,6 +1023,19 @@ _US_FIPS_TO_USPS = {
 }
 # Census covers these as "states"; GeoNames (and ISO 3166) make each its own country.
 _US_TERRITORIES = {"AS", "GU", "MP", "PR", "VI", "UM"}
+# Name for every country code _containment_anchor can produce, spelled as GeoNames'
+# countryInfo.txt spells it, so a Census-only answer matches a GeoNames-backed one.
+# Only used when GeoNames isn't installed (or lacks the code). The OSM DB holds no
+# country polygons, so an OSM-only city has no country at all — nothing to name.
+_CONTAINMENT_COUNTRY_NAMES = {
+    "US": "United States",
+    "AS": "American Samoa",
+    "GU": "Guam",
+    "MP": "Northern Mariana Islands",
+    "PR": "Puerto Rico",
+    "VI": "U.S. Virgin Islands",
+    "UM": "United States Minor Outlying Islands",
+}
 
 
 def _containment_anchor(census: dict | None,
@@ -1075,7 +1102,8 @@ def _name_match(t: _Tables, cands: list[tuple[float, int]], city: str | None) ->
 # 2: state/county/country follow the polygon that supplied the city (audit G6).
 # Photos already geocoded keep their stored loc_* until scripts/regeocode.py:
 # a logic bump only retires cached answers, like a dataset change does.
-_CACHE_LOGIC_VERSION = 2
+# 3: Census-only installs name the country ("United States") (audit G7).
+_CACHE_LOGIC_VERSION = 3
 _version_lock = threading.Lock()
 _cache_version: str | None = None
 

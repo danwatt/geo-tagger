@@ -2324,9 +2324,11 @@ def count_photos_needing_geocode() -> int:
 
 
 def count_geocoded_photos() -> int:
-    """Photos that resolved to a location (geocoded with a country)."""
+    """Photos that resolved to a location: a city or a country. An OSM-only install
+    resolves cities with no country (the OSM DB has no country polygons), so a
+    country alone no longer marks "geocoded" (audit G7)."""
     return get_db().execute(
-        "SELECT COUNT(*) FROM photos WHERE loc_country_code IS NOT NULL"
+        "SELECT COUNT(*) FROM photos WHERE loc_city IS NOT NULL OR loc_country_code IS NOT NULL"
     ).fetchone()[0]
 
 

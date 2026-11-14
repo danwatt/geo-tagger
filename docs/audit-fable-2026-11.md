@@ -251,7 +251,7 @@ directions at Seattle's latitude. Result: duplicate hotspots and duplicate work-
 `geocode.py:782-790`. City comes from polygon containment, but state and country always come from the nearest
 GeoNames point. `census.lookup()` already returns `state` and it is discarded.
 
-**G7 — Medium — `geocode_pending` gates on GeoNames only** [traced]
+**G7 — Medium — `geocode_pending` gates on GeoNames only** [traced] — ✅ **DONE** (`geocode.any_available()` gates backfill, scan, lookup and `regeocode.py`; Census-only gets US/territory country names from a built-in table; OSM-only gives city + sub-location only; export writes when any place field is set; `_CACHE_LOGIC_VERSION` = 3; Home hint untested in a browser)
 `services/geocode_service.py:13,41-43`. An OSM- or Census-only install never geocodes, and
 `export_to_sidecars` skips cities when `loc_country_code` is null.
 

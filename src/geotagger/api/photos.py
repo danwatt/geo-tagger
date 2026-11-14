@@ -339,7 +339,10 @@ async def api_photo(photo_id: int):
             "county": row["loc_county"],
             "country": row["loc_country"],
             "country_code": row["loc_country_code"],
-        } if row["loc_country_code"] else None,
+        # Any resolved field, not just a country: an OSM-only install yields a
+        # city (and sub-location) with no country (audit G7).
+        } if any(row[c] for c in ("loc_city", "loc_sublocation", "loc_postal_code",
+                                  "loc_state", "loc_country_code")) else None,
     }
 
 

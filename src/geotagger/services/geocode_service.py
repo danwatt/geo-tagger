@@ -14,8 +14,11 @@ _WRITE_CHUNK = 300  # photos per geocode write transaction
 
 def geocode_pending(limit: int | None = None) -> dict:
     """Reverse-geocode photos that have coordinates but no location yet, storing
-    the result in the DB (not sidecars). Blocking; runs in the executor."""
-    if not geocode.is_available():
+    the result in the DB (not sidecars). Blocking; runs in the executor.
+    Runs with any one dataset installed (OSM, Census or GeoNames): lookup() merges
+    whichever are present, so gating on GeoNames alone left OSM- or Census-only
+    installs never geocoding (audit G7)."""
+    if not geocode.any_available():
         return {"processed": 0, "matched": 0, "available": False,
                 "remaining": index.count_photos_needing_geocode()}
     rows = index.get_photos_needing_geocode(limit)
@@ -58,10 +61,15 @@ def export_to_sidecars() -> dict:
     written = errors = 0
     err_samples: list[str] = []
     for r in rows:
-        loc = None
-        if r["loc_country_code"] is not None:
-            loc = {"city": r["loc_city"], "state": r["loc_state"],
-                   "country": r["loc_country"], "country_code": r["loc_country_code"]}
+        loc = {"city": r["loc_city"], "state": r["loc_state"],
+               "country": r["loc_country"], "country_code": r["loc_country_code"]}
+        # Any resolved field is worth exporting: an OSM-only install yields a city
+        # with no country, which used to be skipped wholesale (audit G7). A photo
+        # with nothing resolved (not geocoded yet, or no match) passes None so its
+        # sidecar's existing place tags are left alone; otherwise the DB answer is
+        # authoritative and a missing field clears that tag (see _location_args).
+        if not any(loc.values()):
+            loc = None
         try:
             p = Path(index.photo_path(r))
             with lock:

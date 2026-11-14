@@ -82,9 +82,13 @@ def main():
     root = resolve_root(args)
     index.init_db(root)
 
+    if not geocode.any_available():
+        # Every lookup would answer None and wipe the stored place names.
+        print("No geocode data installed (GeoNames, US Census places or OSM places) — nothing to do.")
+        return
     if not geocode.is_available():
-        print("Note: GeoNames data not installed — state/county/country will stay blank "
-              "(run scripts/get_geonames.py to enable them).")
+        print("Note: GeoNames data not installed — county will stay blank, and state/country "
+              "blank outside the US Census places (run scripts/get_geonames.py to enable them).")
     if not osm_places.is_available():
         print("Note: OSM places DB not found — this will only re-run the GeoNames nearest-city "
               "lookup (run scripts/build_osm_places.py to enable city/sub-location boundaries).")

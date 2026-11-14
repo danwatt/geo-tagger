@@ -12,6 +12,10 @@ from geotagger.services import geocode_service
 
 router = APIRouter()
 
+# Lookups merge whichever datasets are installed, so any one of them is enough.
+_NO_DATASETS_MSG = ("No geocode data installed — run scripts/get_geonames.py, "
+                    "scripts/get_census_places.py and/or scripts/build_osm_places.py")
+
 
 class GeocodeBackfillRequest(BaseModel):
     limit: int = Field(1000, ge=1, le=100_000)  # photos geocoded per call; repeat until remaining == 0
@@ -32,9 +36,12 @@ def _parse_bbox(bbox: str) -> tuple[float, float, float, float]:
 
 @router.get("/api/geocode/status")
 async def api_geocode_status():
-    """Geocoder availability plus how many photos are geocoded vs. pending."""
+    """Geocoder availability plus how many photos are geocoded vs. pending.
+    `available` is GeoNames alone (it gates the GeoNames map layers);
+    `any_available` is whether geocoding can run at all (audit G7)."""
     return {
         **geocode.status(),
+        "any_available": geocode.any_available(),
         "osm": osm_places.status(),
         "census": census_places.status(),
         "geocoded": index.count_geocoded_photos(),
@@ -167,9 +174,8 @@ async def api_geocode_lookup(lat: float = Query(...), lng: float = Query(...)):
     GeoNames nearest-point). Backs the Places
     DB map's click-to-probe: click a point and see what location the geocoder would
     save, and why. 503 only if none of the datasets is installed."""
-    if not (geocode.is_available() or osm_places.is_available() or census_places.is_available()):
-        raise HTTPException(503, "No geocode data installed — run scripts/get_geonames.py, "
-                                 "scripts/get_census_places.py and/or scripts/build_osm_places.py")
+    if not geocode.any_available():
+        raise HTTPException(503, _NO_DATASETS_MSG)
     loop = asyncio.get_running_loop()
     probe = await loop.run_in_executor(get_executor(), _probe, lat, lng)
     return {"lat": lat, "lng": lng, **probe}
@@ -178,11 +184,12 @@ async def api_geocode_lookup(lat: float = Query(...), lng: float = Query(...)):
 @router.post("/api/geocode/backfill")
 async def api_geocode_backfill(req: GeocodeBackfillRequest):
     """Reverse-geocode up to `limit` photos that have coordinates but no location.
-    Repeat until `remaining` is 0. Returns 503 if the GeoNames data isn't installed."""
+    Repeat until `remaining` is 0. Returns 503 if no geocoding dataset (OSM, Census
+    or GeoNames) is installed."""
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(get_executor(), geocode_service.geocode_pending, max(1, req.limit))
     if not result.get("available"):
-        raise HTTPException(503, "GeoNames data not installed — run scripts/get_geonames.py")
+        raise HTTPException(503, _NO_DATASETS_MSG)
     return result
 
 

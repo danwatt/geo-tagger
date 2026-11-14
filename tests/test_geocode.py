@@ -652,7 +652,25 @@ class TestCensusInTheCityChain:
         # The place's own state (the fixture's default, Texas) — no GeoNames needed.
         assert r["state"] == "Texas"
         assert r["country_code"] == "US"
-        assert r["country"] is None           # country names come from GeoNames
+        # Named from the static table, spelled as GeoNames spells it (audit G7).
+        assert r["country"] == "United States"
+
+    def test_census_alone_names_a_territory_country(self, census_db):
+        census_db([{"name": "San Juan", "state_fp": "72", "state": "Puerto Rico",
+                    "polygons": _rect(18.3, 18.5, -66.2, -66.0)}])
+        r = geocode.lookup(18.4, -66.1)
+        assert r["city"] == "San Juan"
+        assert (r["country_code"], r["country"]) == ("PR", "Puerto Rico")
+
+    def test_osm_alone_gives_a_city_and_no_country(self, osm_db):
+        # The OSM DB has no state/country polygons, so with nothing else installed
+        # the hierarchy is simply unknown — not an error, not a guess.
+        osm_db([dict(name="OsmCity", category="city", admin_level=8, area=1.0,
+                     polygons=_rect(39.9, 40.1, -74.1, -73.9))])
+        r = geocode.lookup(40.0, -74.0)
+        assert r["city"] == "OsmCity"
+        assert r["state"] is None and r["country"] is None and r["country_code"] is None
+        assert geocode.lookup(10.0, 10.0) is None    # outside every polygon
 
     def test_nothing_installed_still_returns_none(self, geonames_dir):
         assert geocode.lookup(40.0, -74.0) is None

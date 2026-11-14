@@ -228,6 +228,8 @@ async def api_stats_summary():
             "guessable": {"count": guessable_count, "window_sec": window_sec},
             "geocode": {
                 **geocode.status(),
+                # GeoNames-only `available` above; the backfill needs just one dataset.
+                "any_available": geocode.any_available(),
                 "geocoded": index.count_geocoded_photos(),
                 "pending": index.count_photos_needing_geocode(),
             },

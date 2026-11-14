@@ -40,7 +40,7 @@ def _fake_lookup(lat, lng):
 
 
 def test_geocode_pending_single_transaction_same_result(db, monkeypatch):
-    monkeypatch.setattr(geocode, "is_available", lambda: True)
+    monkeypatch.setattr(geocode, "any_available", lambda: True)
     monkeypatch.setattr(geocode, "lookup", _fake_lookup)
     ids = [_add_photo(db, f"g{i}.jpg", lat=10.0 + i * 20, lng=1.0) for i in range(4)]  # last two: lat 50, 70
     res = {}
@@ -53,7 +53,7 @@ def test_geocode_pending_single_transaction_same_result(db, monkeypatch):
 
 
 def test_geocode_pending_bad_row_does_not_lose_batch(db, monkeypatch):
-    monkeypatch.setattr(geocode, "is_available", lambda: True)
+    monkeypatch.setattr(geocode, "any_available", lambda: True)
 
     def lookup(lat, lng):
         if lat == 11.0:
@@ -70,7 +70,7 @@ def test_geocode_pending_bad_row_does_not_lose_batch(db, monkeypatch):
 
 
 def test_geocode_pending_chunks_writes(db, monkeypatch):
-    monkeypatch.setattr(geocode, "is_available", lambda: True)
+    monkeypatch.setattr(geocode, "any_available", lambda: True)
     monkeypatch.setattr(geocode, "lookup", _fake_lookup)
     monkeypatch.setattr(geocode_service, "_WRITE_CHUNK", 2)
     for i in range(5):

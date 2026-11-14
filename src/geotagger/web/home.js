@@ -53,14 +53,19 @@ function renderGeotag(geotag, guessable, total) {
       : "";
 }
 
+const NO_GEOCODE_DATA_HINT =
+  "No place data installed — add GeoNames, US Census places or OSM places on the Data page";
+
 function renderReverseGeocode(geocode) {
   const btn = document.getElementById("backfill-btn");
   const hint = document.getElementById("reverse-geocode-hint");
   document.getElementById("reverse-geocode-stats").textContent =
     `${geocode.geocoded.toLocaleString()} geocoded · ${geocode.pending.toLocaleString()} pending`;
-  if (!geocode.available) {
+  // any_available, not available: the latter is GeoNames alone, and an OSM- or
+  // Census-only install geocodes too.
+  if (!geocode.any_available) {
     hint.style.display = "";
-    hint.textContent = "GeoNames data not installed — run scripts/get_geonames.py";
+    hint.textContent = NO_GEOCODE_DATA_HINT;
     btn.disabled = true;
   } else if (!backfillRunning) {
     hint.style.display = "none";
@@ -287,8 +292,7 @@ async function runBackfill() {
       });
       if (res.status === 503) {
         document.getElementById("reverse-geocode-hint").style.display = "";
-        document.getElementById("reverse-geocode-hint").textContent =
-          "GeoNames data not installed — run scripts/get_geonames.py";
+        document.getElementById("reverse-geocode-hint").textContent = NO_GEOCODE_DATA_HINT;
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

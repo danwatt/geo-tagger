@@ -744,7 +744,8 @@ def scan_directory(root: Path, show_progress: bool = True, generate_thumbnails: 
 
     # Reverse-geocode any newly-indexed photos that have coordinates (DB only;
     # sidecars are written on demand via /api/geocode/export-sidecars).
-    if geocode.is_available() and not cancelled():
+    # Any one dataset is enough (audit G7), not GeoNames alone.
+    if geocode.any_available() and not cancelled():
         _update_scan_state(phase="geocoding")
         try:
             pending = index.count_photos_needing_geocode()
