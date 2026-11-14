@@ -90,7 +90,7 @@ def test_search_person_any(client):
     bob = index.create_person("Bob")
     p1 = _add("alice_only.jpg", dt=1000)
     p2 = _add("bob_only.jpg", dt=1000)
-    p3 = _add("neither.jpg", dt=1000)
+    _add("neither.jpg", dt=1000)
     _add_face(p1, alice)
     _add_face(p2, bob)
     r = client.get(f"/api/search?person_ids={alice},{bob}&person_mode=any").json()
@@ -203,7 +203,7 @@ def test_search_folder_filter(client):
 def test_search_has_faces_filter(client):
     alice = index.create_person("Alice")
     with_face = _add("with_face.jpg", dt=1000)
-    without_face = _add("without_face.jpg", dt=2000)
+    _add("without_face.jpg", dt=2000)
     _add_face(with_face, alice)
     assert [p["filename"] for p in client.get("/api/search?has_faces=yes").json()["photos"]] == ["with_face.jpg"]
     assert [p["filename"] for p in client.get("/api/search?has_faces=no").json()["photos"]] == ["without_face.jpg"]

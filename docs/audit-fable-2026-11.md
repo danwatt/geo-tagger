@@ -561,7 +561,7 @@ change-stamp (`index.py:1293-1298`); use a generation counter.
 download routes. Nothing covers pre-1970 dates, duplicate names, malformed place bounds, partial batch
 failure, or any concurrent request.
 
-**T3 — CI runs `pytest` only.** No lint or type check. `ruff` with F401/F821 would have caught A11.
+**T3 — CI runs `pytest` only.** — ✅ **DONE** (ruff `F`+`E9`+`B`, B008/B904/B905/B007 ignored; no undefined names found, dead code and late-binding lambdas fixed; CI `lint` job plus an `America/Los_Angeles` test job; mypy not added: 148 errors, mostly false positives) No lint or type check. `ruff` with F401/F821 would have caught A11.
 CI also runs in UTC, hiding D1; add a job with `TZ` set to a non-UTC zone.
 
 **T4 — Write-path tests skip silently when ExifTool is missing.** — ✅ **DONE** (`et_session` is the single gate and uses `skip_or_fail`, which fails under `CI=true`; two ungated geotag tests now use it; CI already installed ExifTool, now runs `pytest -rs`) `tests/api/test_geotag.py:60`,

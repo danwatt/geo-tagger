@@ -143,7 +143,7 @@ def test_service_and_sidecar_guard_out_of_range(db, tmp_path):
 
 def test_partial_failure_reports_breakdown_and_invalidates(client, tmp_path, monkeypatch):
     from geotagger import sidecar
-    from geotagger.services import geotag_service, hotspots_service, work_queue_service
+    from geotagger.services import hotspots_service, work_queue_service
     monkeypatch.setattr(config, "WRITE_XMP_ON_GEOTAG", True)
     ids = _photos(tmp_path, 3)
 

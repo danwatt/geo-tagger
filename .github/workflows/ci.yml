@@ -6,14 +6,50 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.13
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Ruff (bug-finding rules only, see [tool.ruff] in pyproject.toml)
+        run: uv run ruff check src tests scripts
+
   test:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        tz: [""]
+        include:
+          # Runners default to UTC, which hides local-time bugs (a UTC run
+          # passes code that confuses wall clock with UTC). West of UTC is the
+          # direction the past date-bucketing bugs went. Linux only: the Windows
+          # CRT does not understand IANA zone names in TZ.
+          - os: ubuntu-latest
+            tz: America/Los_Angeles
+    name: test (${{ matrix.os }}${{ matrix.tz && format(', TZ={0}', matrix.tz) || '' }})
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set time zone
+        # Only for the TZ entry: the other jobs must not see TZ at all (an empty
+        # TZ is still "set" and its meaning varies by libc / CRT).
+        if: matrix.tz != ''
+        run: |
+          echo "TZ=${{ matrix.tz }}" >> "$GITHUB_ENV"
+          TZ=${{ matrix.tz }} date
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3

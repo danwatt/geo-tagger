@@ -1086,7 +1086,6 @@ def _rank_from_matrix(rows, unknowns: np.ndarray, times: np.ndarray, gallery: Ga
         # Batch argsort across all columns at once (one C call instead of one
         # per face), then filter per column in sorted order.
         order      = np.argsort(per_person, axis=0)[::-1]   # (P, chunk), descending
-        pids_list  = uniq.tolist()
         for j in range(c1 - c0):
             ord_j = order[:, j]
             col   = per_person[ord_j, j]          # scores in descending order

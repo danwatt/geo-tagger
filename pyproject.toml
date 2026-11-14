@@ -55,6 +55,7 @@ dev = [
     "httpx>=0.28.1",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
+    "ruff>=0.17.5",
 ]
 
 [tool.uv]
@@ -77,4 +78,20 @@ omit = [
 exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.:",
+]
+
+[tool.ruff]
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# Bug-catching only, no style rules (and no `ruff format`): pyflakes (unused /
+# undefined names, redefinitions, unused locals), E9 (syntax errors), and
+# flake8-bugbear minus the rules that fire on deliberate patterns here.
+select = ["F", "E9", "B"]
+ignore = [
+    "B008",  # FastAPI's `body: Model = Model()` / Depends() defaults are idiomatic
+    "B904",  # `raise HTTPException(...)` inside except is the house error-handling style
+    "B905",  # zip(strict=) on every call would be churn; lengths are equal by construction
+    "B007",  # unused loop variables are harmless and often document tuple shape
 ]

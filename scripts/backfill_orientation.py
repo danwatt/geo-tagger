@@ -51,7 +51,7 @@ def read_chunk_per_file(chunk, timeout_s: float) -> tuple[list[tuple[int, int]],
     for r in chunk:
         p = index.photo_path(r)
         try:
-            oris = run_with_timeout(lambda: sidecar.read_orientations([p]), timeout_s)
+            oris = run_with_timeout(lambda p=p: sidecar.read_orientations([p]), timeout_s)
             updates.append((oris[Path(p)], r["id"]))
         except TimeoutError:
             n_timeouts += 1
@@ -99,7 +99,7 @@ def main():
             chunk = pending[start:start + args.batch_size]
             paths = [index.photo_path(r) for r in chunk]
             try:
-                oris = run_with_timeout(lambda: sidecar.read_orientations(paths), batch_timeout)
+                oris = run_with_timeout(lambda paths=paths: sidecar.read_orientations(paths), batch_timeout)
                 updates = [(oris[Path(index.photo_path(r))], r["id"]) for r in chunk]
             except TimeoutError:
                 # The batch wedged on some file. The session watchdog has already

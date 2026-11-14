@@ -1,4 +1,3 @@
-import pytest
 
 from geotagger import osm_places
 

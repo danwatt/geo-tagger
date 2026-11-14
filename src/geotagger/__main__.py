@@ -158,15 +158,15 @@ def main():
         print(f"Server accessible at: http://{url_host}:{bind_port}{token_qs}")
     else:
         print(f"\nWARNING: binding to {bind_host} exposes Geo-Tagger to your local network.")
-        print(f"Access needs the token below (open a URL with ?token=... once per browser, or")
-        print(f"send 'Authorization: Bearer <token>'), but traffic is plain HTTP: anyone who")
-        print(f"can sniff the network can read it. Only use this on a network you trust.")
+        print("Access needs the token below (open a URL with ?token=... once per browser, or")
+        print("send 'Authorization: Bearer <token>'), but traffic is plain HTTP: anyone who")
+        print("can sniff the network can read it. Only use this on a network you trust.")
         print(f"Access token: {config.ACCESS_TOKEN}")
 
     if bind_host in _WILDCARD_HOSTS:
         import socket
         print(f"\nBinding to {url_host}:{bind_port}")
-        print(f"Server will be accessible at:")
+        print("Server will be accessible at:")
         print(f"  - http://localhost:{bind_port}{token_qs} (this computer)")
 
         # Try to get all local IP addresses
