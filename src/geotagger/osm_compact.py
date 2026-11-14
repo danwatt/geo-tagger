@@ -104,6 +104,76 @@ def is_compacted(path: Path) -> bool:
         return False
 
 
+def _varint(buf: bytes, i: int) -> tuple[int, int]:
+    shift = value = 0
+    while True:
+        if i >= len(buf) or shift > 63:
+            raise ValueError("bad varint")
+        b = buf[i]
+        i += 1
+        value |= (b & 0x7F) << shift
+        if not b & 0x80:
+            return value, i
+        shift += 7
+
+
+def _blob_datasize(header: bytes) -> tuple[str, int]:
+    """(type, datasize) from a serialized fileformat.proto BlobHeader."""
+    i, kind, size = 0, "", None
+    while i < len(header):
+        key, i = _varint(header, i)
+        field, wire = key >> 3, key & 7
+        if wire == 0:
+            value, i = _varint(header, i)
+            if field == 3:
+                size = value
+        elif wire == 2:
+            n, i = _varint(header, i)
+            if field == 1:
+                kind = header[i:i + n].decode("ascii", "replace")
+            i += n
+        else:
+            raise ValueError(f"unexpected wire type {wire}")
+    if size is None:
+        raise ValueError("BlobHeader without datasize")
+    return kind, size
+
+
+def is_complete_pbf(path: Path) -> bool:
+    """True if `path` is structurally a whole .osm.pbf: it opens with an OSMHeader
+    blob and its chain of length-prefixed blobs ends exactly at end of file. Only
+    the small blob headers are read (one seek per blob, a few ms for a state
+    extract); blob contents are not decoded.
+
+    This is how a partial file from the pre-atomic downloader is recognised
+    without handing it to osmium — pyosmium leaks the file handle of a reader that
+    hits a truncated file, which on Windows locks it for the rest of the process."""
+    try:
+        end = path.stat().st_size
+        with open(path, "rb") as f:
+            pos = 0
+            first = True
+            while pos < end:
+                raw = f.read(4)
+                if len(raw) < 4:
+                    return False
+                hlen = int.from_bytes(raw, "big")
+                if hlen > 64 * 1024:  # the spec's BlobHeader cap
+                    return False
+                header = f.read(hlen)
+                if len(header) < hlen:
+                    return False
+                kind, size = _blob_datasize(header)
+                if first and kind != "OSMHeader":
+                    return False
+                first = False
+                pos += 4 + hlen + size
+                f.seek(pos)
+            return pos == end and not first
+    except (OSError, ValueError):
+        return False
+
+
 def compact(path: Path, progress_cb: Callable[[str], None] | None = None) -> dict:
     """Rewrite `path` in place, keeping only what the app can use. No-op if the
     file already carries the current MARKER.

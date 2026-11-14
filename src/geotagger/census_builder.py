@@ -90,10 +90,15 @@ def download_cb_zip(dest: Path, year: int | None = None,
                     template: str = CB_URL_TEMPLATE) -> tuple[int, str]:
     """Download a national 1:500,000 Cartographic Boundary zip (places by default,
     or the ZCTA file via `template`) to `dest`, trying cb_urls() in order. Returns
-    (year, url) of the one that worked; raises the last error if none did. Tens of MB
-    at most, so it's read in one shot rather than streamed."""
+    (year, url) of the one that worked; raises the last error if none did.
+
+    Lands atomically via downloads.download_to (Content-Length + zip CRC check
+    before the rename), so a cut-off transfer never leaves a `dest` the Data page
+    would later reuse as cached. Only an HTTP/URL error moves on to the previous
+    vintage; a truncated or corrupt download raises instead, since an older year
+    wouldn't fix it."""
     from urllib.error import HTTPError, URLError
-    from urllib.request import Request, urlopen
+    from geotagger import downloads
 
     def progress(msg: str):
         if progress_cb:
@@ -106,16 +111,12 @@ def download_cb_zip(dest: Path, year: int | None = None,
     for y, url in candidates:
         progress(f"Downloading Census {y} {label} boundaries…")
         try:
-            req = Request(url, headers={"User-Agent": "geo-tagger-data-mgmt/1.0"})
-            with urlopen(req, timeout=300) as r:
-                data = r.read()
+            got = downloads.download_to(url, dest, transform=downloads.check_zip)
         except (HTTPError, URLError) as e:
             logger.info("Census CB %s %s not available (%s)", y, label, e)
             last = e
             continue
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(data)
-        progress(f"Downloaded {dest.name} ({len(data) / 1e6:.1f} MB)")
+        progress(f"Downloaded {dest.name} ({got['bytes'] / 1e6:.1f} MB)")
         return y, url
     raise RuntimeError(
         f"Could not download the Census {label} boundary file (tried "
@@ -131,18 +132,15 @@ def download_zcta_zip(dest: Path, year: int | None = None,
 
 def download_geonames_zip_codes(dest: Path,
                                 progress_cb: Callable[[str], None] | None = None) -> str:
-    """Download GeoNames' US postal-code archive (~1 MB) to `dest`. Returns the URL."""
-    from urllib.request import Request, urlopen
+    """Download GeoNames' US postal-code archive (~1 MB) to `dest`. Returns the URL.
+    Atomic and CRC-checked like download_cb_zip."""
+    from geotagger import downloads
 
     if progress_cb:
         progress_cb("Downloading GeoNames US postal codes…")
-    req = Request(GEONAMES_ZIP_URL, headers={"User-Agent": "geo-tagger-data-mgmt/1.0"})
-    with urlopen(req, timeout=300) as r:
-        data = r.read()
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(data)
+    got = downloads.download_to(GEONAMES_ZIP_URL, dest, transform=downloads.check_zip)
     if progress_cb:
-        progress_cb(f"Downloaded {dest.name} ({len(data) / 1e6:.1f} MB)")
+        progress_cb(f"Downloaded {dest.name} ({got['bytes'] / 1e6:.1f} MB)")
     return GEONAMES_ZIP_URL
 
 

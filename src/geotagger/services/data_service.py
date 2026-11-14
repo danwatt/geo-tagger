@@ -21,14 +21,12 @@ future "check for updates" feature has something to compare against instead of
 re-downloading blind.
 """
 
-import io
 import logging
+import re
 import threading
-import zipfile
 from pathlib import Path
-from urllib.request import Request, urlopen
 
-from geotagger import config, index
+from geotagger import config, downloads, index
 from geotagger.osm_builder import build_or_append
 
 logger = logging.getLogger(__name__)
@@ -135,6 +133,12 @@ def _pbf_cache_dir() -> Path:
     return config.get_pbf_cache_dir()
 
 
+def _mb_progress(done: int, total: int | None) -> str:
+    if total:
+        return f"{done / 1e6:,.0f} of {total / 1e6:,.0f} MB"
+    return f"{done / 1e6:,.0f} MB"
+
+
 def _count_lines(path: Path) -> int | None:
     try:
         with path.open(encoding="utf-8") as f:
@@ -175,18 +179,18 @@ def _run_geonames_download(force: bool = False):
                 continue
             with _geonames_lock:
                 _geonames_job["message"] = f"Downloading {name}…"
-            req = Request(url, headers={"User-Agent": "geo-tagger-data-mgmt/1.0"})
-            with urlopen(req, timeout=120) as r:
-                data = r.read()
-            if is_zip:
-                with zipfile.ZipFile(io.BytesIO(data)) as zf:
-                    member = next(n for n in zf.namelist()
-                                  if n.endswith(".txt") and "readme" not in n.lower())
-                    dest.write_bytes(zf.read(member))
-            else:
-                dest.write_bytes(data)
+
+            def progress(done: int, total: int | None, name=name):
+                with _geonames_lock:
+                    _geonames_job["message"] = f"Downloading {name}… {_mb_progress(done, total)}"
+
+            # GeoNames publishes no checksums: Content-Length guards every file, and
+            # the cities zip's own CRCs are checked before its .txt is extracted.
+            got = downloads.download_to(
+                url, dest, progress=progress,
+                transform=downloads.extract_zip_txt if is_zip else None)
             with _geonames_lock:
-                _geonames_job["message"] = f"Saved {name} ({len(data):,} bytes)"
+                _geonames_job["message"] = f"Saved {name} ({got['bytes']:,} bytes)"
             index.record_dataset_download(
                 dataset="geonames", region=name, url=url,
                 size_bytes=dest.stat().st_size, records_loaded=_count_lines(dest),
@@ -252,24 +256,58 @@ def osm_job_status() -> dict:
         return dict(_osm_job)
 
 
+_MD5_RE = re.compile(r"^\s*([0-9a-fA-F]{32})\b")
+
+
+def geofabrik_md5(url: str) -> str:
+    """GeoFabrik publishes ``<extract url>.md5`` ("<hex>  <filename>") beside every
+    extract; return the hex digest. Raises if it can't be fetched or parsed — an
+    extract we can't verify isn't accepted."""
+    text = downloads.fetch_text(url + ".md5")
+    m = _MD5_RE.match(text)
+    if not m:
+        raise downloads.DownloadError(f"Unrecognized checksum file at {url}.md5")
+    return m.group(1).lower()
+
+
 def _download_pbf(url: str, dest: Path, label: str, progress_cb) -> None:
+    """Download one extract so that `dest` only ever holds a complete, verified,
+    compacted file: stream into a temp file -> check its size against
+    Content-Length and its MD5 against GeoFabrik's .md5 (of the raw bytes, which
+    compaction then changes) -> compact the temp file -> os.replace onto `dest`.
+
+    The temp file sits in a ".download" subdirectory under the extract's own name:
+    the cache's "*.osm.pbf" globs (street search, compact_osm_pbf.py) are not
+    recursive so they never see it, and osmium still recognises the format from
+    the extension (a "*.pbf.part" name would not open).
+
+    Unlike _compact_pbf on a cached file, a compaction failure here fails the
+    download: nothing else can have the temp file open, so a failure means
+    something is wrong with the data, and the final name must stay empty."""
     progress_cb(f"Downloading {label}…")
-    req = Request(url, headers={"User-Agent": "geo-tagger-data-mgmt/1.0"})
-    with urlopen(req, timeout=600) as r, open(dest, "wb") as f:
-        total = 0
-        while chunk := r.read(1 << 20):
-            f.write(chunk)
-            total += len(chunk)
-            progress_cb(f"Downloading {label}… {total / 1e6:.0f} MB")
-    progress_cb(f"Downloaded {label} ({dest.stat().st_size / 1e6:.0f} MB)")
+    expected = geofabrik_md5(url)
+
+    def progress(done: int, total: int | None):
+        progress_cb(f"Downloading {label}… {_mb_progress(done, total)}")
+
+    def compact(part: Path) -> None:
+        progress_cb(f"Downloaded {label} ({part.stat().st_size / 1e6:.0f} MB, MD5 verified)")
+        if config.OSM_COMPACT_PBF:
+            from geotagger import osm_compact
+            osm_compact.compact(part, progress_cb=progress_cb)
+
+    downloads.download_to(url, dest, expected_md5=expected, transform=compact,
+                          progress=progress, part=dest.parent / ".download" / dest.name)
+    progress_cb(f"{label}: saved {dest.name} ({dest.stat().st_size / 1e6:.0f} MB)")
 
 
 def _compact_pbf(dest: Path, progress_cb) -> None:
-    """Shrink a cached extract in place (osm_compact.py) before it's merged. Covers
-    both a fresh download and an older, still-raw cached file; an already compacted
-    one is a header-read no-op. Best-effort: the raw file works just as well, only
+    """Shrink an already-cached extract in place (osm_compact.py) before it's
+    merged — a raw file from before compaction existed; an already compacted one
+    is a header-read no-op. Best-effort: the raw file works just as well, only
     bigger and slower, so a failure here (e.g. Windows refusing the swap while a
-    street search has the file open) must not fail the whole download job."""
+    street search has the file open) must not fail the whole job. Fresh downloads
+    are compacted inside _download_pbf instead, before they get their final name."""
     if not config.OSM_COMPACT_PBF:
         return
     from geotagger import osm_compact
@@ -295,11 +333,25 @@ def _run_osm_download_and_merge(keys: list[str], force: bool = False):
             if dest.exists() and force:
                 progress(f"{region['name']}: forcing re-download (discarding cached file)…")
                 dest.unlink()
+            if dest.exists():
+                # Existence is enough: _download_pbf only ever renames a complete,
+                # verified (and compacted) file into place. A compacted file can't
+                # be re-checked against GeoFabrik's .md5 anyway: compaction changed
+                # its bytes, and "latest" moves daily.
+                # The exception is a partial file left by the old, non-atomic
+                # downloader. Caught with a structural walk rather than by letting
+                # osmium fail on it: pyosmium leaks the handle of a reader that
+                # hits a truncated file, and on Windows that lock would then block
+                # the unlink and the re-download for the life of the process.
+                from geotagger import osm_compact
+                if not osm_compact.is_complete_pbf(dest):
+                    progress(f"{region['name']}: cached file is incomplete, downloading it again…")
+                    dest.unlink()
+                else:
+                    progress(f"{region['name']}: using cached download ({dest.stat().st_size / 1e6:.0f} MB)")
+                    _compact_pbf(dest, progress)
             if not dest.exists():
                 _download_pbf(region["url"], dest, region["name"], progress)
-            else:
-                progress(f"{region['name']}: using cached download ({dest.stat().st_size / 1e6:.0f} MB)")
-            _compact_pbf(dest, progress)
             pbf_paths.append(dest)
 
         summary = build_or_append(config.OSM_DB_PATH, pbf_paths, append=True, progress_cb=progress)
@@ -382,8 +434,14 @@ def _run_census_download(force: bool = False):
                 progress(f"Forcing re-download of {name} (discarding cached copy)…")
                 dest.unlink()
             if dest.exists():
-                progress(f"Using cached {name} ({dest.stat().st_size / 1e6:.1f} MB)")
-                return dest, None
+                # Downloads land atomically now, but an archive left truncated by
+                # the old downloader would otherwise be reused forever; a CRC pass
+                # over a few tens of MB is cheap insurance.
+                if downloads.zip_ok(dest):
+                    progress(f"Using cached {name} ({dest.stat().st_size / 1e6:.1f} MB)")
+                    return dest, None
+                progress(f"Cached {name} is incomplete or corrupt, downloading it again…")
+                dest.unlink()
             return dest, downloader(dest)
 
         zip_path, url = fetch(
@@ -464,7 +522,12 @@ def _run_face_model_download(force: bool = False):
             faces.reset_model()
         with _face_model_lock:
             _face_model_job["message"] = "Downloading face model pack (~275 MB)…"
-        faces.ensure_model_downloaded()
+
+        def progress(message: str):
+            with _face_model_lock:
+                _face_model_job["message"] = message
+
+        faces.ensure_model_downloaded(progress_cb=progress)
         status = faces.model_status()
         size_bytes = None
         if status.get("model_dir"):

@@ -16,12 +16,10 @@ We use:
 """
 
 import argparse
-import io
 import sys
-import zipfile
 from pathlib import Path
-from urllib.request import urlopen, Request
 
+from geotagger import downloads
 from geotagger.config import get_geonames_dir
 
 BASE = "https://download.geonames.org/export/dump"
@@ -36,15 +34,16 @@ FILES = [
 ]
 
 
-def download(url: str) -> bytes:
+def download(url: str, dest: Path, is_zip: bool) -> None:
+    """Atomic, length-checked download straight to `dest` (downloads.download_to);
+    for the cities zip, the CRC-checked .txt inside it is what lands at `dest`. An
+    interrupted run leaves no `dest`, so the skip-if-present check below can trust
+    whatever it finds."""
     print(f"Downloading {url} …")
-    req = Request(url, headers={
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) geo-tagger-setup/1.0",
-    })
-    with urlopen(req, timeout=120) as r:
-        data = r.read()
-    print(f"  {len(data):,} bytes")
-    return data
+    got = downloads.download_to(
+        url, dest, transform=downloads.extract_zip_txt if is_zip else None,
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) geo-tagger-setup/1.0"})
+    print(f"  {got['bytes']:,} bytes -> {dest}")
 
 
 def main():
@@ -66,16 +65,7 @@ def main():
             print(f"{name} already present ({dest.stat().st_size:,} bytes) — skipping")
             continue
 
-        data = download(url)
-        if is_zip:
-            with zipfile.ZipFile(io.BytesIO(data)) as zf:
-                # The cities zip contains <name>.txt plus a readme; pull the .txt.
-                member = next(n for n in zf.namelist() if n.endswith(".txt") and "readme" not in n.lower())
-                dest.write_bytes(zf.read(member))
-                print(f"  Extracted {member} -> {dest}")
-        else:
-            dest.write_bytes(data)
-            print(f"  Saved -> {dest}")
+        download(url, dest, is_zip)
 
     # Sanity check
     cities = DATA_DIR / "cities500.txt"

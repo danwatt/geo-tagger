@@ -216,6 +216,12 @@ def get_pbf_cache_dir() -> Path:
 # street searches. Set to 0 to keep the raw GeoFabrik files untouched.
 OSM_COMPACT_PBF = os.environ.get("GEOTAGGER_OSM_COMPACT_PBF", "1").lower() in ("1", "true", "yes", "on")
 
+# Socket timeout (seconds) for every dataset/model download (downloads.py). It
+# bounds each connect/read, not the whole transfer, so a multi-GB extract on a
+# slow link is fine as long as bytes keep arriving; a stalled server fails the
+# download instead of hanging the job forever.
+DOWNLOAD_TIMEOUT = float(os.environ.get("GEOTAGGER_DOWNLOAD_TIMEOUT", "120"))
+
 
 # ── OSM street search (on-demand, over the cached .osm.pbf extracts) ──
 # Max ways one search returns before it stops scanning and reports "truncated".

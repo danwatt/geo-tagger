@@ -14,7 +14,6 @@ Two sessions, two locks: the ~350 MB visual session is only needed while indexin
 from __future__ import annotations
 
 import logging
-import os
 import re
 import string
 import threading
@@ -76,12 +75,16 @@ def model_status() -> dict:
 
 
 def download_model(force: bool = False, progress_cb=None) -> None:
-    """Fetch every model file (blocking; run on the executor). Each file streams into
-    a ``.part`` sibling and is renamed into place only when complete, so an
-    interrupted download can never look like a finished one. ``progress_cb(done_bytes,
+    """Fetch every model file (blocking; run on the executor). Each file goes through
+    downloads.download_to: streamed into a ``.part`` sibling, its size checked
+    against Content-Length, and renamed into place only when complete, so an
+    interrupted or truncated download can never look like a finished one (a cut-off
+    .onnx would otherwise fail every later load). ``progress_cb(done_bytes,
     file_name)`` is called as bytes arrive. Stdlib urllib on purpose — no
-    huggingface_hub dependency for a handful of plain HTTPS GETs."""
-    import urllib.request
+    huggingface_hub dependency for a handful of plain HTTPS GETs. (HF's LFS sha256
+    sits on the redirect response, which urllib follows silently, so there is no
+    checksum to compare here — only the length.)"""
+    from geotagger import downloads
     d = _model_dir()
     base = config.SEMANTIC_MODEL_URL.format(name=config.SEMANTIC_MODEL_NAME)
     done = 0
@@ -90,16 +93,13 @@ def download_model(force: bool = False, progress_cb=None) -> None:
         if dest.is_file() and not force:
             done += dest.stat().st_size
             continue
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        part = dest.with_name(dest.name + ".part")
-        req = urllib.request.Request(base + rel, headers={"User-Agent": "geotagger"})
-        with urllib.request.urlopen(req, timeout=60) as resp, open(part, "wb") as f:
-            while chunk := resp.read(1 << 20):
-                f.write(chunk)
-                done += len(chunk)
-                if progress_cb:
-                    progress_cb(done, rel)
-        os.replace(part, dest)
+
+        def progress(file_done: int, _total: int | None, before=done, rel=rel):
+            if progress_cb:
+                progress_cb(before + file_done, rel)
+
+        got = downloads.download_to(base + rel, dest, progress=progress)
+        done += got["bytes"]
     reset_model()
 
 

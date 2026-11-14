@@ -222,7 +222,7 @@ runs on candidates that already passed the threshold.
 
 ## Geocoding and datasets
 
-**G1 — High — Downloads write straight to the final filename** [seen, for the OSM path]
+**G1 — High — Downloads write straight to the final filename** [seen, for the OSM path] — ✅ **DONE** (shared `downloads.download_to`: temp file → `Content-Length` + GeoFabrik `.md5` on raw bytes → compaction → `os.replace` → build; applied to OSM, GeoNames, Census, semantic and InsightFace packs; truncated legacy pbfs and bad Census zips re-downloaded; HuggingFace and others have length/zip CRC only)
 `services/data_service.py:255-264`, `semantic.py:96-102`. A timeout leaves a partial `.pbf` that the next run
 accepts as cached. No `Content-Length` or checksum check anywhere. A truncated model file feeds F1.
 *Fix:* `.part` plus `os.replace`, compare bytes to `Content-Length`, verify GeoFabrik's `.md5`.

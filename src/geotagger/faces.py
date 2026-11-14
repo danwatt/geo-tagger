@@ -11,6 +11,7 @@ the cache dir) and guarded by a lock, since detection is CPU-heavy and the
 underlying sessions are shared.
 """
 import logging
+import os
 import threading
 import time as _time
 from pathlib import Path
@@ -45,6 +46,7 @@ def _cfg(value, key: str):
 _model_dir: Path | None = None
 _app = None  # insightface.app.FaceAnalysis, loaded lazily
 _app_lock = threading.Lock()
+_pack_lock = threading.Lock()  # serializes _ensure_model_pack's download/extract
 
 EMBED_DIM = 512
 
@@ -77,6 +79,7 @@ def _get_app():
             return _app
         if _model_dir is None:
             raise RuntimeError("Faces not initialized — call init_faces first")
+        _ensure_model_pack()
         from insightface.app import FaceAnalysis
         from geotagger import onnx_setup
         onnx_setup.prepare(FACE_PROVIDERS)
@@ -97,14 +100,71 @@ def _get_app():
     return _app
 
 
+def _pack_present(model_path: Path) -> bool:
+    return model_path.is_dir() and any(model_path.glob("*.onnx"))
+
+
+def _ensure_model_pack(progress_cb=None) -> None:
+    """Fetch the model pack ourselves before FaceAnalysis would. InsightFace's own
+    downloader writes the zip straight to its final name and creates the pack
+    directory *before* extracting, then treats "directory exists" as installed —
+    so one interrupted download left an empty or half-extracted pack that every
+    later load tripped over. Here the zip goes through downloads.download_to
+    (temp file, Content-Length + CRC check), is extracted into a temp directory,
+    and only then renamed to models/<name>. GitHub releases publish no checksum.
+    Same URL and layout as insightface.utils.storage, so FaceAnalysis finds the
+    pack and skips its own download."""
+    models = _model_dir / "models"
+    model_path = models / FACE_MODEL_NAME
+    if _pack_present(model_path):
+        return
+    with _pack_lock:  # the Data page's pre-fetch and a scan's first load can race
+        if not _pack_present(model_path):
+            _download_model_pack(models, model_path, progress_cb)
+
+
+def _download_model_pack(models: Path, model_path: Path, progress_cb) -> None:
+    import shutil
+    import zipfile
+    from insightface.utils.storage import BASE_REPO_URL
+    from geotagger import downloads
+
+    url = f"{BASE_REPO_URL}/{FACE_MODEL_NAME}.zip"
+    staging = models / ".download"
+    zip_path = staging / f"{FACE_MODEL_NAME}.zip"
+    extract_dir = staging / FACE_MODEL_NAME
+
+    def progress(done: int, total: int | None):
+        if progress_cb:
+            of = f" of {total / 1e6:,.0f}" if total else ""
+            progress_cb(f"Downloading face model pack… {done / 1e6:,.0f}{of} MB")
+
+    try:
+        downloads.download_to(url, zip_path, transform=downloads.check_zip, progress=progress)
+        if extract_dir.exists():
+            shutil.rmtree(extract_dir)
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(extract_dir)
+        src = extract_dir
+        if not _pack_present(src) and _pack_present(src / FACE_MODEL_NAME):
+            src = src / FACE_MODEL_NAME  # some packs nest their files one level down
+        if not _pack_present(src):
+            raise RuntimeError(f"{url} contained no .onnx models")
+        # An empty/partial directory left by InsightFace's own downloader.
+        if model_path.exists():
+            shutil.rmtree(model_path)
+        os.replace(src, model_path)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
 def model_status() -> dict:
     """Whether the InsightFace model pack has been downloaded, for the Data
     Management page. Doesn't load the model — just checks the on-disk files
     FaceAnalysis's downloader would have written."""
     if _model_dir is None:
         return {"available": False, "model_dir": None, "name": FACE_MODEL_NAME}
-    model_path = _model_dir / "models" / FACE_MODEL_NAME
-    present = model_path.is_dir() and any(model_path.glob("*.onnx"))
+    present = _pack_present(_model_dir / "models" / FACE_MODEL_NAME)
     return {"available": present, "model_dir": str(_model_dir), "name": FACE_MODEL_NAME}
 
 
@@ -115,10 +175,13 @@ def load_model():
     return _get_app()
 
 
-def ensure_model_downloaded():
-    """Force the lazy model load, triggering InsightFace's one-time download if
-    the pack isn't already on disk. Used by the Data Management page's pre-fetch
-    button — the same load that would otherwise happen on first detect call."""
+def ensure_model_downloaded(progress_cb=None):
+    """Fetch the pack if it isn't on disk (_ensure_model_pack), then force the
+    lazy model load. Used by the Data Management page's pre-fetch button — the same
+    load that would otherwise happen on first detect call."""
+    if _model_dir is None:
+        raise RuntimeError("Faces not initialized — call init_faces first")
+    _ensure_model_pack(progress_cb)
     _get_app()
 
 
