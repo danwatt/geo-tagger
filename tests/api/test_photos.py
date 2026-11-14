@@ -366,14 +366,10 @@ def test_undo_date_commit_rejects_malformed_snapshots(client):
     assert post({"raw_datetime": None}).status_code == 422  # no photo_id
 
 
-def test_commit_then_undo_round_trips_through_the_api(client, tmp_path):
+def test_commit_then_undo_round_trips_through_the_api(et_session, client, tmp_path):
     """The snapshots commit returns — including a real ExifTool-read
     raw_datetime string — must pass the undo route's validation."""
-    import pytest
     from PIL import Image
-    from geotagger import exiftool_session
-    if exiftool_session._et is None:
-        pytest.skip("ExifTool unavailable")
     Image.new("RGB", (8, 8), color="blue").save(tmp_path / "t.jpg", "JPEG")
     index.upsert_photo(
         filename="t.jpg", dir_=str(tmp_path), ext=".jpg", media_type="image",

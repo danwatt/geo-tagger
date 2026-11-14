@@ -2,8 +2,8 @@
 routes hand to the executor. No FastAPI here; they run the real DB / geocoder /
 ExifTool / face-math code paths directly.
 
-ExifTool-backed cases use the session-scoped ``et_session`` fixture and skip if the
-binary isn't available; face detection (scan_faces_batch's happy path) needs the
+ExifTool-backed cases use the session-scoped ``et_session`` fixture, which skips
+them locally if the binary isn't available (and fails them when CI=true); face detection (scan_faces_batch's happy path) needs the
 275 MB InsightFace model, so only its model-free branch is covered here.
 """
 

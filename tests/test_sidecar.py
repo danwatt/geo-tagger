@@ -606,7 +606,6 @@ class TestQuickTimeDates:
 class TestQuickTimeDatesEndToEnd:
     @pytest.fixture
     def video(self, tmp_path, et_session, monkeypatch):
-        pytest.importorskip("av")
         monkeypatch.setattr(sidecar, "_local_utc_offset", lambda ts: _PDT)
         return _make_video(tmp_path / "clip.mp4")
 

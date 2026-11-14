@@ -39,4 +39,7 @@ jobs:
         run: choco install exiftool -y
 
       - name: Run tests
-        run: uv run pytest -q
+        # GitHub sets CI=true, so tests/conftest.py's skip_or_fail turns a missing
+        # ExifTool into a failure here instead of a silent skip. -rs lists the
+        # reasons for the skips that remain (platform-only tests).
+        run: uv run pytest -q -rs

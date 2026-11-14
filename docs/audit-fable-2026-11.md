@@ -564,10 +564,10 @@ failure, or any concurrent request.
 **T3 — CI runs `pytest` only.** No lint or type check. `ruff` with F401/F821 would have caught A11.
 CI also runs in UTC, hiding D1; add a job with `TZ` set to a non-UTC zone.
 
-**T4 — Write-path tests skip silently when ExifTool is missing.** `tests/api/test_geotag.py:60`,
+**T4 — Write-path tests skip silently when ExifTool is missing.** — ✅ **DONE** (`et_session` is the single gate and uses `skip_or_fail`, which fails under `CI=true`; two ungated geotag tests now use it; CI already installed ExifTool, now runs `pytest -rs`) `tests/api/test_geotag.py:60`,
 `tests/api/test_photos.py:284`. Fail instead when `CI=true`.
 
-**T5 — The `client` fixture leaks four threads per API test.** Nothing calls `shutdown` on the executor.
+**T5 — The `client` fixture leaks four threads per API test.** — ✅ **DONE** (leak was already fixed by R5's lifespan shutdown; `client` teardown now asserts no new threads survive, plus an 8-cycle start/stop regression test) Nothing calls `shutdown` on the executor.
 
 **T6 — Stray files tracked in git.** [seen] `tempgeotagger-test/`, `tempgeotagger-test2/` and
 `tempgeotagger-test3/` (`index.db`, `-wal`, `-shm`, and `.last_scan_roots` containing an absolute local path),

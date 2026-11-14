@@ -35,7 +35,8 @@ def test_ignore_toggles_flag(client):
     assert client.get(f"/api/photo/{pid}").json()["geocode_ignored"] is False
 
 
-def test_geotag_write_and_remove_db_only_by_default(client, tmp_path):
+def test_geotag_write_and_remove_db_only_by_default(et_session, client, tmp_path):
+    # Removal clears GPS through sidecar.remove_gps (ExifTool) even in DB-only mode.
     """WRITE_XMP_ON_GEOTAG defaults to off: geotag lands in the DB, no sidecar
     is created."""
     assert config.WRITE_XMP_ON_GEOTAG is False
@@ -56,9 +57,8 @@ def test_geotag_write_and_remove_db_only_by_default(client, tmp_path):
     assert client.get(f"/api/photo/{pid}").json()["lat"] is None
 
 
-def test_geotag_writes_sidecar_when_setting_enabled(client, tmp_path):
-    if not exiftool_status()["ok"]:
-        pytest.skip("ExifTool unavailable")
+def test_geotag_writes_sidecar_when_setting_enabled(et_session, client, tmp_path):
+    assert exiftool_status()["ok"]
     img = tmp_path / "g2.jpg"
     Image.new("RGB", (8, 8), "green").save(img, "JPEG")
     pid = _add(str(img), dt=1000)
@@ -219,7 +219,7 @@ def test_all_unknown_ids_is_404_and_empty_is_200(client):
     assert client.post("/api/geotag/remove", json={"ids": [98765]}).status_code == 404
 
 
-def test_remove_partial_failure(client, tmp_path, monkeypatch):
+def test_remove_partial_failure(et_session, client, tmp_path, monkeypatch):
     from geotagger import sidecar
     from geotagger.services import hotspots_service
     monkeypatch.setattr(config, "WRITE_XMP_ON_GEOTAG", False)

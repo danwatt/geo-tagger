@@ -1,5 +1,6 @@
 import os
 import shutil
+import threading
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,45 @@ if not os.environ.get("GEOTAGGER_EXIFTOOL"):
     if _dev_exiftool := _find_dev_exiftool():
         os.environ["GEOTAGGER_EXIFTOOL"] = _dev_exiftool
         config.EXIFTOOL_PATH = _dev_exiftool
+
+
+# ── Optional dependencies ──
+
+def skip_or_fail(reason: str) -> None:
+    """Skip a test whose external dependency (e.g. the ExifTool binary) is
+    missing — but fail it when CI=true (GitHub Actions sets this). CI installs
+    those dependencies on purpose, so a skip there means the install step broke
+    and the write-path tests silently stopped running."""
+    if os.environ.get("CI") == "true":
+        pytest.fail(f"{reason} (required when CI=true)", pytrace=False)
+    pytest.skip(reason)
+
+
+# ── Thread hygiene ──
+
+# Threads that legitimately outlive one app lifetime: the ExifTool call watchdog
+# is started once, with the first ExifTool session, and serves the whole run.
+_SESSION_THREADS = {"exiftool-watchdog"}
+
+
+def live_threads() -> set[threading.Thread]:
+    return set(threading.enumerate())
+
+
+def assert_no_new_threads(before: set[threading.Thread], timeout: float = 5.0) -> None:
+    """Fail if a thread started since `before` is still alive (audit T5).
+
+    Daemon threads count too: under TestClient the request executor's workers
+    are spawned from anyio's daemon portal thread and inherit daemon=True, so a
+    daemon-only filter would miss exactly the leak this guards against. Only the
+    named session-lived threads above are exempt. Each leftover gets a bounded
+    join first (e.g. the "executor-shutdown" waiter is just returning), so a
+    thread that is mid-exit doesn't make this flaky."""
+    leftover = {t for t in live_threads() - before if t.name not in _SESSION_THREADS}
+    for t in leftover:
+        t.join(timeout)
+    alive = sorted(t.name for t in leftover if t.is_alive())
+    assert not alive, f"threads leaked past app shutdown: {alive}"
 
 
 @pytest.fixture
@@ -279,10 +319,13 @@ def census_db(tmp_path, monkeypatch):
 
 @pytest.fixture(scope="session")
 def et_session():
-    """Shared ExifTool process for sidecar round-trip tests. Skips the tests
-    that need it if the bundled/PATH exiftool binary isn't available."""
+    """Shared ExifTool process for every test that needs a real ExifTool (sidecar
+    round trips, write-path API tests). The one gate for that dependency: skips
+    those tests locally if the bundled/PATH exiftool binary isn't available, and
+    fails them on CI (see skip_or_fail). API tests request it *before* `client`,
+    whose teardown restarts the session its lifespan stopped."""
     if not exiftool_session.start_et():
-        pytest.skip(f"ExifTool unavailable: {exiftool_session._et_error}")
+        skip_or_fail(f"ExifTool unavailable: {exiftool_session._et_error}")
     yield
     exiftool_session.stop_et()
 
@@ -318,7 +361,9 @@ def client(tmp_path, monkeypatch):
     # session-scoped et_session fixture already had it running, restart it after
     # teardown so later et_session-based tests still find a live process.
     et_was_running = exiftool_session._et is not None
+    threads_before = live_threads()
     # base_url pins Host to 127.0.0.1: the default "testserver" is rejected by RequestGuard.
+    # The context manager is what runs lifespan shutdown (executor, DB, ExifTool).
     with TestClient(main.app, base_url="http://127.0.0.1") as c:
         yield c
     if et_was_running:
@@ -332,6 +377,10 @@ def client(tmp_path, monkeypatch):
     faces._unlabeled_cache = None
     faces._suggested_scores_cache = None
     _reset_semantic_state()
+    # Audit T5: every API test must hand back the threads it started — the
+    # lifespan shuts the request executor down, so its workers are gone here.
+    # Last, so a failure here doesn't skip the cleanup above.
+    assert_no_new_threads(threads_before)
 
 
 def _reset_semantic_state():

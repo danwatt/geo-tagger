@@ -91,6 +91,40 @@ class TestLifespanTeardown:
                 exiftool_session.start_et()
 
 
+    def test_repeated_app_cycles_do_not_accumulate_threads(self, tmp_path, monkeypatch):
+        """Audit T5: each start/stop re-creates the executor singleton (init after
+        shutdown) and hands its workers back, so N app lifetimes — the shape of N
+        `client`-fixture tests — leave the thread count where it started."""
+        from fastapi.testclient import TestClient
+        from geotagger import main
+        from conftest import assert_no_new_threads, live_threads
+
+        monkeypatch.setenv("GEOTAGGER_NO_SCAN", "1")
+        monkeypatch.setenv("GEOTAGGER_CACHE_DIR", str(tmp_path))
+        monkeypatch.delenv("GEOTAGGER_SCAN_DIRS", raising=False)
+        et_was_running = exiftool_session._et is not None
+        before = live_threads()
+        pools = []
+        try:
+            for _ in range(8):
+                index.init_db(tmp_path)
+                with TestClient(main.app, base_url="http://127.0.0.1") as c:
+                    pool = executor.get_executor()
+                    # Make the pool actually spawn workers (they start lazily).
+                    futures = [pool.submit(threading.get_ident) for _ in range(4)]
+                    assert all(f.result(5) for f in futures)
+                    assert c.get("/api/status").status_code == 200
+                    pools.append(pool)
+                with pytest.raises(RuntimeError, match="not initialized"):
+                    executor.get_executor()
+        finally:
+            index.close_db()
+            if et_was_running:
+                exiftool_session.start_et()
+        assert len({id(p) for p in pools}) == 8  # a fresh pool every start
+        assert_no_new_threads(before)
+
+
 class TestStartEtFailure:
     def test_failed_probe_terminates_the_started_process(self, monkeypatch):
         """A failure after the -stay_open child has started must not just drop
