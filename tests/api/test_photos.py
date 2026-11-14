@@ -562,3 +562,49 @@ def test_update_times_invalidates_caches_when_written(client, monkeypatch):
     monkeypatch.setattr(work_queue_service, "invalidate", lambda: inval.append("queue"))
     client.post("/api/photos/update-times", json={"updates": [_upd(a, 5000, 5600)]})
     assert inval == ["hotspots", "queue"]
+
+
+# ── /api/photos/guess-dates (read-only staging for the "Guess dates…" panel) ──
+
+def test_guess_dates_from_filename_folder_or_nothing(client, tmp_path):
+    by_name = _add_real_file(tmp_path, "IMG_20190704_120000.jpg")
+    folder = tmp_path / "2003-08"
+    folder.mkdir()
+    by_dir = _add_real_file(folder, "scan.jpg")
+    nothing = _add_real_file(tmp_path, "holiday.jpg")
+
+    r = client.post("/api/photos/guess-dates", json={"photo_ids": [by_name, by_dir, nothing, 99999]})
+    assert r.status_code == 200
+    guesses = {g["photo_id"]: g for g in r.json()["guesses"]}
+    assert set(guesses) == {by_name, by_dir, nothing}     # unknown id dropped, not an error
+    assert guesses[by_name]["guess"] == {"year": 2019, "month": 7, "day": 4,
+                                         "precision": None, "source": "filename"}
+    g = guesses[by_dir]["guess"]
+    assert (g["year"], g["month"], g["day"], g["precision"]) == (2003, 8, None, "month")
+    assert guesses[nothing]["guess"] is None               # still listed, shown as skipped
+    assert guesses[nothing]["filename"] == "holiday.jpg"
+
+
+def test_guess_dates_writes_nothing(client, tmp_path):
+    pid = _add_real_file(tmp_path, "IMG_20190704_120000.jpg")
+    before = dict(index.get_photo(pid))
+    client.post("/api/photos/guess-dates", json={"photo_ids": [pid]})
+    assert dict(index.get_photo(pid)) == before
+    assert not list(tmp_path.glob("*.xmp"))
+
+
+def test_guess_dates_rejects_empty_and_malformed(client):
+    assert client.post("/api/photos/guess-dates", json={"photo_ids": []}).status_code == 400
+    assert client.post("/api/photos/guess-dates", json={"photo_ids": ["x"]}).status_code == 422
+    assert client.post("/api/photos/guess-dates", json={}).status_code == 422
+
+
+# ── Media routes on a file that vanished since the scan ──
+
+@pytest.mark.xfail(strict=True, reason="A6: media routes turn a vanished file into a 500")
+def test_fullsize_of_vanished_file_is_404(client, tmp_path):
+    pid = _add_real_file(tmp_path, "gone.jpg")
+    (tmp_path / "gone.jpg").unlink()
+    r = client.get(f"/api/photo/{pid}/fullsize")
+    assert r.status_code == 404
+    assert str(tmp_path) not in r.text          # and the detail doesn't leak the path

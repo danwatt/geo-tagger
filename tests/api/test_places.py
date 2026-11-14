@@ -1,5 +1,9 @@
 """Endpoint tests for geotagger.api.places."""
 
+import sqlite3
+
+import pytest
+
 from geotagger import index
 
 
@@ -96,3 +100,45 @@ def test_places_stats_survive_unparseable_bounds(client):
 def test_place_representative_unknown_photo_404(client):
     pid = client.post("/api/places", json={"name": "X", "type": "circle", "bounds": "{}"}).json()["id"]
     assert client.put(f"/api/places/{pid}/representative", json={"photo_id": 999999}).status_code == 404
+
+
+# ── Malformed bounds and missing ids (audit A5) ──
+
+_MALFORMED = ["not json", "{}", '{"lat": "x", "lng": 0, "radius": 5}', "[1, 2]", "null"]
+
+
+@pytest.mark.parametrize("bounds", _MALFORMED)
+def test_listing_and_jump_search_survive_malformed_bounds(client, bounds):
+    """Rows already stored with bad bounds (A5 has no create-time validation yet)
+    must not take down the read paths that only need a bbox."""
+    pid = index.create_place("Bad", "circle", bounds)
+    _add_photo("in.jpg", 0.0, 0.0, 1000)
+    stats = client.get("/api/places?stats=true")
+    assert stats.status_code == 200
+    assert next(p for p in stats.json() if p["id"] == pid)["photo_count"] == 0
+    r = client.get("/api/search/locations?q=Bad")
+    assert r.status_code == 200
+    assert [m["bounds"] for m in r.json()["locations"] if m["label"] == "Bad"] == [None]
+
+
+@pytest.mark.xfail(strict=True, raises=sqlite3.OperationalError,
+                   reason="A5: malformed bounds make place search 500")
+@pytest.mark.parametrize("bounds", _MALFORMED)
+def test_place_search_with_malformed_bounds_is_not_500(client, bounds):
+    pid = index.create_place("Bad", "circle", bounds)
+    _add_photo("in.jpg", 0.0, 0.0, 1000)
+    r = client.get("/api/search", params={"place_id": pid})
+    assert r.status_code in (200, 400)
+
+
+@pytest.mark.xfail(strict=True, reason="A5: places CRUD does not validate bounds")
+def test_create_place_rejects_malformed_bounds(client):
+    r = client.post("/api/places", json={"name": "Bad", "type": "circle", "bounds": "not json"})
+    assert r.status_code in (400, 422)
+    assert client.get("/api/places").json() == []
+
+
+@pytest.mark.xfail(strict=True, reason="A5: PATCH/DELETE on a missing place report success")
+def test_patch_and_delete_missing_place_404(client):
+    assert client.patch("/api/places/987654", json={"name": "X"}).status_code == 404
+    assert client.delete("/api/places/987654").status_code == 404

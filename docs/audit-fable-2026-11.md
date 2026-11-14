@@ -556,7 +556,7 @@ change-stamp (`index.py:1293-1298`); use a generation counter.
 
 **T1 — A test pins a bug.** `tests/test_sidecar.py:153-163` asserts the D1 asymmetry.
 
-**T2 — Untested routes.** `/api/photos/update-times`, `/api/photos/guess-dates`,
+**T2 — Untested routes.** — ✅ **DONE** (every mounted route now hit; new nuke, dedup, export-sidecars, guess-dates, faces-months, dataset-download, roadtrip and barrier-synchronised concurrency tests; A5 malformed-bounds 500 / no validation and A6 vanished-file 500 pinned as `xfail(strict=True)`; A10 not reproducible) `/api/photos/update-times`, `/api/photos/guess-dates`,
 `/api/geocode/export-sidecars`, `/api/faces/nuke`, `/api/faces/dedup/*`, `/api/stats/faces-months`, and the
 download routes. Nothing covers pre-1970 dates, duplicate names, malformed place bounds, partial batch
 failure, or any concurrent request.

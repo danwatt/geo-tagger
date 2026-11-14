@@ -100,3 +100,46 @@ def test_dates_all_and_filtered(client):
     assert {"date": "2020-01-01", "count": 1} in client.get("/api/stats/dates").json()["dates"]
     filtered = client.get("/api/stats/dates?year=2020&month=1").json()["dates"]
     assert filtered == [{"date": "2020-01-01", "count": 1}]
+
+
+# ── /api/stats/faces-months ──
+
+def _scanned(pid, faces=()):
+    """Mark a photo face-scanned and give it faces, each 'labeled', 'unlabeled'
+    or 'ignored'."""
+    with index.transaction() as db:
+        db.execute("UPDATE photos SET faces_scanned_at=1 WHERE id=?", (pid,))
+        person = None
+        if "labeled" in faces:
+            person = db.execute("INSERT INTO persons (name, created_at) VALUES (?, 0)",
+                                (f"P{pid}",)).lastrowid
+        for kind in faces:
+            db.execute(
+                "INSERT INTO faces (photo_id, person_id, bbox, det_score, source, ignored, created_at) "
+                "VALUES (?, ?, '0,0,1,1', 0.9, 'detected', ?, 0)",
+                (pid, person if kind == "labeled" else None, 1 if kind == "ignored" else 0))
+
+
+def test_faces_months_buckets_by_labeling_state(client):
+    JUN_2021 = 1_622_505_600  # 2021-06-01 00:00:00 UTC
+    _scanned(_add("full.jpg", dt=JAN_2020), ["labeled", "labeled"])
+    _scanned(_add("ign.jpg", dt=JAN_2020), ["labeled", "ignored"])      # ignored ≠ unlabeled
+    _scanned(_add("part.jpg", dt=JAN_2020), ["labeled", "unlabeled"])
+    _scanned(_add("none.jpg", dt=JAN_2020), ["unlabeled"])
+    _scanned(_add("empty.jpg", dt=JUN_2021))
+    _add("unscanned.jpg", dt=JAN_2020)                                   # excluded
+    _scanned(_add("clip.mp4", dt=JAN_2020, media="video"), ["unlabeled"])  # excluded
+    _scanned(_add("undated.jpg", dt=None), ["unlabeled"])
+    _scanned(_add("undated0.jpg", dt=0))
+
+    body = client.get("/api/stats/faces-months").json()
+    assert body["months"] == [   # newest first
+        {"year": 2021, "month": 6, "full": 0, "partial": 0, "none": 0, "no_faces": 1},
+        {"year": 2020, "month": 1, "full": 2, "partial": 1, "none": 1, "no_faces": 0},
+    ]
+    assert body["undated"] == {"full": 0, "partial": 0, "none": 1, "no_faces": 1}
+
+
+def test_faces_months_empty_library(client):
+    assert client.get("/api/stats/faces-months").json() == {
+        "months": [], "undated": {"full": 0, "partial": 0, "none": 0, "no_faces": 0}}
