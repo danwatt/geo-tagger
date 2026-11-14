@@ -406,7 +406,7 @@ Open June 2019, then a folder dated 2021: "Showing 0 of N".
 *Fix:* zero the four date variables when the timeline is unavailable.
 
 <a id="w2"></a>
-**W2 — High — `setGeocodeIgnored` never checks `res.ok`** [seen]
+**W2 — High — `setGeocodeIgnored` never checks `res.ok`** [seen] — ✅ **DONE** (state and staged entries change only after a successful reply; server error in the commit summary; `commitInFlight` guard; new `fetchJson`/`postJson`/`httpErrorMessage` in `common.js`)
 `web/app.js:2082-2096`. On a 4xx/5xx, local state is mutated, staged entries are deleted, and the UI reports
 "Committed N".
 
@@ -442,7 +442,7 @@ the help modal. `people.js:1906` has the same order [seen; whether its guard pre
 `web/face-grid.js:72-87`. West of UTC, a photo taken 1 Jan 00:30 lands under the previous December.
 *Fix:* one shared UTC date helper.
 
-**W10 — Medium — `loadFaces` and `loadPersons` never check `res.ok`** [traced]
+**W10 — Medium — `loadFaces` and `loadPersons` never check `res.ok`** [traced] — ✅ **DONE** (failed loads keep previous state and show the error; `setStatus` tracks `statusIsError` so the People hint doesn't cover it)
 `web/people.js:507-508,712-714`. A 422 leaves `faces` undefined and every later handler throws.
 
 **W11 — Medium — Shift-click after a filter change reads past the array** [traced] — ✅ **DONE** (anchor remapped by photo id in `applyFilters`, -1 when hidden)
@@ -454,7 +454,7 @@ the help modal. `people.js:1906` has the same order [seen; whether its guard pre
 **W13 — Medium — Tag page double-submit drops a group** [traced]
 `web/tag.js:99-118,274-280,354-373`. Only three buttons are disabled in flight; a second tap splices twice.
 
-**W14 — Medium — Data page poll loops have no `catch`** [traced]
+**W14 — Medium — Data page poll loops have no `catch`** [traced] — ✅ **DONE** (one `pollJob()` in `data.js`: transient errors retried with "Lost contact…", gives up after 5, 404 = job gone; six loops converted. Unchecked fetches remain in `timesync.js`, `map.js`, `search.js`, `settings.js`)
 `web/data.js:166-195,218-248,293-322,345-374,654-678,767-781`. A failed status fetch freezes progress with no
 error. One generic `pollJob()` would also remove about 200 duplicated lines.
 

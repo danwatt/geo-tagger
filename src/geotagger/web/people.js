@@ -30,7 +30,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   } else {
     await loadFaces();
   }
-  setStatus("Select a person on the left, or scan for faces to begin.");
+  // Don't paint the hint over a "Failed to load …" from the loads above.
+  if (!statusIsError) setStatus("Select a person on the left, or scan for faces to begin.");
 });
 
 // Pulls live settings tunable on the Settings page — FACE_PRESELECT_MIN_SCORE

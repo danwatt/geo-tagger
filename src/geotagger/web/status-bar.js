@@ -5,8 +5,13 @@
  */
 
 /* ── Status ── */
+// Whether the bar currently shows an error — lets a later generic hint (e.g. the
+// People page's post-init "Select a person…") avoid painting over a load failure.
+let statusIsError = false;
+
 function setStatus(msg, isError = false) {
   const bar = document.getElementById("status-bar");
   bar.textContent = msg;
   bar.style.color = isError ? "#f88" : "#888";
+  statusIsError = isError;
 }

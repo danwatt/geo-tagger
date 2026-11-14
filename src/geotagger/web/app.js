@@ -140,6 +140,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 async function checkStatus() {
   try {
     const res = await fetch("/api/status");
+    if (!res.ok) return;   // a server error isn't "ExifTool missing"
     const data = await res.json();
     if (!data.ok) {
       setStatus("⚠ ExifTool not found — run: uv run python scripts/get_exiftool.py  |  " + data.error, true);
@@ -234,6 +235,7 @@ function initMap() {
 async function fitMapToAllLocations() {
   try {
     const res = await fetch("/api/stats/bounds");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (data.has_data) {
       map.fitBounds(
@@ -593,6 +595,7 @@ async function selectUndated() {
 async function loadPlaces() {
   try {
     const res = await fetch("/api/places");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     places = await res.json();
 
     // Display all places on map
@@ -1991,10 +1994,10 @@ function batchProblems(out) {
   return `${bad} failed: ${first}`;
 }
 
-// Writes the location to `ids`. Returns {written, error}, or null when the request
-// itself failed — commitPendingGeo clears from its staged set only the ids in
-// `written`, so a photo that failed stays staged. `error` is the problem summary
-// ("2 failed: <reason>") or "".
+// Writes the location to `ids`. Returns {written, error} — commitPendingGeo clears
+// from its staged set only the ids in `written`, so a photo that failed stays
+// staged. `error` is the problem summary ("2 failed: <reason>"), the server's
+// detail when the request itself failed (written is then []), or "".
 // `render: false` updates `photos` only; the caller re-renders once after a
 // batch of calls (commitPendingGeo commits one call per point).
 async function geotag(ids, lat, lng, accuracy = null, { render = true } = {}) {
@@ -2033,7 +2036,7 @@ async function geotag(ids, lat, lng, accuracy = null, { render = true } = {}) {
     return { written: out.written, error: problems };
   } catch (err) {
     setStatus("Geotag error: " + err.message, true);
-    return null;
+    return { written: [], error: err.message };
   }
 }
 
@@ -2070,25 +2073,25 @@ async function doRemoveGeotag() {
 }
 
 /* ── Ignore for geocoding (e.g. screenshots) ── */
+// Returns {ok: true} or {ok: false, error}. Local state is only touched after the
+// server accepted the write — on a 4xx/5xx the photos keep their old flag, and
+// commitPendingGeo keeps them staged (it reports `error` in its summary).
 async function setGeocodeIgnored(ids, ignored, { render = true } = {}) {
-  if (!ids.length) return false;
+  if (!ids.length) return { ok: false, error: "no photos" };
   try {
-    await fetch("/api/geotag/ignore", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids, ignored }),
-    });
-    ids.forEach((id) => {
-      const photo = photos.find((p) => p.id === id);
-      if (photo) photo.geocode_ignored = ignored;
-    });
-    if (render) applyFilters();
-    if (focusedPhotoId && ids.includes(focusedPhotoId)) showDetail(focusedPhotoId);
-    return true;
+    await postJson("/api/geotag/ignore", { ids, ignored });
   } catch (err) {
-    setStatus("Error: " + err.message, true);
-    return false;
+    setStatus("Ignore for geocoding failed: " + err.message, true);
+    return { ok: false, error: err.message };
   }
+  const byId = new Map(photos.map((p) => [p.id, p]));
+  ids.forEach((id) => {
+    const photo = byId.get(id);
+    if (photo) photo.geocode_ignored = ignored;
+  });
+  if (render) applyFilters();
+  if (focusedPhotoId && ids.includes(focusedPhotoId)) showDetail(focusedPhotoId);
+  return { ok: true };
 }
 
 // "This photo needs no location" is a judgement like any other tag, and just as
@@ -2173,6 +2176,7 @@ const showDetail = latestOnly(async (signal, id) => {
   dismissGuess();
   try {
     const res = await fetch(`/api/photo/${id}`, { signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (signal.aborted) return;
 
@@ -2217,8 +2221,13 @@ const showDetail = latestOnly(async (signal, id) => {
     table.innerHTML = rows.map(([k, v, isHtml]) =>
       `<tr><td>${k}</td><td>${isHtml ? v : escapeHtml(v ?? "—")}</td></tr>`
     ).join("");
-    document.getElementById("detail-ignore-chk").addEventListener("change", (e) => {
-      setGeocodeIgnored([id], e.target.checked);
+    document.getElementById("detail-ignore-chk").addEventListener("change", async (e) => {
+      const chk = e.target;
+      chk.disabled = true;
+      const { ok } = await setGeocodeIgnored([id], chk.checked);
+      // On failure the photo kept its old flag — put the box back to match.
+      if (!ok) chk.checked = !chk.checked;
+      chk.disabled = false;
     });
 
     // Show guess bar only for untagged photos that have a timestamp
@@ -2226,7 +2235,8 @@ const showDetail = latestOnly(async (signal, id) => {
     guessBar.style.display = (data.lat == null && data.datetime) ? "" : "none";
     document.getElementById("guess-result").style.display = "none";
   } catch (err) {
-    // ignore
+    if (signal.aborted) return;   // superseded by a newer photo — not a failure
+    setStatus("Couldn't load photo details: " + err.message, true);
   }
 });
 
@@ -2727,11 +2737,25 @@ function makePendingPinIcon(count) {
   return L.divIcon({ html: svg, className: "", iconSize: [24, 34], iconAnchor: [12, 34] });
 }
 
+// Set while a commit's requests are in flight: a second Commit click (or Ctrl+S)
+// would otherwise re-send the same still-staged entries alongside the first.
+let commitInFlight = false;
+
 async function commitPendingGeo(groups, what) {
+  if (commitInFlight) { setStatus("A commit is already in progress…", true); return; }
   const total = groups.reduce((n, g) => n + g.entries.length, 0);
   if (!total) { setStatus("Nothing staged to commit.", true); return; }
   if (!confirm(`Commit ${total} staged change(s)${what ? ` — ${what}` : ""}? ` +
                `This writes them to the photos.`)) return;
+  commitInFlight = true;
+  try {
+    await commitGroups(groups, total);
+  } finally {
+    commitInFlight = false;
+  }
+}
+
+async function commitGroups(groups, total) {
   setStatus(`Committing ${total} change(s)…`);
 
   let saved = 0;
@@ -2741,11 +2765,12 @@ async function commitPendingGeo(groups, what) {
     // of it, and no Recent entry, since it isn't a place anyone will reuse.
     if (g.ignore) {
       const ids = g.entries.map(e => e.photo.id);
-      if (await setGeocodeIgnored(ids, true, { render: false })) {
+      const done = await setGeocodeIgnored(ids, true, { render: false });
+      if (done.ok) {
         ids.forEach(id => pendingGeo.delete(id));
         saved += ids.length;
       } else {
-        failures.push(`${g.label} (${ids.length} photo(s))`);
+        failures.push(`${g.label} (${ids.length} photo(s)) — ${done.error}`);
       }
       continue;
     }

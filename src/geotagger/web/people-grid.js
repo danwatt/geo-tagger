@@ -22,10 +22,12 @@ const loadFaces = latestOnly(async (signal) => {
     if ((scope === "unlabeled" || scope === "suggested") && focusActive()) {
       url += "&" + focusQuery();
     }
-    const res = await fetch(url, { signal });
-    const data = await res.json();
+    // fetchJson throws on a 4xx/5xx before anything is assigned, so a failed load
+    // leaves the previous `faces` (and grid) intact instead of setting it to the
+    // error body's undefined `.faces` — which every later handler would trip on.
+    const data = await fetchJson(url, { signal });
     if (signal.aborted) return;
-    faces = data.faces;
+    faces = Array.isArray(data.faces) ? data.faces : [];
 
     if (scope === "suggested") {
       // Order chronologically (undated last) so event groups are contiguous,

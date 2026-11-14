@@ -27,6 +27,39 @@ const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
  *  (written by app.js, counted/cleared by home.js). */
 const SKIPPED_BATCHES_KEY = "geotagger.workqueue.skipped";
 
+/* ── JSON fetch helpers ──
+ * FastAPI reports errors as {"detail": …}: a string for our own HTTPExceptions,
+ * a list for 422 validation errors, and occasionally {message, …} (e.g. the
+ * semantic scan's 503). httpErrorMessage turns any failed response into one
+ * line for a status bar; fetchJson / postJson are the "check res.ok, then
+ * parse" pair so callers can't forget the check (a 4xx body parsed as data is
+ * how state ends up undefined). */
+async function httpErrorMessage(res) {
+  const body = await res.json().catch(() => null);
+  const d = body?.detail;
+  if (typeof d === "string" && d) return d;
+  if (d && typeof d === "object" && !Array.isArray(d) && typeof d.message === "string") return d.message;
+  if (Array.isArray(d) && d.length && typeof d[0]?.msg === "string") {
+    return `HTTP ${res.status}: ${d[0].msg}`;
+  }
+  return `HTTP ${res.status}`;
+}
+
+async function fetchJson(url, opts) {
+  const res = await fetch(url, opts);
+  if (!res.ok) throw new Error(await httpErrorMessage(res));
+  return res.json();
+}
+
+function postJson(url, body, opts = {}) {
+  return fetchJson(url, {
+    ...opts,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+    body: JSON.stringify(body),
+  });
+}
+
 /* ── Latest-only loaders ──
  * A loader triggered by navigation (pick a month, press j, click Next) can be
  * called again before its previous fetch returns, and responses don't come back

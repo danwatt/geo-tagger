@@ -12,12 +12,14 @@ const loadPersons = latestOnly(async (signal) => {
     // menu and name lookups, so you can still tag someone who has no faces in the
     // window yet. The left nav renders `navPersons`, which is windowed when a Focus
     // is active (only in-range people, with in-range counts).
-    const [pRes, sRes] = await Promise.all([
-      fetch("/api/persons", { signal }),
-      fetch("/api/faces/scan/status" + q, { signal }),
+    // Both must succeed before anything is assigned: on a 4xx/5xx the previous
+    // `persons` / list stay as they were (an error body here would replace the
+    // array with {detail} and break every .find/.map over it).
+    const [allPersons, status] = await Promise.all([
+      fetchJson("/api/persons", { signal }),
+      fetchJson("/api/faces/scan/status" + q, { signal }),
     ]);
-    const allPersons = await pRes.json();
-    const status = await sRes.json();
+    if (!Array.isArray(allPersons)) throw new Error("unexpected /api/persons reply");
     let nav = allPersons;
     if (focusActive()) {
       const navRes = await fetch("/api/persons" + q, { signal });

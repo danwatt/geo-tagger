@@ -1,7 +1,3 @@
-let geonamesPolling = false;
-let osmPolling = false;
-let censusPolling = false;
-let faceModelPolling = false;
 let osmGroups = [];         // [{group, label, items: [{key, name}]}]
 let osmIngested = new Set();
 let osmSelectedRegions = new Set();
@@ -163,35 +159,100 @@ function renderOsmCheckboxes() {
   `).join("");
 }
 
-async function pollGeonames() {
-  if (geonamesPolling) return;
-  geonamesPolling = true;
-  const btn = document.getElementById("geonames-download-btn");
-  const progress = document.getElementById("geonames-progress");
-  const errorEl = document.getElementById("geonames-error");
-  try {
-    while (true) {
-      const res = await fetch("/api/data/geonames/download/status");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const job = await res.json();
-      progress.textContent = job.message || "";
-      if (job.error) {
-        errorEl.textContent = job.error;
-        break;
+// ── Job polling ──
+//
+// Every download and the street search is start-a-job-then-poll-its-status. One
+// loop for all of them, so each gets the same failure handling: a failed status
+// fetch used to throw out of the loop with nothing shown, freezing the progress
+// text. Network errors, 5xx and unreadable bodies are treated as transient (a
+// server restart, a laptop waking up) — retried with a short backoff and a
+// "Lost contact" note, which clears once a poll gets through — until
+// POLL_MAX_FAILURES in a row, then it gives up with the error. 404 means the job
+// (or its route) is gone and other 4xx won't change on retry, so those stop at once.
+const POLL_MAX_FAILURES = 5;
+
+/** Poll `statusUrl` (a job dict: {running, done, error, message, …}) until it
+ *  finishes. onProgress(job) runs on every status; then onError(job.error),
+ *  onDone(job) (awaited), or a silent stop when the job is no longer running.
+ *  onError(msg) also gets fetch failures once retries are exhausted;
+ *  onRetry(msg) reports a transient failure, onRetry(null) its recovery. Never
+ *  throws — a throwing callback is reported through onError. */
+async function pollJob({ statusUrl, intervalMs = 1500, onProgress, onDone, onError, onRetry }) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  let failures = 0;
+  while (true) {
+    let job;
+    try {
+      const res = await fetch(statusUrl);
+      if (res.status === 404) { onError("The job is no longer on the server."); return; }
+      if (!res.ok) {
+        const msg = await httpErrorMessage(res);
+        if (res.status < 500) { onError(msg); return; }
+        throw new Error(msg);
       }
-      if (job.done) {
-        progress.textContent = job.message;
-        await loadStatus();
-        break;
+      job = await res.json();
+    } catch (e) {
+      failures++;
+      if (failures >= POLL_MAX_FAILURES) {
+        onError(`Lost contact with server: ${e.message}`);
+        return;
       }
-      if (!job.running) break;
-      await new Promise((r) => setTimeout(r, 1500));
+      onRetry?.(`Lost contact with server — retrying… (${e.message})`);
+      // Back off a little each time (capped) so a restarting server isn't hammered.
+      await wait(Math.max(intervalMs, 1000) * Math.min(failures + 1, 4));
+      continue;
     }
-  } finally {
-    geonamesPolling = false;
-    btn.disabled = false;
-    await loadStatus();
+    if (failures) { failures = 0; onRetry?.(null); }
+    try {
+      onProgress?.(job);
+      if (job.error) { onError(job.error); return; }
+      if (job.done) { await onDone?.(job); return; }
+      if (!job.running) return;
+    } catch (e) {
+      onError(e.message);
+      return;
+    }
+    await wait(intervalMs);
   }
+}
+
+// Cards whose job is being polled — guards against two loops for one job (the
+// resume-on-load check and a click can both start one).
+const activePolls = new Set();
+
+/** pollJob wired to one Data-page card: job.message → #<prefix>-progress, errors →
+ *  #<prefix>-error, and the card's button re-enabled when polling ends.
+ *  `refreshAfter` re-reads /api/data/status afterwards (the download cards). */
+async function pollCard(prefix, { statusUrl, intervalMs, btnId, onDone, refreshAfter = true }) {
+  if (activePolls.has(prefix)) return;
+  activePolls.add(prefix);
+  const progress = document.getElementById(`${prefix}-progress`);
+  const errorEl = document.getElementById(`${prefix}-error`);
+  let retryMsg = null;
+  try {
+    await pollJob({
+      statusUrl, intervalMs, onDone,
+      onProgress: (job) => { progress.textContent = job.message || ""; },
+      onError: (msg) => { errorEl.textContent = msg; },
+      onRetry: (msg) => {
+        // Only clear our own "Lost contact" note, never a real error.
+        if (msg) errorEl.textContent = msg;
+        else if (errorEl.textContent === retryMsg) errorEl.textContent = "";
+        retryMsg = msg;
+      },
+    });
+  } finally {
+    activePolls.delete(prefix);
+    document.getElementById(btnId).disabled = false;
+    if (refreshAfter) await loadStatus();
+  }
+}
+
+function pollGeonames() {
+  return pollCard("geonames", {
+    statusUrl: "/api/data/geonames/download/status", intervalMs: 1500,
+    btnId: "geonames-download-btn",
+  });
 }
 
 async function startGeonamesDownload() {
@@ -215,36 +276,16 @@ async function startGeonamesDownload() {
   }
 }
 
-async function pollOsm() {
-  if (osmPolling) return;
-  osmPolling = true;
-  const btn = document.getElementById("osm-download-btn");
-  const progress = document.getElementById("osm-progress");
-  const errorEl = document.getElementById("osm-error");
-  try {
-    while (true) {
-      const res = await fetch("/api/data/osm/download/status");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const job = await res.json();
-      progress.textContent = job.message || "";
-      if (job.error) {
-        errorEl.textContent = job.error;
-        break;
-      }
-      if (job.done) {
-        progress.textContent = job.message;
-        await loadStatus();
-        // The merge just cached a fresh .osm.pbf — that's a newly searchable region.
-        await loadStreetsStatus();
-        break;
-      }
-      if (!job.running) break;
-      await new Promise((r) => setTimeout(r, 2000));
-    }
-  } finally {
-    osmPolling = false;
-    btn.disabled = false;
-  }
+function pollOsm() {
+  return pollCard("osm", {
+    statusUrl: "/api/data/osm/download/status", intervalMs: 2000,
+    btnId: "osm-download-btn", refreshAfter: false,
+    onDone: async () => {
+      await loadStatus();
+      // The merge just cached a fresh .osm.pbf — that's a newly searchable region.
+      await loadStreetsStatus();
+    },
+  });
 }
 
 async function startOsmDownload() {
@@ -290,35 +331,11 @@ async function startOsmDownload() {
   }
 }
 
-async function pollCensus() {
-  if (censusPolling) return;
-  censusPolling = true;
-  const btn = document.getElementById("census-download-btn");
-  const progress = document.getElementById("census-progress");
-  const errorEl = document.getElementById("census-error");
-  try {
-    while (true) {
-      const res = await fetch("/api/data/census/download/status");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const job = await res.json();
-      progress.textContent = job.message || "";
-      if (job.error) {
-        errorEl.textContent = job.error;
-        break;
-      }
-      if (job.done) {
-        progress.textContent = job.message;
-        await loadStatus();
-        break;
-      }
-      if (!job.running) break;
-      await new Promise((r) => setTimeout(r, 1500));
-    }
-  } finally {
-    censusPolling = false;
-    btn.disabled = false;
-    await loadStatus();
-  }
+function pollCensus() {
+  return pollCard("census", {
+    statusUrl: "/api/data/census/download/status", intervalMs: 1500,
+    btnId: "census-download-btn",
+  });
 }
 
 async function startCensusDownload() {
@@ -342,35 +359,11 @@ async function startCensusDownload() {
   }
 }
 
-async function pollFaceModel() {
-  if (faceModelPolling) return;
-  faceModelPolling = true;
-  const btn = document.getElementById("face-model-download-btn");
-  const progress = document.getElementById("face-model-progress");
-  const errorEl = document.getElementById("face-model-error");
-  try {
-    while (true) {
-      const res = await fetch("/api/data/face-model/download/status");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const job = await res.json();
-      progress.textContent = job.message || "";
-      if (job.error) {
-        errorEl.textContent = job.error;
-        break;
-      }
-      if (job.done) {
-        progress.textContent = job.message;
-        await loadStatus();
-        break;
-      }
-      if (!job.running) break;
-      await new Promise((r) => setTimeout(r, 1500));
-    }
-  } finally {
-    faceModelPolling = false;
-    btn.disabled = false;
-    await loadStatus();
-  }
+function pollFaceModel() {
+  return pollCard("face-model", {
+    statusUrl: "/api/data/face-model/download/status", intervalMs: 1500,
+    btnId: "face-model-download-btn",
+  });
 }
 
 async function startFaceModelDownload() {
@@ -399,7 +392,6 @@ async function startFaceModelDownload() {
 // Download is the usual start-job-then-poll; indexing is the client batch loop
 // (POST a batch, read `remaining`, repeat) used by face detection on Home.
 
-let semanticPolling = false;
 let semanticIndexing = false;
 let semanticStopRequested = false;
 
@@ -438,29 +430,11 @@ async function renderSemantic(m) {
     idx && idx.failed && m.available && !semanticIndexing ? "" : "none";
 }
 
-async function pollSemanticModel() {
-  if (semanticPolling) return;
-  semanticPolling = true;
-  const btn = document.getElementById("semantic-download-btn");
-  const progress = document.getElementById("semantic-progress");
-  const errorEl = document.getElementById("semantic-error");
-  try {
-    while (true) {
-      const res = await fetch("/api/data/semantic-model/download/status");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const job = await res.json();
-      progress.textContent = job.message || "";
-      if (job.error) { errorEl.textContent = job.error; break; }
-      if (job.done || !job.running) break;
-      await new Promise((r) => setTimeout(r, 1000));
-    }
-  } catch (e) {
-    errorEl.textContent = e.message;
-  } finally {
-    semanticPolling = false;
-    btn.disabled = false;
-    await loadStatus();
-  }
+function pollSemanticModel() {
+  return pollCard("semantic", {
+    statusUrl: "/api/data/semantic-model/download/status", intervalMs: 1000,
+    btnId: "semantic-download-btn",
+  });
 }
 
 async function startSemanticDownload() {
@@ -571,7 +545,6 @@ fetch("/api/data/semantic-model/download/status")
 
 let streetsMap = null;
 let streetsLayer = null;
-let streetsPolling = false;
 let streetGroups = [];      // [{name, ref, ways: [{coords, ...}], lines: [L.Polyline]}]
 
 function initStreetsMap(status) {
@@ -598,6 +571,7 @@ async function fitStreetsMap(status) {
   }
   try {
     const res = await fetch("/api/stats/bounds");
+    if (!res.ok) return;   // keep the default view
     const data = await res.json();
     if (data.has_data) {
       streetsMap.fitBounds([[data.min_lat, data.min_lng], [data.max_lat, data.max_lng]],
@@ -682,30 +656,12 @@ async function startStreetSearch() {
   }
 }
 
-async function pollStreets() {
-  if (streetsPolling) return;
-  streetsPolling = true;
-  const btn = document.getElementById("streets-search-btn");
-  const progress = document.getElementById("streets-progress");
-  const errorEl = document.getElementById("streets-error");
-  try {
-    while (true) {
-      const res = await fetch("/api/data/streets/search/status");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const job = await res.json();
-      progress.textContent = job.message || "";
-      if (job.error) { errorEl.textContent = job.error; break; }
-      if (job.done) {
-        renderStreets(job.result);
-        break;
-      }
-      if (!job.running) break;
-      await new Promise((r) => setTimeout(r, 800));
-    }
-  } finally {
-    streetsPolling = false;
-    btn.disabled = false;
-  }
+function pollStreets() {
+  return pollCard("streets", {
+    statusUrl: "/api/data/streets/search/status", intervalMs: 800,
+    btnId: "streets-search-btn", refreshAfter: false,
+    onDone: (job) => renderStreets(job.result),
+  });
 }
 
 // Segments, not streets: OSM splits a road at every junction and tag change, so a
@@ -792,22 +748,25 @@ document.getElementById("osm-state-picker").addEventListener("change", (e) => {
   else osmSelectedRegions.delete(e.target.value);
 });
 
+// Start polling a job that was already running on load. A failed check just
+// leaves the card idle — the user can still start the job by hand.
+function resumePoll(statusUrl, btnId, poll) {
+  fetch(statusUrl)
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => {
+      if (!j?.running) return;
+      document.getElementById(btnId).disabled = true;
+      poll();
+    })
+    .catch(() => {});
+}
+
 loadStatus().then(() => {
   loadStreetsStatus();
   // Resume polling if a job was already running when the page loaded (e.g. reload mid-download).
-  fetch("/api/data/geonames/download/status").then((r) => r.json()).then((j) => {
-    if (j.running) { document.getElementById("geonames-download-btn").disabled = true; pollGeonames(); }
-  });
-  fetch("/api/data/osm/download/status").then((r) => r.json()).then((j) => {
-    if (j.running) { document.getElementById("osm-download-btn").disabled = true; pollOsm(); }
-  });
-  fetch("/api/data/census/download/status").then((r) => r.json()).then((j) => {
-    if (j.running) { document.getElementById("census-download-btn").disabled = true; pollCensus(); }
-  });
-  fetch("/api/data/face-model/download/status").then((r) => r.json()).then((j) => {
-    if (j.running) { document.getElementById("face-model-download-btn").disabled = true; pollFaceModel(); }
-  });
-  fetch("/api/data/streets/search/status").then((r) => r.json()).then((j) => {
-    if (j.running) { document.getElementById("streets-search-btn").disabled = true; pollStreets(); }
-  });
+  resumePoll("/api/data/geonames/download/status", "geonames-download-btn", pollGeonames);
+  resumePoll("/api/data/osm/download/status", "osm-download-btn", pollOsm);
+  resumePoll("/api/data/census/download/status", "census-download-btn", pollCensus);
+  resumePoll("/api/data/face-model/download/status", "face-model-download-btn", pollFaceModel);
+  resumePoll("/api/data/streets/search/status", "streets-search-btn", pollStreets);
 });
