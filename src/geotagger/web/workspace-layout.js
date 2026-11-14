@@ -64,7 +64,8 @@ document.addEventListener("DOMContentLoaded", () => {
     actions.id = "photo-selection-actions";
     actions.hidden = true;
     const count = document.createElement("span"); count.id = "workspace-selection-count";
-    const buttons = [document.getElementById("tag-as-btn"), document.getElementById("mark-ignored-btn")];
+    const buttons = ["tag-as-btn", "mark-ignored-btn", "remove-location-btn"]
+      .map(id => document.getElementById(id));
     const oldGroups = buttons.map(button => button.parentElement);
     actions.append(count, ...buttons);
     oldGroups.forEach(group => { if (!group.children.length) group.remove(); });

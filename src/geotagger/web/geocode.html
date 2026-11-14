@@ -73,10 +73,6 @@
 </div>
 </div>
 <div class="workspace-scope"><span id="workspace-scope-text">Choose a location or month to begin</span><button id="preview-toggle" aria-expanded="true">Hide preview</button></div>
-<!-- Hidden controls kept for JS compatibility -->
-<div style="display:none">
-  <button id="remove-geotag-btn"></button>
-</div>
 
 <div id="cam-legend"></div>
 
@@ -162,6 +158,10 @@
              committed mark is the detail pane's "Ignore for geocoding" checkbox. -->
         <button id="mark-ignored-btn" title="Stage the selected photos as not needing a location (e.g. screenshots) — review and Commit below">🚫 Ignore location <kbd>I</kbd></button>
       </div>
+      <div class="toolbar-group">
+        <!-- Stages too: a committed removal can be taken back with Undo below. -->
+        <button id="remove-location-btn" title="Stage removing the saved location from the selected geotagged photos — review and Commit below">❌ Remove location <kbd>Del</kbd></button>
+      </div>
       <div class="toolbar-spacer"></div>
       <div class="toolbar-group">
         <button id="shortcuts-help-btn" class="icon-btn" title="Keyboard shortcuts" aria-label="Keyboard shortcuts">?</button>
@@ -190,6 +190,16 @@
           <button id="commit-all-btn" class="primary" title="Write every staged location to the photos">✔ Commit all</button>
           <button id="revert-all-btn" class="danger" title="Throw away every staged location and put the photos back in the grid">↩ Revert all</button>
         </div>
+      </div>
+    </div>
+
+    <!-- Undo for the last commit (U2): shown once a commit lands, until the next
+         one, an undo or a dismiss. Wired in app.js's "Undo last commit". -->
+    <div id="undo-commit-bar" role="status" hidden>
+      <span id="undo-commit-summary"></span>
+      <div id="undo-commit-btns">
+        <button id="undo-commit-btn" title="Put every photo in the last commit back the way it was (asks to confirm)">↶ Undo last commit <kbd>U</kbd></button>
+        <button id="undo-commit-dismiss" class="icon-btn" aria-label="Hide undo" title="Hide this bar (the commit stays)">✕</button>
       </div>
     </div>
   </div>
@@ -230,8 +240,10 @@
       <tr><td><kbd>Space</kbd></td><td>Toggle selection of focused photo</td></tr>
       <tr><td><kbd>l</kbd></td><td>Tag selection as… (saved places, recents, hotspots)</td></tr>
       <tr><td><kbd>i</kbd></td><td>Stage selection as needing no location</td></tr>
+      <tr><td><kbd>Del</kbd></td><td>Stage removing the selection's saved location</td></tr>
       <tr><td><kbd>g</kbd></td><td>Guess location for the focused photo</td></tr>
       <tr><td><kbd>Enter</kbd></td><td>Commit all staged locations</td></tr>
+      <tr><td><kbd>u</kbd></td><td>Undo the last commit</td></tr>
       <tr><td><kbd>?</kbd></td><td>Show this help</td></tr>
     </table>
     <div class="sh-foot">Shortcuts are ignored while typing in a text field.</div>

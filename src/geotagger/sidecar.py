@@ -508,6 +508,41 @@ def remove_gps(image_path: Path, create: bool = False) -> Path:
     return sc
 
 
+def clear_gps(image_path: Path) -> Path:
+    """Take the sidecar back to saying nothing about the location: no coordinates,
+    no accuracy, no removal marker (GPS_VOID), no place names — so a re-read falls
+    through to whatever the ORIGINAL embeds (or to no location). Used by
+    geotag_service.undo_geotags to restore a photo whose location used to come from
+    the original, or that never had one. Unlike remove_gps this records nothing.
+
+    A sidecar with neither coordinates nor the marker is left alone: then no
+    geotag write of ours is in it to undo, and its place names (e.g. from the
+    'export locations to sidecars' action) are not ours to drop. Never creates a
+    sidecar. Returns the sidecar path."""
+    et = get_et()
+    sc = sidecar_path(image_path)
+    if not sc.exists():
+        return sc
+    with get_et_lock():
+        rows = et.get_tags([str(sc)], tags=["XMP:GPSLatitude", "XMP:GPSLongitude", "XMP:GPSStatus"])
+        row = rows[0] if rows else {}
+        has_gps = row.get("XMP:GPSLatitude") is not None or row.get("XMP:GPSLongitude") is not None
+        if not has_gps and not str(row.get("XMP:GPSStatus") or "").strip():
+            return sc
+        et.execute(
+            "-overwrite_original",
+            "-XMP:GPSLatitude=",
+            "-XMP:GPSLongitude=",
+            "-XMP:GPSHPositioningError=",
+            "-GPSHPositioningError=",
+            "-XMP-exif:GPSStatus=",
+            *_location_args(None),
+            str(sc),
+        )
+    logger.info(f"Cleared sidecar GPS for {image_path.name} (location back to the original's)")
+    return sc
+
+
 def read_sidecar_datetime_raw(image_path: Path) -> str | None:
     """The literal ``XMP:DateTimeOriginal`` string currently in the sidecar, or
     None if there's no sidecar or no such tag (i.e. the file's own embedded date,

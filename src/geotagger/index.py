@@ -1297,16 +1297,21 @@ def upsert_photo(
 
 def update_geotag(photo_id: int, lat: float | None, lng: float | None,
                   geotag_source: str, sidecar_path: str | None, sidecar_mtime: float | None,
-                  gps_accuracy: float | None = None):
+                  gps_accuracy: float | None = None, geotag_removed: bool | None = None):
     """A user geotag write; lat/lng None is a removal. sidecar_path/sidecar_mtime
-    must be sidecar.sidecar_tracking()'s values, or the next scan re-reads the file."""
+    must be sidecar.sidecar_tracking()'s values, or the next scan re-reads the file.
+    `geotag_removed` overrides the marker, which otherwise follows the coordinates:
+    undo restores a photo that simply never had a location (None coordinates, no
+    marker), which is not a removal."""
     with transaction() as db:
         # Coordinates changed, so any previously-derived location names are stale.
         # Clear them all and reset geocoded_at so the point is re-geocoded; the caller
         # repopulates them (geotag_service.write_geotag does this immediately after).
         # geotag_removed records a removal so a rescan can't restore embedded GPS
         # (see upsert_photo); any write with coordinates clears it.
-        removed = 1 if lat is None or lng is None else 0
+        if geotag_removed is None:
+            geotag_removed = lat is None or lng is None
+        removed = 1 if geotag_removed else 0
         db.execute(f"""
             UPDATE photos SET lat=?, lng=?, gps_accuracy=?, geotag_source=?, sidecar_path=?, sidecar_mtime=?,
                 geotag_removed=?, {DERIVED_LOCATION_CLEAR_SQL}

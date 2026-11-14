@@ -5,11 +5,13 @@ import asyncio
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from geotagger import index
 from geotagger.executor import get_executor
-from geotagger.services import geotag_service, hotspots_service, work_queue_service
+from geotagger.services import geotag_service, hotspots_service
 from geotagger.timeutil import has_date
 
 router = APIRouter()
@@ -27,6 +29,33 @@ class RemoveGeotagRequest(BaseModel):
 class SetGeocodeIgnoredRequest(BaseModel):
     ids: list[int]
     ignored: bool = True
+
+class GeotagState(BaseModel):
+    """The geotag half of an undo snapshot (geotag_service._geotag_state)."""
+    lat: float | None = Field(None, ge=-90, le=90, allow_inf_nan=False)
+    lng: float | None = Field(None, ge=-180, le=180, allow_inf_nan=False)
+    gps_accuracy: float | None = Field(None, allow_inf_nan=False)  # raw: -1.0 = "none"
+    geotag_source: Literal["sidecar", "database", "embedded", "none"]
+    geotag_removed: bool = False
+
+class CommittedState(BaseModel):
+    """What the commit being undone left; undo refuses a photo changed since."""
+    lat: float | None = Field(None, allow_inf_nan=False)
+    lng: float | None = Field(None, allow_inf_nan=False)
+    geocode_ignored: bool | None = None
+
+class GeotagSnapshot(BaseModel):
+    """One `previous` entry from a /api/geotag, /remove or /ignore reply. The
+    client only stores and returns these, but they are client input on the way
+    back, so they are validated like any other write (coordinates in range, a
+    known source)."""
+    id: int
+    geotag: GeotagState | None = None        # None: the commit didn't touch the geotag
+    geocode_ignored: bool | None = None      # None: the commit didn't touch the flag
+    expect: CommittedState = CommittedState()
+
+class UndoGeotagRequest(BaseModel):
+    previous: list[GeotagSnapshot]
 
 class ProposeRequest(BaseModel):
     ids: list[int]
@@ -66,9 +95,9 @@ async def api_geotag_ignore(req: SetGeocodeIgnoredRequest):
     """Mark (or unmark) photos as not needing geocoding, e.g. screenshots.
     DB-only — no EXIF/sidecar write. Ignored photos still appear in the grid
     but count as geotagged for the Show filter and geotagged/not-geotagged stats."""
-    index.set_geocode_ignored(req.ids, req.ignored)
-    work_queue_service.invalidate()
-    return {"ids": req.ids, "geocode_ignored": req.ignored}
+    out = geotag_service.set_geocode_ignored(req.ids, req.ignored)
+    # `results` carries each photo's undo snapshot (see /api/geotag/undo).
+    return {"ids": req.ids, "geocode_ignored": req.ignored, "results": out["results"]}
 
 
 # ── Hotspots & proposals ──
@@ -180,3 +209,19 @@ async def api_geotag_remove(req: RemoveGeotagRequest):
     )
     return _batch_response(req.ids, out)
 
+
+@router.post("/api/geotag/undo")
+async def api_geotag_undo(req: UndoGeotagRequest):
+    """Revert a commit: hand back the `previous` snapshots from the /api/geotag,
+    /api/geotag/remove and /api/geotag/ignore replies it was made of. Each photo
+    goes back to its state before (sidecar and row, see geotag_service.
+    undo_geotags) unless it changed since, which comes back in `failed` with
+    `conflict: true`. Same {results, written, failed, not_found} reply."""
+    if not req.previous:
+        raise HTTPException(400, "nothing to undo")
+    loop = asyncio.get_running_loop()
+    out = await loop.run_in_executor(
+        get_executor(), geotag_service.undo_geotags,
+        [s.model_dump() for s in req.previous],
+    )
+    return _batch_response([s.id for s in req.previous], out)

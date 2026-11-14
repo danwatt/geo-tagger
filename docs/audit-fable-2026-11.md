@@ -80,10 +80,6 @@ names. No archive is extracted to disk. Download URLs are fixed HTTPS constants.
 
 ## UX
 
-**U2 — No way to remove or undo a committed geotag** [traced] — `web/geocode.html:74-80`. The only caller of
-`/api/geotag/remove` sits in a `display:none` block. Add "Remove location" to the context menu and an
-"Undo last commit".
-
 **U3 — One-click destructive actions without undo** [traced] — the "×" on a tagged card and "Ignore all N"
 (`photo-faces.js:448-450,507,588-590`); group Ignore/Accept on Tag (1.8 s toast only); the hover-only "×"
 beside "✎" in the People list (`people.js:597-615`). An Undo toast pattern would cover all of them.
@@ -138,4 +134,4 @@ already have `--dry-run`; match them and require `--yes`.
 
 1. **Small fixes:** A11, T1, T6.
 2. **Request handling:** A1, A7.
-3. **UX features:** U2 (remove geotag), U3 (undo toast).
+3. **UX features:** U3 (undo toast).

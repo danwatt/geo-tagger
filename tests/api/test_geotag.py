@@ -28,7 +28,9 @@ def test_ignore_toggles_flag(client):
     pid = _add("u.jpg", dt=1000)
     r = client.post("/api/geotag/ignore", json={"ids": [pid], "ignored": True})
     assert r.status_code == 200
-    assert r.json() == {"ids": [pid], "geocode_ignored": True}
+    assert r.json() == {"ids": [pid], "geocode_ignored": True, "results": [
+        {"id": pid, "previous": {"id": pid, "geocode_ignored": False,
+                                 "expect": {"geocode_ignored": True}}}]}
     assert client.get(f"/api/photo/{pid}").json()["geocode_ignored"] is True
 
     client.post("/api/geotag/ignore", json={"ids": [pid], "ignored": False})
@@ -247,3 +249,67 @@ def test_remove_partial_failure(et_session, client, tmp_path, monkeypatch):
 
     monkeypatch.setattr(sidecar, "remove_gps", lambda *a, **k: (_ for _ in ()).throw(OSError("x")))
     assert client.post("/api/geotag/remove", json={"ids": [ids[1]]}).status_code == 502
+
+
+# ── U2: /api/geotag/undo ──
+
+def test_commit_replies_carry_undo_snapshots_and_undo_restores(et_session, client, tmp_path):
+    ids = _photos(tmp_path, 2)
+    client.post("/api/geotag", json={"ids": [ids[0]], "lat": 1.0, "lng": 2.0, "gps_accuracy": 9.0})
+    tag = client.post("/api/geotag", json={"ids": ids, "lat": 10.0, "lng": 20.0}).json()
+    prev = [r["previous"] for r in tag["results"]]
+    assert prev[0] == {"id": ids[0], "expect": {"lat": 10.0, "lng": 20.0},
+                       "geotag": {"lat": 1.0, "lng": 2.0, "gps_accuracy": 9.0,
+                                  "geotag_source": "database", "geotag_removed": False}}
+    assert prev[1]["geotag"]["geotag_source"] == "none"
+
+    r = client.post("/api/geotag/undo", json={"previous": prev})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["written"] == ids and body["failed"] == [] and body["not_found"] == []
+    by_id = {x["id"]: x for x in body["results"]}
+    assert (by_id[ids[0]]["lat"], by_id[ids[0]]["gps_accuracy"]) == (1.0, 9.0)
+    assert (by_id[ids[1]]["lat"], by_id[ids[1]]["geotag_source"]) == (None, "none")
+    assert client.get(f"/api/photo/{ids[0]}").json()["lat"] == 1.0
+    assert _lat(ids[1]) is None
+
+
+def test_remove_reply_snapshot_round_trips(et_session, client, tmp_path):
+    (pid,) = _photos(tmp_path, 1)
+    client.post("/api/geotag", json={"ids": [pid], "lat": 5.0, "lng": 6.0})
+    rem = client.post("/api/geotag/remove", json={"ids": [pid]}).json()
+    assert rem["results"][0]["previous"]["expect"] == {"lat": None, "lng": None}
+    r = client.post("/api/geotag/undo", json={"previous": [rem["results"][0]["previous"]]})
+    assert r.status_code == 200 and _lat(pid) == 5.0
+
+
+def test_undo_conflict_and_unknown_ids_status(et_session, client, tmp_path):
+    (pid,) = _photos(tmp_path, 1)
+    tag = client.post("/api/geotag", json={"ids": [pid], "lat": 10.0, "lng": 20.0}).json()
+    client.post("/api/geotag", json={"ids": [pid], "lat": 11.0, "lng": 21.0})
+    r = client.post("/api/geotag/undo", json={"previous": [tag["results"][0]["previous"]]})
+    assert r.status_code == 502   # nothing written: every photo was refused
+    assert r.json()["failed"][0]["conflict"] is True
+    assert _lat(pid) == 11.0
+
+    gone = {"id": 98765, "geocode_ignored": False, "expect": {"geocode_ignored": True}}
+    assert client.post("/api/geotag/undo", json={"previous": [gone]}).status_code == 404
+
+
+@pytest.mark.parametrize("snap", [
+    {"id": 1, "geotag": {"lat": 999, "lng": 0, "geotag_source": "sidecar"}},
+    {"id": 1, "geotag": {"lat": 1, "lng": 2, "geotag_source": "somewhere"}},
+    {"id": 1, "geotag": {"lat": 1, "lng": 2}},
+    {"geocode_ignored": True},
+])
+def test_undo_rejects_malformed_snapshots(client, snap):
+    assert client.post("/api/geotag/undo", json={"previous": [snap]}).status_code == 422
+
+
+def test_undo_rejects_empty_and_coordless_geotag(client, tmp_path):
+    assert client.post("/api/geotag/undo", json={"previous": []}).status_code == 400
+    (pid,) = _photos(tmp_path, 1)
+    # A 'sidecar' geotag with no coordinates is refused per photo, not written.
+    snap = {"id": pid, "geotag": {"geotag_source": "sidecar"}, "expect": {"lat": None, "lng": None}}
+    r = client.post("/api/geotag/undo", json={"previous": [snap]})
+    assert r.status_code == 502 and "needs coordinates" in r.json()["failed"][0]["error"]

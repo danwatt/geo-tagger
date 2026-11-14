@@ -22,11 +22,16 @@ let undatedMode = false;  // true when browsing the Undated queue instead of a m
  * provisional pin marks the spot until the change is committed or reverted.
  * See the "Geotag staging" section for the details. */
 // photo id → { photo, lat, lng, accuracy, loc, label } for a staged drop, or
-// { photo, ignore: true, label } for a staged "no location needed" mark. Both
-// kinds share the staging area, the revert buttons and Commit.
+// { photo, ignore: true, label } for a staged "no location needed" mark, or
+// { photo, remove: true, label } for a staged "remove the saved location" (U2).
+// All kinds share the staging area, the revert buttons and Commit; only drops
+// have a point (stagedPoint).
 // A StagedMap (common.js): mirrored to sessionStorage on every change so a
 // reload or crash doesn't lose the pass (U7) — see restoreStagedGeo. Version 1
-// record: {id, lat, lng, accuracy, loc, label, ignore, was}.
+// record: {id, lat, lng, accuracy, loc, label, ignore, remove, was}. `remove`
+// was added without a version bump: a bump would sweep (lose) records staged
+// by the previous build, and that build simply drops a remove record it can't
+// validate.
 let pendingGeo = new StagedMap(stagedWorkStore("geocode", 1), e => pendingGeoRecord(e));
 let pendingGeoMarkers = [];      // provisional pins/circles, rebuilt on every render
 const geocodeLabelCache = new Map();   // "lat,lng" (4dp) → { loc, label }
@@ -43,6 +48,12 @@ const FILTER_TOGGLES = {
 // Group heading for staged "needs no location" marks. Doubles as their key in
 // groupPendingGeo, so it must not collide with a real geocoded place name.
 const IGNORE_LABEL = "🚫 No location needed";
+// Same, for staged removals.
+const REMOVE_LABEL = "❌ Remove saved location";
+
+// Whether a staged entry is a map drop (has a point to pin, pan to, write),
+// rather than an ignore mark or a removal.
+function stagedPoint(e) { return !e.ignore && !e.remove; }
 
 /* ── Places state ── */
 let places = [];
@@ -304,8 +315,9 @@ function bindToolbar() {
   document.getElementById("place-search").addEventListener("keydown", (e) => {
     if (e.key === "Enter") doPlaceSearch();
   });
-  document.getElementById("remove-geotag-btn").addEventListener("click", doRemoveGeotag);
   document.getElementById("mark-ignored-btn").addEventListener("click", () => stageIgnore());
+  document.getElementById("remove-location-btn").addEventListener("click", () => stageRemove());
+  bindUndoCommit();
 
   document.getElementById("commit-all-btn").addEventListener("click",
     () => commitPendingGeo(groupPendingGeo()));
@@ -1527,6 +1539,14 @@ function openPhotoContextMenu(e, photo) {
   add(`📍 Assign location…${suffix}`,
       "Pick from saved places, recent locations and hotspots (same as the L key)",
       () => openLocationPicker(ids));
+  // Only photos with a saved location have anything to remove; the count says
+  // how many of a mixed selection that is.
+  const located = locatedIds(ids);
+  add(`❌ Remove location${located.length > 1 ? ` (${located.length})` : ""}`,
+      located.length
+        ? "Stage removing the saved location — review and Commit below (same as the Del key)"
+        : "No saved location to remove",
+      () => stageRemove(located), !located.length);
   add("🗺 Show nearby on map",
       "Put every photo from this photo's day on the map, whatever the Show toggles say",
       () => showDayOnMap(photo));
@@ -2061,17 +2081,19 @@ async function geotag(ids, lat, lng, accuracy = null, { render = true } = {}) {
       setStatus(`Tagged ${out.written.length} photo(s) at ${lat.toFixed(5)}, ${lng.toFixed(5)}${accLog}`);
     }
     if (focusedPhotoId && ids.includes(focusedPhotoId)) showDetail(focusedPhotoId);
-    return { written: out.written, error: problems };
+    // `results` carry the per-photo undo snapshots (commitGroups collects them).
+    return { written: out.written, results: out.results, error: problems };
   } catch (err) {
     setStatus("Geotag error: " + err.message, true);
-    return { written: [], error: err.message };
+    return { written: [], results: [], error: err.message };
   }
 }
 
-async function doRemoveGeotag() {
-  if (!selectedIds.size) return;
-  const ids = [...selectedIds];
-  setStatus(`Removing geotag from ${ids.length} photo(s)…`);
+// Removes the saved location from `ids` — the commit side of a staged removal
+// (stageRemove). Same {written, results, error} contract and `render` option
+// as geotag(); a photo that failed keeps its location and stays staged.
+async function removeGeotag(ids, { render = true } = {}) {
+  setStatus(`Removing the location from ${ids.length} photo(s)…`);
   try {
     const res = await fetch("/api/geotag/remove", {
       method: "POST",
@@ -2080,23 +2102,29 @@ async function doRemoveGeotag() {
     });
     const out = await readBatchReply(res);
     // Only photos the server actually cleared lose their pin; failed ones keep it.
+    const byId = new Map(photos.map((p) => [p.id, p]));
     out.written.forEach((id) => {
-      const photo = photos.find((p) => p.id === id);
-      if (photo) { photo.lat = null; photo.lng = null; photo.geotag_source = "none"; }
+      const photo = byId.get(id);
+      if (photo) {
+        photo.lat = null; photo.lng = null; photo.geotag_source = "none";
+        photo.gps_accuracy = null; photo.location = null;
+      }
       if (markersById[id]) { photoCluster.removeLayer(markersById[id]); delete markersById[id]; }
     });
     // Same reason as geotag(): losing a geotag can move a photo into or out of
     // the Show filter, so the filtered set has to be rebuilt, not just redrawn.
-    applyFilters();
+    if (render) applyFilters();
     const problems = batchProblems(out);
     if (problems) {
-      setStatus(`Removed geotag from ${out.written.length} of ${ids.length}; ${problems}`, true);
+      setStatus(`Removed the location from ${out.written.length} of ${ids.length}; ${problems}`, true);
     } else {
-      setStatus(`Removed geotag from ${out.written.length} photo(s)`);
+      setStatus(`Removed the location from ${out.written.length} photo(s)`);
     }
     if (focusedPhotoId && ids.includes(focusedPhotoId)) showDetail(focusedPhotoId);
+    return { written: out.written, results: out.results, error: problems };
   } catch (err) {
     setStatus("Remove error: " + err.message, true);
+    return { written: [], results: [], error: err.message };
   }
 }
 
@@ -2106,8 +2134,9 @@ async function doRemoveGeotag() {
 // commitPendingGeo keeps them staged (it reports `error` in its summary).
 async function setGeocodeIgnored(ids, ignored, { render = true } = {}) {
   if (!ids.length) return { ok: false, error: "no photos" };
+  let out;
   try {
-    await postJson("/api/geotag/ignore", { ids, ignored });
+    out = await postJson("/api/geotag/ignore", { ids, ignored });
   } catch (err) {
     setStatus("Ignore for geocoding failed: " + err.message, true);
     return { ok: false, error: err.message };
@@ -2119,7 +2148,8 @@ async function setGeocodeIgnored(ids, ignored, { render = true } = {}) {
   });
   if (render) applyFilters();
   if (focusedPhotoId && ids.includes(focusedPhotoId)) showDetail(focusedPhotoId);
-  return { ok: true };
+  // `results` carry the per-photo undo snapshots (commitGroups collects them).
+  return { ok: true, results: out.results || [] };
 }
 
 // "This photo needs no location" is a judgement like any other tag, and just as
@@ -2145,6 +2175,40 @@ function stageIgnore(ids = [...selectedIds]) {
   refreshSelectionUI();    // same reason as stageDrop: the selection just shrank
   setStatus(`Staged ${staged} photo(s) as needing no location. Nothing saved yet — ` +
             `review at the bottom of the grid, then Commit.`);
+}
+
+// The ids among `ids` whose photo has a saved location — all a removal can act on.
+function locatedIds(ids) {
+  const byId = new Map(photos.map((p) => [p.id, p]));
+  return ids.filter((id) => byId.get(id)?.lat != null);
+}
+
+// "Remove location" (U2) stages like every other judgement here: the photos
+// park in the staging area under REMOVE_LABEL and nothing is written until
+// Commit, so Revert backs out a wrong selection for free — and a committed
+// removal can still be taken back with "Undo last commit".
+function stageRemove(ids = [...selectedIds]) {
+  if (!ids.length) { setStatus("No photos selected", true); return; }
+  const located = locatedIds(ids);
+  if (!located.length) {
+    setStatus(ids.length > 1 ? "None of the selected photos has a saved location to remove."
+                             : "That photo has no saved location to remove.", true);
+    return;
+  }
+  located.forEach((id) => {
+    const photo = photos.find((p) => p.id === id);
+    // Overwrites a staged drop for the same photo, exactly as re-dropping does.
+    pendingGeo.set(id, { photo, remove: true, label: REMOVE_LABEL });
+    selectedIds.delete(id);
+  });
+  lastClickedIndex = -1;   // the grid's index run shifts under the removed cells
+  hideProposal();
+  renderGrid();
+  refreshSelectionUI();
+  const skipped = ids.length - located.length;
+  const skipNote = skipped ? ` (${skipped} without a location left as they are.)` : "";
+  setStatus(`Staged removing the location from ${located.length} photo(s).${skipNote} ` +
+            `Nothing saved yet — review at the bottom of the grid, then Commit.`);
 }
 
 /* ── Place search ── */
@@ -2608,11 +2672,16 @@ function groupPendingGeo(entries = pendingGeo.values()) {
   const groups = new Map();
   [...entries].forEach((e) => {
     let g = groups.get(e.label);
-    if (!g) { g = { label: e.label, ignore: !!e.ignore, entries: [] }; groups.set(e.label, g); }
+    if (!g) {
+      g = { label: e.label, ignore: !!e.ignore, remove: !!e.remove, entries: [] };
+      groups.set(e.label, g);
+    }
     g.entries.push(e);
   });
+  // Places first, then the removals, then the no-location marks.
+  const rank = (g) => (g.ignore ? 2 : g.remove ? 1 : 0);
   return [...groups.values()].sort((a, b) => {
-    if (a.ignore !== b.ignore) return a.ignore ? 1 : -1;
+    if (rank(a) !== rank(b)) return rank(a) - rank(b);
     const ua = a.label.startsWith("📌"), ub = b.label.startsWith("📌");
     if (ua !== ub) return ua ? 1 : -1;   // un-geocoded points sink to the bottom
     return a.label.localeCompare(b.label);
@@ -2624,6 +2693,9 @@ function renderPendingGeo() {
   const wrap = document.getElementById("pending-groups");
   wrap.innerHTML = "";
   renderPendingGeoMarkers();
+  // Both bars stick to the pane's bottom edge; while something is staged the
+  // undo bar drops into flow below the staging bar instead of covering it.
+  document.getElementById("undo-commit-bar").classList.toggle("below-staging", pendingGeo.size > 0);
   if (!pendingGeo.size) { pane.style.display = "none"; return; }
   pane.style.display = "";
 
@@ -2636,11 +2708,12 @@ function renderPendingGeo() {
 function makePendingGeoGroup(g, groupIdx) {
   const sec = document.createElement("div");
   sec.className = `face-group-section pending-group group-tint-${groupIdx % 6}` +
-    (g.ignore ? " pending-ignore-group" : "");
-  const points = g.ignore ? 0 : new Set(g.entries.map(pointKey)).size;
+    (g.ignore || g.remove ? " pending-ignore-group" : "");
+  const hasPoints = !g.ignore && !g.remove;
+  const points = hasPoints ? new Set(g.entries.map(pointKey)).size : 0;
   const buttons = [];
-  // Nothing to zoom to: the no-location group has no coordinates.
-  if (!g.ignore) {
+  // Nothing to zoom to: the no-location and removal groups have no coordinates.
+  if (hasPoints) {
     buttons.push({ icon: "⛶", label: "Zoom to these photos",
       title: "Fit the map to this group's staged point(s)",
       onClick: () => {
@@ -2652,12 +2725,16 @@ function makePendingGeoGroup(g, groupIdx) {
     { label: `✔ Commit (${g.entries.length})`, kind: "primary",
       title: g.ignore
         ? `Mark these ${g.entries.length} photo(s) as needing no location`
-        : `Write just this place's ${g.entries.length} location(s) to the photos`,
+        : g.remove
+          ? `Remove the saved location from these ${g.entries.length} photo(s)`
+          : `Write just this place's ${g.entries.length} location(s) to the photos`,
       onClick: () => commitPendingGeo([g], g.label) },
     { label: "↩ Revert", kind: "danger",
       title: g.ignore
         ? "Discard these staged marks and put the photos back in the grid"
-        : "Discard this place's staged locations and put the photos back in the grid",
+        : g.remove
+          ? "Keep these photos' locations and put them back in the grid"
+          : "Discard this place's staged locations and put the photos back in the grid",
       onClick: () => revertPendingGeo([g], g.label) },
   );
   sec.appendChild(faceGroupHeader({
@@ -2697,7 +2774,9 @@ function makePendingGeoCell(e) {
   chip.className = "face-label pending-label";
   chip.textContent = e.ignore
     ? "🚫 no location"
-    : `${e.lat.toFixed(4)}, ${e.lng.toFixed(4)}` + (e.accuracy ? ` ±${e.accuracy}m` : "");
+    : e.remove
+      ? "❌ remove location"
+      : `${e.lat.toFixed(4)}, ${e.lng.toFixed(4)}` + (e.accuracy ? ` ±${e.accuracy}m` : "");
   chip.title = `${photo.filename} → ${e.label}`;
   cell.appendChild(chip);
 
@@ -2712,11 +2791,13 @@ function makePendingGeoCell(e) {
   cell.appendChild(undo);
 
   // Click previews the photo and pans to where it would land — an ignored photo
-  // has nowhere to pan to, so it just previews.
+  // has nowhere to pan to, so it just previews; a staged removal pans to the
+  // location it is about to lose.
   cell.addEventListener("click", () => {
     showDetail(photo.id);
     renderPendingGeo();   // move the focus ring
-    if (!e.ignore) map.panTo([e.lat, e.lng]);
+    if (stagedPoint(e)) map.panTo([e.lat, e.lng]);
+    else if (e.remove && photo.lat != null) map.panTo([photo.lat, photo.lng]);
   });
   return cell;
 }
@@ -2731,7 +2812,7 @@ function renderPendingGeoMarkers() {
 
   const byPoint = new Map();
   pendingGeo.forEach((e) => {
-    if (e.ignore) return;   // no coordinate, nothing to pin
+    if (!stagedPoint(e)) return;   // no coordinate, nothing to pin
     const k = pointKey(e);
     if (!byPoint.has(k)) byPoint.set(k, { ...e, count: 0 });
     byPoint.get(k).count++;
@@ -2771,7 +2852,7 @@ function makePendingPinIcon(count) {
 let commitInFlight = false;
 
 async function commitPendingGeo(groups, what) {
-  if (commitInFlight) { setStatus("A commit is already in progress…", true); return; }
+  if (commitInFlight || undoInFlight) { setStatus("A commit or undo is already in progress…", true); return; }
   const total = groups.reduce((n, g) => n + g.entries.length, 0);
   if (!total) { setStatus("Nothing staged to commit.", true); return; }
   if (!confirm(`Commit ${total} staged change(s)${what ? ` — ${what}` : ""}? ` +
@@ -2789,6 +2870,10 @@ async function commitGroups(groups, total) {
 
   let saved = 0;
   const failures = [];
+  // Every landed write's undo snapshot (the server's `previous`), so the whole
+  // commit — all its groups and points — can be taken back in one go.
+  const snapshots = [];
+  const keep = (results) => (results || []).forEach(r => { if (r.previous) snapshots.push(r.previous); });
   for (const g of groups) {
     // The no-location group writes a flag, not a coordinate — one call for all
     // of it, and no Recent entry, since it isn't a place anyone will reuse.
@@ -2798,8 +2883,22 @@ async function commitGroups(groups, total) {
       if (done.ok) {
         ids.forEach(id => pendingGeo.delete(id));
         saved += ids.length;
+        keep(done.results);
       } else {
         failures.push(`${g.label} (${ids.length} photo(s)) — ${done.error}`);
+      }
+      continue;
+    }
+    // Staged removals: one call for the group; failed photos stay staged.
+    if (g.remove) {
+      const ids = g.entries.map(e => e.photo.id);
+      const done = await removeGeotag(ids, { render: false });
+      done.written.forEach(id => pendingGeo.delete(id));
+      saved += done.written.length;
+      keep(done.results);
+      if (done.written.length < ids.length) {
+        failures.push(`${g.label} (${ids.length - done.written.length} photo(s))` +
+                      (done.error ? ` — ${done.error}` : ""));
       }
       continue;
     }
@@ -2816,6 +2915,7 @@ async function commitGroups(groups, total) {
       // Only clear what actually landed — failed photos (or a failed point) stay staged.
       landed.forEach(id => pendingGeo.delete(id));
       saved += landed.length;
+      keep(done.results);
       if (landed.length) {
         // A committed point is a location the user demonstrably uses — it heads
         // the location picker's Recent list from here on.
@@ -2838,6 +2938,9 @@ async function commitGroups(groups, total) {
   } else {
     setStatus(`Committed ${saved} change(s).`);
   }
+  // This commit becomes "the last commit" — only if something landed, so a
+  // wholly failed retry doesn't throw away the undo of the one before it.
+  if (snapshots.length) setLastCommit(snapshots);
   // In batch mode a clean sweep means the batch is done — roll on.
   if (!failures.length) maybeAdvanceBatch();
 }
@@ -2857,6 +2960,119 @@ function revertPendingGeo(groups, what) {
   unstageGeo(ids);
 }
 
+/* ── Undo last commit (U2) ──
+ * Every write on the commit path (/api/geotag, /remove, /ignore) answers with a
+ * per-photo `previous` snapshot: the row's geotag (or flag) just before, plus
+ * what the write left. commitGroups keeps them all as "the last commit"; Undo
+ * hands them back to /api/geotag/undo, which restores each photo — the sidecar
+ * as well as the row, and to what a re-read would see (an embedded location
+ * comes back from the original, a removal is removed again, a never-located
+ * photo goes back to no location). A photo changed since the commit is left
+ * alone and reported. Opaque to this page: it only stores and returns them.
+ *
+ * Kept in this tab's sessionStorage (like the staged set, U7), so it survives a
+ * reload and a scope change; it is replaced by the next commit that lands,
+ * cleared by a clean undo, and trimmed to the failed photos by a partial one. */
+const UNDO_COMMIT_KEY = "geotagger.undo.geocode.v1";
+let lastCommit = null;   // { previous: [snapshot…], at: ms }
+
+function loadLastCommit() {
+  try {
+    const data = JSON.parse(sessionStorage.getItem(UNDO_COMMIT_KEY) || "null");
+    if (data && Array.isArray(data.previous) && data.previous.length &&
+        data.previous.every(s => s && Number.isInteger(s.id))) return data;
+  } catch (_) { /* storage blocked or garbled: no undo to offer */ }
+  return null;
+}
+
+function saveLastCommit() {
+  try {
+    if (lastCommit) sessionStorage.setItem(UNDO_COMMIT_KEY, JSON.stringify(lastCommit));
+    else sessionStorage.removeItem(UNDO_COMMIT_KEY);
+  } catch (_) { /* storage blocked: undo still works until the tab reloads */ }
+}
+
+function setLastCommit(previous) {
+  lastCommit = previous && previous.length ? { previous, at: Date.now() } : null;
+  saveLastCommit();
+  renderUndoBar();
+}
+
+function renderUndoBar() {
+  const bar = document.getElementById("undo-commit-bar");
+  if (!lastCommit) { bar.hidden = true; return; }
+  const n = lastCommit.previous.length;
+  const when = new Date(lastCommit.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  document.getElementById("undo-commit-summary").textContent =
+    `Last commit: ${n.toLocaleString()} photo${n !== 1 ? "s" : ""} at ${when}.`;
+  bar.hidden = false;
+}
+
+function bindUndoCommit() {
+  lastCommit = loadLastCommit();
+  renderUndoBar();
+  document.getElementById("undo-commit-btn").addEventListener("click", undoLastCommit);
+  // Hiding is not forgetting: the U key still undoes until the next commit.
+  document.getElementById("undo-commit-dismiss").addEventListener("click", () => {
+    document.getElementById("undo-commit-bar").hidden = true;
+  });
+}
+
+let undoInFlight = false;
+
+async function undoLastCommit() {
+  if (!lastCommit) { setStatus("Nothing to undo.", true); return; }
+  if (undoInFlight || commitInFlight) { setStatus("A commit or undo is already in progress…", true); return; }
+  const snaps = lastCommit.previous;
+  if (!confirm(`Undo the last commit? ${snaps.length} photo(s) go back to the location ` +
+               `(or no location / ignore mark) they had before it.`)) return;
+  undoInFlight = true;
+  setStatus(`Undoing the last commit (${snaps.length} photo(s))…`);
+  try {
+    const res = await fetch("/api/geotag/undo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ previous: snaps }),
+    });
+    const out = await readBatchReply(res);
+    const byId = new Map(photos.map((p) => [p.id, p]));
+    out.results.forEach((r) => {
+      const photo = byId.get(r.id);
+      if (!photo) return;   // not in the loaded scope: nothing on screen to update
+      photo.lat = r.lat;
+      photo.lng = r.lng;
+      photo.geotag_source = r.geotag_source;
+      photo.gps_accuracy = r.gps_accuracy;
+      photo.geocode_ignored = r.geocode_ignored;
+      if ("location" in r) photo.location = r.location;
+    });
+    applyFilters();   // restored photos can change Show bucket and pin
+    if (focusedPhotoId != null && out.written.includes(focusedPhotoId)) showDetail(focusedPhotoId);
+
+    // Keep only what can usefully be retried: a photo changed since the commit
+    // (conflict) or deleted (not_found) would just fail the same way again.
+    const retry = new Set(out.failed.filter(f => !f.conflict).map(f => f.id));
+    setLastCommit(snaps.filter(s => retry.has(s.id)));
+
+    const bad = out.failed.length + out.not_found.length;
+    if (!bad) {
+      setStatus(`Undid the last commit: ${out.written.length} photo(s) restored.`);
+      return;
+    }
+    // Per photo: name each failure (filename when loaded) with its reason.
+    const name = (id) => byId.get(id)?.filename || `photo #${id}`;
+    const lines = out.failed.map(f => `${name(f.id)} (${f.error})`)
+      .concat(out.not_found.map(id => `${name(id)} (no longer in the library)`));
+    const shown = lines.slice(0, 5).join(", ") + (lines.length > 5 ? `, +${lines.length - 5} more` : "");
+    setStatus(`Undid ${out.written.length} of ${snaps.length} photo(s); not restored: ${shown}.` +
+              (retry.size ? " Undo again to retry the failed ones." : ""), true);
+  } catch (err) {
+    setStatus("Undo failed: " + err.message, true);   // record kept: retry with Undo
+  } finally {
+    undoInFlight = false;
+  }
+}
+
 /* ── Restore after a reload or crash (U7) ──
  * pendingGeo is a StagedMap, so every drop / mark / revert / landed commit is
  * already mirrored to sessionStorage (ids + intended values, pendingGeoRecord).
@@ -2869,14 +3085,14 @@ function revertPendingGeo(groups, what) {
 function pendingGeoRecord(e) {
   const p = e.photo;
   const was = { lat: p.lat ?? null, lng: p.lng ?? null, gi: !!p.geocode_ignored };
-  return e.ignore
-    ? { id: p.id, ignore: true, was }
-    : { id: p.id, lat: e.lat, lng: e.lng, accuracy: e.accuracy ?? null,
-        loc: e.loc ?? null, label: e.label, was };
+  if (e.ignore) return { id: p.id, ignore: true, was };
+  if (e.remove) return { id: p.id, remove: true, was };
+  return { id: p.id, lat: e.lat, lng: e.lng, accuracy: e.accuracy ?? null,
+           loc: e.loc ?? null, label: e.label, was };
 }
 
 function validGeoRecord(r) {
-  if (r.ignore === true) return true;
+  if (r.ignore === true || r.remove === true) return true;
   return Number.isFinite(r.lat) && Math.abs(r.lat) <= 90 &&
          Number.isFinite(r.lng) && Math.abs(r.lng) <= 180 &&
          (r.accuracy == null || Number.isFinite(r.accuracy)) &&
@@ -2909,17 +3125,19 @@ async function restoreStagedGeo() {
     if (pendingGeo.has(r.id)) return;   // re-staged during the check: newer wins
     const photo = current.get(r.id);
     if (!photo) { gone++; return; }
+    // A removal is "already applied" once the photo has no location at all.
     if (r.ignore ? photo.geocode_ignored
-                 : (sameCoord(photo.lat, r.lat) && sameCoord(photo.lng, r.lng) &&
-                    (photo.gps_accuracy ?? null) === (r.accuracy ?? null))) {
+        : r.remove ? photo.lat == null
+        : (sameCoord(photo.lat, r.lat) && sameCoord(photo.lng, r.lng) &&
+           (photo.gps_accuracy ?? null) === (r.accuracy ?? null))) {
       applied++;
       return;
     }
     const was = r.was || {};
     if ((was.lat ?? null) !== (photo.lat ?? null) || (was.lng ?? null) !== (photo.lng ?? null) ||
         !!was.gi !== !!photo.geocode_ignored) changed++;
-    pendingGeo.set(r.id, r.ignore
-      ? { photo, ignore: true, label: IGNORE_LABEL }
+    pendingGeo.set(r.id, r.ignore ? { photo, ignore: true, label: IGNORE_LABEL }
+      : r.remove ? { photo, remove: true, label: REMOVE_LABEL }
       : { photo, lat: r.lat, lng: r.lng, accuracy: r.accuracy ?? null, loc: r.loc ?? null, label: r.label });
     selectedIds.delete(r.id);
     restored.push(r.id);
@@ -2948,7 +3166,7 @@ async function restoreStagedGeo() {
     detail: notes.join(" "),
     onReview: () => {
       document.getElementById("pending-pane")?.scrollIntoView({ behavior: "smooth", block: "start" });
-      const pts = stillRestored().map(id => pendingGeo.get(id)).filter(e => !e.ignore);
+      const pts = stillRestored().map(id => pendingGeo.get(id)).filter(stagedPoint);
       if (pts.length) {
         map.flyToBounds(L.latLngBounds(pts.map(e => [e.lat, e.lng])),
                         { padding: [60, 60], maxZoom: 15, duration: 0.6 });
@@ -3260,7 +3478,8 @@ function isShortcutsHelpOpen() {
 }
 
 // Grid keyboard nav — j/k move, space select, shift extends, l tag-as (bound
-// separately above), i ignore, g guess, Enter commits staged. Ported from
+// separately above), i ignore, Delete stages a removal, g guess, Enter commits
+// staged, u undoes the last commit. Ported from
 // People's shortcut set (see people.js's bindKeyboardShortcuts).
 function bindGridKeyboardShortcuts() {
   document.addEventListener("keydown", (e) => {
@@ -3301,6 +3520,13 @@ function bindGridKeyboardShortcuts() {
       case "i":
         e.preventDefault();
         stageIgnore();
+        break;
+      case "Delete":
+        e.preventDefault();
+        stageRemove();
+        break;
+      case "u":
+        if (lastCommit) { e.preventDefault(); undoLastCommit(); }
         break;
       case "Enter":
         if (pendingGeo.size) { e.preventDefault(); commitPendingGeo(groupPendingGeo()); }

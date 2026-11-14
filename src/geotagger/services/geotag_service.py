@@ -52,6 +52,25 @@ def _invalidate_caches() -> None:
     work_queue_service.invalidate()
 
 
+# ── Undo snapshots ──
+# Every commit-path writer (write_geotag, remove_geotag, set_geocode_ignored)
+# returns, per photo it changed, a `previous` snapshot of what the row held just
+# before, plus `expect`: what the write left. The client keeps the snapshots of
+# its last commit and hands them back to undo_geotags (POST /api/geotag/undo),
+# which puts that state back — sidecar and row — unless the photo has been changed
+# again since (its row no longer matches `expect`). Same contract as
+# photos_service.commit_guessed_dates / undo_date_commit.
+
+GEOTAG_SOURCES = ("sidecar", "database", "embedded", "none")
+
+
+def _geotag_state(row) -> dict:
+    """The geotag half of a snapshot, verbatim from the row (gps_accuracy raw,
+    -1.0/NULL included, so the restored row reads the same to is_fresh)."""
+    return {"lat": row["lat"], "lng": row["lng"], "gps_accuracy": row["gps_accuracy"],
+            "geotag_source": row["geotag_source"], "geotag_removed": bool(row["geotag_removed"])}
+
+
 def write_geotag(photo_ids: list[int], lat: float, lng: float,
                  gps_accuracy: float | None = None) -> dict:
     """Write one shared point to every photo in `photo_ids`. Blocking; runs in the
@@ -115,6 +134,8 @@ def write_geotag(photo_ids: list[int], lat: float, lng: float,
                 "geotag_source": source, "sidecar_path": sc_name,
                 "location": loc,
                 "gps_accuracy": gps_accuracy,
+                "previous": {"id": photo_id, "geotag": _geotag_state(row),
+                             "expect": {"lat": lat, "lng": lng}},
             })
     finally:
         # Even a partial (or aborted) batch moved coordinates.
@@ -156,7 +177,150 @@ def remove_geotag(photo_ids: list[int]) -> dict:
                 logger.exception("Geotag removal failed for photo %s", photo_id)
                 failed.append({"id": photo_id, "error": _short_error(e)})
                 continue
-            results.append({"id": photo_id, "geotag_source": "none"})
+            results.append({"id": photo_id, "geotag_source": "none",
+                            "previous": {"id": photo_id, "geotag": _geotag_state(row),
+                                         "expect": {"lat": None, "lng": None}}})
+    finally:
+        _invalidate_caches()
+    return {"results": results, "written": [r["id"] for r in results],
+            "failed": failed, "not_found": not_found}
+
+
+def set_geocode_ignored(photo_ids: list[int], ignored: bool) -> dict:
+    """Mark (or unmark) photos as needing no location. DB-only; one transaction.
+    Returns {"results": [{"id", "previous"}] for the photos that exist} — the
+    snapshot undo_geotags takes to put each flag back."""
+    db = index.get_db()
+    before = {r["id"]: bool(r["geocode_ignored"]) for r in db.execute(
+        "SELECT id, geocode_ignored FROM photos WHERE id IN (SELECT value FROM json_each(?))",
+        (index.ids_json(photo_ids),))}
+    index.set_geocode_ignored(photo_ids, ignored)
+    # Not _invalidate_caches: no coordinate moved, so the hotspot clustering stands.
+    from geotagger.services import work_queue_service
+    work_queue_service.invalidate()
+    return {"results": [
+        {"id": pid, "previous": {"id": pid, "geocode_ignored": was,
+                                 "expect": {"geocode_ignored": ignored}}}
+        for pid, was in before.items()]}
+
+
+def _same_coord(a: float | None, b: float | None) -> bool:
+    if a is None or b is None:
+        return a is None and b is None
+    return abs(a - b) <= 1e-7  # index._COORD_EPSILON_DEG: float noise, not a move
+
+
+def _changed_since(row, snap: dict) -> bool:
+    """Whether the photo no longer holds what the commit being undone left — then
+    someone (another tab, a rescan of an externally edited sidecar) has changed it
+    since, and undo must not clobber that."""
+    expect = snap.get("expect") or {}
+    if snap.get("geotag") is not None:
+        if not (_same_coord(row["lat"], expect.get("lat"))
+                and _same_coord(row["lng"], expect.get("lng"))):
+            return True
+    if snap.get("geocode_ignored") is not None:
+        if bool(row["geocode_ignored"]) != bool(expect.get("geocode_ignored")):
+            return True
+    return False
+
+
+def _restore_geotag(row, state: dict) -> tuple[dict | None, str]:
+    """Put one photo's geotag back to `state` (a _geotag_state snapshot), sidecar
+    first and then the row, exactly as write_geotag orders it. Returns (location,
+    source) for the reply.
+
+    The sidecar is restored to what that state implies it held, not to a copy of
+    the coordinates — a re-read has to land on the same state again:
+      * 'sidecar': the location lived in the sidecar → write it back there (with
+        the place names geocoded from it, as write_geotag would have written).
+      * removed ('none' + geotag_removed): remove again — GPS_VOID in the sidecar
+        (created only in sidecar-writing mode, like remove_geotag) + the DB marker.
+      * 'embedded', 'database', or never located ('none', no marker): the sidecar
+        held no location then, so clear_gps takes ours out of it; a re-read falls
+        through to the original's GPS (embedded) or to nothing, and a 'database'
+        row is kept by upsert_photo's keep rule. Writing the embedded coordinates
+        INTO the sidecar instead would turn them into a user geotag that outranks
+        the original forever after.
+    Derived place names (loc_*) are re-geocoded from the restored point rather
+    than copied from the snapshot: they are a function of the coordinates (D3/D5)
+    and this keeps the row and the sidecar's names in agreement."""
+    src = state["geotag_source"]
+    lat, lng = state.get("lat"), state.get("lng")
+    acc = state.get("gps_accuracy")
+    has_point = lat is not None and lng is not None
+    if src not in GEOTAG_SOURCES:
+        raise ValueError(f"unknown geotag_source {src!r}")
+    if has_point:
+        validate_point(lat, lng)
+    elif src != "none":
+        raise ValueError(f"a {src!r} geotag needs coordinates")
+    if src == "none":
+        lat = lng = None
+    removed = src == "none" and bool(state.get("geotag_removed"))
+
+    p = Path(index.photo_path(row))
+    loc = geocode.lookup(lat, lng) if lat is not None else None
+    lock = get_et_lock()
+    with lock:
+        if src == "sidecar":
+            sidecar.write_gps(p, lat, lng, location=loc,
+                              gps_accuracy=acc if acc is not None and acc > 0 else None)
+        elif removed:
+            sidecar.remove_gps(p, create=config.WRITE_XMP_ON_GEOTAG)
+        else:
+            sidecar.clear_gps(p)
+    sc_name, sc_mtime = sidecar.sidecar_tracking(p)
+    with index.transaction():
+        index.update_geotag(row["id"], lat, lng, src, sc_name, sc_mtime,
+                            gps_accuracy=acc, geotag_removed=removed)
+        if loc is not None:
+            index.update_photo_location(row["id"], loc)
+    return loc, src
+
+
+def undo_geotags(snapshots: list[dict]) -> dict:
+    """Revert a commit using the `previous` snapshots its writers returned.
+    Blocking; runs in the executor. Per-photo isolation and the result shape of
+    write_geotag; a photo changed since the commit is reported in `failed` with
+    `conflict: true` and left as it is now. Each result carries the photo's
+    restored state so the client can update it without a refetch."""
+    results: list[dict] = []
+    failed: list[dict] = []
+    not_found: list[int] = []
+    try:
+        for snap in snapshots:
+            pid = snap["id"]
+            row = index.get_photo(pid)
+            if not row:
+                not_found.append(pid)
+                continue
+            if _changed_since(row, snap):
+                failed.append({"id": pid, "error": "changed since the commit", "conflict": True})
+                continue
+            try:
+                loc = None
+                if snap.get("geotag") is not None:
+                    loc, _ = _restore_geotag(row, snap["geotag"])
+                if snap.get("geocode_ignored") is not None:
+                    index.set_geocode_ignored([pid], bool(snap["geocode_ignored"]))
+            except Exception as e:
+                logger.exception("Geotag undo failed for photo %s", pid)
+                failed.append({"id": pid, "error": _short_error(e)})
+                continue
+            now = index.get_photo(pid)
+            acc = now["gps_accuracy"]
+            out = {
+                "id": pid, "lat": now["lat"], "lng": now["lng"],
+                "geotag_source": now["geotag_source"],
+                "gps_accuracy": acc if acc is not None and acc > 0 else None,
+                "geocode_ignored": bool(now["geocode_ignored"]),
+            }
+            # Only a restored geotag changes the place names; an ignore-only undo
+            # leaves them (and says nothing about them).
+            if snap.get("geotag") is not None:
+                out["location"] = loc
+            results.append(out)
     finally:
         _invalidate_caches()
     return {"results": results, "written": [r["id"] for r in results],
