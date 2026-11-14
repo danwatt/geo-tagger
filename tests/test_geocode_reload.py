@@ -16,6 +16,7 @@ import threading
 import pytest
 
 from geotagger import census_places, config, geocode, index, osm_builder, osm_places
+from geotagger.downloads import replace_retrying
 from geotagger.services import data_service
 
 from test_geocode import CITY_A, _city_row, _write_admin_files, _write_geonames_files
@@ -111,7 +112,10 @@ class TestGeonamesJob:
 def _swap_in(dir_, cities, name="cities500.txt"):
     staged = dir_ / "__staged__"
     staged.write_text(_cities_text(cities), encoding="utf-8")
-    os.replace(staged, dir_ / name)
+    # Reader threads may be mid-parse on the old file; on Windows a plain
+    # os.replace then fails with PermissionError. Use the same retrying replace
+    # the download path uses, so this exercises the real swap.
+    replace_retrying(staged, dir_ / name)
 
 
 SET_1 = [dict(CITY_A, name="Alpha")]                                # 1 row, NY

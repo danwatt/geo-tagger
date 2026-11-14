@@ -10,6 +10,9 @@ stray temp file beside it.
 
 import hashlib
 import io
+import os
+import sys
+import threading
 import zipfile
 from pathlib import Path
 
@@ -363,3 +366,35 @@ def test_face_pack_installs_atomically_over_a_leftover_empty_dir(http, tmp_path,
     assert sorted(p.name for p in model_path.iterdir()) == ["det_10g.onnx", "w600k_r50.onnx"]
     assert sorted(p.name for p in model_path.parent.iterdir()) == [config.FACE_MODEL_NAME]
     assert faces.model_status()["available"] is True
+
+
+# ── replace_retrying: a reader briefly holding the target open ──
+
+@pytest.mark.skipif(sys.platform != "win32", reason="POSIX replaces open files freely")
+def test_replace_retrying_waits_out_a_short_lived_reader(tmp_path):
+    # The GeoNames swap can land while a lazy parse is still reading the old file;
+    # Windows refuses os.replace until that handle closes.
+    dest, src = tmp_path / "cities500.txt", tmp_path / "staged"
+    dest.write_text("old", encoding="utf-8")
+    src.write_text("new", encoding="utf-8")
+    fh = dest.open(encoding="utf-8")
+    with pytest.raises(PermissionError):
+        os.replace(src, dest)                      # the failure being guarded against
+    timer = threading.Timer(0.2, fh.close)
+    timer.start()
+    try:
+        downloads.replace_retrying(src, dest)
+    finally:
+        timer.join()
+    assert dest.read_text(encoding="utf-8") == "new"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="POSIX replaces open files freely")
+def test_replace_retrying_gives_up_on_a_file_held_for_good(tmp_path):
+    dest, src = tmp_path / "held.txt", tmp_path / "staged"
+    dest.write_text("old", encoding="utf-8")
+    src.write_text("new", encoding="utf-8")
+    with dest.open(encoding="utf-8"):
+        with pytest.raises(PermissionError):
+            downloads.replace_retrying(src, dest, attempts=3, delay=0.01)
+    assert src.exists()                             # nothing lost; caller can retry

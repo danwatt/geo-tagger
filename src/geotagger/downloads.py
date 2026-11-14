@@ -42,6 +42,28 @@ class DownloadError(RuntimeError):
     published, try the previous year", which a truncated transfer is not."""
 
 
+def replace_retrying(src: Path, dest: Path, *, attempts: int = 20,
+                     delay: float = 0.05) -> None:
+    """os.replace that rides out a reader briefly holding `dest` open.
+
+    Windows refuses to replace a file another handle has open (PermissionError,
+    WinError 5/32). The GeoNames tables are parsed lazily by whichever lookup
+    comes first, so a download job can land its file while a parse is still
+    streaming the old one; that read finishes in well under a second. Retrying
+    with a short backoff (~1 s total by default) covers that without hiding a
+    file that is genuinely held open for good — the last error is re-raised."""
+    import time
+
+    for i in range(attempts):
+        try:
+            os.replace(src, dest)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(delay * min(i + 1, 4))
+
+
 def _open(url: str, timeout: float | None, headers: dict[str, str] | None):
     req = Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})})
     return urlopen(req, timeout=config.DOWNLOAD_TIMEOUT if timeout is None else timeout)
@@ -151,7 +173,7 @@ def download_to(url: str, dest: Path, *, expected_md5: str | None = None,
         if transform is not None:
             produced = transform(part)
         final_src = produced if produced is not None else part
-        os.replace(final_src, dest)
+        replace_retrying(final_src, dest)
         return {"bytes": done, "md5": digest}
     finally:
         # Success leaves neither behind (the replaced one no longer exists);
