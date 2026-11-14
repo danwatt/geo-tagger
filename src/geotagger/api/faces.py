@@ -160,8 +160,36 @@ async def api_update_person(person_id: int, req: UpdatePersonRequest):
             if "family_id" in fields:
                 index.set_person_family(person_id, req.family_id)
     except sqlite3.IntegrityError:
-        raise HTTPException(409, f'A person named "{name}" already exists')
+        # Carry the existing person's id so the client can offer "merge into
+        # them?" instead of a dead-end error. {message} is what common.js's
+        # httpErrorMessage shows for an object detail.
+        existing = index.get_db().execute(
+            "SELECT id FROM persons WHERE name=?", (name,)).fetchone()
+        raise HTTPException(409, {
+            "message": f'A person named "{name}" already exists',
+            "existing_person_id": existing["id"] if existing else None,
+        })
     return {"id": person_id}
+
+
+class MergePersonRequest(BaseModel):
+    into: int   # the person that survives; the path's person is deleted
+
+
+@router.post("/api/persons/{person_id}/merge")
+async def api_merge_person(person_id: int, req: MergePersonRequest):
+    """Merge person ``person_id`` into ``req.into``: every face, representative
+    flag and "not this person" negative moves to the target, empty target
+    attributes are filled from the source, and the source is deleted — all in
+    one transaction (see index.merge_persons for the per-table rules). Returns a
+    summary of what moved."""
+    try:
+        result = index.merge_persons(person_id, req.into)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if result is None:
+        raise HTTPException(404, "Person not found")
+    return result
 
 
 # ── Family endpoints ──

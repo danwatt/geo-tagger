@@ -590,11 +590,14 @@ def test_patch_person_invalid_date_applies_nothing(client):
 
 
 def test_patch_person_conflict_rolls_back_other_fields(client):
-    _person(client, "Bob")
+    bob = _person(client, "Bob")
     pid = _person(client, "Alice")
     r = client.patch(f"/api/persons/{pid}",
                      json={"name": "Bob", "birth_date": "1990-01-02"})
-    assert r.status_code == 409 and "Bob" in r.json()["detail"]
+    detail = r.json()["detail"]
+    assert r.status_code == 409 and "Bob" in detail["message"]
+    # Enough for the UI to offer "merge into them?".
+    assert detail["existing_person_id"] == bob
     row = _person_row(client, pid)
     assert row["name"] == "Alice" and row["birth_date"] is None
 

@@ -3461,6 +3461,103 @@ def delete_person(person_id: int) -> bool:
     return found
 
 
+def merge_persons(source_id: int, target_id: int) -> dict | None:
+    """Fold person ``source_id`` into ``target_id`` and delete the source — one
+    transaction, so a failure leaves both people exactly as they were. None if
+    either person doesn't exist; ValueError if they're the same person.
+
+    Everything that references a person is one of: faces.person_id (plus that
+    face's representative flag), face_negatives.person_id, and the persons row's
+    own attributes. Per piece:
+
+    - **Faces** move as-is: assigned_at keeps the original tagging time (tag
+      order / "recently tagged" stay truthful) and representative flags are kept,
+      so the target's set becomes the union of both. That's a superset of what a
+      fresh recompute would pick (two people's medoids, some now near-duplicates);
+      the next Recompute tightens it, and nothing between now and then reads the
+      flags as more than "examples worth keeping".
+    - **Negatives** ("face F is NOT source") become "F is NOT target" — the two
+      are one person now. A negative that would contradict a label after the
+      merge (either person's negative on a face now labeled target) is dropped:
+      the label is the stronger statement, and assign_faces already clears a
+      person's negative on faces it labels as them. A moved negative that the
+      target already has is a duplicate; the target's row (and created_at) wins.
+    - **Attributes**: the target's name is kept. birth_date and family_id keep
+      the target's value and only fill a NULL from the source (a differing value
+      is reported in ``conflicts``, not silently picked). not_before/not_after
+      are bounds on when this person can appear, and the merged person appears
+      in both people's photos — so when both are set the window widens to cover
+      both (earlier not_before, later not_after); a NULL is filled from the
+      source like the others.
+    """
+    if source_id == target_id:
+        raise ValueError("Cannot merge a person into themselves")
+    with transaction() as db:
+        src = db.execute("SELECT * FROM persons WHERE id=?", (source_id,)).fetchone()
+        tgt = db.execute("SELECT * FROM persons WHERE id=?", (target_id,)).fetchone()
+        if src is None or tgt is None:
+            return None
+
+        moved_reps = db.execute(
+            "SELECT COUNT(*) FROM faces WHERE person_id=? AND representative=1",
+            (source_id,)).fetchone()[0]
+        moved_faces = db.execute(
+            "UPDATE faces SET person_id=? WHERE person_id=?",
+            (target_id, source_id)).rowcount
+
+        # Negatives that the merged label now contradicts — before the move, so a
+        # source negative on a target-labeled face isn't first copied over.
+        dropped = db.execute(
+            "DELETE FROM face_negatives WHERE person_id IN (?, ?) "
+            "AND face_id IN (SELECT id FROM faces WHERE person_id=?)",
+            (source_id, target_id, target_id)).rowcount
+        merged_neg = db.execute(
+            "INSERT OR IGNORE INTO face_negatives (face_id, person_id, created_at) "
+            "SELECT face_id, ?, created_at FROM face_negatives WHERE person_id=?",
+            (target_id, source_id)).rowcount
+        src_neg = db.execute(
+            "DELETE FROM face_negatives WHERE person_id=?", (source_id,)).rowcount
+
+        updates: dict[str, object] = {}
+        filled: list[str] = []
+        widened: list[str] = []
+        conflicts: list[dict] = []
+        for col in ("birth_date", "family_id", "not_before", "not_after"):
+            s, t = src[col], tgt[col]
+            if s is None or s == t:
+                continue
+            if t is None:
+                updates[col] = s
+                filled.append(col)
+            elif col in ("not_before", "not_after"):
+                # ISO YYYY-MM-DD compares correctly as text.
+                wider = min(s, t) if col == "not_before" else max(s, t)
+                if wider != t:
+                    updates[col] = wider
+                    widened.append(col)
+            else:
+                conflicts.append({"field": col, "kept": t, "discarded": s})
+        if updates:
+            sets = ", ".join(f"{c}=?" for c in updates)   # fixed column names only
+            db.execute(f"UPDATE persons SET {sets} WHERE id=?",
+                       (*updates.values(), target_id))
+        db.execute("DELETE FROM persons WHERE id=?", (source_id,))
+    # Every face-derived cache (gallery, unlabeled matrix, suggestion scores,
+    # negatives map) is keyed on this generation: the target's gallery now holds
+    # the source's examples, and the source's id is gone from every ranking.
+    bump_faces_generation()
+    return {
+        "id": target_id, "name": tgt["name"],
+        "merged_from": {"id": source_id, "name": src["name"]},
+        "moved_faces": moved_faces,
+        "moved_representatives": moved_reps,
+        "merged_negatives": merged_neg,
+        "duplicate_negatives": src_neg - merged_neg,
+        "dropped_negatives": dropped,
+        "filled": filled, "widened": widened, "conflicts": conflicts,
+    }
+
+
 # ── Settings (runtime overrides of config.py tuning knobs) ──
 
 def record_dataset_download(dataset: str, region: str | None, url: str | None,

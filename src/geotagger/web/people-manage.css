@@ -23,7 +23,7 @@ body {
 
 /* ── Main layout ── */
 #manage-main {
-  max-width: 960px; margin: 0 auto;
+  max-width: 1040px; margin: 0 auto; /* room for the Merge into… + Delete actions */
   padding: 18px 16px 60px;
   display: flex; flex-direction: column; gap: 24px;
 }
@@ -108,7 +108,7 @@ body {
 .col-not-after { width: 140px; }
 .col-family { width: 26%; min-width: 140px; }
 .col-faces  { width: 60px; text-align: right; }
-.col-actions { width: 70px; text-align: right; }
+.col-actions { width: 1%; text-align: right; white-space: nowrap; }
 
 /* Inline editable fields — look like text until focused */
 .edit-input {
@@ -138,6 +138,17 @@ input[type="date"].edit-input {
   border-radius: 4px; padding: 2px 6px; font-size: 11px; cursor: pointer;
 }
 .del-btn:hover { border-color: #a33; color: #f88; background: #300; }
+
+/* Merge into… — same quiet look as Delete, accent (not danger) on hover. */
+.merge-btn {
+  background: none; border: 1px solid transparent; color: var(--text-muted);
+  border-radius: var(--radius-sm); padding: 2px 6px; font-size: 11px; cursor: pointer;
+  margin-right: 4px;
+}
+.merge-btn:hover:not(:disabled) {
+  border-color: var(--accent); color: var(--text); background: none;
+}
+.merge-btn:disabled { opacity: .4; cursor: default; }
 
 #no-persons { color: #666; font-style: italic; padding: 20px 8px; font-size: 12px; }
 

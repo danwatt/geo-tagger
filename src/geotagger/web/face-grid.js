@@ -455,7 +455,8 @@ function openQuickActions(anchor, face, opts) {
  * line under the name and is searched alongside it.
  *
  * openPersonPicker(persons, opts) is the person-shaped wrapper — same modal,
- * with onPick handing back {person_id} | {name} as its callers expect. */
+ * with onPick handing back {person_id} | {name} as its callers expect
+ * (opts: title, placeholder, allowCreate, onPick, onClose). */
 let _ppBackdrop = null;
 let _ppOnClose = null;
 
@@ -483,7 +484,7 @@ function openPersonPicker(persons, opts) {
   }));
   openEntityPicker(items, {
     title: opts.title || "Assign to…",
-    placeholder: "Search people, or type a new name…",
+    placeholder: opts.placeholder || "Search people, or type a new name…",
     emptyText: "No people yet — type a name to create one.",
     allowCreate: opts.allowCreate ?? true,
     createLabel: (q) => `➕ Create "${q}"`,

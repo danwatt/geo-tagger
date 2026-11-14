@@ -80,10 +80,6 @@ names. No archive is extracted to disk. Download URLs are fixed HTTPS constants.
 
 ## UX
 
-**U1 — No way to merge two people** [traced] — `web/people-manage.js:198-211`. Renaming one person to
-another's name fails with "Internal Server Error" (see A2). Add `POST /api/persons/{id}/merge` and a
-"Merge into…" action; offer it on rename collision.
-
 **U2 — No way to remove or undo a committed geotag** [traced] — `web/geocode.html:74-80`. The only caller of
 `/api/geotag/remove` sits in a `display:none` block. Add "Remove location" to the context menu and an
 "Undo last commit".
@@ -142,4 +138,4 @@ already have `--dry-run`; match them and require `--yes`.
 
 1. **Small fixes:** A11, T1, T6.
 2. **Request handling:** A1, A7.
-3. **UX features:** U1 (merge people), U2 (remove geotag), U3 (undo toast).
+3. **UX features:** U2 (remove geotag), U3 (undo toast).

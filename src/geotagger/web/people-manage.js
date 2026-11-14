@@ -22,9 +22,17 @@ async function api(method, url, body) {
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
-    // FastAPI errors are {"detail": "..."} — show just the message.
+    // FastAPI errors are {"detail": "..."} — show just the message. An object
+    // detail ({message, …}, e.g. the rename 409's existing_person_id) rides
+    // along on the error so a caller can act on it.
     const e = await res.json().catch(() => ({}));
-    throw new Error(typeof e.detail === "string" ? e.detail : `HTTP ${res.status}`);
+    const d = e.detail;
+    const msg = typeof d === "string" ? d
+      : (d && typeof d.message === "string" ? d.message : `HTTP ${res.status}`);
+    const err = new Error(msg);
+    err.status = res.status;
+    err.detail = d;
+    throw err;
   }
   return res.json();
 }
@@ -252,6 +260,15 @@ function makePersonRow(p) {
       toast(`Renamed to "${name}"`);
     } catch (e) {
       nameInput.value = origName;
+      // Renaming onto an existing name is how people try to merge — offer it.
+      const targetId = e.status === 409 ? e.detail?.existing_person_id : null;
+      if (targetId != null) {
+        // The target may postdate this page's list (created in another tab).
+        const target = persons.find((q) => q.id === targetId) || { id: targetId, name };
+        await mergePerson(p, target,
+          `A person named "${target.name}" already exists — merge into them?\n\n`);
+        return;
+      }
       toast("Rename failed: " + e.message, true);
     }
   });
@@ -325,17 +342,86 @@ function makePersonRow(p) {
   facesTd.className = "col-faces";
   facesTd.textContent = p.face_count ?? "—";
 
-  // ── Delete ──
+  // ── Actions: merge, delete ──
   const actTd = document.createElement("td");
   actTd.className = "col-actions";
   const delBtn = document.createElement("button");
   delBtn.className = "del-btn";
   delBtn.textContent = "Delete";
   delBtn.addEventListener("click", () => deletePerson(p));
-  actTd.appendChild(delBtn);
+  const mergeBtn = document.createElement("button");
+  mergeBtn.className = "merge-btn";
+  mergeBtn.textContent = "Merge into…";
+  mergeBtn.title = `Move all of ${p.name}'s faces to another person, then delete ${p.name}`;
+  mergeBtn.disabled = persons.length < 2;
+  mergeBtn.addEventListener("click", () => pickMergeTarget(p));
+  actTd.append(mergeBtn, delBtn);
 
   tr.append(nameTd, birthTd, notBeforeTd, notAfterTd, familyTd, facesTd, actTd);
   return tr;
+}
+
+/* ── Merge ── */
+const MERGE_FIELD_LABELS = {
+  birth_date: "birth date", family_id: "family",
+  not_before: "not-before", not_after: "not-after",
+};
+
+function pickMergeTarget(p) {
+  // The shared typeahead from face-grid.js; no "create" row — merging into a
+  // brand-new person is just a rename.
+  openPersonPicker(persons.filter((q) => q.id !== p.id), {
+    title: `Merge "${p.name}" into…`,
+    placeholder: "Search people…",
+    allowCreate: false,
+    onPick: ({ person_id }) => {
+      const target = persons.find((q) => q.id === person_id);
+      if (target) mergePerson(p, target);
+    },
+  });
+}
+
+// Fresh face count at confirm time, for the same reason deletePerson re-reads
+// it: the confirm must not understate how much moves. Null if the source is gone.
+async function freshFaceCount(p) {
+  const fresh = (await api("GET", "/api/persons?face_counts=true")).find((q) => q.id === p.id);
+  return fresh ? fresh.face_count : null;
+}
+
+async function mergePerson(p, target, preface = "") {
+  let count;
+  try {
+    count = await freshFaceCount(p);
+  } catch (e) {
+    toast("Could not check face count: " + e.message, true);
+    return;
+  }
+  if (count === null) {
+    toast(`"${p.name}" no longer exists`, true);
+    await reload();
+    return;
+  }
+  const faces = `${count} face${count === 1 ? "" : "s"}`;
+  if (!confirm(`${preface}Merge "${p.name}" (${faces}) into "${target.name}"? ` +
+               `"${p.name}" will be deleted. This can't be undone.`)) return;
+  try {
+    const s = await api("POST", `/api/persons/${p.id}/merge`, { into: target.id });
+    // Attribute outcomes (see index.merge_persons): empty target fields filled
+    // from the source, date windows widened, differing values kept as target's.
+    const label = (f) => MERGE_FIELD_LABELS[f] || f;
+    const notes = [];
+    if (s.filled.length) notes.push(`took ${s.filled.map(label).join(", ")}`);
+    if (s.widened.length) notes.push(`widened ${s.widened.map(label).join(", ")}`);
+    if (s.conflicts.length) {
+      notes.push(`kept ${target.name}'s ${s.conflicts.map((c) => label(c.field)).join(", ")}`);
+    }
+    toast(`Merged "${p.name}" into "${target.name}" — ${s.moved_faces} face` +
+          `${s.moved_faces === 1 ? "" : "s"} moved` + (notes.length ? ` (${notes.join("; ")})` : ""));
+    await reload();
+  } catch (e) {
+    toast("Merge failed: " + e.message, true);
+    await reload();
+  }
 }
 
 async function deletePerson(p) {
