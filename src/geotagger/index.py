@@ -3266,7 +3266,8 @@ def get_persons(start_ts: int | None = None,
                 end_ts: int | None = None) -> list[sqlite3.Row]:
     """All persons, with family info. No ``face_count`` ever — a live COUNT(*)
     join over the whole faces table on every call was the People page's biggest
-    single latency cost at scale, and nothing currently needs the number.
+    single latency cost at scale. The one caller that needs the number (the
+    Manage page) asks for it separately via get_person_face_counts.
 
     With a ``start_ts``/``end_ts`` window (epoch secs, the People page's time
     Focus), the list is filtered to just people who have at least one face in
@@ -3303,6 +3304,22 @@ def get_persons(start_ts: int | None = None,
             ORDER BY p.name""",
         params,
     ).fetchall()
+
+
+def get_person_face_counts() -> dict[int, int]:
+    """{person_id: assigned face count} for every person with at least one face.
+
+    Opt-in companion to get_persons (which deliberately carries no count — see
+    its docstring) for the Manage page, whose delete confirm must say how many
+    faces will lose their label. Counts exactly the set delete_person clears:
+    every face with ``person_id`` = that person (ignoring a face already nulls
+    its person_id, so ignored faces never count). One GROUP BY over the
+    covering idx_faces_person range — only the labeled rows are touched, not a
+    correlated count per person — merged in Python by the caller."""
+    return {r[0]: r[1] for r in get_db().execute(
+        """SELECT person_id, COUNT(*) FROM faces INDEXED BY idx_faces_person
+           WHERE person_id IS NOT NULL GROUP BY person_id"""
+    ).fetchall()}
 
 
 def set_person_birth_date(person_id: int, birth_date: str | None) -> bool:

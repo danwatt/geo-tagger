@@ -87,17 +87,27 @@ class AddManualFaceRequest(BaseModel):
 async def api_get_persons(
     start_ts: int | None = Query(None),
     end_ts: int | None = Query(None),
+    face_counts: bool = Query(False),
 ):
     """List persons. With a start_ts/end_ts window (the People page's time Focus),
-    people with no faces in range are omitted. No face_count in either case — see
-    index.get_persons."""
-    return [
-        {"id": p["id"], "name": p["name"],
-         "birth_date": p["birth_date"], "not_before": p["not_before"],
-         "not_after": p["not_after"], "created_at": p["created_at"],
-         "family_id": p["family_id"], "family_name": p["family_name"]}
-        for p in index.get_persons(start_ts=start_ts, end_ts=end_ts)
-    ]
+    people with no faces in range are omitted.
+
+    face_count is opt-in (``face_counts=true``, the Manage page): the hot callers
+    (People page, tag pickers) don't need it and index.get_persons dropped the
+    count for latency. When requested it is each person's *total* assigned faces
+    — exactly what DELETE /api/persons/{id} would unlabel — regardless of any
+    time window."""
+    counts = index.get_person_face_counts() if face_counts else None
+    out = []
+    for p in index.get_persons(start_ts=start_ts, end_ts=end_ts):
+        row = {"id": p["id"], "name": p["name"],
+               "birth_date": p["birth_date"], "not_before": p["not_before"],
+               "not_after": p["not_after"], "created_at": p["created_at"],
+               "family_id": p["family_id"], "family_name": p["family_name"]}
+        if counts is not None:
+            row["face_count"] = counts.get(p["id"], 0)
+        out.append(row)
+    return out
 
 
 def _parse_optional_date(label: str, value: str | None) -> str | None:

@@ -269,6 +269,35 @@ def test_delete_person_removes_face_negatives(client):
     assert db.execute("SELECT COUNT(*) FROM face_negatives").fetchone()[0] == 0
 
 
+def test_persons_face_count_matches_delete(client):
+    """face_count (opt-in) counts exactly the faces DELETE would unlabel: the
+    person's assigned faces, not ignored ones, not another person's."""
+    db = index.get_db()
+    rng = np.random.default_rng(31)
+    alice_id, alice_faces = ff.seed_person(db, "Alice", ff.unit_vectors(rng, 3))
+    bob_id, _ = ff.seed_person(db, "Bob", ff.unit_vectors(rng, 2))
+    carol_id = client.post("/api/persons", json={"name": "Carol"}).json()["id"]
+    ff.seed_unlabeled(db, ff.unit_vectors(rng, 2))
+    # Ignoring one of Alice's faces takes it off her (and out of her count).
+    client.post("/api/faces/ignore", json={"face_ids": [alice_faces[0]]})
+
+    # Default listing stays count-free (the People page's hot path).
+    assert all("face_count" not in p for p in client.get("/api/persons").json())
+
+    counts = {p["id"]: p["face_count"]
+              for p in client.get("/api/persons?face_counts=true").json()}
+    assert counts == {alice_id: 2, bob_id: 2, carol_id: 0}
+
+    unlabeled_before = client.get("/api/faces?scope=unlabeled").json()["total"]
+    assert client.delete(f"/api/persons/{alice_id}").json() == {"success": True}
+    unlabeled_after = client.get("/api/faces?scope=unlabeled").json()["total"]
+    assert unlabeled_after - unlabeled_before == counts[alice_id]
+    assert db.execute("SELECT COUNT(*) FROM faces WHERE ignored=1").fetchone()[0] == 1
+    counts = {p["id"]: p["face_count"]
+              for p in client.get("/api/persons?face_counts=true").json()}
+    assert counts == {bob_id: 2, carol_id: 0}
+
+
 # ── Time Focus window (start_ts/end_ts) on the tagging/discovery surfaces ──
 
 _2015 = (ff.epoch(2015, 1, 1), ff.epoch(2016, 1, 1))  # a [start, end] covering 2015

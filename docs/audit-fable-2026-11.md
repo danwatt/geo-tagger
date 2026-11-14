@@ -422,7 +422,7 @@ photo's faces on another, and "Ignore unlabeled" then posts for the wrong photo)
 `web/search.js:1371-1376`. Enter in the text input fires two concurrent searches. Enter in the Assign-date
 year field runs a search behind the modal, clearing the selection, so Apply posts an empty `photo_ids`.
 
-**W5 — High — Manage page delete confirm never warns about tagged faces** [traced]
+**W5 — High — Manage page delete confirm never warns about tagged faces** [traced] — ✅ **DONE** (opt-in `GET /api/persons?face_counts=true`, one indexed `GROUP BY`; Manage shows counts and re-fetches at Delete so the warning matches what delete unassigns. People list, person picker and Tag picker still read a `face_count` they never get)
 `web/people-manage.js:310,326-329`, `api/faces.py:84-90`. `/api/persons` returns no `face_count`, so the
 warning branch never runs while the server unassigns every face. The Faces column always shows "—".
 

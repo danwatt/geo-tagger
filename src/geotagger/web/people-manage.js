@@ -41,7 +41,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 async function reload() {
   try {
     [persons, families] = await Promise.all([
-      api("GET", "/api/persons"),
+      // face_counts is opt-in on the server (the People page skips it for speed).
+      api("GET", "/api/persons?face_counts=true"),
       api("GET", "/api/families"),
     ]);
   } catch (e) {
@@ -324,8 +325,26 @@ function makePersonRow(p) {
 }
 
 async function deletePerson(p) {
-  const msg = p.face_count > 0
-    ? `Delete "${p.name}"? Their ${p.face_count} tagged face(s) will be unassigned.`
+  // Re-read the count at click time: the list may have been loaded long before
+  // faces were tagged on the People page in another tab, and understating how
+  // many labels a delete throws away is the one thing this confirm must not do.
+  let count = p.face_count;
+  try {
+    const fresh = (await api("GET", "/api/persons?face_counts=true")).find((q) => q.id === p.id);
+    if (!fresh) {
+      toast(`"${p.name}" no longer exists`, true);
+      await reload();
+      return;
+    }
+    count = fresh.face_count;
+    // Keep the Faces column honest if the user cancels.
+    if (count !== p.face_count) { p.face_count = count; renderPersons(); }
+  } catch (e) {
+    toast("Could not check face count: " + e.message, true);
+    return;
+  }
+  const msg = count > 0
+    ? `Delete "${p.name}"? ${count} tagged face${count === 1 ? "" : "s"} will become unlabeled.`
     : `Delete "${p.name}"?`;
   if (!confirm(msg)) return;
   try {
