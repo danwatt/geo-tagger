@@ -382,18 +382,36 @@ def _raw_lookup(lat: float, lng: float) -> dict | None:
     t = _tables()
     if t is None:
         return None
+    k = config.GEOCODE_CANDIDATES if config.GEOCODE_POP_WEIGHT else 1
+    i = _pick(t, _candidates(t, lat, lng, k))
+    return _place_dict(t, i) if i is not None else None
+
+
+def _candidates(t: _Tables, lat: float, lng: float, k: int) -> list[tuple[float, int]]:
+    """The k nearest GeoNames rows as (chord distance, row index), nearest first."""
     lat_r = math.radians(lat)
     lng_r = math.radians(lng)
     cos_lat = math.cos(lat_r)
     point = [cos_lat * math.cos(lng_r), cos_lat * math.sin(lng_r), math.sin(lat_r)]
-    if not config.GEOCODE_POP_WEIGHT:
-        _, idx = t.tree.query(point)
-        return _place_dict(t, int(idx))
-    k = max(1, min(config.GEOCODE_CANDIDATES, len(t.names)))
+    k = max(1, min(k, len(t.names)))
     dists, idxs = t.tree.query(point, k=k)
     if k == 1:  # scipy returns scalars, not arrays, for k=1
-        return _place_dict(t, int(idxs))
-    return _place_dict(t, _pick_weighted(t, [float(d) for d in dists], [int(i) for i in idxs]))
+        dists, idxs = [dists], [idxs]
+    # cKDTree pads a k larger than the point count with inf / out-of-range rows.
+    return [(float(d), int(i)) for d, i in zip(dists, idxs)
+            if math.isfinite(d) and 0 <= int(i) < len(t.names)]
+
+
+def _pick(t: _Tables, cands: list[tuple[float, int]]) -> int | None:
+    """The label choice _raw_lookup makes — plain nearest, or population-weighted
+    over the first GEOCODE_CANDIDATES — applied to a nearest-first candidate list
+    that may already have been filtered (to one state, say). None if it's empty."""
+    if not cands:
+        return None
+    if not config.GEOCODE_POP_WEIGHT:
+        return cands[0][1]
+    cands = cands[:max(1, config.GEOCODE_CANDIDATES)]
+    return _pick_weighted(t, [d for d, _ in cands], [i for _, i in cands])
 
 
 def cities_in_bbox(min_lat: float, max_lat: float, min_lng: float, max_lng: float,
@@ -871,7 +889,8 @@ def voronoi_cells(min_lat: float, max_lat: float, min_lng: float, max_lng: float
 
 def _merged_lookup(lat: float, lng: float) -> dict | None:
     """Combine the polygon-containment sources (city + sub-location) with the
-    GeoNames nearest-point lookup (state/county/country).
+    GeoNames nearest-point lookup, keeping state/county/country consistent with
+    whichever source supplied the city.
 
     City resolution, in order — every step is skipped if its data isn't installed:
 
@@ -891,34 +910,155 @@ def _merged_lookup(lat: float, lng: float) -> dict | None:
 
     The ZIP code itself is returned as `postal_code` whenever the ZCTA layer resolves
     one, independent of which step won the city. Sub-location is OSM-only (None
-    without OSM) — the Census files have no parks/campuses/venues to draw one from."""
+    without OSM) — the Census files have no parks/campuses/venues to draw one from.
+
+    State/country, in order: the Census place's state, else the ZIP's state (both
+    US containment), else the GeoNames record of the OSM city's own name nearby,
+    else the GeoNames estimate. County is GeoNames-only (no county polygons are
+    installed), taken from the nearest GeoNames place in that state — so near a
+    county line it is still an estimate, but never one from another state."""
     from geotagger import census_places, osm_places
     osm = osm_places.lookup(lat, lng)          # {city, sublocation} or None
-    gn = _raw_lookup(lat, lng) or {}           # state/county/country/cc (+ its own city)
-    census = census_places.lookup(lat, lng)    # {city, kind, …} or None
-    postal = census_places.postal_lookup(lat, lng)  # {postal_code, postal_city, …} or None
-    if osm is None and not gn and census is None and postal is None:
+    census = census_places.lookup(lat, lng)    # {city, state, state_fp, …} or None
+    postal = census_places.postal_lookup(lat, lng)  # {postal_code, postal_city, state_code, …} or None
+    t = _tables()                              # one snapshot for every GeoNames read below
+    # Wide enough for the in-state / same-name searches (see GEOCODE_ADMIN_CANDIDATES);
+    # _pick() still only weighs the nearest GEOCODE_CANDIDATES of whatever survives.
+    cands = (_candidates(t, lat, lng, max(config.GEOCODE_CANDIDATES,
+                                          config.GEOCODE_ADMIN_CANDIDATES))
+             if t is not None else [])
+    nearest = _pick(t, cands)                  # exactly what _raw_lookup would answer
+    if osm is None and nearest is None and census is None and postal is None:
         return None
 
     if osm and osm.get("city"):
-        city = osm["city"]
+        city, source = osm["city"], "osm"
     elif census and census.get("city"):
-        city = census["city"]                  # containment beats the distance estimate
+        city, source = census["city"], "census"    # containment beats the distance estimate
     elif postal and postal.get("postal_city") and config.ZCTA_CITY_FALLBACK:
-        city = postal["postal_city"]           # mailing city: weaker, still containment
+        city, source = postal["postal_city"], "zcta"  # mailing city: weaker, still containment
     elif osm_places.is_available() and not config.OSM_CITY_FALLBACK_GEONAMES:
-        city = None                            # polygons are the authority; point in none
+        city, source = None, None              # polygons are the authority; point in none
     else:
-        city = gn.get("city")                  # OSM absent, or fallback enabled
+        city, source = None, "geonames"        # OSM absent, or fallback enabled (set below)
+
+    # ── Admin fields follow the city (audit G6) ──
+    # The nearest GeoNames point is only an estimate, and near a border it is often
+    # across it: a Census place in Blaine WA whose nearest GeoNames point is White
+    # Rock BC must not come out "Blaine, British Columbia, Canada". So state and
+    # country come from containment wherever a polygon gives them (Census place, then
+    # ZIP), and the GeoNames row that supplies county is the nearest one *inside* that
+    # state. The OSM DB holds no state/country polygons, so an OSM city takes its
+    # hierarchy from the GeoNames record of the same name nearby instead.
+    anchor = _containment_anchor(census, postal)
+    record = nearest                           # GeoNames row the admin fields come from
+    if source == "osm" and t is not None:
+        match = _name_match(t, cands, city)
+        if match is not None:
+            record = match
+            if anchor is not None and t.ccs[match] != anchor[0]:
+                # The 1:500,000 Census polygons overhang the national border by a
+                # few hundred metres; a named Canadian city outranks that sliver.
+                anchor = None
+    if anchor is not None and t is not None and (record is None or not _in_anchor(t, record, anchor)):
+        # None when no GeoNames place in that state is among the candidates: the
+        # state/country below still come from the anchor, county is left unknown.
+        record = _pick(t, [c for c in cands if _in_anchor(t, c[1], anchor)])
+
+    place = _place_dict(t, record) if record is not None else {}
+    if source == "geonames":
+        # The fallback city is the same in-state record the admin fields come from,
+        # so city and state can't disagree; only if the state has no candidate at
+        # all does the plain nearest still name the city.
+        city = place.get("city") if place else (_place_dict(t, nearest)["city"]
+                                                if nearest is not None else None)
+    if anchor is not None:
+        cc, a1, state_name = anchor
+        state = (t.admin1_names.get(f"{cc}.{a1}") if (t is not None and a1) else None) or state_name
+        if state is None and a1 is None and place:
+            state = place.get("state")         # a territory: GeoNames' own admin1 for it
+        admin = {
+            "state": state,
+            "county": place.get("county"),
+            "country": t.country_names.get(cc) if t is not None else None,
+            "country_code": cc,
+        }
+    else:
+        admin = {k: place.get(k) for k in ("state", "county", "country", "country_code")}
     return {
         "city": city,
         "sublocation": osm.get("sublocation") if osm else None,
         "postal_code": postal.get("postal_code") if postal else None,
-        "state": gn.get("state"),
-        "county": gn.get("county"),
-        "country": gn.get("country"),
-        "country_code": gn.get("country_code"),
+        **admin,
     }
+
+
+# Census FIPS state code -> USPS code, which is also GeoNames' admin1 code for US
+# states ("US.TX"), so a Census answer lands on exactly the state name GeoNames
+# answers elsewhere instead of the Census spelling ("District of Columbia" vs
+# GeoNames' "Washington, D.C.").
+_US_FIPS_TO_USPS = {
+    "01": "AL", "02": "AK", "04": "AZ", "05": "AR", "06": "CA", "08": "CO", "09": "CT",
+    "10": "DE", "11": "DC", "12": "FL", "13": "GA", "15": "HI", "16": "ID", "17": "IL",
+    "18": "IN", "19": "IA", "20": "KS", "21": "KY", "22": "LA", "23": "ME", "24": "MD",
+    "25": "MA", "26": "MI", "27": "MN", "28": "MS", "29": "MO", "30": "MT", "31": "NE",
+    "32": "NV", "33": "NH", "34": "NJ", "35": "NM", "36": "NY", "37": "NC", "38": "ND",
+    "39": "OH", "40": "OK", "41": "OR", "42": "PA", "44": "RI", "45": "SC", "46": "SD",
+    "47": "TN", "48": "TX", "49": "UT", "50": "VT", "51": "VA", "53": "WA", "54": "WV",
+    "55": "WI", "56": "WY", "60": "AS", "66": "GU", "69": "MP", "72": "PR", "78": "VI",
+}
+# Census covers these as "states"; GeoNames (and ISO 3166) make each its own country.
+_US_TERRITORIES = {"AS", "GU", "MP", "PR", "VI", "UM"}
+
+
+def _containment_anchor(census: dict | None,
+                        postal: dict | None) -> tuple[str, str | None, str | None] | None:
+    """(country_code, admin1 code or None, state name or None) from the US polygon
+    layers containing the point — Census place first, then the ZIP's crosswalk state
+    (ZCTAs occasionally straddle a state line, so it's the weaker of the two). None
+    when neither contains it."""
+    for code, name in (
+        (_US_FIPS_TO_USPS.get((census or {}).get("state_fp") or ""), (census or {}).get("state")),
+        (((postal or {}).get("state_code") or "").upper() or None, (postal or {}).get("state")),
+    ):
+        if code in _US_TERRITORIES:
+            return code, None, None
+        if code:
+            return "US", code, name
+        if name:
+            return "US", None, name
+    return None
+
+
+def _in_anchor(t: _Tables, i: int, anchor: tuple[str, str | None, str | None]) -> bool:
+    cc, a1, _ = anchor
+    return t.ccs[i] == cc and (a1 is None or t.admin1[i] == a1)
+
+
+def _norm_name(name: str) -> str:
+    """Case/accent/punctuation-insensitive form for matching an OSM city name to a
+    GeoNames one ("Montréal" = "Montreal", "City of Bristol" = "Bristol")."""
+    import unicodedata
+    s = unicodedata.normalize("NFKD", name).casefold()
+    s = " ".join("".join(c if c.isalnum() else " " for c in s
+                         if not unicodedata.combining(c)).split())
+    for prefix in ("city of ", "town of ", "village of ", "township of "):
+        if s.startswith(prefix):
+            return s[len(prefix):]
+    return s
+
+
+def _name_match(t: _Tables, cands: list[tuple[float, int]], city: str | None) -> int | None:
+    """Nearest candidate within config.GEOCODE_ADMIN_MATCH_KM named `city`, or None."""
+    if not city:
+        return None
+    want = _norm_name(city)
+    for chord, i in cands:
+        if _chord_to_km(chord) > config.GEOCODE_ADMIN_MATCH_KM:
+            break                              # nearest first: nothing further matches
+        if t.names[i] and _norm_name(t.names[i]) == want:
+            return i
+    return None
 
 
 # ── Cache versioning (audit G2) ──
@@ -932,7 +1072,10 @@ def _merged_lookup(lat: float, lng: float) -> dict | None:
 # next start notices without being told.
 #
 # Bump when the merge logic changes answers for unchanged data.
-_CACHE_LOGIC_VERSION = 1
+# 2: state/county/country follow the polygon that supplied the city (audit G6).
+# Photos already geocoded keep their stored loc_* until scripts/regeocode.py:
+# a logic bump only retires cached answers, like a dataset change does.
+_CACHE_LOGIC_VERSION = 2
 _version_lock = threading.Lock()
 _cache_version: str | None = None
 
@@ -1084,7 +1227,7 @@ def lookup(lat: float | None, lng: float | None, use_cache: bool = True) -> dict
 
     City comes from OSM polygon containment, then US Census place containment, then
     the ZCTA mailing city, then the GeoNames nearest-point estimate; sub-location is OSM-only and
-    state/county/country always come from GeoNames (see _merged_lookup). Caches by quantized coordinate so nearby
+    state/county/country follow whichever source supplied the city (see _merged_lookup). Caches by quantized coordinate so nearby
     photos reuse one result — note the quantization grid (config.GEOCODE_PRECISION,
     ~11 m) is coarser than a small building, so two photos in adjacent buildings
     can share a bucket. Returns None when neither source resolves anything. Cache

@@ -613,11 +613,11 @@ class TestCensusInTheCityChain:
         _write_geonames_files(geonames_dir, [CITY_A])  # Testville @ (40,-74)
         osm_db([dict(name="Elsewhere", category="city", admin_level=8, area=1.0,
                      polygons=_rect(10.0, 11.0, 10.0, 11.0))])
-        census_db([{"name": "CensusPlace", "kind": "CDP",
+        census_db([{"name": "CensusPlace", "kind": "CDP", "state_fp": "36", "state": "New York",
                     "polygons": _rect(39.9, 40.1, -74.1, -73.9)}])
         r = geocode.lookup(40.0, -74.0)
         assert r["city"] == "CensusPlace"
-        assert r["state"] == "New York"       # still GeoNames
+        assert r["state"] == "New York"
         assert r["sublocation"] is None       # census file has no sub-features
 
     def test_osm_city_still_wins_over_census(self, geonames_dir, osm_db, census_db):
@@ -649,7 +649,10 @@ class TestCensusInTheCityChain:
         census_db([{"name": "CensusPlace", "polygons": _rect(39.9, 40.1, -74.1, -73.9)}])
         r = geocode.lookup(40.0, -74.0)
         assert r["city"] == "CensusPlace"
-        assert r["state"] is None
+        # The place's own state (the fixture's default, Texas) — no GeoNames needed.
+        assert r["state"] == "Texas"
+        assert r["country_code"] == "US"
+        assert r["country"] is None           # country names come from GeoNames
 
     def test_nothing_installed_still_returns_none(self, geonames_dir):
         assert geocode.lookup(40.0, -74.0) is None
@@ -739,3 +742,176 @@ class TestLookupCacheIntegration:
         assert result["city"] == "Testville"
         # The stale cache entry is left untouched, not overwritten.
         assert index.get_cached_geocode(qlat, qlng, version=geocode.cache_version())["city"] == "CachedCity"
+
+
+# ── Admin fields follow the city's source (audit G6) ──
+
+def _write_border_geonames(dir_, cities):
+    """GeoNames files for the border cases below: their own admin1/admin2/country
+    tables, since the shared ones only know NY/CA/Ontario."""
+    (dir_ / "cities500.txt").write_text(
+        "\n".join(_city_row(**c) for c in cities) + "\n", encoding="utf-8")
+    (dir_ / "admin1CodesASCII.txt").write_text(
+        "US.WA\tWashington\tWashington\t1\n"
+        "US.ID\tIdaho\tIdaho\t2\n"
+        "US.VT\tVermont\tVermont\t3\n"
+        "US.TX\tTexas\tTexas\t4\n"
+        "US.AR\tArkansas\tArkansas\t5\n"
+        "US.DC\tWashington, D.C.\tWashington, D.C.\t6\n"
+        "CA.02\tBritish Columbia\tBritish Columbia\t7\n"
+        "CA.10\tQuebec\tQuebec\t8\n"
+        "PR.21\tSan Juan\tSan Juan\t9\n",
+        encoding="utf-8")
+    (dir_ / "admin2Codes.txt").write_text(
+        "US.WA.063\tSpokane County\tSpokane County\t10\n"
+        "US.ID.055\tKootenai County\tKootenai County\t11\n"
+        "US.WA.073\tWhatcom County\tWhatcom County\t12\n"
+        "US.TX.037\tBowie County\tBowie County\t13\n"
+        "US.AR.091\tMiller County\tMiller County\t14\n",
+        encoding="utf-8")
+    (dir_ / "countryInfo.txt").write_text(
+        "US\tUSA\t840\tUS\tUnited States\tWashington\n"
+        "CA\tCAN\t124\tCA\tCanada\tOttawa\n"
+        "PR\tPRI\t630\tRQ\tPuerto Rico\tSan Juan\n",
+        encoding="utf-8")
+
+
+# Washington / Idaho line near Post Falls: the WA town is the nearer GeoNames point.
+SPOKANE_VALLEY = dict(geonameid=10, name="Spokane Valley", lat=47.70, lng=-117.05,
+                      cc="US", admin1="WA", admin2="063", population=1000)
+RATHDRUM = dict(geonameid=11, name="Rathdrum", lat=47.70, lng=-116.90,
+                cc="US", admin1="ID", admin2="055", population=1000)
+# US / Canada line: White Rock BC is the nearer point to a spot in Blaine WA.
+WHITE_ROCK = dict(geonameid=12, name="White Rock", lat=49.02, lng=-122.80,
+                  cc="CA", admin1="02", population=1000)
+BLAINE = dict(geonameid=13, name="Blaine", lat=48.96, lng=-122.75,
+              cc="US", admin1="WA", admin2="073", population=1000)
+# Quebec / Vermont line: Derby Line VT is the nearer point to a spot in Stanstead QC.
+DERBY_LINE = dict(geonameid=14, name="Derby Line", lat=45.00, lng=-72.10,
+                  cc="US", admin1="VT", population=1000)
+STANSTEAD = dict(geonameid=15, name="Stanstead", lat=45.04, lng=-72.10,
+                 cc="CA", admin1="10", population=1000)
+# Texarkana: one name, two states.
+TEXARKANA_TX = dict(geonameid=16, name="Texarkana", lat=33.43, lng=-94.06,
+                    cc="US", admin1="TX", admin2="037", population=1000)
+TEXARKANA_AR = dict(geonameid=17, name="Texarkana", lat=33.44, lng=-94.00,
+                    cc="US", admin1="AR", admin2="091", population=1000)
+
+
+class TestAdminFollowsTheCity:
+    """State/country come from the polygon that supplied the city, not from whichever
+    GeoNames point happens to be nearest; near a border that is often across it."""
+
+    def test_census_city_takes_the_census_state_not_the_nearest_points(
+            self, geonames_dir, census_db):
+        _write_border_geonames(geonames_dir, [SPOKANE_VALLEY, RATHDRUM])
+        census_db([{"name": "Post Falls", "state_fp": "16", "state": "Idaho",
+                    "polygons": _rect(47.69, 47.71, -117.01, -116.99)}])
+        r = geocode.lookup(47.70, -117.00)        # Spokane Valley WA is nearest
+        assert r["city"] == "Post Falls"
+        assert r["state"] == "Idaho"
+        assert r["county"] == "Kootenai County"   # nearest GeoNames place *in Idaho*
+        assert r["country"] == "United States"
+        assert r["country_code"] == "US"
+
+    def test_census_city_by_the_canadian_border_stays_in_the_us(self, geonames_dir, census_db):
+        _write_border_geonames(geonames_dir, [WHITE_ROCK, BLAINE])
+        census_db([{"name": "Blaine", "state_fp": "53", "state": "Washington",
+                    "polygons": _rect(48.99, 49.01, -122.79, -122.77)}])
+        r = geocode.lookup(49.00, -122.78)         # White Rock BC is nearest
+        assert (r["city"], r["state"], r["county"]) == ("Blaine", "Washington", "Whatcom County")
+        assert (r["country"], r["country_code"]) == ("United States", "US")
+
+    def test_census_state_is_normalised_to_the_geonames_name(self, geonames_dir, census_db):
+        # The FIPS code maps onto GeoNames' admin1 code, so the stored name matches
+        # what a GeoNames-only lookup in the same state would have said.
+        _write_border_geonames(geonames_dir, [BLAINE])
+        census_db([{"name": "Washington", "state_fp": "11", "state": "District of Columbia",
+                    "polygons": _rect(38.8, 39.0, -77.2, -76.9)}])
+        assert geocode.lookup(38.9, -77.03)["state"] == "Washington, D.C."
+
+    def test_territory_census_place_gets_its_own_country(self, geonames_dir, census_db):
+        _write_border_geonames(geonames_dir, [
+            dict(geonameid=18, name="San Juan", lat=18.46, lng=-66.10, cc="PR", admin1="21",
+                 population=1000)])
+        census_db([{"name": "San Juan", "state_fp": "72", "state": "Puerto Rico",
+                    "polygons": _rect(18.4, 18.5, -66.2, -66.0)}])
+        r = geocode.lookup(18.45, -66.1)
+        assert (r["country"], r["country_code"], r["state"]) == ("Puerto Rico", "PR", "San Juan")
+
+    def test_zip_city_takes_the_zips_state(self, geonames_dir, census_db):
+        _write_border_geonames(geonames_dir, [SPOKANE_VALLEY, RATHDRUM])
+        census_db([], zctas=[{"zip": "83854", "city": "Post Falls", "state": "Idaho",
+                              "state_code": "ID",
+                              "polygons": _rect(47.69, 47.71, -117.01, -116.99)}])
+        r = geocode.lookup(47.70, -117.00)
+        assert (r["city"], r["state"], r["county"]) == ("Post Falls", "Idaho", "Kootenai County")
+
+    def test_geonames_fallback_city_is_picked_inside_the_containing_state(
+            self, geonames_dir, census_db, monkeypatch):
+        # With the ZIP city switched off the city is the GeoNames estimate, but the ZIP
+        # still says which state the point is in: the estimate is the nearest place in
+        # *that* state, so city and state agree.
+        monkeypatch.setattr(geocode.config, "ZCTA_CITY_FALLBACK", False)
+        _write_border_geonames(geonames_dir, [SPOKANE_VALLEY, RATHDRUM])
+        census_db([], zctas=[{"zip": "83854", "city": "Post Falls", "state": "Idaho",
+                              "state_code": "ID",
+                              "polygons": _rect(47.69, 47.71, -117.01, -116.99)}])
+        r = geocode.lookup(47.70, -117.00)
+        assert (r["city"], r["state"], r["postal_code"]) == ("Rathdrum", "Idaho", "83854")
+
+    def test_osm_city_takes_the_state_of_the_same_named_geonames_place(self, geonames_dir, osm_db):
+        _write_border_geonames(geonames_dir, [DERBY_LINE, STANSTEAD])
+        osm_db([dict(name="Stanstead", category="city", admin_level=8, area=1.0,
+                     polygons=_rect(45.00, 45.02, -72.11, -72.09))])
+        r = geocode.lookup(45.01, -72.10)          # Derby Line VT is nearest
+        assert r["city"] == "Stanstead"
+        assert (r["state"], r["country"], r["country_code"]) == ("Quebec", "Canada", "CA")
+
+    def test_osm_city_outranks_a_census_border_sliver_in_another_country(
+            self, geonames_dir, osm_db, census_db):
+        # Generalised Census polygons overhang the national border slightly; the OSM
+        # city's own Canadian record wins over that sliver.
+        _write_border_geonames(geonames_dir, [DERBY_LINE, STANSTEAD])
+        osm_db([dict(name="Stanstead", category="city", admin_level=8, area=1.0,
+                     polygons=_rect(45.00, 45.02, -72.11, -72.09))])
+        census_db([{"name": "Derby Line", "state_fp": "50", "state": "Vermont",
+                    "polygons": _rect(44.99, 45.015, -72.12, -72.08)}])
+        r = geocode.lookup(45.01, -72.10)
+        assert (r["city"], r["state"], r["country_code"]) == ("Stanstead", "Quebec", "CA")
+
+    def test_osm_city_in_the_us_still_takes_the_census_state(self, geonames_dir, osm_db, census_db):
+        # Same name on both sides of a state line: containment decides which one.
+        _write_border_geonames(geonames_dir, [TEXARKANA_TX, TEXARKANA_AR])
+        osm_db([dict(name="Texarkana", category="city", admin_level=8, area=1.0,
+                     polygons=_rect(33.42, 33.46, -94.04, -93.98))])
+        census_db([{"name": "Texarkana", "state_fp": "05", "state": "Arkansas",
+                    "polygons": _rect(33.42, 33.46, -94.04, -93.98)}])
+        r = geocode.lookup(33.43, -94.035)        # Texarkana TX is the nearer point
+        assert (r["state"], r["county"]) == ("Arkansas", "Miller County")
+
+    def test_osm_city_without_a_geonames_namesake_keeps_the_nearest_points_admin(
+            self, geonames_dir, osm_db):
+        _write_border_geonames(geonames_dir, [DERBY_LINE, STANSTEAD])
+        osm_db([dict(name="Rock Island", category="city", admin_level=8, area=1.0,
+                     polygons=_rect(45.00, 45.02, -72.11, -72.09))])
+        r = geocode.lookup(45.01, -72.10)
+        assert (r["city"], r["state"], r["country_code"]) == ("Rock Island", "Vermont", "US")
+
+    def test_a_far_away_namesake_is_not_taken_for_the_osm_city(self, geonames_dir, osm_db):
+        _write_border_geonames(geonames_dir, [DERBY_LINE, dict(STANSTEAD, lat=46.5)])  # ~165 km
+        osm_db([dict(name="Stanstead", category="city", admin_level=8, area=1.0,
+                     polygons=_rect(45.00, 45.02, -72.11, -72.09))])
+        assert geocode.lookup(45.01, -72.10)["state"] == "Vermont"
+
+    def test_osm_name_match_ignores_case_accents_and_city_of(self):
+        assert geocode._norm_name("Montréal") == geocode._norm_name("MONTREAL")
+        assert geocode._norm_name("City of Bristol") == geocode._norm_name("Bristol")
+        assert geocode._norm_name("Winston-Salem") == geocode._norm_name("Winston Salem")
+
+    def test_geonames_only_lookup_is_unchanged(self, geonames_dir):
+        # No polygons installed: every field still comes from the one nearest record.
+        _write_border_geonames(geonames_dir, [SPOKANE_VALLEY, RATHDRUM])
+        r = geocode.lookup(47.70, -117.00)
+        assert (r["city"], r["state"], r["county"], r["country_code"]) == (
+            "Spokane Valley", "Washington", "Spokane County", "US")

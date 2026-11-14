@@ -179,6 +179,17 @@ GEOCODE_POP_WEIGHT_MARGIN = float(os.environ.get("GEOTAGGER_GEOCODE_POP_WEIGHT_M
 # eliminates anything further out anyway, and a k=12 KD-tree query still runs in
 # microseconds. Ignored when GEOCODE_POP_WEIGHT is off.
 GEOCODE_CANDIDATES = int(os.environ.get("GEOTAGGER_GEOCODE_CANDIDATES", "12"))
+# State/county/country follow whichever polygon supplied the city (audit G6), which
+# means searching the nearest GeoNames places for one in a given state (a Census
+# city's) or with a given name (an OSM city's). Near a state line the nearest dozen
+# can all sit across it, so this search looks wider than the label pick does; a
+# k=64 query still runs in microseconds.
+GEOCODE_ADMIN_CANDIDATES = int(os.environ.get("GEOTAGGER_GEOCODE_ADMIN_CANDIDATES", "64"))
+# How far from the photo a GeoNames place may be and still be taken as *the* OSM
+# city of the same name. A city polygon can be large (its GeoNames point sits at the
+# centre, the photo may be at the edge), but a same-named town far away is a
+# different town.
+GEOCODE_ADMIN_MATCH_KM = float(os.environ.get("GEOTAGGER_GEOCODE_ADMIN_MATCH_KM", "50"))
 # Long-edge resolution of the grid the map's place-boundary overlay is computed on
 # when the weighting above is active. The weighted boundaries are Apollonius arcs
 # (and the margin/reach guards clip them further), so there is no cheap exact

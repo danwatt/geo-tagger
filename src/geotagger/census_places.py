@@ -208,7 +208,8 @@ def _containing_rows(lat: float, lng: float) -> list[sqlite3.Row]:
         if _state != "ready" or conn is None:
             return []
         candidates = conn.execute(
-            """SELECT p.id, p.geoid, p.name, p.name_lsad, p.kind, p.state_name, p.area, p.rings
+            """SELECT p.id, p.geoid, p.name, p.name_lsad, p.kind, p.state_fp, p.state_name,
+                      p.area, p.rings
                FROM places_spatial s JOIN places p ON p.id = s.id
                WHERE s.min_lat <= ? AND s.max_lat >= ?
                  AND s.min_lng <= ? AND s.max_lng >= ?""",
@@ -219,7 +220,7 @@ def _containing_rows(lat: float, lng: float) -> list[sqlite3.Row]:
 
 
 def lookup(lat: float | None, lng: float | None) -> dict | None:
-    """Resolve a coordinate to {city, geoid, kind, place_id, state}, or None if the
+    """Resolve a coordinate to {city, geoid, kind, place_id, state, state_fp}, or None if the
     DB is unavailable or the point is inside no place.
 
     Census places don't nest (they're a partition of named populated area within a
@@ -238,6 +239,9 @@ def lookup(lat: float | None, lng: float | None) -> dict | None:
         "kind": row["kind"],
         "place_id": row["id"],
         "state": row["state_name"],
+        # FIPS code, so geocode can map it onto GeoNames' admin1 code rather than
+        # matching names (Census "District of Columbia" vs GeoNames "Washington, D.C.").
+        "state_fp": row["state_fp"],
     }
 
 

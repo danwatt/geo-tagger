@@ -7,8 +7,9 @@ city/town boundary it falls in, plus the smallest containing named feature
     {city, sublocation, category, place_id}
 
 This is polygon **containment**, unlike geocode.py which does nearest-**point**
-GeoNames lookup. It replaces the city half of that lookup (GeoNames keeps
-state/county/country); the merge lives in geocode.lookup().
+GeoNames lookup. It replaces the city half of that lookup; there are no
+state/country polygons here, so those come from Census containment or the
+GeoNames record of the same city (the merge lives in geocode._merged_lookup).
 
 Data is a standalone SQLite DB (config.OSM_DB_PATH) built offline from GeoFabrik
 extracts by scripts/build_osm_places.py — a `places` table plus an R*Tree

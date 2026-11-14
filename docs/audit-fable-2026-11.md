@@ -247,7 +247,7 @@ any lookup in between reopens the old file, and `unlink`/`replace` then raises `
 are not comparable across rows. A cell 90 m from a seed with a 100 m radius failed to merge in 22 of 72
 directions at Seattle's latitude. Result: duplicate hotspots and duplicate work-queue proposals.
 
-**G6 — Medium — City and state can disagree near borders** [traced]
+**G6 — Medium — City and state can disagree near borders** [traced] — ✅ **DONE** (Census/ZIP city: state from FIPS → GeoNames admin1, county from nearest GeoNames inside that state; OSM city: admin from a same-named GeoNames place within 50 km, Census state when same country; `_CACHE_LOGIC_VERSION` = 2; existing photos fixed only by `scripts/regeocode.py`; county still an estimate)
 `geocode.py:782-790`. City comes from polygon containment, but state and country always come from the nearest
 GeoNames point. `census.lookup()` already returns `state` and it is discarded.
 
