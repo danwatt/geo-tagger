@@ -225,6 +225,10 @@ function sortPlaces(list) {
 // a named place can be judged against the unnamed ones below it. photo_count is
 // absent only if the stats query failed; the row then just says less.
 function placeMeta(p) {
+  // A row saved before the server validated shapes (or restored from a hand-edited
+  // backup) can hold bounds nothing can read. The server matches it to no photos;
+  // here it is listed — so it can be deleted — but never drawn.
+  if (p.bounds_valid === false) return "⚠ Unreadable shape — matches no photos. Delete it and draw it again.";
   const bits = [];
   if (typeof p.photo_count === "number") {
     bits.push(p.photo_count === 1 ? "1 photo" : `${p.photo_count} photos`);
@@ -272,13 +276,15 @@ function renderSidebar() {
   }
   shown.forEach(p => {
     const div = document.createElement("div");
-    div.className = "place-item" + (p.id === selectedPlaceId ? " selected" : "");
+    const broken = p.bounds_valid === false;
+    div.className = "place-item" + (p.id === selectedPlaceId ? " selected" : "")
+      + (broken ? " broken" : "");
     div.dataset.id = p.id;
 
     // Representative photo shown as a thumbnail, with a Clear action when
     // present. The thumbnail is also the way into the picker — this page is the
     // only place a representative is chosen.
-    const repThumb = p.representative_photo_id
+    const repThumb = broken ? "" : p.representative_photo_id
       ? `<img class="place-rep-thumb" src="/api/thumbnail/${p.representative_photo_id}"
              alt="Representative photo" title="Click to choose a different photo"/>`
       : `<button class="rep-empty" title="Choose a representative photo from the photos taken here">
@@ -306,19 +312,19 @@ function renderSidebar() {
       </div>
       <div class="place-item-actions">
         ${photosLink}
-        <button class="icon-btn zoom-btn" title="Zoom to this place">🔍</button>
+        ${broken ? "" : `<button class="icon-btn zoom-btn" title="Zoom to this place">🔍</button>`}
         <button class="icon-btn rename-btn" title="Rename">✏️</button>
         ${clearRepBtn}
         <button class="icon-btn delete-btn" title="Delete">🗑️</button>
       </div>`;
 
     // The thumbnail (or its placeholder button) is the way into the picker.
-    div.querySelector(".place-rep-thumb, .rep-empty").addEventListener("click", (e) => {
+    div.querySelector(".place-rep-thumb, .rep-empty")?.addEventListener("click", (e) => {
       e.stopPropagation();
       openRepPicker(p);
     });
 
-    div.querySelector(".zoom-btn").addEventListener("click", (e) => {
+    div.querySelector(".zoom-btn")?.addEventListener("click", (e) => {
       e.stopPropagation();
       selectPlace(p.id);
     });
@@ -370,6 +376,7 @@ function renderPlaces() {
   placeShapes = {};
 
   places.forEach(p => {
+    if (p.bounds_valid === false) return;   // listed as broken in the sidebar instead
     const bounds = JSON.parse(p.bounds);
     let shape;
 

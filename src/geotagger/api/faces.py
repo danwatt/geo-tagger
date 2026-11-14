@@ -11,6 +11,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field, model_validator
 
 from geotagger import index, faces, thumbnails, serializers, config
+from geotagger.api import _media
 from geotagger.executor import get_executor
 from geotagger.scan_failures import BatchAborted
 from geotagger.services import face_undo_service, faces_service
@@ -452,25 +453,29 @@ async def api_faces_by_ids(req: FacesByIdsRequest):
 
 @router.get("/api/faces/{face_id}/crop")
 async def api_face_crop(face_id: int, request: Request):
+    """Square crop of one face. Same failure mapping and caching as the photo
+    renditions (api/_media.py): 404 unknown face or vanished file, 422 undecodable."""
     row = index.get_face_with_photo(face_id)
     if not row:
-        raise HTTPException(404)
-    bbox = tuple(float(v) for v in row["bbox"].split(","))
-    etag = f'"{face_id}-{row["mtime"]}-{row["bbox"]}"'
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304)
+        raise HTTPException(404, "Face not found")
     try:
-        loop = asyncio.get_running_loop()
-        data = await loop.run_in_executor(
-            get_executor(),
-            lambda: thumbnails.get_face_crop(
-                Path(index.photo_path(row)), row["mtime"], row["size"], bbox,
-                orientation=row["orientation"]),
-        )
-        return Response(content=data, media_type=thumbnails.media_type(),
-                        headers={"Cache-Control": "max-age=86400", "ETag": etag})
-    except Exception as e:
-        raise HTTPException(500, str(e))
+        bbox = tuple(float(v) for v in row["bbox"].split(","))
+        if len(bbox) != 4:
+            raise ValueError
+    except (ValueError, AttributeError):
+        logger.warning(f"face {face_id}: malformed bbox {row['bbox']!r}")
+        raise HTTPException(422, "This face has no usable box")
+    path = Path(index.photo_path(row))
+    tag = thumbnails.rendition_etag(path, row["mtime"], row["size"], row["orientation"],
+                                    "face", bbox)
+    etag = f'"f{face_id}-{tag}"'
+    if _media.etag_matches(request, etag):
+        return _media.not_modified(etag)
+    data = await _media.render(thumbnails.get_face_crop, path, row["mtime"], row["size"], bbox,
+                               orientation=row["orientation"],
+                               what="face crop", ident=f"face {face_id}")
+    return Response(content=data, media_type=thumbnails.media_type(),
+                    headers={"Cache-Control": _media.CACHE_CONTROL, "ETag": etag})
 
 
 def _require_person(person_id: int | None):

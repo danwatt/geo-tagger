@@ -44,15 +44,6 @@ The module also imports `services.data_service`, inverting the layering.
 "2,000 photos found" and "Select all" acts on a partial set.
 *Fix:* return the true total and a `truncated` flag; show "first 2,000 of N".
 
-**A5 — Medium — Places CRUD has no validation and no 404s** [traced]
-`api/places.py:50-86`. `bounds` is a free string; malformed JSON makes `place_distance` raise inside SQLite,
-so place search returns 500. DELETE and PATCH on a missing id return success.
-
-**A6 — Medium — Media routes turn every failure into 500 with the exception text** [seen, for `api/faces.py:305-306`]
-`api/photos.py:205-222,233-247,266-278`. A file deleted since the scan should be 404; the detail typically
-leaks an absolute path. The ETag `"{id}-{mtime}"` omits orientation, so browsers keep a sideways image for a
-day after orientation changes.
-
 **A7 — Medium — Dataset downloads run on the shared 4-worker request executor** [traced]
 `services/data_service.py:215,326,416,481`, `services/semantic_service.py:134`. Starting four jobs from the
 Data page occupies every worker and freezes the UI. `/api/geocode/export-sidecars` pins a worker for the whole

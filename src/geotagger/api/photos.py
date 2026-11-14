@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, field_validator
 
 from geotagger import index, thumbnails, serializers
+from geotagger.api import _media
 from geotagger.executor import get_executor
 from geotagger.services import photos_service, zip_service
 from geotagger.timeutil import has_date
@@ -219,57 +220,42 @@ async def api_photos_by_bounds(
     return result
 
 
-@router.get("/api/thumbnail/{photo_id}")
-async def api_thumbnail(photo_id: int, request: Request):
+# ── Media (thumbnail / preview / full size) ──
+#
+# 404 for an unknown id and for a file gone since the scan, 422 for one that
+# won't decode, generic 500 otherwise — never the exception text, which carries
+# the absolute path (audit A6; mapping in api/_media.py).
+
+def _photo_or_404(photo_id: int):
     row = index.get_photo(photo_id)
     if not row:
-        raise HTTPException(404)
-    etag = f'"{photo_id}-{row["mtime"]}"'
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304)
-    try:
-        # Run blocking I/O in thread pool
-        loop = asyncio.get_event_loop()
-        data = await loop.run_in_executor(
-            get_executor(),
-            thumbnails.get_thumbnail,
-            Path(index.photo_path(row)),
-            row["mtime"],
-            row["size"],
-            row["orientation"],
-        )
-        return Response(content=data, media_type=thumbnails.media_type(),
-                        headers={"Cache-Control": "max-age=86400", "ETag": etag})
-    except Exception as e:
-        import traceback
-        print(f"Error generating thumbnail for {photo_id} ({index.photo_path(row)}): {e}")
-        traceback.print_exc()
-        raise HTTPException(500, str(e))
+        raise HTTPException(404, "Photo not found")
+    return row
+
+
+async def _serve_rendition(request: Request, photo_id: int, kind: str, fn, what: str) -> Response:
+    row = _photo_or_404(photo_id)
+    path = Path(index.photo_path(row))
+    tag = thumbnails.rendition_etag(path, row["mtime"], row["size"], row["orientation"], kind)
+    etag = f'"{photo_id}-{tag}"'
+    if _media.etag_matches(request, etag):
+        return _media.not_modified(etag)
+    data = await _media.render(fn, path, row["mtime"], row["size"], row["orientation"],
+                               what=what, ident=f"photo {photo_id}")
+    return Response(content=data, media_type=thumbnails.media_type(),
+                    headers={"Cache-Control": _media.CACHE_CONTROL, "ETag": etag})
+
+
+@router.get("/api/thumbnail/{photo_id}")
+async def api_thumbnail(photo_id: int, request: Request):
+    return await _serve_rendition(request, photo_id, "thumb", thumbnails.get_thumbnail,
+                                  "thumbnail")
 
 
 @router.get("/api/preview/{photo_id}")
 async def api_preview(photo_id: int, request: Request):
-    row = index.get_photo(photo_id)
-    if not row:
-        raise HTTPException(404)
-    etag = f'"{photo_id}-{row["mtime"]}"'
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304)
-    try:
-        # Run blocking I/O in thread pool
-        loop = asyncio.get_event_loop()
-        data = await loop.run_in_executor(
-            get_executor(),
-            thumbnails.get_preview_oriented,
-            Path(index.photo_path(row)),
-            row["mtime"],
-            row["size"],
-            row["orientation"],
-        )
-        return Response(content=data, media_type=thumbnails.media_type(),
-                        headers={"Cache-Control": "max-age=86400", "ETag": etag})
-    except Exception as e:
-        raise HTTPException(500, str(e))
+    return await _serve_rendition(request, photo_id, "preview",
+                                  thumbnails.get_preview_oriented, "preview")
 
 
 @router.get("/api/photo/{photo_id}/fullsize")
@@ -282,25 +268,15 @@ async def api_fullsize(photo_id: int):
     downscaled preview. Heavy (full decode + draw), so it runs in the executor and is not
     disk-cached; boxes reflect current labels, so it must not be cached either.
     """
-    row = index.get_photo(photo_id)
-    if not row:
-        raise HTTPException(404)
+    row = _photo_or_404(photo_id)
     faces = index.get_faces_for_photo(photo_id)
     # Extract plain tuples so no sqlite Row crosses into the worker thread.
     face_specs = [(f["bbox"], f["person_name"], bool(f["ignored"])) for f in faces]
-    try:
-        loop = asyncio.get_event_loop()
-        data = await loop.run_in_executor(
-            get_executor(),
-            thumbnails.render_fullsize_with_faces,
-            Path(index.photo_path(row)),
-            row["orientation"],
-            face_specs,
-        )
-        return Response(content=data, media_type="image/jpeg",
-                        headers={"Cache-Control": "no-store"})
-    except Exception as e:
-        raise HTTPException(500, str(e))
+    data = await _media.render(thumbnails.render_fullsize_with_faces,
+                               Path(index.photo_path(row)), row["orientation"], face_specs,
+                               what="full-size render", ident=f"photo {photo_id}")
+    return Response(content=data, media_type="image/jpeg",
+                    headers={"Cache-Control": "no-store"})
 
 
 @router.get("/api/photo/{photo_id}")

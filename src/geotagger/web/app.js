@@ -655,7 +655,9 @@ async function loadPlaces() {
   try {
     const res = await fetch("/api/places");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    places = await res.json();
+    // A place whose stored bounds the server can't read (bounds_valid false —
+    // a pre-validation row) can't be drawn or jumped to; Custom Places lists it.
+    places = (await res.json()).filter(p => p.bounds_valid !== false);
 
     // Display all places on map
     renderPlaces();
@@ -961,7 +963,7 @@ async function buildLocationItems() {
   let livePlaces = places;
   try {
     const res = await fetch("/api/places");
-    if (res.ok) livePlaces = await res.json();
+    if (res.ok) livePlaces = (await res.json()).filter(p => p.bounds_valid !== false);
   } catch (err) {
     // Offline or server hiccup — fall back to what the page loaded with.
   }

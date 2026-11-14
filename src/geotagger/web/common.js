@@ -770,3 +770,72 @@ function hideToast() {
   const t = document.getElementById("toast");
   if (t) t.hidden = true;
 }
+
+/* ── Placeholder for media that won't load ──
+ *
+ * A photo moved or deleted since the last scan answers 404 on its thumbnail /
+ * preview / face crop, an undecodable one 422. Without this the grid showed the
+ * browser's broken-image glyph (or nothing), with no hint why. One capture-phase
+ * listener covers every <img> builder on every page instead of an onerror in each.
+ * The status is re-fetched only after a failure, to pick the wording. */
+(function () {
+  const MEDIA_RE = /\/api\/(?:thumbnail\/\d+|preview\/\d+|faces\/\d+\/crop)/;
+
+  function placeholder(line1, line2) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160">
+      <rect width="160" height="160" fill="#262626"/>
+      <path d="M58 52h44l10 10v46H48V52z" fill="none" stroke="#777" stroke-width="3"/>
+      <path d="M62 66l36 36M98 66l-36 36" stroke="#d9a441" stroke-width="3"/>
+      <text x="80" y="128" fill="#ccc" font-family="sans-serif" font-size="12"
+            text-anchor="middle">${line1}</text>
+      <text x="80" y="143" fill="#888" font-family="sans-serif" font-size="9"
+            text-anchor="middle">${line2}</text></svg>`;
+    return "data:image/svg+xml," + encodeURIComponent(svg);
+  }
+
+  const BY_STATUS = {
+    404: ["File missing", "moved or deleted since the scan",
+          "Photo file is missing (moved or deleted since the last scan)"],
+    422: ["Can't decode", "corrupt or unsupported file",
+          "This file could not be decoded (corrupt or in an unsupported format)"],
+  };
+  const OTHER = ["Image unavailable", "could not be loaded", "The image could not be loaded"];
+
+  document.addEventListener("error", async (e) => {
+    const img = e.target;
+    if (!(img instanceof HTMLImageElement) || img.dataset.mediaBroken) return;
+    const src = img.getAttribute("src") || "";
+    if (!MEDIA_RE.test(src)) return;
+    img.dataset.mediaBroken = "1";   // the placeholder itself must never re-trigger this
+    let status = 0;
+    try { status = (await fetch(src, { method: "GET" })).status; } catch (err) { /* offline */ }
+    if (img.getAttribute("src") !== src) {   // reused for another photo meanwhile
+      delete img.dataset.mediaBroken;
+      return;
+    }
+    const [l1, l2, title] = BY_STATUS[status] || OTHER;
+    img.dataset.mediaTitle = img.title;   // restored if the element is reused
+    img.dataset.mediaAlt = img.alt;
+    img.title = title;
+    img.alt = title;
+    img.classList.add("media-unavailable");
+    img.src = placeholder(l1, l2);
+  }, true);
+
+  // An <img> recycled for a different photo gets a fresh chance to load.
+  new MutationObserver((records) => {
+    for (const r of records) {
+      const img = r.target;
+      if (img.dataset.mediaBroken && !img.src.startsWith("data:")) {
+        delete img.dataset.mediaBroken;
+        img.classList.remove("media-unavailable");
+        if ("mediaTitle" in img.dataset) {
+          img.title = img.dataset.mediaTitle;
+          img.alt = img.dataset.mediaAlt;
+          delete img.dataset.mediaTitle;
+          delete img.dataset.mediaAlt;
+        }
+      }
+    }
+  }).observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: ["src"] });
+})();

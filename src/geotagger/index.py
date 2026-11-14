@@ -2097,6 +2097,10 @@ def get_places() -> list[sqlite3.Row]:
     return get_db().execute("SELECT * FROM places ORDER BY name").fetchall()
 
 
+def get_place(place_id: int) -> sqlite3.Row | None:
+    return get_db().execute("SELECT * FROM places WHERE id=?", (place_id,)).fetchone()
+
+
 # Same window the propose bar votes with (geotag_service.DEFAULT_PROPOSE_WINDOW):
 # an untagged photo counts as "likely here" when it falls within an hour of one
 # of the place's own geotagged photos, same time-neighbour test /api/geotag/guess
@@ -2198,14 +2202,15 @@ def create_place(name: str, place_type: str, bounds: str) -> int:
     return cursor.lastrowid
 
 
-def delete_place(place_id: int):
-    """Delete a place by ID."""
+def delete_place(place_id: int) -> bool:
+    """Delete a place by ID. False when no such place existed."""
     with transaction() as db:
-        db.execute("DELETE FROM places WHERE id=?", (place_id,))
+        return db.execute("DELETE FROM places WHERE id=?", (place_id,)).rowcount > 0
 
 
-def update_place(place_id: int, bounds: str | None = None, name: str | None = None):
-    """Update a place's bounds and/or name (only fields that are not None)."""
+def update_place(place_id: int, bounds: str | None = None, name: str | None = None) -> bool:
+    """Update a place's bounds and/or name (only fields that are not None).
+    False when no such place exists (an empty update still checks)."""
     sets = []
     params: list = []
     if bounds is not None:
@@ -2215,16 +2220,18 @@ def update_place(place_id: int, bounds: str | None = None, name: str | None = No
         sets.append("name=?")
         params.append(name)
     if not sets:
-        return
+        return get_place(place_id) is not None
     params.append(place_id)
     with transaction() as db:
-        db.execute(f"UPDATE places SET {', '.join(sets)} WHERE id=?", params)
+        return db.execute(f"UPDATE places SET {', '.join(sets)} WHERE id=?", params).rowcount > 0
 
 
-def set_place_representative(place_id: int, photo_id: int | None):
-    """Set (or clear, with photo_id=None) a place's representative photo."""
+def set_place_representative(place_id: int, photo_id: int | None) -> bool:
+    """Set (or clear, with photo_id=None) a place's representative photo.
+    False when no such place exists."""
     with transaction() as db:
-        db.execute("UPDATE places SET representative_photo_id=? WHERE id=?", (photo_id, place_id))
+        return db.execute("UPDATE places SET representative_photo_id=? WHERE id=?",
+                          (photo_id, place_id)).rowcount > 0
 
 
 # ── Reverse geocoding ──

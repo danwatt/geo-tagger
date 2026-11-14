@@ -86,6 +86,8 @@
   font-size: 11px;
   margin-top: 2px;
 }
+.place-item.broken { border-color: var(--warn); }
+.place-item.broken .place-item-meta { color: var(--warn); }
 
 .place-rep-thumb {
   display: block;

@@ -2,7 +2,8 @@
 
 import json
 import math
-from functools import lru_cache
+
+from geotagger.place_bounds import parse_bounds
 
 FIELDS = ("loc_sublocation", "loc_city", "loc_county", "loc_state", "loc_country")
 
@@ -56,22 +57,22 @@ def parse_fields(value: str | None) -> dict:
     return fields
 
 
-@lru_cache(maxsize=128)
-def _bounds(raw):
-    return json.loads(raw)
-
-
 def place_distance(lat, lng, kind, raw):
-    """Meters outside a saved area (zero inside); rectangles use local distance."""
+    """Meters outside a saved area (zero inside); rectangles use local distance.
+
+    Registered as the `search_place_distance` SQLite UDF, so it must never raise:
+    an exception inside a UDF surfaces as sqlite3.OperationalError and 500s the
+    whole query (audit A5). Unusable bounds return NULL, which `<= ?` / `= 0`
+    read as "not inside"."""
     if lat is None or lng is None:
         return None
-    b = _bounds(raw)
+    b = parse_bounds(kind, raw)
+    if b is None:
+        return None
     if kind == "circle":
         p1, p2 = math.radians(lat), math.radians(b["lat"])
         a = math.sin((p1 - p2) / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(math.radians(lng - b["lng"]) / 2) ** 2
         return max(0, 6371000 * 2 * math.asin(math.sqrt(min(1, a))) - b["radius"])
-    if kind != "rectangle":
-        return None
     west, east = b["west"], b["east"]
     if east < west:
         east += 360
@@ -85,17 +86,15 @@ def place_distance(lat, lng, kind, raw):
 
 def place_bbox(kind, raw) -> tuple[float, float, float, float] | None:
     """(min_lat, max_lat, min_lng, max_lng) enclosing a saved place, for an
-    R*Tree prefilter. A circle's box overshoots its corners by ~27% of area, so
-    callers pair this with place_distance() == 0 for the exact test."""
-    try:
-        b = _bounds(raw)
-        if kind == "circle":
-            lat_off = b["radius"] / 111320
-            lng_off = b["radius"] / (111320 * max(1e-6, math.cos(math.radians(b["lat"]))))
-            return (b["lat"] - lat_off, b["lat"] + lat_off,
-                    b["lng"] - lng_off, b["lng"] + lng_off)
-        if kind == "rectangle":
-            return (b["south"], b["north"], b["west"], b["east"])
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-        pass
-    return None
+    R*Tree prefilter, or None for unusable bounds. A circle's box overshoots its
+    corners by ~27% of area, so callers pair this with place_distance() == 0 for
+    the exact test."""
+    b = parse_bounds(kind, raw)
+    if b is None:
+        return None
+    if kind == "circle":
+        lat_off = b["radius"] / 111320
+        lng_off = b["radius"] / (111320 * max(1e-6, math.cos(math.radians(b["lat"]))))
+        return (b["lat"] - lat_off, b["lat"] + lat_off,
+                b["lng"] - lng_off, b["lng"] + lng_off)
+    return (b["south"], b["north"], b["west"], b["east"])

@@ -15,9 +15,9 @@ Blocking (full-table GROUP BY + geocode lookups); runs in the executor.
 import logging
 import math
 import time
-from functools import lru_cache
 
 from geotagger import geocode, index
+from geotagger.place_bounds import parse_bounds
 
 logger = logging.getLogger(__name__)
 
@@ -373,19 +373,6 @@ def _place_inside_disc(place_bounds: dict, place_type: str,
     )
 
 
-@lru_cache(maxsize=1024)
-def _parse_bounds(raw) -> dict | None:
-    """A place's bounds JSON as a dict, or None when unusable. Cached on the raw
-    string: this is called clusters x places times per request but there are only
-    as many distinct strings as saved places. Callers only read the dict."""
-    import json as _json
-    try:
-        bounds = _json.loads(raw)
-    except (TypeError, ValueError):
-        return None
-    return bounds if isinstance(bounds, dict) else None
-
-
 def covered_by_place(lat: float, lng: float, radius_m: float, places: list,
                      threshold: float = PLACE_COVERAGE_THRESHOLD) -> bool:
     """Does a saved place describe the same spot as this hotspot?
@@ -400,7 +387,9 @@ def covered_by_place(lat: float, lng: float, radius_m: float, places: list,
     spot and worth keeping.
     """
     for p in places:
-        bounds = _parse_bounds(p["bounds"])
+        # The shared validated parser (cached per distinct string): a hand-edited
+        # or pre-validation row reads as "covers nothing", never an exception.
+        bounds = parse_bounds(p["type"], p["bounds"])
         if bounds is None:
             continue
         margin = _place_margin_meters(bounds, p["type"], lat, lng)

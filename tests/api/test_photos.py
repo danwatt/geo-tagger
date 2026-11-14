@@ -599,12 +599,124 @@ def test_guess_dates_rejects_empty_and_malformed(client):
     assert client.post("/api/photos/guess-dates", json={}).status_code == 422
 
 
-# ── Media routes on a file that vanished since the scan ──
+# ── Media routes: missing / undecodable files, no path leaks, ETags (audit A6) ──
 
-@pytest.mark.xfail(strict=True, reason="A6: media routes turn a vanished file into a 500")
+_MISSING = "Photo file is missing (moved or deleted since the last scan)"
+_PHOTO_MEDIA = ["/api/thumbnail/{}", "/api/preview/{}", "/api/photo/{}/fullsize"]
+
+
+def _add_jpeg(tmp_path, name, orientation=1):
+    from PIL import Image
+    p = tmp_path / name
+    Image.new("RGB", (120, 80), (200, 40, 40)).save(p, "JPEG")
+    index.upsert_photo(
+        filename=name, dir_=str(tmp_path), ext=".jpg", media_type="image",
+        mtime=1.0, size=p.stat().st_size, lat=None, lng=None,
+        geotag_source="none", sidecar_path=None, sidecar_mtime=None, orientation=orientation,
+    )
+    return index.get_db().execute(
+        "SELECT id FROM photos WHERE dir=? AND filename=?", (str(tmp_path), name)
+    ).fetchone()[0]
+
+
+def _add_face(photo_id, bbox="0.1,0.1,0.6,0.6"):
+    with index.transaction() as db:
+        return db.execute(
+            "INSERT INTO faces (photo_id, person_id, bbox, det_score, source, created_at) "
+            "VALUES (?, NULL, ?, 0.9, 'detected', 0)", (photo_id, bbox)).lastrowid
+
+
 def test_fullsize_of_vanished_file_is_404(client, tmp_path):
     pid = _add_real_file(tmp_path, "gone.jpg")
     (tmp_path / "gone.jpg").unlink()
     r = client.get(f"/api/photo/{pid}/fullsize")
     assert r.status_code == 404
     assert str(tmp_path) not in r.text          # and the detail doesn't leak the path
+
+
+@pytest.mark.parametrize("route", _PHOTO_MEDIA + ["/api/faces/{face}/crop"])
+def test_media_of_vanished_file_is_404_without_path(client, thumbs_dir, tmp_path, route):
+    pid = _add_jpeg(tmp_path, "vanished.jpg")
+    fid = _add_face(pid)
+    (tmp_path / "vanished.jpg").unlink()
+    r = client.get(route.format(pid, face=fid))
+    assert r.status_code == 404
+    assert r.json()["detail"] == _MISSING
+    assert str(tmp_path) not in r.text and "vanished.jpg" not in r.text
+
+
+@pytest.mark.parametrize("route", _PHOTO_MEDIA + ["/api/faces/{face}/crop"])
+def test_media_of_undecodable_file_is_422_without_path(client, thumbs_dir, tmp_path, route):
+    pid = _add_real_file(tmp_path, "corrupt.jpg", b"this is not a jpeg at all")
+    fid = _add_face(pid)
+    r = client.get(route.format(pid, face=fid))
+    assert r.status_code == 422
+    assert "could not be decoded" in r.json()["detail"]
+    assert str(tmp_path) not in r.text
+
+
+def test_media_unexpected_error_is_generic_500(client, thumbs_dir, tmp_path, monkeypatch, caplog):
+    from geotagger import thumbnails
+    pid = _add_jpeg(tmp_path, "boom.jpg")
+
+    def explode(path, *a, **k):
+        raise RuntimeError(f"disk on fire at {path}")
+    monkeypatch.setattr(thumbnails, "get_thumbnail", explode)
+    with caplog.at_level("ERROR"):
+        r = client.get(f"/api/thumbnail/{pid}")
+    assert r.status_code == 500
+    assert r.json()["detail"] == "Could not render the thumbnail"
+    assert str(tmp_path) not in r.text and "fire" not in r.text
+    assert "disk on fire" in caplog.text          # the real error is logged server-side
+
+
+def test_face_crop_unknown_and_malformed_bbox(client, thumbs_dir, tmp_path):
+    assert client.get("/api/faces/987654/crop").status_code == 404
+    pid = _add_jpeg(tmp_path, "f.jpg")
+    fid = _add_face(pid, bbox="not,a,box")
+    assert client.get(f"/api/faces/{fid}/crop").status_code == 422
+
+
+def test_cached_rendition_still_served_after_file_vanishes(client, thumbs_dir, tmp_path):
+    """Deliberate: a rendition already in the disk cache doesn't need the original,
+    so a library on an unplugged drive stays browsable. Only a render reports missing."""
+    pid = _add_jpeg(tmp_path, "cached.jpg")
+    assert client.get(f"/api/thumbnail/{pid}").status_code == 200
+    (tmp_path / "cached.jpg").unlink()
+    assert client.get(f"/api/thumbnail/{pid}").status_code == 200
+    assert client.get(f"/api/photo/{pid}/fullsize").status_code == 404   # never cached
+
+
+@pytest.mark.parametrize("route", ["/api/thumbnail/{}", "/api/preview/{}", "/api/faces/{face}/crop"])
+def test_media_etag_tracks_orientation_and_revalidates(client, thumbs_dir, tmp_path, route):
+    pid = _add_jpeg(tmp_path, "rot.jpg")
+    url = route.format(pid, face=_add_face(pid))
+    r1 = client.get(url)
+    assert r1.status_code == 200
+    etag1 = r1.headers["etag"]
+    # Must revalidate: a fresh max-age would never even consult the new ETag.
+    assert r1.headers["cache-control"] == "no-cache"
+
+    hit = client.get(url, headers={"If-None-Match": etag1})
+    assert hit.status_code == 304 and hit.headers["etag"] == etag1
+    assert client.get(url, headers={"If-None-Match": f'"other", W/{etag1}'}).status_code == 304
+    assert client.get(url, headers={"If-None-Match": '"other"'}).status_code == 200
+
+    index.set_orientations([(6, pid)])
+    r2 = client.get(url, headers={"If-None-Match": etag1})
+    assert r2.status_code == 200                       # old validator no longer matches
+    assert r2.headers["etag"] != etag1
+
+
+def test_preview_etag_tracks_raw_full_decode(tmp_path, monkeypatch):
+    """Toggling RAW full decode swaps the preview's pixels, so it must change the
+    validator too (the ETag derives from the rendition's cache file name)."""
+    from pathlib import Path
+    from geotagger import config, thumbnails
+    path = Path(tmp_path / "shot.nef")
+    monkeypatch.setattr(config, "RAW_FULL_DECODE", False)
+    off = thumbnails.rendition_etag(path, 1.0, 3, 1, "preview")
+    monkeypatch.setattr(config, "RAW_FULL_DECODE", True)
+    on = thumbnails.rendition_etag(path, 1.0, 3, 1, "preview")
+    assert off != on
+    assert thumbnails.rendition_etag(path, 1.0, 3, 6, "preview") != on

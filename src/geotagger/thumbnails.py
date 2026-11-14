@@ -13,6 +13,12 @@ from geotagger.exiftool_session import get_et
 _thumbs_dir: Path | None = None
 
 
+class DecodeError(RuntimeError):
+    """The file exists but none of our decoders could turn it into pixels (corrupt,
+    truncated, or a codec we lack). A RuntimeError subclass so older broad catches
+    keep working; the media routes map it to 422 instead of a generic 500."""
+
+
 def init_thumbs(root: Path | None = None):
     """Initialize thumbnails directory. If CACHE_DIR is set, use that; otherwise use root / CACHE_DIR_NAME."""
     global _thumbs_dir
@@ -47,7 +53,25 @@ def _cache_file(path: Path, mtime: float, size: int, variant: str) -> Path:
     filename is assembled. ``variant`` carries everything after the key (``thumb``,
     ``thumb_o6``, ``face_<bbox>_fd_o8``…). Doesn't create the subdirectory."""
     key = _cache_key(path, mtime, size)
-    return _get_thumbs_dir() / key[:2] / f"{key}_{variant}{cache_ext()}"
+    return _get_thumbs_dir() / key[:2] / _cache_name(key, variant)
+
+
+def _cache_name(key: str, variant: str) -> str:
+    return f"{key}_{variant}{cache_ext()}"
+
+
+def _thumb_variant(orientation: int | None) -> str:
+    return f"thumb{_orient_suffix(orientation)}"
+
+
+def _preview_variant(path: Path, orientation: int | None) -> str:
+    return f"preview{_fd_suffix(path)}{_orient_suffix(orientation)}"
+
+
+def _face_variant(path: Path, bbox: tuple[float, float, float, float],
+                  orientation: int | None) -> str:
+    bbox_key = hashlib.sha1(",".join(f"{v:.4f}" for v in bbox).encode()).hexdigest()[:10]
+    return f"face_{bbox_key}{_fd_suffix(path)}{_orient_suffix(orientation)}"
 
 
 def thumb_cache_path(path: Path, mtime: float, size: int, orientation: int | None) -> Path:
@@ -56,24 +80,44 @@ def thumb_cache_path(path: Path, mtime: float, size: int, orientation: int | Non
     the scan once probed/wrote the unsuffixed name while the API read ``_o{n}``
     (audit S4). ``mtime``/``size``/``orientation`` must be the values stored in the
     photo's DB row: those are what the API passes."""
-    return _cache_file(path, mtime, size, f"thumb{_orient_suffix(orientation)}")
+    return _cache_file(path, mtime, size, _thumb_variant(orientation))
 
 
 def _preview_cache_path(path: Path, mtime: float, size: int,
                         orientation: int | None = None) -> Path:
     """Cache file of the canonical (orientation None/1) or oriented preview, shared by
     ``get_preview``, ``get_preview_oriented`` and ``rebuild_preview_from_full_decode``."""
-    return _cache_file(path, mtime, size,
-                       f"preview{_fd_suffix(path)}{_orient_suffix(orientation)}")
+    return _cache_file(path, mtime, size, _preview_variant(path, orientation))
 
 
 def _face_crop_cache_path(path: Path, mtime: float, size: int,
                           bbox: tuple[float, float, float, float],
                           orientation: int | None) -> Path:
     """Cache file of one face crop, shared by ``get_face_crop`` / ``face_crop_exists``."""
-    bbox_key = hashlib.sha1(",".join(f"{v:.4f}" for v in bbox).encode()).hexdigest()[:10]
-    return _cache_file(path, mtime, size,
-                       f"face_{bbox_key}{_fd_suffix(path)}{_orient_suffix(orientation)}")
+    return _cache_file(path, mtime, size, _face_variant(path, bbox, orientation))
+
+
+def rendition_etag(path: Path, mtime: float, size: int, orientation: int | None,
+                   kind: str, bbox: tuple[float, float, float, float] | None = None) -> str:
+    """Opaque validator for one served rendition (``kind``: thumb / preview / face).
+
+    Derived from the rendition's cache file name (built by the same helpers the
+    cache uses), which by construction carries every input that changes its
+    bytes: the (path, mtime, size) key, the orientation suffix (audit A6 — an ETag
+    without it kept a sideways image after an orientation fix), the RAW
+    full-decode marker, the face bbox, and the output format's extension. One
+    source of truth, so a new cache-key input can't be forgotten here. Needs no
+    initialized cache dir."""
+    if kind == "thumb":
+        variant = _thumb_variant(orientation)
+    elif kind == "preview":
+        variant = _preview_variant(path, orientation)
+    elif kind == "face" and bbox is not None:
+        variant = _face_variant(path, bbox, orientation)
+    else:
+        raise ValueError(f"unknown rendition kind {kind!r}")
+    name = _cache_name(_cache_key(path, mtime, size), variant)
+    return hashlib.sha1(name.encode()).hexdigest()[:20]
 
 
 # ── Atomic cache I/O ──
@@ -337,7 +381,7 @@ def _frame_via_av(path: Path) -> Image.Image:
     with _av.open(str(path)) as container:
         stream = next((s for s in container.streams if s.type == "video"), None)
         if stream is None:
-            raise RuntimeError("No video stream found")
+            raise DecodeError("No video stream found")
 
         # Seek to ~10% of duration for a more interesting frame than frame 0
         duration = container.duration  # microseconds, may be None
@@ -349,7 +393,7 @@ def _frame_via_av(path: Path) -> Image.Image:
             img = frame.to_image()  # returns PIL Image
             return img
 
-    raise RuntimeError("Could not decode any video frame")
+    raise DecodeError("Could not decode any video frame")
 
 
 def _open_image(path: Path, full_decode: bool = False,
@@ -380,8 +424,8 @@ def _open_image(path: Path, full_decode: bool = False,
             # same rotation for compatibility. Undo the bake so callers can apply
             # that tag once via apply_orientation(), same as every other path.
             return apply_orientation(img, _INVERSE_ORIENTATION.get(orientation or 1, orientation or 1))
-        except Exception:
-            raise RuntimeError(f"Cannot decode HEIC: {path}")
+        except Exception as e:
+            raise DecodeError(f"Cannot decode HEIC: {path}") from e
 
     # Opt-in full RAW demosaic (config.RAW_FULL_DECODE). Try LibRaw first; on any
     # failure fall through to the embedded-preview branch below so a decode error
