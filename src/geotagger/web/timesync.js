@@ -33,6 +33,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindKeyboardEvents();
   await checkStatus();
   setStatus("Click 'Select Month' to begin");
+  await restoreStagedOffsets();   // offsets applied before a reload / crash (U7)
 });
 
 /* ── Keyboard events ── */
@@ -576,6 +577,7 @@ function applyTimeOffset() {
   const skipped = selectedIds.size - applied;
 
   hasUnsavedChanges = Object.keys(appliedOffsets).length > 0;
+  persistOffsets();
   buildTimeline();
   applyFilters();
   updateDetailPane();
@@ -603,6 +605,7 @@ function resetTimeOffsets() {
     });
     hasUnsavedChanges = Object.keys(appliedOffsets).length > 0;
   }
+  persistOffsets();
 
   buildTimeline();
   applyFilters();
@@ -669,6 +672,7 @@ async function saveTimesToSidecars() {
     settled.forEach(id => { delete appliedOffsets[id]; delete baseTimes[id]; });
     const retryable = out.failed.filter(f => !f.conflict).map(f => f.id);
     hasUnsavedChanges = Object.keys(appliedOffsets).length > 0;
+    persistOffsets();   // only what settled leaves the backup
 
     // Patch the saved times in locally first, so the view is right even if the
     // reload below fails (it would otherwise show the old time, offset gone).
@@ -699,7 +703,111 @@ async function saveTimesToSidecars() {
   }
 }
 
-/* ── Warn on navigation if unsaved changes ── */
+/* ── Staged offsets survive a reload or crash (U7) ──
+ * appliedOffsets/baseTimes are mirrored to this tab's sessionStorage (common.js
+ * stagedWorkStore — see there for why sessionStorage) after every apply, reset
+ * and save: {id, offset, base} per photo, nothing else. On load they're
+ * re-checked against the server before being offered back: a photo deleted
+ * since, or already at base+offset, is dropped; one whose time moved since
+ * (base no longer matches) is dropped too, because Save would reject it as a
+ * conflict anyway. Restored offsets apply to their photos whichever month is
+ * open — like any applied offset — and nothing is written until Save. */
+const offsetStore = stagedWorkStore("timesync", 1);
+let offsetSaveWarned = false;
+let offsetCarry = [];       // records kept unvalidated after a failed restore check
+let offsetBanner = null;
+
+function persistOffsets() {
+  const records = Object.keys(appliedOffsets).map(k => ({
+    id: Number(k), offset: appliedOffsets[k], base: baseTimes[k],
+  }));
+  offsetCarry.forEach(r => { if (!(r.id in appliedOffsets)) records.push(r); });
+  if (!offsetStore.save(records) && !offsetSaveWarned) {
+    offsetSaveWarned = true;
+    setStatus(STAGED_SAVE_FAILED_MSG, true);
+  }
+  offsetBanner?.refresh();
+}
+
+async function restoreStagedOffsets() {
+  const records = offsetStore.load().filter(r =>
+    Number.isFinite(r.offset) && r.offset !== 0 && Number.isFinite(r.base));
+  if (!records.length) return;
+  let current;
+  try {
+    current = new Map((await fetchPhotosByIds(records.map(r => r.id))).map(p => [p.id, p]));
+  } catch (err) {
+    offsetCarry = records;   // keep them in the backup for the next load
+    setStatus(`Couldn't check the ${records.length} time offset(s) kept from your last visit ` +
+              `(${err.message}). They're kept for the next reload.`, true);
+    return;
+  }
+
+  let gone = 0, applied = 0, moved = 0;
+  const restored = [];
+  records.forEach(r => {
+    if (r.id in appliedOffsets) return;   // applied again during the check: newer wins
+    const photo = current.get(r.id);
+    if (!photo) { gone++; return; }
+    if (photo.photo_datetime === r.base + r.offset) { applied++; return; }
+    if (photo.photo_datetime !== r.base) { moved++; return; }
+    appliedOffsets[r.id] = r.offset;
+    baseTimes[r.id] = r.base;
+    restored.push(r.id);
+  });
+  hasUnsavedChanges = Object.keys(appliedOffsets).length > 0;
+  persistOffsets();   // the backup now matches what was restored
+
+  const dropped = [];
+  if (gone) dropped.push(`${gone} photo(s) no longer exist`);
+  if (applied) dropped.push(`${applied} already saved`);
+  if (moved) dropped.push(`${moved} whose time was changed elsewhere since`);
+  const droppedNote = dropped.length ? `Dropped: ${dropped.join(", ")}.` : "";
+  if (!restored.length) {
+    setStatus(`Nothing left to restore from your last visit. ${droppedNote}`);
+    return;
+  }
+  buildTimeline();
+  applyFilters();
+  updateDetailPane();
+
+  const restoredIds = new Set(restored);
+  const stillRestored = () => [...restoredIds].filter(id => id in appliedOffsets);
+  offsetBanner = showStagedRestoreBanner({
+    remaining: () => stillRestored().length,
+    noun: "time offset",
+    detail: [`Offsets show on their photos once that month is open.`, droppedNote].join(" ").trim(),
+    onReview: async () => {
+      // Open the month of the earliest restored photo.
+      const ids = stillRestored();
+      if (!ids.length) return;
+      const first = ids.reduce((a, b) => (baseTimes[a] <= baseTimes[b] ? a : b));
+      const parts = wallClockParts(baseTimes[first]);
+      if (parts) await selectMonth(parts.year, parts.month + 1);
+    },
+    onCommit: async () => {
+      // Save writes every applied offset (it has its own confirm).
+      await saveTimesToSidecars();
+      return stillRestored().length === 0;
+    },
+    onDiscard: () => {
+      const ids = stillRestored();
+      if (ids.length > 3 && !confirm(`Discard ${ids.length} restored time offset(s)?`)) return false;
+      ids.forEach(id => { delete appliedOffsets[id]; delete baseTimes[id]; });
+      hasUnsavedChanges = Object.keys(appliedOffsets).length > 0;
+      persistOffsets();
+      buildTimeline();
+      applyFilters();
+      updateDetailPane();
+      setStatus(`Discarded ${ids.length} restored time offset(s).`);
+    },
+  });
+  setStatus(`Restored ${restored.length} unsaved time offset(s) from your last visit. ` +
+            `Nothing is written until you Save.`);
+}
+
+/* ── Warn on navigation if unsaved changes ──
+ * The sessionStorage backup above is gone once the tab is closed for good. */
 window.addEventListener("beforeunload", (e) => {
   if (hasUnsavedChanges) {
     e.preventDefault();

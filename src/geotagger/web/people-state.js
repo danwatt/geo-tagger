@@ -44,7 +44,10 @@ let hideCompletedCrowds = true; // hide crowd photos with no unlabeled faces
 // "not this person" negatives stay immediate: the first is explicitly
 // destructive, the second is a recognition hint whose whole point is to
 // re-rank the remaining guesses right away.
-let pending = new Map();
+// A StagedMap (common.js): every change is mirrored to sessionStorage so a
+// reload or crash doesn't lose the pass (U7) — see restoreStagedWork in
+// people-staging.js. Version 1 record: {id, kind, personId, name, was}.
+let pending = new StagedMap(stagedWorkStore("people", 1), e => pendingRecord(e));
 
 let groupGapSeconds = 86400;    // event grouping gap in the guesses view (1 day)
 

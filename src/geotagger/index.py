@@ -2686,6 +2686,30 @@ def count_existing_faces(face_ids: list[int]) -> int:
     return n
 
 
+def get_faces_by_ids(face_ids: list[int]) -> list[sqlite3.Row]:
+    """The face_item columns (same shape as list_faces, minus the embedding) for
+    an explicit id list, in no particular order; ids matching no face are simply
+    absent. The People page uses it to re-validate staged decisions restored
+    from sessionStorage (U7). json_each keeps it to one bound param however many
+    ids (SQLite caps a literal IN list at ~999 variables)."""
+    import json as _json
+    ids = list(dict.fromkeys(face_ids))
+    if not ids:
+        return []
+    return get_db().execute(
+        """SELECT f.id, f.photo_id, f.person_id, f.bbox, f.det_score,
+                  f.ignored, f.assigned_at, f.ignored_at, f.come_back, f.come_back_at,
+                  p.name AS person_name, ph.filename,
+                  ph.photo_datetime, ph.date_precision, ph.orientation, ph.dir,
+                  ph.loc_city, ph.loc_sublocation, ph.loc_state, ph.loc_country
+           FROM faces f
+           LEFT JOIN persons p ON p.id = f.person_id
+           JOIN photos ph ON ph.id = f.photo_id
+           WHERE f.id IN (SELECT value FROM json_each(?))""",
+        (_json.dumps(ids),),
+    ).fetchall()
+
+
 def get_labeled_faces() -> list[sqlite3.Row]:
     """All faces assigned to a person (the recognition gallery), with each
     example's photo date and the person's birth date for age-aware matching.

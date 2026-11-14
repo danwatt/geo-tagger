@@ -32,6 +32,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
   // Don't paint the hint over a "Failed to load …" from the loads above.
   if (!statusIsError) setStatus("Select a person on the left, or scan for faces to begin.");
+  // Staged work from before a reload / crash (U7). After the first load, so the
+  // restored faces leave a grid that is already there, like a fresh stage does.
+  pending.onSaveError = () => setStatus(STAGED_SAVE_FAILED_MSG, true);
+  await restoreStagedWork();
 });
 
 // Pulls live settings tunable on the Settings page — FACE_PRESELECT_MIN_SCORE
@@ -168,7 +172,8 @@ function bindToolbar() {
     () => commitPending(groupPendingEntries()));
   document.getElementById("revert-all-btn").addEventListener("click",
     () => revertPending(groupPendingEntries()));
-  // Staged changes live only in this tab — don't let a reload eat a tagging pass.
+  // Staged changes are backed up to this tab's sessionStorage (U7), but that is
+  // gone once the tab is closed for good — so still ask before leaving.
   window.addEventListener("beforeunload", (e) => {
     if (!pending.size) return;
     e.preventDefault();

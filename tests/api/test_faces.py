@@ -770,3 +770,25 @@ def test_faces_paging_suggested_scopes(client):
         paged, total = _page_ids(client, url, 2)
         assert total == one_shot["total"] >= 2
         assert paged == [f["id"] for f in one_shot["faces"]]
+
+
+def test_faces_by_ids_returns_current_state_and_missing(client):
+    # The People page re-validates staged work restored from sessionStorage (U7)
+    # against this: current person/ignored state per face, and the gone ids.
+    db = index.get_db()
+    rng = np.random.default_rng(7)
+    ids = ff.seed_unlabeled(db, ff.unit_vectors(rng, 3))
+    client.post("/api/faces/assign", json={"face_ids": [ids[0]], "name": "Cora"})
+    client.post("/api/faces/ignore", json={"face_ids": [ids[1]], "ignored": True})
+
+    r = client.post("/api/faces/by-ids", json={"face_ids": [ids[0], ids[1], ids[2], 999999, ids[0]]})
+    assert r.status_code == 200
+    body = r.json()
+    by_id = {f["id"]: f for f in body["faces"]}
+    assert set(by_id) == set(ids)
+    assert by_id[ids[0]]["person_name"] == "Cora"
+    assert by_id[ids[1]]["ignored"] is True
+    assert by_id[ids[2]]["person_id"] is None and not by_id[ids[2]]["ignored"]
+    assert body["missing"] == [999999]
+
+    assert client.post("/api/faces/by-ids", json={"face_ids": []}).json() == {"faces": [], "missing": []}

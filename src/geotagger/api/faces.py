@@ -74,6 +74,11 @@ class ScanFacesRequest(BaseModel):
     # consecutive-failure guard for this one batch; see config.SCAN_FAILURE_STREAK_LIMIT).
     allow_failures: bool = False
 
+class FacesByIdsRequest(BaseModel):
+    # Same cap as one /api/faces page: a restored staging area (U7) is at most a
+    # tagging pass, and the client chunks anything bigger.
+    face_ids: list[int] = Field(max_length=20000)
+
 class NukePhotoFacesRequest(BaseModel):
     photo_ids: list[int]  # hard-wipe every face + cached rendition for these photos
 
@@ -340,6 +345,20 @@ def _face_page(out: list[dict], total: int, offset: int) -> dict:
     end = offset + len(out)
     return {"faces": out, "total": total, "returned": len(out), "offset": offset,
             "next_offset": end if out and end < total else None}
+
+
+@router.post("/api/faces/by-ids")
+async def api_faces_by_ids(req: FacesByIdsRequest):
+    """Current state of an explicit set of faces, as face_item dicts (no
+    suggestion), plus the ids that no longer exist. The People page calls it on
+    load to re-validate staged decisions restored from sessionStorage (U7):
+    a face deleted (nuked, rescanned) since is dropped, one already in its
+    staged state is dropped, one changed elsewhere is flagged. POST because the
+    id list can run to thousands — too long for a query string."""
+    rows = index.get_faces_by_ids(req.face_ids)
+    found = {r["id"] for r in rows}
+    return {"faces": [serializers.face_item(r) for r in rows],
+            "missing": [i for i in dict.fromkeys(req.face_ids) if i not in found]}
 
 
 @router.get("/api/faces/{face_id}/crop")

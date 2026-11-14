@@ -427,6 +427,39 @@ input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
 #pending-summary { color: var(--warn); font-weight: 600; }
 #pending-bar-btns { margin-left: auto; display: flex; gap: 6px; }
 
+/* "Uncommitted changes from your last visit" (U7, common.js
+   showStagedRestoreBanner). Fixed rather than in flow, so it never reflows the
+   workspace panes; non-modal. Bottom-centre, above #toast's slot and the status
+   bar: at the top it covered the toolbar, which wraps to two rows on narrow
+   windows. */
+.staged-restore-banner {
+  position: fixed;
+  bottom: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  /* Above Leaflet's panes (400) and controls (1000): the map isn't its own
+     stacking context, so anything lower slides under the Geocode map. */
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  max-width: min(720px, calc(100vw - 32px));
+  padding: 8px 12px;
+  background: var(--surface-3);
+  border: 1px solid var(--warn);
+  border-left-width: 4px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+  color: var(--text);
+  font-size: var(--font-size);
+}
+.staged-restore-banner .srb-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.staged-restore-banner .srb-count { color: var(--text-strong); }
+.staged-restore-banner .srb-detail { color: var(--text-muted); font-size: 12px; }
+.staged-restore-banner .srb-btns { display: flex; gap: 6px; margin-left: auto; }
+.staged-restore-banner .srb-close { background: none; border-color: transparent; color: var(--text-muted); }
+
 /* Staged cells: amber ring + destination chip + per-item revert. */
 .thumb-cell.pending-cell { border-color: rgba(217, 164, 65, 0.55); }
 .thumb-cell.pending-cell.focused { border-color: var(--warn); }

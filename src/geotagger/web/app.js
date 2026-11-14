@@ -24,7 +24,10 @@ let undatedMode = false;  // true when browsing the Undated queue instead of a m
 // photo id → { photo, lat, lng, accuracy, loc, label } for a staged drop, or
 // { photo, ignore: true, label } for a staged "no location needed" mark. Both
 // kinds share the staging area, the revert buttons and Commit.
-let pendingGeo = new Map();
+// A StagedMap (common.js): mirrored to sessionStorage on every change so a
+// reload or crash doesn't lose the pass (U7) — see restoreStagedGeo. Version 1
+// record: {id, lat, lng, accuracy, loc, label, ignore, was}.
+let pendingGeo = new StagedMap(stagedWorkStore("geocode", 1), e => pendingGeoRecord(e));
 let pendingGeoMarkers = [];      // provisional pins/circles, rebuilt on every render
 const geocodeLabelCache = new Map();   // "lat,lng" (4dp) → { loc, label }
 // Grid "Show" toggles, keyed by the buttons' data-filter. Ignored starts off:
@@ -103,6 +106,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   await loadPlaces();
   await loadDirFacet();
   await fitMapToAllLocations();
+  // Staged work from before a reload / crash (U7). Before any scope loads: the
+  // restored photos sit in the staging area whatever scope is picked, and a
+  // batch or ?ids= scope below then leaves them out of its grid as usual.
+  pendingGeo.onSaveError = () => setStatus(STAGED_SAVE_FAILED_MSG, true);
+  await restoreStagedGeo();
 
   // A "?month=YYYY-MM" URL argument (e.g. from the homepage month charts)
   // jumps straight to that month, same as picking it from the Month Picker.
@@ -303,7 +311,8 @@ function bindToolbar() {
     () => commitPendingGeo(groupPendingGeo()));
   document.getElementById("revert-all-btn").addEventListener("click",
     () => revertPendingGeo(groupPendingGeo()));
-  // Staged drops live only in this tab — don't let a reload eat a tagging pass.
+  // Staged drops are backed up to this tab's sessionStorage (U7), but that is
+  // gone once the tab is closed for good — so still ask before leaving.
   window.addEventListener("beforeunload", (e) => {
     if (!pendingGeo.size) return;
     e.preventDefault();
@@ -2593,9 +2602,11 @@ function pointKey(e) {
 // Group the staging area by resolved place, newest place first is meaningless
 // here, so groups are alphabetical with raw-coordinate ones last and the
 // no-location group — which isn't a place at all — last of all.
-function groupPendingGeo() {
+// `entries` defaults to everything staged; the restore banner passes just the
+// restored subset so its Commit doesn't sweep up drops made since.
+function groupPendingGeo(entries = pendingGeo.values()) {
   const groups = new Map();
-  pendingGeo.forEach((e) => {
+  [...entries].forEach((e) => {
     let g = groups.get(e.label);
     if (!g) { g = { label: e.label, ignore: !!e.ignore, entries: [] }; groups.set(e.label, g); }
     g.entries.push(e);
@@ -2844,6 +2855,118 @@ function revertPendingGeo(groups, what) {
   if (ids.length > 3 &&
       !confirm(`Discard ${ids.length} staged change(s)${what ? ` — ${what}` : ""}?`)) return;
   unstageGeo(ids);
+}
+
+/* ── Restore after a reload or crash (U7) ──
+ * pendingGeo is a StagedMap, so every drop / mark / revert / landed commit is
+ * already mirrored to sessionStorage (ids + intended values, pendingGeoRecord).
+ * On load restoreStagedGeo reads it back and re-checks each photo against the
+ * server (/api/photos?ids=): a photo deleted since, or already at its staged
+ * point / already marked, is dropped; one geotagged or marked elsewhere since is
+ * kept but called out (committing overwrites it). The restored photos go back
+ * into the staging area — which shows them whatever scope is loaded, as it does
+ * for any staged photo — and nothing is written until Commit. */
+function pendingGeoRecord(e) {
+  const p = e.photo;
+  const was = { lat: p.lat ?? null, lng: p.lng ?? null, gi: !!p.geocode_ignored };
+  return e.ignore
+    ? { id: p.id, ignore: true, was }
+    : { id: p.id, lat: e.lat, lng: e.lng, accuracy: e.accuracy ?? null,
+        loc: e.loc ?? null, label: e.label, was };
+}
+
+function validGeoRecord(r) {
+  if (r.ignore === true) return true;
+  return Number.isFinite(r.lat) && Math.abs(r.lat) <= 90 &&
+         Number.isFinite(r.lng) && Math.abs(r.lng) <= 180 &&
+         (r.accuracy == null || Number.isFinite(r.accuracy)) &&
+         typeof r.label === "string";
+}
+
+function sameCoord(a, b) {
+  return a != null && b != null && Math.abs(a - b) < 1e-6;
+}
+
+let geoRestoreBanner = null;
+
+async function restoreStagedGeo() {
+  const records = pendingGeo.store.load().filter(validGeoRecord);
+  if (!records.length) return;
+  // Written along with any new drop until validated (see StagedMap.holdCarry).
+  pendingGeo.holdCarry(records);
+  let current;
+  try {
+    current = new Map((await fetchPhotosByIds(records.map(r => r.id))).map(p => [p.id, p]));
+  } catch (err) {
+    setStatus(`Couldn't check the ${records.length} staged change(s) kept from your last visit ` +
+              `(${err.message}). They're kept for the next reload.`, true);
+    return;
+  }
+
+  let gone = 0, applied = 0, changed = 0;
+  const restored = [];
+  records.forEach((r) => {
+    if (pendingGeo.has(r.id)) return;   // re-staged during the check: newer wins
+    const photo = current.get(r.id);
+    if (!photo) { gone++; return; }
+    if (r.ignore ? photo.geocode_ignored
+                 : (sameCoord(photo.lat, r.lat) && sameCoord(photo.lng, r.lng) &&
+                    (photo.gps_accuracy ?? null) === (r.accuracy ?? null))) {
+      applied++;
+      return;
+    }
+    const was = r.was || {};
+    if ((was.lat ?? null) !== (photo.lat ?? null) || (was.lng ?? null) !== (photo.lng ?? null) ||
+        !!was.gi !== !!photo.geocode_ignored) changed++;
+    pendingGeo.set(r.id, r.ignore
+      ? { photo, ignore: true, label: IGNORE_LABEL }
+      : { photo, lat: r.lat, lng: r.lng, accuracy: r.accuracy ?? null, loc: r.loc ?? null, label: r.label });
+    selectedIds.delete(r.id);
+    restored.push(r.id);
+  });
+  pendingGeo.dropCarry();
+
+  const dropped = [];
+  if (gone) dropped.push(`${gone} photo(s) no longer exist`);
+  if (applied) dropped.push(`${applied} already saved`);
+  const droppedNote = dropped.length ? `Dropped: ${dropped.join(", ")}.` : "";
+  if (!restored.length) {
+    setStatus(`Nothing left to restore from your last visit. ${droppedNote}`);
+    return;
+  }
+
+  renderPendingGeo();
+  const notes = [];
+  if (changed) notes.push(`${changed} changed elsewhere since; committing overwrites that.`);
+  if (droppedNote) notes.push(droppedNote);
+  const restoredIds = new Set(restored);
+  const stillRestored = () => [...restoredIds].filter(id => pendingGeo.has(id));
+  const restoredGroups = () => groupPendingGeo(stillRestored().map(id => pendingGeo.get(id)));
+  const what = "restored from your last visit";
+  geoRestoreBanner = showStagedRestoreBanner({
+    remaining: () => stillRestored().length,
+    detail: notes.join(" "),
+    onReview: () => {
+      document.getElementById("pending-pane")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      const pts = stillRestored().map(id => pendingGeo.get(id)).filter(e => !e.ignore);
+      if (pts.length) {
+        map.flyToBounds(L.latLngBounds(pts.map(e => [e.lat, e.lng])),
+                        { padding: [60, 60], maxZoom: 15, duration: 0.6 });
+      }
+      setStatus(`Restored ${stillRestored().length} staged change(s) — nothing is saved until you Commit.`);
+    },
+    onCommit: async () => {
+      await commitPendingGeo(restoredGroups(), what);
+      return stillRestored().length === 0;   // keep the banner for failures / a cancel
+    },
+    onDiscard: () => {
+      revertPendingGeo(restoredGroups(), what);
+      return stillRestored().length === 0;
+    },
+  });
+  pendingGeo.onChange = () => geoRestoreBanner?.refresh();
+  setStatus(`Restored ${restored.length} staged change(s) from your last visit — review them ` +
+            `in the staging area. Nothing is saved until you Commit.`);
 }
 
 /* ── Proposal banner ──

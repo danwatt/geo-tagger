@@ -96,9 +96,11 @@ function pendingCellLabel(e) {
     : pendingGroupLabel(e);
 }
 
-function groupPendingEntries() {
+// `entries` defaults to everything staged; the restore banner passes just the
+// restored subset so its Commit doesn't sweep up work staged since.
+function groupPendingEntries(entries = pending.values()) {
   const groups = new Map();
-  pending.forEach(e => {
+  [...entries].forEach(e => {
     const key = pendingGroupKey(e);
     let g = groups.get(key);
     if (!g) {
@@ -270,4 +272,129 @@ function revertPending(groups, what) {
   if (ids.length > SELECTION_CONFIRM_THRESHOLD &&
       !confirm(`Discard ${ids.length} staged change(s)${what ? ` — ${what}` : ""}?`)) return;
   unstageFaces(ids);
+}
+
+/* ── Restore after a reload or crash (U7) ──
+ * `pending` is a StagedMap, so every stage / revert / successful commit is
+ * already mirrored to sessionStorage (ids + intended values only — see
+ * pendingRecord). On load, restoreStagedWork reads that back, re-checks each
+ * face against the server (POST /api/faces/by-ids) and re-stages what still
+ * makes sense: a face deleted since (nuked, rescanned) or already in its staged
+ * state is dropped, an assign to a person deleted since is dropped (the server
+ * would 404 it), and a face changed elsewhere is kept but called out, since
+ * committing it overwrites that change. Nothing is written until the user
+ * presses Commit — on the banner or in the staging area as usual. */
+const PENDING_KINDS = new Set(PENDING_KIND_ORDER);
+// /api/faces/by-ids caps one request at this many ids.
+const FACES_BY_IDS_MAX = 5000;
+
+// The stored form of a staged entry: the decision plus a snapshot of the face's
+// server state when it was staged (to tell "changed elsewhere since" on restore).
+function pendingRecord(e) {
+  const f = e.face;
+  return {
+    id: f.id, kind: e.kind, personId: e.personId ?? null, name: e.name ?? null,
+    was: { p: f.person_id ?? null, i: !!f.ignored, c: !!f.come_back },
+  };
+}
+
+// Is `face` (current server state) already where record `r` would put it?
+function stagedAlreadyApplied(r, face) {
+  switch (r.kind) {
+    case "assign":
+      return r.personId != null
+        ? face.person_id === r.personId
+        : face.person_id != null && face.person_name === r.name;
+    case "unassign":    return face.person_id == null;
+    case "ignore":      return face.ignored;
+    case "unignore":    return !face.ignored;
+    case "come_back":   return face.come_back;
+    case "uncome_back": return !face.come_back;
+    default:            return false;
+  }
+}
+
+let restoreBanner = null;
+
+async function restoreStagedWork() {
+  const records = pending.store.load().filter(r => PENDING_KINDS.has(r.kind));
+  if (!records.length) return;
+  // Until validated, the records ride along in every write, so anything staged
+  // while the check below is in flight can't overwrite them.
+  pending.holdCarry(records);
+  const current = new Map();
+  try {
+    const ids = records.map(r => r.id);
+    for (let i = 0; i < ids.length; i += FACES_BY_IDS_MAX) {
+      const data = await postJson("/api/faces/by-ids", { face_ids: ids.slice(i, i + FACES_BY_IDS_MAX) });
+      data.faces.forEach(f => current.set(f.id, f));
+    }
+  } catch (err) {
+    // Can't tell what's still valid — keep the backup untouched (the carry stays
+    // in every write) and offer it again on the next load.
+    setStatus(`Couldn't check the ${records.length} staged change(s) kept from your last visit ` +
+              `(${err.message}). They're kept for the next reload.`, true);
+    return;
+  }
+
+  const personIds = new Set(persons.map(p => p.id));
+  const loadedById = new Map(loadedFaces().map(f => [f.id, f]));
+  let gone = 0, applied = 0, orphaned = 0, changed = 0;
+  const restored = [];
+  records.forEach(r => {
+    if (pending.has(r.id)) return;   // re-staged during the check: the newer decision wins
+    const face = current.get(r.id);
+    if (!face) { gone++; return; }
+    if (r.kind === "assign" && r.personId != null && !personIds.has(r.personId)) { orphaned++; return; }
+    if (stagedAlreadyApplied(r, face)) { applied++; return; }
+    const was = r.was || {};
+    if ((was.p ?? null) !== face.person_id || !!was.i !== face.ignored || !!was.c !== face.come_back) changed++;
+    // Prefer the grid's own object when the face is loaded (it carries the
+    // suggestion, and its crop <img> is the one the cache will hand over).
+    pending.set(r.id, { face: loadedById.get(r.id) || face, kind: r.kind,
+                        personId: r.personId ?? null, name: r.name ?? null });
+    selectedIds.delete(r.id);
+    if (focusedFaceId === r.id) focusedFaceId = null;
+    restored.push(r.id);
+  });
+  pending.dropCarry();   // what's left of the backup is now exactly `pending`
+
+  const dropped = [];
+  if (gone) dropped.push(`${gone} face(s) no longer exist`);
+  if (applied) dropped.push(`${applied} already saved`);
+  if (orphaned) dropped.push(`${orphaned} for a person who was deleted`);
+  const droppedNote = dropped.length ? `Dropped: ${dropped.join(", ")}.` : "";
+  if (!restored.length) {
+    setStatus(`Nothing left to restore from your last visit. ${droppedNote}`);
+    return;
+  }
+
+  if (stagingEnabled()) afterStaging();
+  else updateActionButtons();
+  const notes = [];
+  if (changed) notes.push(`${changed} changed elsewhere since; committing overwrites that.`);
+  if (droppedNote) notes.push(droppedNote);
+  const restoredIds = new Set(restored);
+  const stillRestored = () => [...restoredIds].filter(id => pending.has(id));
+  const restoredGroups = () => groupPendingEntries(stillRestored().map(id => pending.get(id)));
+  const what = "restored from your last visit";
+  restoreBanner = showStagedRestoreBanner({
+    remaining: () => stillRestored().length,
+    detail: notes.join(" "),
+    onReview: () => {
+      document.getElementById("pending-pane")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      setStatus(`Restored ${stillRestored().length} staged change(s) — nothing is saved until you Commit.`);
+    },
+    onCommit: async () => {
+      await commitPending(restoredGroups(), what);
+      return stillRestored().length === 0;   // keep the banner up for failures / a cancel
+    },
+    onDiscard: () => {
+      revertPending(restoredGroups(), what);
+      return stillRestored().length === 0;
+    },
+  });
+  pending.onChange = () => restoreBanner?.refresh();
+  setStatus(`Restored ${restored.length} staged change(s) from your last visit — ` +
+            `review them at the bottom of the grid. Nothing is saved until you Commit.`);
 }

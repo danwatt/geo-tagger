@@ -497,7 +497,7 @@ banner with "Load more".
 **U6 — Discover: any single-face action re-clusters the whole library** [traced] — ✅ **DONE** (every Discover action patches groups in memory via `patchClustersAfter`; "↻ Refresh groups" button plus an "may be outdated" note; failed POSTs change nothing. Crowds still reloads after each action) — `people.js:699,2561-2562`.
 Patch the cluster locally, as `clusterAssign` already does.
 
-**U7 — Staged tagging work is lost on crash or accidental close** [traced] — persist `pending` to
+**U7 — Staged tagging work is lost on crash or accidental close** [traced] — ✅ **DONE** (People, Geocode and Time Sync staging saved to versioned sessionStorage via `StagedMap`/`stagedWorkStore`; validated against the server on load (new `POST /api/faces/by-ids`); restore banner with Review / Commit / Discard, never auto-commits; partial commits keep only failed ids. Per tab: a fresh tab doesn't restore) — persist `pending` to
 `sessionStorage`.
 
 **U8 — Dialog and drawing papercuts** [traced] — Enter on a focused Cancel button saves
