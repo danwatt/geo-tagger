@@ -2,9 +2,13 @@
 
 Local web app for organizing a photo/video library: geotag photos on a map, reverse-geocode
 them offline, detect and tag faces, sync camera clocks, and search across it all. Backend +
-all data (SQLite DB, thumbnails, models) stay fully local; the only network dependencies are
-the Leaflet library and OpenStreetMap map tiles (loaded from CDNs in the page HTML — the map
-UI needs internet, nothing else does).
+all data (SQLite DB, thumbnails, models) stay fully local; the only runtime network
+dependencies are the Leaflet, leaflet.markercluster and vis-timeline libraries (loaded from
+`unpkg.com` at pinned versions with Subresource Integrity hashes) and the map tiles —
+OpenStreetMap for the street basemap, Esri World Imagery for satellite/hybrid. The map UI and
+the Time Sync timeline need internet; nothing else does. Place search ("jump to location")
+is offline: it matches saved places and locations already in your library, not an online
+geocoder.
 
 **Original media files are never modified.** Geolocation and other metadata are written to
 **XMP sidecar files** next to each photo, as an explicit export step — see
@@ -581,5 +585,6 @@ third-party geographic datasets under their own licenses, unrelated to the code 
 - [OpenStreetMap](https://www.openstreetmap.org/copyright) extracts — [ODbL](https://opendatacommons.org/licenses/odbl/)
 - [US Census Cartographic Boundary Files](https://www.census.gov/geographies/mapping-files.html) — public domain
 
-Map tiles are served live from `tile.openstreetmap.org`; see OSM's tile usage policy if you
-plan on heavy use.
+Map tiles are served live from `tile.openstreetmap.org` (street) and Esri's
+`server.arcgisonline.com` (satellite/hybrid); see their tile usage policies if you plan on
+heavy use.

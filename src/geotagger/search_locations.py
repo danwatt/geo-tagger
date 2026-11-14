@@ -8,17 +8,28 @@ FIELDS = ("loc_sublocation", "loc_city", "loc_county", "loc_state", "loc_country
 
 
 def suggestions(db, query: str, limit: int = 20) -> list[dict]:
+    """Saved places and photo-metadata locations matching every query token.
+
+    Each match carries `bounds` = [south, west, north, east] (or None when no
+    coordinates are known) so the geocode page's "jump to location" box can pan
+    the map offline instead of asking an online geocoder."""
     tokens = query.casefold().replace(",", " ").split()
     matches = []
-    for row in db.execute("SELECT id, name FROM places ORDER BY name"):
+    for row in db.execute("SELECT id, name, type, bounds FROM places ORDER BY name"):
         if all(token in row["name"].casefold() for token in tokens):
-            matches.append({"kind": "place", "id": row["id"], "label": row["name"]})
+            box = place_bbox(row["type"], row["bounds"])
+            matches.append({"kind": "place", "id": row["id"], "label": row["name"],
+                            "bounds": [box[0], box[2], box[1], box[3]] if box else None})
     # Each level retains its parent context, so Washington County, Texas and
     # Washington County, Oregon are separate choices with exact predicates.
+    # MIN/MAX ride along in the same GROUP BY (NULL coords are ignored), so the
+    # extent costs no extra query.
     for i, field in enumerate(FIELDS):
         columns = FIELDS[i:]
         select = ", ".join(f"COALESCE({c}, '') AS {c}" for c in columns)
-        rows = db.execute(f"SELECT {select}, COUNT(*) AS count FROM photos "
+        rows = db.execute(f"SELECT {select}, COUNT(*) AS count, "
+                          f"MIN(lat) AS s, MIN(lng) AS w, MAX(lat) AS n, MAX(lng) AS e "
+                          f"FROM photos "
                           f"WHERE {field} IS NOT NULL AND {field} != '' "
                           f"GROUP BY {', '.join(columns)}")
         for row in rows:
@@ -27,7 +38,9 @@ def suggestions(db, query: str, limit: int = 20) -> list[dict]:
             if all(token in label.casefold() for token in tokens):
                 matches.append({"kind": "metadata", "label": label,
                                 "fields": values, "count": row["count"],
-                                "level": field.removeprefix("loc_")})
+                                "level": field.removeprefix("loc_"),
+                                "bounds": ([row["s"], row["w"], row["n"], row["e"]]
+                                           if row["s"] is not None else None)})
     matches.sort(key=lambda m: (m["kind"] != "place", -m.get("count", 0), m["label"].casefold()))
     return matches[:limit]
 

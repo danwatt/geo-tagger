@@ -333,7 +333,7 @@ Mutations return `{"success"}`, `{"id"}`, `{"updated"}`, or bare lists. `/api/st
 *Fix:* `TrustedHostMiddleware` (localhost, 127.0.0.1, plus the LAN IP under `--network`); a small middleware
 rejecting non-GET requests whose `Origin`/`Sec-Fetch-Site` is cross-site; pin `fastapi>=0.132`.
 
-**X2 — Medium — Undeclared runtime network dependencies** [seen]
+**X2 — Medium — Undeclared runtime network dependencies** [seen] — ✅ **DONE** (Nominatim replaced by offline `/api/search/locations`, now with `bounds`; search finds only library places; Esri tiles + pinned unpkg libs sanctioned in CLAUDE.md/README; SRI on every CDN tag. Not covered: `picsum.photos` in `design-artifacts.html`, Hugging Face model URL undocumented in CLAUDE.md)
 CLAUDE.md sanctions only Leaflet and OSM tiles and forbids online geocoders. The code also uses:
 - Nominatim place search, sending typed queries to a third party (`web/app.js:2159-2160`; no `res.ok` check).
 - Esri satellite tiles (`web/app.js:76-92`, `web/map.js:96-106`, `web/custom-places.js:31-41`).

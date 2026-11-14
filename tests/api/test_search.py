@@ -149,6 +149,20 @@ def test_location_suggestions_and_exact_county(client):
     assert choices[0]["id"] == ranch
 
 
+def test_location_suggestions_carry_bounds(client):
+    # The geocode page's "jump to location" box pans to these offline extents.
+    index.create_place("Box Ranch", "rectangle",
+                       json.dumps({"south": 1, "west": 2, "north": 3, "east": 4}))
+    _add("a.jpg", lat=10, lng=20, loc_city="Boxford")
+    _add("b.jpg", lat=11, lng=22, loc_city="Boxford")
+    _add("nogps.jpg", loc_city="Boxless")
+    by_label = {c["label"]: c for c in
+                client.get("/api/search/locations?q=box").json()["locations"]}
+    assert by_label["Box Ranch"]["bounds"] == [1, 2, 3, 4]
+    assert by_label["Boxford"]["bounds"] == [10, 20, 11, 22]
+    assert by_label["Boxless"]["bounds"] is None
+
+
 def test_saved_circle_nearby_date_and_limit(client):
     place = index.create_place("Ranch", "circle", json.dumps({"lat": 30, "lng": -96, "radius": 1000}))
     _add("outside.jpg", lat=30.009, lng=-95.990, dt=946684800)  # bbox corner, outside circle

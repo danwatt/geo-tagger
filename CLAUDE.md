@@ -8,10 +8,10 @@ Guidance for work in repo. Read `README.md` for setup/usage; this file about
 
 Local web app, geotag photo/video library. Python (FastAPI)
 backend + vanilla-JS/Leaflet frontend served static files. No build step, no Node. Backend +
-all data (SQLite DB, thumbnails, models) fully local; only network
-dependencies: Leaflet library + OpenStreetMap map tiles, loaded from CDNs
-(`unpkg.com`, `tile.openstreetmap.org`) in HTML — map UI need internet, rest
-don't.
+all data (SQLite DB, thumbnails, models) fully local; only runtime network
+dependencies: map libraries from `unpkg.com` + map tiles from `tile.openstreetmap.org` /
+`server.arcgisonline.com` (full list under Hard constraints) — map UI and timeline need
+internet, rest don't.
 
 ## Stack & tooling
 
@@ -34,10 +34,20 @@ don't.
   writes for face data without checking memory note / asking.
 - **Reverse geocoding offline**: bundled datasets only — OSM polygons (`data/osm/`), US
   Census places (`data/census/`), GeoNames (`data/geonames/`), in that lookup order (see
-  `geocode._merged_lookup`). Not a network API — don't add calls to online geocoders.
+  `geocode._merged_lookup`). Not a network API — don't add calls to online geocoders
+  (Nominatim included). Forward place search offline too: geocode page's "jump to location"
+  box uses `/api/search/locations` (saved places + library photo locations, with `bounds`).
   Downloading a dataset is a one-shot admin action (`scripts/get_*.py` + Data Management
-  page), never a per-lookup fetch. Leaflet + OSM tiles only sanctioned runtime network deps
-  (load from CDN, not vendored locally) — don't add more.
+  page), never a per-lookup fetch.
+- **Sanctioned runtime network deps — only these, don't add more:**
+  - `unpkg.com`: Leaflet 1.9.4, leaflet.markercluster 1.5.3 (JS + 2 CSS), vis-timeline 7.7.3
+    (`timesync.html`). Every tag pins exact version and carries
+    `integrity="sha384-…" crossorigin="anonymous"`; bumping a version means recomputing hash
+    (`curl -s <url> | openssl dgst -sha384 -binary | openssl base64 -A`). Load from CDN, not
+    vendored locally.
+  - Map tiles: OSM (`{s}.tile.openstreetmap.org`) and Esri World Imagery + World Boundaries
+    and Places reference overlay (`server.arcgisonline.com`, satellite/hybrid basemaps in
+    `basemaps.js`). Tiles are images; no SRI possible.
 
 ## Python conventions
 

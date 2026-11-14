@@ -2101,24 +2101,29 @@ function stageIgnore(ids = [...selectedIds]) {
 }
 
 /* ── Place search ── */
-let _lastPlaceSearch = 0;
+// Offline: matches saved places and locations already in the library's photo
+// metadata (the same source as the search page's location picker). No online
+// geocoder — see CLAUDE.md. A place with no photos/saved area won't be found.
 async function doPlaceSearch() {
   const q = document.getElementById("place-search").value.trim();
   if (!q) return;
-  const now = Date.now();
-  if (now - _lastPlaceSearch < 1000) {
-    setStatus("Please wait 1 second between place searches");
-    return;
-  }
-  _lastPlaceSearch = now;
   try {
-    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q)}`;
-    const res = await fetch(url, { headers: { "User-Agent": "geo-tagger/1.0 (local)" } });
-    const results = await res.json();
-    if (!results.length) { setStatus("Place not found"); return; }
-    const { lat, lon, display_name } = results[0];
-    map.flyTo([parseFloat(lat), parseFloat(lon)], 12);
-    setStatus(`Flew to: ${display_name}`);
+    const res = await fetch(`/api/search/locations?q=${encodeURIComponent(q)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const { locations } = await res.json();
+    // Best-ranked match that has coordinates (metadata-only rows may not).
+    const hit = locations.find((l) => l.bounds);
+    if (!hit) {
+      setStatus(locations.length
+        ? `"${locations[0].label}" has no GPS coordinates to jump to`
+        : "No saved place or photo location matches — place search only knows " +
+          "places in your library");
+      return;
+    }
+    const [s, w, n, e] = hit.bounds;
+    // A single photo gives a zero-size box; maxZoom keeps that from zooming to street level.
+    map.flyToBounds([[s, w], [n, e]], { maxZoom: 14, padding: [40, 40] });
+    setStatus(`Flew to: ${hit.label}`);
   } catch (err) {
     setStatus("Place search error: " + err.message, true);
   }
