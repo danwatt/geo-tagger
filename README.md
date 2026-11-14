@@ -530,7 +530,8 @@ live from the Settings page):
 | `GEOTAGGER_SIDECAR_MODE` | `basename` | `basename` or `fullname` |
 | `GEOTAGGER_HOST` | `127.0.0.1` | Bind address |
 | `GEOTAGGER_PORT` | `8000` | Port |
-| `GEOTAGGER_ALLOWED_HOSTS` | *(empty)* | Comma-separated extra hostnames the app may be reached by. `localhost`, IP addresses and this machine's hostname are always allowed; any other `Host` header gets a 403 (DNS-rebinding protection). Cross-origin non-GET requests are also refused |
+| `GEOTAGGER_ALLOWED_HOSTS` | *(empty)* | Comma-separated extra hostnames the app may be reached by. `localhost`, IP addresses and this machine's hostname are always allowed; any other `Host` header gets a 400 (DNS-rebinding protection). Cross-origin and same-site non-GET requests get a 403 |
+| `GEOTAGGER_TOKEN` | *(empty; random per start on a non-loopback bind)* | Access token. Always required when the server binds a non-loopback address (`--network`); the printed startup URL carries `?token=…`, which sets an HttpOnly cookie and redirects to the clean URL. Scripts can send `Authorization: Bearer <token>`. Set it on loopback to require a token there too |
 | `GEOTAGGER_CACHE_DIR` | *(none — see [Cache location](#cache-location))* | Directory for the database + thumbnails + tools/data |
 | `GEOTAGGER_WORKERS` | `4` | Thumbnail-generation worker threads |
 | `GEOTAGGER_ZIP_MAX_BYTES` | `4294967296` (4 GiB) | Largest total size of originals one "Download ZIP" may bundle (the archive is built in a temp file, so this is also the scratch space needed); larger selections are refused with 413. `0` = no limit |

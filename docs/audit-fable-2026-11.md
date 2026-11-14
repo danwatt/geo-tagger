@@ -321,7 +321,7 @@ Mutations return `{"success"}`, `{"id"}`, `{"updated"}`, or bare lists. `/api/st
 ## Security
 
 <a id="x1"></a>
-**X1 — High — No Host or Origin validation** [traced; not exploited]
+**X1 — High — No Host or Origin validation** [traced; not exploited] — ✅ **DONE** (`middleware.RequestGuard` from `1f4d7c4` extended: bad Host = 400, cross-site and same-site unsafe methods = 403, any non-loopback bind requires `GEOTAGGER_TOKEN` (random per start) via `?token=` cookie or Bearer; `fastapi>=0.132`; no state-changing GETs found)
 `main.py:24-30`. The API is unauthenticated on loopback.
 - **DNS rebinding:** a page that rebinds its hostname to `127.0.0.1:8000` becomes same-origin and can read
   absolute paths, download originals and call every write endpoint.

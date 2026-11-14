@@ -27,6 +27,8 @@ def cli(monkeypatch):
         monkeypatch.delenv(name)
 
     monkeypatch.setattr("geotagger.config.HOST", "127.0.0.1")
+    # main() writes the generated network token onto the config module; undo that.
+    monkeypatch.setattr("geotagger.config.ACCESS_TOKEN", "")
     monkeypatch.setattr("geotagger.index.get_last_scan_roots", lambda: ["x"])
 
     calls: list[dict] = []
@@ -107,29 +109,47 @@ def test_workers_zero_is_rejected(cli, capsys):
 def test_specific_lan_host_warns_and_is_passed_to_uvicorn(cli, capsys):
     calls = cli("--scan-dir", os.getcwd(), "--host", "192.168.1.20")
     out = capsys.readouterr().out
-    assert "NO AUTHENTICATION" in out
-    assert "Server accessible at: http://192.168.1.20:8000" in out
+    assert "WARNING" in out
+    assert config.ACCESS_TOKEN
+    assert f"Server accessible at: http://192.168.1.20:8000/?token={config.ACCESS_TOKEN}" in out
     assert calls[-1]["host"] == "192.168.1.20"
 
 
 def test_network_flag_warns_and_binds_wildcard(cli, capsys):
     calls = cli("--scan-dir", os.getcwd(), "--network")
     out = capsys.readouterr().out
-    assert "NO AUTHENTICATION" in out
+    assert "WARNING" in out
+    assert f"Access token: {config.ACCESS_TOKEN}" in out
+    assert f"http://localhost:8000/?token={config.ACCESS_TOKEN}" in out
     assert calls[-1]["host"] == "0.0.0.0"
+
+
+def test_network_flag_uses_preset_token(cli, capsys, monkeypatch):
+    monkeypatch.setattr(config, "ACCESS_TOKEN", "my-token")
+    cli("--scan-dir", os.getcwd(), "--network")
+    assert config.ACCESS_TOKEN == "my-token"
+    assert "Access token: my-token" in capsys.readouterr().out
+
+
+def test_unsafe_token_rejected(cli, capsys, monkeypatch):
+    monkeypatch.setattr(config, "ACCESS_TOKEN", "a;b")
+    with pytest.raises(SystemExit) as exc:
+        cli("--scan-dir", os.getcwd(), "--network")
+    assert exc.value.code != 0
+    assert "GEOTAGGER_TOKEN" in capsys.readouterr().err
 
 
 def test_default_bind_has_no_warning(cli, capsys):
     calls = cli("--scan-dir", os.getcwd())
     out = capsys.readouterr().out
-    assert "NO AUTHENTICATION" not in out
-    assert "Server accessible at: http://127.0.0.1:8000" in out
+    assert "WARNING" not in out and not config.ACCESS_TOKEN
+    assert "Server accessible at: http://127.0.0.1:8000\n" in out
     assert calls[-1]["host"] == "127.0.0.1"
 
 
 def test_ipv6_loopback_has_no_warning(cli, capsys):
     calls = cli("--scan-dir", os.getcwd(), "--host", "::1")
     out = capsys.readouterr().out
-    assert "NO AUTHENTICATION" not in out
+    assert "WARNING" not in out and not config.ACCESS_TOKEN
     assert "Server accessible at: http://[::1]:8000" in out
     assert calls[-1]["host"] == "::1"

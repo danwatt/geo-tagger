@@ -378,6 +378,12 @@ SCAN_PRUNE_MAX_FRACTION = float(os.environ.get("GEOTAGGER_SCAN_PRUNE_MAX_FRACTIO
 # allows. Needed only when serving under another name (reverse proxy, mDNS alias, ...);
 # any other Host header is refused to block DNS-rebinding attacks.
 ALLOWED_HOSTS = [h.strip().lower() for h in os.environ.get("GEOTAGGER_ALLOWED_HOSTS", "").split(",") if h.strip()]
+# Access token RequestGuard demands on every request when non-empty (cookie set by
+# opening `/?token=...`, or `Authorization: Bearer`). Empty = no token, the loopback
+# default: there the Host/Origin checks suffice since only this machine can connect.
+# A non-loopback bind (`--network`, `--host <LAN IP>`) always gets one - __main__ uses
+# GEOTAGGER_TOKEN if set, else generates a random one per start and prints it.
+ACCESS_TOKEN = os.environ.get("GEOTAGGER_TOKEN", "").strip()
 
 # Cap on the total size of originals one download-zip request may bundle. The archive is
 # built in a temp file (system temp dir), so this also bounds the scratch space a download

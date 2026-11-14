@@ -308,6 +308,8 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("GEOTAGGER_NO_SCAN", "1")
     monkeypatch.setenv("GEOTAGGER_CACHE_DIR", str(tmp_path))
     monkeypatch.delenv("GEOTAGGER_SCAN_DIRS", raising=False)
+    # Loopback mode: no access token, even if the developer's shell has GEOTAGGER_TOKEN.
+    monkeypatch.setattr(config, "ACCESS_TOKEN", "")
 
     # Pre-create the DB; with no last-scan sentinel in the empty cache dir the
     # lifespan's auto-load path is a no-op, so this connection is the one served.

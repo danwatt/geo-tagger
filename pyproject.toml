@@ -19,7 +19,7 @@ classifiers = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "fastapi",
+    "fastapi>=0.132",
     "uvicorn[standard]",
     "pyexiftool",
     "pillow",

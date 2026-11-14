@@ -26,6 +26,12 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
+def _token_is_cookie_safe(token: str) -> bool:
+    """The token travels in a cookie and a URL query, so keep it to characters that
+    need no quoting in either (secrets.token_urlsafe output always qualifies)."""
+    return all(c.isascii() and (c.isalnum() or c in "-_.") for c in token)
+
+
 def _positive_int(value: str) -> int:
     try:
         n = int(value)
@@ -133,22 +139,35 @@ def main():
     # IPv6 literals need brackets in a URL, or the port is parsed as part of the address.
     url_host = f"[{bind_host}]" if ":" in bind_host else bind_host
 
+    # Any non-loopback bind is reachable from other machines, not just the 0.0.0.0
+    # wildcard, so it always gets an access token (middleware.RequestGuard enforces it).
+    # Set on the config module (not just the env) because it is already imported, and
+    # uvicorn.run below loads the app in this same process.
+    from geotagger import config
+    if not _is_loopback(bind_host) and not config.ACCESS_TOKEN:
+        import secrets
+        config.ACCESS_TOKEN = secrets.token_urlsafe(24)
+    if config.ACCESS_TOKEN and not _token_is_cookie_safe(config.ACCESS_TOKEN):
+        print("Error: GEOTAGGER_TOKEN may only contain letters, digits, '-', '_' and '.'", file=sys.stderr)
+        sys.exit(1)
+    # Appended to every printed URL: opening it once stores the token in a cookie.
+    token_qs = f"/?token={config.ACCESS_TOKEN}" if config.ACCESS_TOKEN else ""
+
     # Print access information
     if _is_loopback(bind_host):
-        print(f"Server accessible at: http://{url_host}:{bind_port}")
+        print(f"Server accessible at: http://{url_host}:{bind_port}{token_qs}")
     else:
-        # Any non-loopback bind is reachable from the network with no auth,
-        # not just the 0.0.0.0 wildcard, so the warning is keyed on the address.
-        print(f"\nWARNING: binding to {bind_host} exposes Geo-Tagger to your entire local network with")
-        print(f"NO AUTHENTICATION. Anyone who can reach this port can browse every photo,")
-        print(f"rewrite geotags, edit sidecar files, and rename people. Only use this on a")
-        print(f"network you trust.")
+        print(f"\nWARNING: binding to {bind_host} exposes Geo-Tagger to your local network.")
+        print(f"Access needs the token below (open a URL with ?token=... once per browser, or")
+        print(f"send 'Authorization: Bearer <token>'), but traffic is plain HTTP: anyone who")
+        print(f"can sniff the network can read it. Only use this on a network you trust.")
+        print(f"Access token: {config.ACCESS_TOKEN}")
 
     if bind_host in _WILDCARD_HOSTS:
         import socket
         print(f"\nBinding to {url_host}:{bind_port}")
         print(f"Server will be accessible at:")
-        print(f"  - http://localhost:{bind_port} (this computer)")
+        print(f"  - http://localhost:{bind_port}{token_qs} (this computer)")
 
         # Try to get all local IP addresses
         try:
@@ -163,11 +182,11 @@ def main():
 
             if ips:
                 for ip in sorted(ips):
-                    print(f"  - http://{ip}:{bind_port} (from local network)")
+                    print(f"  - http://{ip}:{bind_port}{token_qs} (from local network)")
             else:
                 # Fallback
                 local_ip = socket.gethostbyname(hostname)
-                print(f"  - http://{local_ip}:{bind_port} (from local network)")
+                print(f"  - http://{local_ip}:{bind_port}{token_qs} (from local network)")
         except Exception as e:
             print(f"  Could not determine local IP: {e}")
 
@@ -179,7 +198,7 @@ def main():
     elif not _is_loopback(bind_host):
         # Specific LAN address: one URL is enough, the interface list is only
         # useful when we don't know which address the user should pick.
-        print(f"\nServer accessible at: http://{url_host}:{bind_port}")
+        print(f"\nServer accessible at: http://{url_host}:{bind_port}{token_qs}")
 
     uvicorn.run(
         "geotagger.main:app",

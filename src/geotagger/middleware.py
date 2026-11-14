@@ -6,16 +6,27 @@ Two attacks work against an unauthenticated app bound to 127.0.0.1:
   * DNS rebinding: a hostile domain re-resolves to 127.0.0.1, making its pages
     "same-origin" with the app.
 RequestGuard stops both with a Host allow-list and an Origin / Sec-Fetch-Site check.
+A third attack applies only off loopback (`--network`): any machine on the LAN can just
+talk to the app. There RequestGuard also demands an access token (config.ACCESS_TOKEN),
+sent as a cookie (set once by opening `/?token=...`) or an `Authorization: Bearer` header.
 Pure ASGI (not BaseHTTPMiddleware) so hot routes like thumbnails pay no wrapper cost."""
 
+import hmac
 import ipaddress
 import json
 import socket
+from urllib.parse import parse_qsl, urlencode
 
 from geotagger import config
 
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 _DEFAULT_PORTS = {"http": "80", "https": "443", "ws": "80", "wss": "443"}
+# The app's own pages only ever produce "same-origin" (fetch, form posts) or "none"
+# (typed URL, bookmark). "same-site" is rejected too: ports are ignored when computing a
+# site, so another dev server on localhost:3000 counts as same-site with localhost:8000.
+_BLOCKED_FETCH_SITES = {"cross-site", "same-site"}
+TOKEN_COOKIE = "geotagger_token"
+TOKEN_PARAM = "token"
 
 
 def _split_host(value: str) -> tuple[str, str]:
@@ -40,6 +51,24 @@ def _is_ip(host: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _token_ok(candidate: str | None) -> bool:
+    # Constant-time compare so response timing can't leak the token prefix by prefix.
+    return candidate is not None and hmac.compare_digest(candidate.encode(), config.ACCESS_TOKEN.encode())
+
+
+def _cookie(header: str, name: str) -> str | None:
+    for part in header.split(";"):
+        key, sep, value = part.strip().partition("=")
+        if sep and key == name:
+            return value.strip().strip('"')
+    return None
+
+
+def _bearer(header: str) -> str | None:
+    scheme, _, value = header.strip().partition(" ")
+    return value.strip() if scheme.lower() == "bearer" and value.strip() else None
 
 
 def _host_allowed(host: str) -> bool:
@@ -80,29 +109,71 @@ class RequestGuard:
         host_header = headers.get("host", "")
 
         if not _host_allowed(_split_host(host_header)[0]):
-            await self._deny(scope, receive, send,
+            # 400, like Starlette's TrustedHostMiddleware: the request is malformed for
+            # this server rather than a permission problem.
+            await self._deny(scope, receive, send, 400,
                              "Host not allowed. If you reach this app by a custom name, add it to "
                              "the GEOTAGGER_ALLOWED_HOSTS environment variable (comma-separated).")
             return
 
+        # Requests with neither Origin nor Sec-Fetch-Site pass: browsers always send
+        # Origin on non-GET requests (form posts included), so their absence means a
+        # non-browser client (curl, a script), which is no cross-site threat - it could
+        # forge any header it liked anyway.
         if scope["type"] == "http" and scope["method"] not in _SAFE_METHODS:
             origin = headers.get("origin")
             if origin is not None and not _origin_matches_host(origin, host_header):
-                await self._deny(scope, receive, send, "Cross-origin request blocked (Origin does not match Host).")
+                await self._deny(scope, receive, send, 403, "Cross-origin request blocked (Origin does not match Host).")
                 return
-            if headers.get("sec-fetch-site", "").lower() == "cross-site":
-                await self._deny(scope, receive, send, "Cross-site request blocked.")
+            if headers.get("sec-fetch-site", "").lower() in _BLOCKED_FETCH_SITES:
+                await self._deny(scope, receive, send, 403, "Cross-site request blocked.")
+                return
+
+        if config.ACCESS_TOKEN:  # module-attribute access: __main__ and tests set it
+            if not (_token_ok(_cookie(headers.get("cookie", ""), TOKEN_COOKIE))
+                    or _token_ok(_bearer(headers.get("authorization", "")))):
+                if scope["type"] == "http" and await self._token_login(scope, send):
+                    return
+                await self._deny(scope, receive, send, 401,
+                                 "Access token required. Open the URL with ?token=... that the "
+                                 "server printed at startup, or send 'Authorization: Bearer <token>'.")
                 return
 
         await self.app(scope, receive, send)
 
     @staticmethod
-    async def _deny(scope, receive, send, detail: str) -> None:
+    async def _token_login(scope, send) -> bool:
+        """`GET /any/path?token=<valid>`: set the cookie and redirect to the same URL
+        without the token, so it doesn't linger in the address bar, history or a
+        Referer header. False when the query carries no valid token."""
+        if scope["method"] not in ("GET", "HEAD"):
+            return False
+        params = parse_qsl(scope.get("query_string", b"").decode("latin-1"), keep_blank_values=True)
+        supplied = [v for k, v in params if k == TOKEN_PARAM]
+        if not supplied or not _token_ok(supplied[-1]):
+            return False
+        rest = urlencode([(k, v) for k, v in params if k != TOKEN_PARAM])
+        path = scope.get("raw_path") or scope["path"].encode()
+        location = path.decode("latin-1") + (f"?{rest}" if rest else "")
+        # HttpOnly: page scripts never need it. SameSite=Lax (not Strict) so the first
+        # visit still works when the URL was opened from a link in another app/site;
+        # cross-site writes are already stopped by the Origin check above.
+        cookie = f"{TOKEN_COOKIE}={config.ACCESS_TOKEN}; Path=/; HttpOnly; SameSite=Lax"
+        await send({"type": "http.response.start", "status": 303, "headers": [
+            (b"location", location.encode("latin-1")),
+            (b"set-cookie", cookie.encode("latin-1")),
+            (b"content-length", b"0"),
+        ]})
+        await send({"type": "http.response.body", "body": b""})
+        return True
+
+    @staticmethod
+    async def _deny(scope, receive, send, status: int, detail: str) -> None:
         if scope["type"] == "websocket":
             await send({"type": "websocket.close", "code": 1008})
             return
         body = json.dumps({"detail": detail}).encode()
-        await send({"type": "http.response.start", "status": 403, "headers": [
+        await send({"type": "http.response.start", "status": status, "headers": [
             (b"content-type", b"application/json"),
             (b"content-length", str(len(body)).encode()),
         ]})

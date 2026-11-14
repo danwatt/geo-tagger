@@ -276,7 +276,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "av" },
-    { name = "fastapi" },
+    { name = "fastapi", specifier = ">=0.132" },
     { name = "insightface", specifier = ">=1.0.1" },
     { name = "onnxruntime", marker = "sys_platform == 'darwin'", specifier = ">=1.27.0" },
     { name = "onnxruntime-gpu", extras = ["cuda", "cudnn"], marker = "sys_platform != 'darwin'", specifier = ">=1.27.0" },
