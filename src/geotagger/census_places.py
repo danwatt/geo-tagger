@@ -26,8 +26,10 @@ the OSM -> GeoNames chain exactly as it was.
 
 import json
 import logging
+import os
 import sqlite3
 import threading
+from pathlib import Path
 
 from geotagger import config
 from geotagger.db_timing import TimedConnection
@@ -133,8 +135,8 @@ def _ensure_loaded():
 
 def reset():
     """Drop the open handle and go back to "unloaded", so the next lookup reopens
-    whatever is on disk. Needed before a (re)build replaces the file — Windows
-    won't let it be replaced while this connection holds it open."""
+    whatever is on disk. A rebuild doesn't call this itself: replace_db() closes
+    and swaps under one hold of the lock, which a separate reset() can't."""
     with _lock:
         _close_locked()
 
@@ -164,13 +166,44 @@ def refresh_if_changed() -> bool:
     return True
 
 
+def replace_db(src: Path, dest: Path) -> None:
+    """Atomically swap a finished build (`src`) in as the census DB at `dest`.
+    Same contract as osm_places.replace_db (audit G4).
+
+    Close and replace happen under one hold of _lock. Resetting before the
+    multi-minute build instead left a window in which any lookup reopened the old
+    file, and Windows then refused the replace. Every layer — places, ZCTAs, the
+    ZIP crosswalk — lives in this one file, so they all switch together, and
+    _zctas_present is re-probed on the next load. No unlink first: os.replace
+    overwrites in one step, and deleting first would leave a moment with no DB
+    at all (and fail the same way while the file is open).
+
+    Leaves the state "unloaded" with _sig cleared, so refresh_if_changed() sees
+    nothing to do and the next lookup opens, and fingerprints, the new file. With
+    nothing open (the CLI, or a first install) the close is a no-op. Another
+    process holding the file (a running app, when this is the CLI) makes the
+    replace fail on Windows: that is a RuntimeError, and the build stays at `src`."""
+    with _lock:
+        _close_locked()
+        try:
+            os.replace(src, dest)
+        except PermissionError as e:
+            raise RuntimeError(
+                f"Built {src.name} but could not replace {dest.name}: another process "
+                "has it open (a running geotagger instance?). Stop it and rename the "
+                ".tmp file over the old one, or run the build from the app's Data "
+                f"Management page instead. ({e})"
+            ) from e
+
+
 def _containing_rows(lat: float, lng: float) -> list[sqlite3.Row]:
     """All place rows whose polygon actually contains the point. R*Tree bbox
     prefilter (cheap, indexed) then exact point-in-polygon on the survivors."""
     _ensure_loaded()
     with _lock:
-        # _conn is re-read under the lock: reset() on another thread can set it to None
-        # after _ensure_loaded() returns, so an earlier read could race that.
+        # _conn is re-read under the lock: reset()/replace_db() on another thread can
+        # set it to None after _ensure_loaded() returns, so an earlier read could
+        # race that.
         conn = _conn
         if _state != "ready" or conn is None:
             return []

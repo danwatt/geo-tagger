@@ -237,7 +237,7 @@ the cache, so pre-install answers are served forever for that cell.
 `osm_places.py:72-79`, `geocode.py:71-78`. `_state` latches to `"unavailable"`, and only `census_places` has a
 `reset()`.
 
-**G4 — High — Census rebuild can fail at the final swap on Windows** [traced]
+**G4 — High — Census rebuild can fail at the final swap on Windows** [traced] — ✅ **DONE** (no reset before the build; `census_places.replace_db` closes and `os.replace`s in one lock hold, no `unlink`; another process holding the file = `RuntimeError` with the `.tmp` kept; failed build removes the `.tmp`)
 `services/data_service.py:384-386`, `census_builder.py:462-464`. `reset()` runs before the multi-minute build;
 any lookup in between reopens the old file, and `unlink`/`replace` then raises `PermissionError`.
 *Fix:* reset and swap together under the lock; drop the `unlink` before `replace`.

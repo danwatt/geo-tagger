@@ -3,6 +3,7 @@ the containment lookup (census_places). The place this source occupies in the ci
 chain (OSM -> Census -> GeoNames) is covered in test_geocode.py's TestMergedLookup."""
 
 import sqlite3
+import sys
 
 import pytest
 
@@ -567,3 +568,188 @@ class TestPlacesInBbox:
         # GeoJSON is lng/lat and rings must be closed.
         assert ring[0] == [-96.0, 30.0]
         assert ring[0] == ring[-1]
+
+
+# ── Swapping a rebuild in under a running app (audit G4) ──
+
+def _rename_places_during_build(monkeypatch, new_name: str, during=None):
+    """Wrap census_builder._load_places so the build being written renames
+    Bigtown -> new_name (telling the old DB from the new apart) and runs
+    `during()` mid-build, while the .tmp is half-written and the live DB is
+    still being served."""
+    real = census_builder._load_places
+
+    def load(db, zip_path, progress):
+        out = real(db, zip_path, progress)
+        db.execute("UPDATE places SET name=? WHERE name=?", (new_name, "Bigtown"))
+        if during is not None:
+            during()
+        return out
+
+    monkeypatch.setattr(census_builder, "_load_places", load)
+
+
+BIGTOWN = (30.9, -95.9)
+
+
+class TestSwap:
+    def test_lookups_use_the_old_db_during_the_build_then_the_new_one(
+            self, cb_zip, tmp_path, monkeypatch):
+        db_path = tmp_path / "places.sqlite"
+        monkeypatch.setattr(config, "CENSUS_DB_PATH", db_path)
+        census_builder.build(db_path, cb_zip)
+        # The app's read connection stays open for the whole rebuild; on Windows
+        # that is what used to make the final replace fail.
+        assert census_places.lookup(*BIGTOWN)["city"] == "Bigtown"
+        old_conn = census_places._conn
+        seen = []
+
+        def during():
+            seen.append(census_places.lookup(*BIGTOWN)["city"])
+            seen.append(census_places._conn is old_conn)
+
+        _rename_places_during_build(monkeypatch, "Newbigtown", during)
+        census_builder.build(db_path, cb_zip)
+
+        assert seen == ["Bigtown", True]
+        assert census_places._state == "unloaded" and census_places._conn is None
+        assert census_places.lookup(*BIGTOWN)["city"] == "Newbigtown"
+        assert not db_path.with_suffix(db_path.suffix + ".tmp").exists()
+
+    def test_zcta_layer_switches_with_the_places(self, cb_zip, zcta_zip, tmp_path, monkeypatch):
+        # One file holds every layer, so one swap moves them all, including the
+        # _zctas_present probe, which must be redone for the new file: here the
+        # rebuild drops the layer, so a stale True would query missing tables.
+        db_path = tmp_path / "places.sqlite"
+        monkeypatch.setattr(config, "CENSUS_DB_PATH", db_path)
+        census_builder.build(db_path, cb_zip, zcta_zip)
+        assert census_places.postal_lookup(*BIGTOWN)["postal_code"] == "77070"
+        census_builder.build(db_path, cb_zip)
+        assert census_places.postal_lookup(*BIGTOWN) is None
+        assert census_places.lookup(*BIGTOWN)["city"] == "Bigtown"
+
+    def test_swap_leaves_nothing_for_the_stat_check_to_redo(self, cb_zip, tmp_path, monkeypatch):
+        # replace_db clears _sig with the handle and the next load fingerprints
+        # the new file, so the G3 re-check finds no change and doesn't reset again.
+        db_path = tmp_path / "places.sqlite"
+        monkeypatch.setattr(config, "CENSUS_DB_PATH", db_path)
+        census_builder.build(db_path, cb_zip)
+        census_places.lookup(*BIGTOWN)
+        census_builder.build(db_path, cb_zip)
+        assert census_places.refresh_if_changed() is False
+        census_places.lookup(*BIGTOWN)
+        assert census_places._sig == census_places._signature()
+        assert census_places.refresh_if_changed() is False
+
+    def test_works_with_nothing_open_as_from_the_cli(self, cb_zip, tmp_path, monkeypatch):
+        # scripts/get_census_places.py runs in its own process: no read handle,
+        # and on a first install not even a file to replace.
+        db_path = tmp_path / "out" / "places.sqlite"
+        monkeypatch.setattr(config, "CENSUS_DB_PATH", db_path)
+        assert census_places._conn is None
+        census_builder.build(db_path, cb_zip)
+        assert census_places._conn is None
+        _rename_places_during_build(monkeypatch, "Newbigtown")
+        census_builder.build(db_path, cb_zip)
+        assert census_places.lookup(*BIGTOWN)["city"] == "Newbigtown"
+
+    def test_first_install_unlatches_unavailable(self, cb_zip, tmp_path, monkeypatch):
+        db_path = tmp_path / "places.sqlite"
+        monkeypatch.setattr(config, "CENSUS_DB_PATH", db_path)
+        assert census_places.lookup(*BIGTOWN) is None
+        assert census_places._state == "unavailable"
+        census_builder.build(db_path, cb_zip)
+        assert census_places.lookup(*BIGTOWN)["city"] == "Bigtown"
+
+    def test_failed_build_keeps_the_live_db_and_removes_the_tmp(
+            self, cb_zip, tmp_path, monkeypatch):
+        db_path = tmp_path / "places.sqlite"
+        monkeypatch.setattr(config, "CENSUS_DB_PATH", db_path)
+        census_builder.build(db_path, cb_zip)
+        assert census_places.lookup(*BIGTOWN)["city"] == "Bigtown"
+
+        def boom():
+            raise OSError("disk full")
+
+        _rename_places_during_build(monkeypatch, "Newbigtown", boom)
+        with pytest.raises(OSError, match="disk full"):
+            census_builder.build(db_path, cb_zip)
+        assert not db_path.with_suffix(db_path.suffix + ".tmp").exists()
+        assert census_places._state == "ready"
+        assert census_places.lookup(*BIGTOWN)["city"] == "Bigtown"
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="POSIX lets an open file be replaced")
+    def test_another_process_holding_the_db_reports_and_keeps_the_build(
+            self, cb_zip, tmp_path, monkeypatch):
+        db_path = tmp_path / "places.sqlite"
+        monkeypatch.setattr(config, "CENSUS_DB_PATH", db_path)
+        census_builder.build(db_path, cb_zip)
+        before = db_path.read_bytes()
+        _rename_places_during_build(monkeypatch, "Newbigtown")
+        foreign = sqlite3.connect(str(db_path))  # e.g. a running app, when this is the CLI
+        try:
+            foreign.execute("SELECT COUNT(*) FROM places").fetchone()
+            with pytest.raises(RuntimeError, match="another process"):
+                census_builder.build(db_path, cb_zip)
+        finally:
+            foreign.close()
+        tmp = db_path.with_suffix(db_path.suffix + ".tmp")
+        assert tmp.exists()
+        assert db_path.read_bytes() == before
+        assert census_places.lookup(*BIGTOWN)["city"] == "Bigtown"
+        # The kept build is complete: renaming it over, as the message says,
+        # installs it.
+        census_places.replace_db(tmp, db_path)
+        assert census_places.lookup(*BIGTOWN)["city"] == "Newbigtown"
+
+
+class TestCensusJob:
+    def test_no_early_reset_and_the_version_moves_after_the_swap(
+            self, cb_zip, db, tmp_path, monkeypatch):
+        from geotagger import downloads, geocode
+        from geotagger.services import data_service
+
+        db_path = tmp_path / "census" / "places.sqlite"
+        monkeypatch.setattr(config, "CENSUS_DB_PATH", db_path)
+        db_path.parent.mkdir()
+        census_builder.build(db_path, cb_zip)
+        for name in ("cb-place-500k.zip", "cb-zcta520-500k.zip", "geonames-us-postal.zip"):
+            (db_path.parent / name).write_bytes(b"zip")
+        monkeypatch.setattr(downloads, "zip_ok", lambda p: True)
+        monkeypatch.setattr(census_builder, "cb_urls", lambda: [("x", "http://example.invalid")])
+        assert census_places.lookup(*BIGTOWN)["city"] == "Bigtown"
+        geocode.cache_version()
+
+        events = []
+        monkeypatch.setattr(census_places, "reset", lambda: events.append("reset"))
+        real_replace = census_places.replace_db
+
+        def replace_db(src, dest):
+            events.append("swap")
+            real_replace(src, dest)
+
+        monkeypatch.setattr(census_places, "replace_db", replace_db)
+        real_changed = geocode.datasets_changed
+
+        def datasets_changed(*a, **k):
+            # By the time the version moves, lookups must already read the new DB.
+            events.append(("changed", census_places.lookup(*BIGTOWN)["city"]))
+            out = real_changed(*a, **k)
+            events.append(out["changed"])
+            return out
+
+        monkeypatch.setattr(geocode, "datasets_changed", datasets_changed)
+        real_build = census_builder.build
+
+        def build(db_path_, *a, **k):
+            # Build the real thing from the fixture zip rather than the stub
+            # archives. The live DB is still open and serving the old answer.
+            events.append(("building", census_places.lookup(*BIGTOWN)["city"]))
+            return real_build(db_path_, cb_zip, **k)
+
+        monkeypatch.setattr(census_builder, "build", build)
+        _rename_places_during_build(monkeypatch, "Newbigtown")
+        data_service._run_census_download()
+
+        assert data_service.census_job_status()["error"] is None
+        assert events == [("building", "Bigtown"), "swap", ("changed", "Newbigtown"), True]

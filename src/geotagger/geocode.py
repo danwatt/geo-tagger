@@ -974,7 +974,7 @@ def datasets_changed(version: str | None = None) -> dict:
     Census build, GeoNames download), whether or not it succeeded: a failed
     GeoNames download can still have replaced some of its files. The caller must
     already have made the new data visible to lookups (osm_places.replace_db,
-    census_places.reset(), geocode.refresh_if_changed()), so any lookup that reads
+    census_places.replace_db, geocode.refresh_if_changed()), so any lookup that reads
     the new version also reads the new data. A no-op when no file actually changed.
     `version` is a fingerprint the caller computed before making the data visible
     (see check_datasets); by default it is computed here.

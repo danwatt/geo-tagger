@@ -473,7 +473,7 @@ def _run_census_download(force: bool = False):
 
 
 def _census_download(force: bool):
-    from geotagger import census_builder, census_places
+    from geotagger import census_builder
 
     def progress(message: str):
         with _census_lock:
@@ -510,15 +510,13 @@ def _census_download(force: bool):
             "geonames-us-postal.zip",
             lambda d: census_builder.download_geonames_zip_codes(d, progress_cb=progress))
 
-        # The build replaces the DB file, which this process may still hold open
-        # read-only — drop that handle first (Windows won't allow the replace).
-        census_places.reset()
+        # No reset() first: lookups keep using the old DB for the whole build. The
+        # build swaps the new file in through census_places.replace_db, which
+        # closes our read handle and replaces under one lock hold (audit G4), so
+        # the new data is visible before _geocoding_dataset_job moves the cache
+        # version.
         summary = census_builder.build(config.CENSUS_DB_PATH, zip_path, zcta_path,
                                        postal_path, progress_cb=progress)
-        # A lookup during the build may have reopened the old file; on POSIX the
-        # replace succeeded anyway and that handle still reads the old data. Drop it
-        # so lookups see the new build before the cache version moves on (G2).
-        census_places.reset()
         index.record_dataset_download(
             dataset="census_places", region="us", url=url,
             size_bytes=sum(p.stat().st_size for p in (zip_path, zcta_path, postal_path)),

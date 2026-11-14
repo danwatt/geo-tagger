@@ -400,30 +400,10 @@ def _load_zip_places(db: sqlite3.Connection, zip_path: Path, progress) -> int:
     return n
 
 
-def build(db_path: Path, zip_path: Path, zcta_zip_path: Path | None = None,
-          postal_zip_path: Path | None = None,
-          progress_cb: Callable[[str], None] | None = None) -> dict:
-    """Build the census DB at db_path from a cb_<year>_us_place_500k.zip, optionally
-    also loading the ZCTA boundary file and GeoNames' ZIP -> city crosswalk.
-
-    Always a full rebuild (these files are national and self-contained — there's no
-    append story like OSM's per-region extracts), so all layers are written in one
-    pass, and an existing DB is replaced only once the new one is complete: it's
-    written to a .tmp sibling and swapped in at the end, leaving the live DB intact if
-    anything fails halfway. Omitting a layer therefore *drops* it, rather than keeping
-    whatever the previous build had.
-
-    Returns {"total_places", "by_kind", "total_zctas", "total_zip_names", "errors",
-    "seconds"}.
-    """
-    def progress(msg: str):
-        if progress_cb:
-            progress_cb(msg)
-
-    t0 = time.time()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = db_path.with_suffix(db_path.suffix + ".tmp")
-    tmp_path.unlink(missing_ok=True)
+def _build_into(tmp_path: Path, zip_path: Path, zcta_zip_path: Path | None,
+                postal_zip_path: Path | None,
+                progress: Callable[[str], None]) -> tuple[dict, dict, int]:
+    """Write every layer into the (temp) DB at tmp_path. See build()."""
     db = sqlite3.connect(str(tmp_path))
     try:
         init_db(db)
@@ -451,22 +431,49 @@ def build(db_path: Path, zip_path: Path, zcta_zip_path: Path | None = None,
         db.commit()
     finally:
         db.close()
+    return places, zctas, zip_names
 
-    # Swap the finished build in. In-process, census_places.reset() (called by the
-    # Data Management job) drops our own read-only handle first. A *separate* process
-    # holding it — a running app instance — can't be reset from here, and Windows
-    # refuses to replace a file that's open, so say so instead of surfacing a bare
-    # WinError 32. The completed build is left in place as .tmp either way.
+
+def build(db_path: Path, zip_path: Path, zcta_zip_path: Path | None = None,
+          postal_zip_path: Path | None = None,
+          progress_cb: Callable[[str], None] | None = None) -> dict:
+    """Build the census DB at db_path from a cb_<year>_us_place_500k.zip, optionally
+    also loading the ZCTA boundary file and GeoNames' ZIP -> city crosswalk.
+
+    Always a full rebuild (these files are national and self-contained — there's no
+    append story like OSM's per-region extracts), so all layers are written in one
+    pass, and an existing DB is replaced only once the new one is complete: it's
+    written to a .tmp sibling and swapped in at the end, leaving the live DB intact if
+    anything fails halfway. Omitting a layer therefore *drops* it, rather than keeping
+    whatever the previous build had.
+
+    Returns {"total_places", "by_kind", "total_zctas", "total_zip_names", "errors",
+    "seconds"}.
+    """
+    def progress(msg: str):
+        if progress_cb:
+            progress_cb(msg)
+
+    t0 = time.time()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = db_path.with_suffix(db_path.suffix + ".tmp")
+    tmp_path.unlink(missing_ok=True)
     try:
-        db_path.unlink(missing_ok=True)
-        tmp_path.replace(db_path)
-    except PermissionError as e:
-        raise RuntimeError(
-            f"Built {tmp_path.name} but could not replace {db_path.name} — another "
-            "process has it open (a running geotagger instance?). Stop it and rename "
-            "the .tmp file over the old one, or run this from the app's Data "
-            f"Management page instead. ({e})"
-        ) from e
+        places, zctas, zip_names = _build_into(tmp_path, zip_path, zcta_zip_path,
+                                               postal_zip_path, progress)
+    except BaseException:
+        # Don't leave hundreds of MB of half-built DB behind (the next build
+        # would discard it anyway).
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+    # Swap the finished build in (audit G4). replace_db closes this process's
+    # read handle and os.replaces under census_places' lock, so lookups ran
+    # against the old DB for the whole build and can't reopen it mid-swap. With
+    # nothing open (the CLI) the close is a no-op; another process holding the
+    # file raises RuntimeError and the completed build is kept as .tmp.
+    from geotagger import census_places
+    census_places.replace_db(tmp_path, db_path)
 
     errors = places["errors"] + zctas["errors"]
     seconds = round(time.time() - t0, 1)
