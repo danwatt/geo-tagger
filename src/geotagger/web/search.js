@@ -940,10 +940,18 @@ function selectAllResults() {
 
 /* ── Assign approximate date ── */
 
+// The photos the open Assign-date modal acts on, captured when it opens. Apply
+// posts these, not whatever selectedIds holds by then: a search or Clear
+// selection behind the modal must not turn Apply into an empty (or different)
+// photo_ids list.
+let assignDateIds = [];
+
 function openAssignDateModal() {
   if (selectedIds.size === 0) return;
+  assignDateIds = [...selectedIds];
+  const n = assignDateIds.length;
   document.getElementById("assign-date-summary").textContent =
-    `Assigning an approximate date to ${selectedIds.size} selected photo${selectedIds.size === 1 ? "" : "s"}.`;
+    `Assigning an approximate date to ${n} selected photo${n === 1 ? "" : "s"}.`;
   document.getElementById("assign-date-year").value = "";
   document.getElementById("assign-date-month").value = "";
   document.getElementById("assign-date-modal").style.display = "flex";
@@ -951,9 +959,12 @@ function openAssignDateModal() {
 
 function closeAssignDateModal() {
   document.getElementById("assign-date-modal").style.display = "none";
+  assignDateIds = [];
 }
 
 async function applyAssignDate() {
+  // Already posting (Enter in a field can fire while Apply is disabled).
+  if (document.getElementById("assign-date-apply-btn").disabled) return;
   const yearStr = document.getElementById("assign-date-year").value;
   const monthStr = document.getElementById("assign-date-month").value;
   const year = parseInt(yearStr);
@@ -962,7 +973,12 @@ async function applyAssignDate() {
     return;
   }
   const month = monthStr ? parseInt(monthStr) : null;
-  const ids = [...selectedIds];
+  const ids = assignDateIds.slice();
+  if (!ids.length) {
+    closeAssignDateModal();
+    setStatus("Assign date: no photos selected — select photos, then try again.", true);
+    return;
+  }
 
   const precisionLabel = month
     ? `${MONTH_NAMES[month - 1]} ${year}`
@@ -1375,9 +1391,6 @@ window.addEventListener("resize", () => {
 
 document.getElementById("search-btn").addEventListener("click", runSearch);
 document.getElementById("text-input").addEventListener("input", onTextInput);
-document.getElementById("text-input").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") { e.preventDefault(); runSearch(); }
-});
 document.getElementById("similar-btn").addEventListener("click", searchSimilar);
 document.getElementById("untagged-btn").addEventListener("click", runUntaggedSearch);
 document.getElementById("clear-btn").addEventListener("click", clearForm);
@@ -1395,12 +1408,31 @@ document.getElementById("guess-dates-close").addEventListener("click", closeGues
 document.getElementById("guess-dates-cancel-btn").addEventListener("click", closeGuessDatesModal);
 document.getElementById("guess-dates-commit-btn").addEventListener("click", commitGuessDates);
 document.getElementById("date-undo-btn").addEventListener("click", undoDateCommit);
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && document.activeElement &&
-      document.activeElement.id !== "person-picker-input") {
-    runSearch();
-  }
+// Enter in a filter field runs the search — one listener on the form, so one
+// search per press (W4). Scoped to #search-form, not document: Enter in the
+// Assign-date / Guess-dates modals must never start a search behind them (it
+// would replace the results and clear the selection the modal acts on).
+// Skipped: keys a field already handled (location suggestion picked, date range
+// applied — both preventDefault), the people picker (Enter there is its own),
+// the date-range panel, and buttons (Enter on a button is that button's click).
+document.getElementById("search-form").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || e.defaultPrevented || e.isComposing) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+  const t = e.target;
+  if (!(t instanceof Element)) return;
+  if (t.id === "person-picker-input" || t.closest("#date-range")) return;
+  if (t.tagName !== "INPUT" && t.tagName !== "SELECT") return;
+  e.preventDefault();
+  runSearch();
 });
+// Enter in the Assign-date fields applies, like pressing Apply.
+for (const id of ["assign-date-year", "assign-date-month"]) {
+  document.getElementById(id).addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.isComposing) return;
+    e.preventDefault();
+    applyAssignDate();
+  });
+}
 
 /* ── Deep link: ?place_id=N ──
  * The Custom Places page links here to answer "show me the photos this place

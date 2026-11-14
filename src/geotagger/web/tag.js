@@ -4,6 +4,10 @@
 
 let queue = [];   // groups (clusters split by date window)
 let pos = 0;      // index of the group currently shown
+// Every group gets a stable id at split time. Completions find their group by
+// id, never by a captured index: by the time a POST returns, Skip, an earlier
+// completion or a reload may have shifted what sits at any index.
+let nextGroupId = 1;
 let persons = []; // existing people, for the picker
 let pickerGroup = null;
 
@@ -96,7 +100,10 @@ async function loadPersons() {
   } catch { /* picker just shows create-new */ }
 }
 
-async function loadGroups() {
+// Latest-only (common.js): the strictness slider and window select can fire a
+// reload while the previous one is still clustering; the older reply must not
+// land last and replace the newer queue.
+const loadGroups = latestOnly(async (signal) => {
   el("loading").hidden = false;
   el("loading").textContent = "Finding groups…";
   el("card").hidden = true;
@@ -105,17 +112,20 @@ async function loadGroups() {
   el("progress").textContent = "";
   try {
     // full=true → every face per group, so the grid can show them all.
-    const res = await fetch(`/api/faces/clusters?full=true&threshold=${settings.threshold}`);
+    const res = await fetch(`/api/faces/clusters?full=true&threshold=${settings.threshold}`,
+                            { signal });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
+    if (signal.aborted) return;
     // Split each person-group into chunks that are tight in both time and place.
     queue = (data.clusters || []).flatMap(splitGroups);
     pos = 0;
     render();
   } catch (e) {
+    if (signal.aborted) return;
     el("loading").textContent = "Could not load groups: " + e.message;
   }
-}
+});
 
 // Break a cluster's faces into groups that are tight in BOTH time and place.
 // Faces are sorted by time; a new chunk starts whenever a face falls more than
@@ -136,7 +146,8 @@ function splitGroups(cluster) {
     // differing location — missing locations join the current chunk.
     const newPlace = cur && cur.place && place && place !== cur.place;
     if (newWindow || newPlace) {
-      cur = { suggestion: cluster.suggestion, faces: [], start: ts, place };
+      cur = { id: nextGroupId++, suggestion: cluster.suggestion, faces: [], start: ts, place,
+              busy: false };
       groups.push(cur);
     }
     cur.faces.push(f);
@@ -172,6 +183,7 @@ function render() {
   el("place").textContent = place ? `📍 ${place}` : "";
   el("progress").textContent = `${pos + 1} / ${queue.length}`;
   renderPrevBtn();
+  paintBusy();
 
   const grid = el("faces");
   grid.innerHTML = "";
@@ -192,40 +204,75 @@ function render() {
  * face without abandoning the whole group; the group's Accept/Ignore/Skip
  * footer still acts on whatever faces remain. */
 function openFaceActions(anchor, f) {
+  const cl = queue[pos];
+  if (!cl || cl.busy) return;
   openQuickActions(anchor, f, {
     persons,
-    onAssign: (pid) => faceAction(f, "/api/faces/assign",
+    onAssign: (pid) => faceAction(cl, f, "/api/faces/assign",
       pid === null ? { face_ids: [f.id], clear: true } : { face_ids: [f.id], person_id: pid }),
-    onAssignNew: (name) => faceAction(f, "/api/faces/assign", { face_ids: [f.id], name }),
-    onIgnore: (ignored) => faceAction(f, "/api/faces/ignore", { face_ids: [f.id], ignored }),
-    onComeBack: (comeBack) => faceAction(f, "/api/faces/come-back", { face_ids: [f.id], come_back: comeBack }),
+    onAssignNew: (name) => faceAction(cl, f, "/api/faces/assign", { face_ids: [f.id], name }),
+    onIgnore: (ignored) => faceAction(cl, f, "/api/faces/ignore", { face_ids: [f.id], ignored }),
+    onComeBack: (comeBack) => faceAction(cl, f, "/api/faces/come-back", { face_ids: [f.id], come_back: comeBack }),
     onOpenPhoto: () => openPreview(f),
   });
 }
 
-async function faceAction(f, url, body) {
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    removeFaceFromGroup(f.id);
-    if (url.includes("/assign")) loadPersons();   // pick up any newly-created person
-    toast("Updated");
-  } catch (e) {
-    toast("Failed: " + e.message, true);
+function faceAction(cl, f, url, body) {
+  return withGroupBusy(cl, async () => {
+    try {
+      await postJson(url, body);
+      removeFaceFromGroup(cl.id, f.id);
+      if (url.includes("/assign")) loadPersons();   // pick up any newly-created person
+      toast("Updated");
+    } catch (e) {
+      toast("Failed: " + e.message, true);
+    }
+  });
+}
+
+function removeFaceFromGroup(groupId, faceId) {
+  const cl = queue.find((g) => g.id === groupId);
+  if (!cl) return;   // group already gone (reloaded, or handled by another action)
+  cl.faces = cl.faces.filter((x) => x.id !== faceId);
+  cl.face_ids = cl.face_ids.filter((x) => x !== faceId);
+  if (!cl.faces.length) dropGroup(groupId);   // group emptied → drop it
+  render();
+}
+
+/* ── In-flight guard ──
+ * One request per group at a time. While a group's POST is out, its whole card
+ * and the footer are disabled: a second tap would otherwise post again and, on
+ * return, splice a second group out of the queue. The flag lives on the group,
+ * so a reload's fresh groups aren't blocked by an old group's request. */
+function paintBusy() {
+  const busy = !!queue[pos]?.busy;
+  el("card").classList.toggle("busy", busy);
+  el("card").setAttribute("aria-busy", String(busy));
+  for (const id of ["accept-btn", "ignore-btn", "skip-btn", "choose-btn", "prev-btn"]) {
+    el(id).disabled = busy;
   }
 }
 
-function removeFaceFromGroup(id) {
-  const cl = queue[pos];
-  if (!cl) return;
-  cl.faces = cl.faces.filter((x) => x.id !== id);
-  cl.face_ids = cl.face_ids.filter((x) => x !== id);
-  if (!cl.faces.length) queue.splice(pos, 1);   // group emptied → drop it
-  render();
+// Runs `send` for group `cl` unless that group already has a request in flight.
+async function withGroupBusy(cl, send) {
+  if (!cl || cl.busy) return;
+  cl.busy = true;
+  paintBusy();
+  try {
+    await send();
+  } finally {
+    cl.busy = false;
+    paintBusy();
+  }
+}
+
+// Remove a group by id (no-op if it's already gone). Keeps `pos` on the group
+// the user is looking at when the removed one sat before it.
+function dropGroup(groupId) {
+  const i = queue.findIndex((g) => g.id === groupId);
+  if (i < 0) return;
+  queue.splice(i, 1);
+  if (i < pos) pos--;
 }
 
 function dateRange(cl) {
@@ -260,10 +307,10 @@ function showDone() {
 /* ── Actions ── */
 function onAccept() {
   const cl = queue[pos];
-  if (!cl) return;
+  if (!cl || cl.busy) return;
   if (cl.suggestion) {
     savePrevPerson(cl.suggestion.person_id, cl.suggestion.person_name);
-    act("/api/faces/assign",
+    act(cl, "/api/faces/assign",
         { face_ids: cl.face_ids, person_id: cl.suggestion.person_id },
         `Tagged ${cl.face_ids.length} as ${cl.suggestion.person_name}`);
   } else {
@@ -273,16 +320,16 @@ function onAccept() {
 
 function onUsePrevious() {
   const cl = queue[pos];
-  if (!cl || !prevPerson) return;
-  act("/api/faces/assign",
+  if (!cl || cl.busy || !prevPerson) return;
+  act(cl, "/api/faces/assign",
       { face_ids: cl.face_ids, person_id: prevPerson.id },
       `Tagged ${cl.face_ids.length} as ${prevPerson.name}`);
 }
 
 /* ── Person picker ── */
 function openPicker() {
+  if (!queue[pos] || queue[pos].busy) return;
   pickerGroup = queue[pos];
-  if (!pickerGroup) return;
   el("picker-title").textContent = `Assign ${pickerGroup.face_ids.length} face(s) to…`;
   el("picker-search").value = "";
   renderPickerList("");
@@ -326,10 +373,10 @@ function renderPickerList(q) {
 
 function pickAssign(who, label) {
   const cl = pickerGroup;
-  if (!cl) return;
+  if (!cl || cl.busy) return;
   closePicker();
   if (who.person_id) savePrevPerson(who.person_id, label);
-  act("/api/faces/assign", { face_ids: cl.face_ids, ...who },
+  act(cl, "/api/faces/assign", { face_ids: cl.face_ids, ...who },
       `Tagged ${cl.face_ids.length} as ${label}`);
 }
 
@@ -340,36 +387,32 @@ function closePicker() {
 
 function onIgnore() {
   const cl = queue[pos];
-  if (!cl) return;
+  if (!cl || cl.busy) return;
   const n = cl.face_ids.length;
-  act("/api/faces/ignore",
+  act(cl, "/api/faces/ignore",
       { face_ids: cl.face_ids, ignored: true },
       `Ignored ${n} face${n > 1 ? "s" : ""}`);
 }
 
 function onSkip() {
+  if (queue[pos]?.busy) return;
   if (pos < queue.length) { pos++; render(); }
 }
 
-async function act(url, body, msg) {
-  const btns = [el("accept-btn"), el("ignore-btn"), el("skip-btn")];
-  btns.forEach((b) => (b.disabled = true));
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    queue.splice(pos, 1);   // remove handled group; the next one shifts into pos
-    toast(msg);
-    render();
-    if (url.includes("/assign")) loadPersons();   // pick up any newly-created person
-  } catch (e) {
-    toast("Failed: " + e.message, true);
-  } finally {
-    btns.forEach((b) => (b.disabled = false));
-  }
+// Whole-group action. The group is passed in (not read from `pos` at completion)
+// and removed by id, so the group that was acted on is the one that leaves.
+function act(cl, url, body, msg) {
+  return withGroupBusy(cl, async () => {
+    try {
+      await postJson(url, body);
+      dropGroup(cl.id);   // the next group shifts into pos
+      toast(msg);
+      render();
+      if (url.includes("/assign")) loadPersons();   // pick up any newly-created person
+    } catch (e) {
+      toast("Failed: " + e.message, true);
+    }
+  });
 }
 
 /* ── Preview overlay ── */

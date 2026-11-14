@@ -121,9 +121,9 @@ function isShortcutsHelpOpen() {
 
 function bindKeyboardShortcuts() {
   document.addEventListener("keydown", (e) => {
-    // Let text inputs/selects and the person-picker modal handle their own keys.
-    const tag = document.activeElement?.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    // Let fields, dialogs (common.js) and the person-picker modal handle their own
+    // keys — first, before "?" or any other shortcut.
+    if (isTypingTarget(e)) return;
     // Same for the focused pane divider: its arrows resize, they don't navigate.
     if (document.activeElement?.id === "detail-resizer") return;
     if (typeof isPersonPickerOpen === "function" && isPersonPickerOpen()) return;

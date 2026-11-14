@@ -111,6 +111,30 @@ function latestOnly(loader) {
   return run;
 }
 
+/* ── Keyboard shortcut guard ──
+ * Every document-level shortcut handler calls isTypingTarget(e) FIRST, before it
+ * looks at any key (including "?"): a keystroke typed into a field, or into a
+ * modal dialog stacked over the page, belongs to that field/dialog, not to the
+ * page behind it. "Typing" means a text-like field (any <input>, <textarea>,
+ * <select>, contenteditable), an IME composition in progress, or any target
+ * inside an open modal (.modal, <dialog>, role="dialog").
+ * Handlers that deliberately act everywhere (Escape to close the innermost
+ * layer, Shift tracking) don't use it. anyModalOpen() covers the other case:
+ * focus is on the page but a modal is showing, so page shortcuts stay off. */
+function isTypingTarget(e) {
+  if (e.isComposing) return true;
+  const t = e.target;
+  if (!(t instanceof Element)) return false;
+  if (t.isContentEditable) return true;
+  if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT") return true;
+  return !!t.closest('.modal, dialog[open], [role="dialog"]');
+}
+
+/** True when any page modal (.modal with an inline display other than none) is up. */
+function anyModalOpen() {
+  return [...document.querySelectorAll(".modal")].some(m => m.style.display !== "none");
+}
+
 /** Reduce an untrusted URL (query param, stored value) to a same-origin
  *  path+query+hash, or return `fallback`. Guards `location.href = <param>`
  *  against javascript:/data: URLs and off-site redirects: anything that does

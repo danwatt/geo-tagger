@@ -418,7 +418,7 @@ photo's faces on another, and "Ignore unlabeled" then posts for the wrong photo)
 `custom-places.js:999-1048,762-785`; `map.js:267-408`; `home.js:430-471`; `representatives.js:51-62`.
 *Fix:* one shared sequence-token helper used by every loader.
 
-**W4 — High — Document-level Enter handler on Search** [traced]
+**W4 — High — Document-level Enter handler on Search** [traced] — ✅ **DONE** (one Enter listener on `#search-form`, one search per Enter; Enter in Assign-date runs Apply; Apply posts the ids captured at open and refuses an empty set)
 `web/search.js:1371-1376`. Enter in the text input fires two concurrent searches. Enter in the Assign-date
 year field runs a search behind the modal, clearing the selection, so Apply posts an empty `photo_ids`.
 
@@ -430,7 +430,7 @@ warning branch never runs while the server unassigns every face. The Faces colum
 `web/app.js:344-357,658-682,2885`. `batchScope` is never nulled, so changing a filter after visiting a folder
 reloads the old folder. `selectedIds` is never pruned, so `L`/`I` act on photos no longer visible.
 
-**W7 — Medium — `?` shortcut fires inside text inputs** [seen]
+**W7 — Medium — `?` shortcut fires inside text inputs** [seen] — ✅ **DONE** (shared `isTypingTarget(e)` / `anyModalOpen()` in `common.js`, checked first by every document-level shortcut handler; Escape-only handlers left as they were)
 `web/app.js:3095`. The check runs before the input guard at line 3098, so typing "?" in a search box opens
 the help modal. `people.js:1906` has the same order [seen; whether its guard precedes was not checked].
 
@@ -451,7 +451,7 @@ the help modal. `people.js:1906` has the same order [seen; whether its guard pre
 **W12 — Medium — Search "untagged faces" mode leaves old results actionable** [traced]
 `web/search.js:343-368,924-928`. "Select all" and "Open in Geocode" act on the previous, invisible result set.
 
-**W13 — Medium — Tag page double-submit drops a group** [traced]
+**W13 — Medium — Tag page double-submit drops a group** [traced] — ✅ **DONE** (groups carry an id and a `busy` flag; the whole card is disabled in flight; removal by id via `dropGroup`; `loadGroups` is latest-only)
 `web/tag.js:99-118,274-280,354-373`. Only three buttons are disabled in flight; a second tap splices twice.
 
 **W14 — Medium — Data page poll loops have no `catch`** [traced] — ✅ **DONE** (one `pollJob()` in `data.js`: transient errors retried with "Lost contact…", gives up after 5, 404 = job gone; six loops converted. Unchecked fetches remain in `timesync.js`, `map.js`, `search.js`, `settings.js`)

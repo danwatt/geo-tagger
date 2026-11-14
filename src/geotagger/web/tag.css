@@ -104,3 +104,7 @@
 
 /* Toast sits above the action bar (overrides theme's bottom offset). */
 #toast { bottom: 92px; font-size: 14px; }
+
+/* A request for this group is in flight (tag.js paintBusy): taps on the card
+   would act on it a second time, so the card goes inert until it settles. */
+#card.busy { opacity: .55; pointer-events: none; }

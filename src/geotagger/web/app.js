@@ -343,16 +343,12 @@ function bindToolbar() {
   // Wrapped, not passed by reference: the click event would land in `ids`.
   document.getElementById("tag-as-btn").addEventListener("click", () => openLocationPicker());
   document.addEventListener("keydown", (e) => {
+    if (isTypingTarget(e)) return;   // common.js — always first
     if (e.key !== "l" && e.key !== "L") return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    const t = e.target;
-    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" ||
-              t.tagName === "SELECT" || t.isContentEditable)) return;
     if (typeof isPersonPickerOpen === "function" && isPersonPickerOpen()) return;
     // Don't stack the picker on top of the month/timeline modals.
-    const openModal = [...document.querySelectorAll(".modal")]
-      .some(m => m.style.display !== "none");
-    if (openModal) return;
+    if (anyModalOpen()) return;
     e.preventDefault();
     openLocationPicker();
   });
@@ -362,9 +358,7 @@ function bindToolbar() {
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape" || !mapDayOverride) return;
     if (typeof isPersonPickerOpen === "function" && isPersonPickerOpen()) return;
-    const openModal = [...document.querySelectorAll(".modal")]
-      .some(m => m.style.display !== "none");
-    if (openModal) return;
+    if (anyModalOpen()) return;
     clearDayOnMap();
   });
 
@@ -3123,6 +3117,9 @@ function isShortcutsHelpOpen() {
 // People's shortcut set (see people.js's bindKeyboardShortcuts).
 function bindGridKeyboardShortcuts() {
   document.addEventListener("keydown", (e) => {
+    // Fields first (common.js): "?" typed into the place search is a character,
+    // not a request for the help sheet (W7).
+    if (isTypingTarget(e)) return;
     if (isShortcutsHelpOpen()) {
       if (e.key === "Escape" || e.key === "?") { e.preventDefault(); closeShortcutsHelp(); }
       return;
@@ -3130,13 +3127,10 @@ function bindGridKeyboardShortcuts() {
     if (e.key === "?") { e.preventDefault(); openShortcutsHelp(); return; }
 
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    const t = e.target;
-    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" ||
-              t.tagName === "SELECT" || t.tagName === "BUTTON" || t.isContentEditable)) return;
+    // Space/Enter on a focused button is that button's click, not a grid key.
+    if (e.target instanceof Element && e.target.tagName === "BUTTON") return;
     if (typeof isPersonPickerOpen === "function" && isPersonPickerOpen()) return;
-    const openModal = [...document.querySelectorAll(".modal")]
-      .some(m => m.style.display !== "none");
-    if (openModal) return;
+    if (anyModalOpen()) return;
 
     switch (e.key) {
       case "ArrowDown": case "j":
@@ -3177,19 +3171,15 @@ function bindBatchMode() {
   document.addEventListener("click", cancelBatchAdvance, true);
 
   document.addEventListener("keydown", (e) => {
+    // Same guards as the "l" shortcut: never steal a keystroke from a field or
+    // from whatever is stacked on top of the grid.
+    if (isTypingTarget(e)) return;
     if (!activeBatch) return;
     const key = e.key.toLowerCase();
     if (key !== "n" && key !== "s") return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    // Same guards as the "l" shortcut: never steal a keystroke from a field or
-    // from whatever is stacked on top of the grid.
-    const t = e.target;
-    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" ||
-              t.tagName === "SELECT" || t.isContentEditable)) return;
     if (typeof isPersonPickerOpen === "function" && isPersonPickerOpen()) return;
-    const openModal = [...document.querySelectorAll(".modal")]
-      .some(m => m.style.display !== "none");
-    if (openModal) return;
+    if (anyModalOpen()) return;
     e.preventDefault();
     key === "n" ? loadNextBatch() : skipBatch();
   });

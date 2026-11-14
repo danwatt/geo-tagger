@@ -318,7 +318,8 @@
 
   function onKey(e) {
     if (e.key === "Escape") { stopDrawing(); }
-    else if (e.key === "Backspace" && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) {
+    // Escape finishes from anywhere; Backspace is a field's own key (common.js).
+    else if (e.key === "Backspace" && !isTypingTarget(e)) {
       e.preventDefault();
       undoPoint();
     }
