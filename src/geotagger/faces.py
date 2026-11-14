@@ -417,14 +417,27 @@ def _embeddings_matrix(rows) -> np.ndarray:
 # Decoded embedding matrices are expensive to rebuild (SQLite blob reads + numpy
 # decode) and the people UI refetches constantly, so both the labeled gallery and
 # the unlabeled scan are cached and keyed on index.faces_generation() — any
-# assign/ignore/scan/birth-date change bumps it and the next call rebuilds.
+# assign/ignore/birth-date change bumps it and the next call rebuilds. A face
+# scan's new detections only invalidate the unlabeled side (_unlabeled_epoch).
 _gallery_cache: tuple[int, "Gallery"] | None = None
-_unlabeled_cache: tuple[int, int, list, np.ndarray, np.ndarray] | None = None
-# Parallel to _unlabeled_cache rows: cached suggest_persons_batch output.
-# Keyed on (gen, scan_cap) and pruned in drop_from_unlabeled_cache so the
-# full matmul only runs when the generation actually changes, not on every
-# accept in the suggested-only review loop.
-_suggested_scores_cache: tuple[int, int, list] | None = None
+# (gen, epoch, scan_cap, rows, unknowns, times). `gen` is faces_generation();
+# `epoch` is _unlabeled_epoch, bumped by invalidate_unlabeled_cache for changes
+# that add unlabeled faces but must not rebuild the labeled gallery (a face scan
+# inserting detections — bumping the generation per scanned photo would rebuild
+# the gallery on every refetch for the whole scan).
+_unlabeled_cache: tuple[int, int, int, list, np.ndarray, np.ndarray] | None = None
+_unlabeled_epoch = 0
+# Parallel to _unlabeled_cache rows: cached suggest_persons_batch output, as
+# ((gen, epoch, scan_cap) of the rows it was computed for, scores). Pruned in
+# drop_from_unlabeled_cache so the full matmul only runs when the rows actually
+# rebuild, not on every accept in the suggested-only review loop.
+_suggested_scores_cache: tuple[tuple[int, int, int], list] | None = None
+# Serializes read-modify-write of the two caches above (the in-place prune in
+# drop_from_unlabeled_cache, an invalidation, a rebuild's store) between request
+# threads and a face scan's writes. Never held across the DB read or the matmul:
+# readers snapshot the key *before* reading, so a rebuild that raced a write is
+# stored under the older key and simply misses next time.
+_unlabeled_lock = threading.Lock()
 # face_id -> {excluded person_id, ...}, keyed on faces_generation() (see
 # get_negatives_map). The table is tiny (only user-rejected pairs), so a full
 # read is cheap and refreshed automatically by the same generation bump every
@@ -514,14 +527,22 @@ def get_unlabeled_matrix(scan_cap: int | None = None
     Defaults to the live ``config.FACE_SUGGEST_SCAN_CAP`` setting. Keyed on the
     faces-table generation (and the cap). Removals (assign/ignore) prune this in
     place via ``drop_from_unlabeled_cache`` so the exhaustive read happens once,
-    not on every accept.
+    not on every accept; additions (new detections) invalidate it.
     """
+    entry = _unlabeled_entry(_cfg(scan_cap, "FACE_SUGGEST_SCAN_CAP"))
+    return entry[3], entry[4], entry[5]
+
+
+def _unlabeled_entry(scan_cap: int) -> tuple[int, int, int, list, np.ndarray, np.ndarray]:
+    """The whole cache tuple, so get_suggested_scores can key its scores on the
+    exact rows they were computed for."""
     global _unlabeled_cache
-    scan_cap = _cfg(scan_cap, "FACE_SUGGEST_SCAN_CAP")
-    gen = index.faces_generation()
-    if (_unlabeled_cache is not None
-            and _unlabeled_cache[0] == gen and _unlabeled_cache[1] == scan_cap):
-        return _unlabeled_cache[2], _unlabeled_cache[3], _unlabeled_cache[4]
+    # Key snapshotted BEFORE the read: a write that lands mid-read bumps one of
+    # them, so this entry is stored under the older key and rebuilt next call.
+    gen, epoch = index.faces_generation(), _unlabeled_epoch
+    cached = _unlabeled_cache   # one read of the global; tuple swaps are atomic
+    if cached is not None and cached[:3] == (gen, epoch, scan_cap):
+        return cached
     limit = scan_cap if scan_cap and scan_cap > 0 else -1   # -1 → unbounded
     floor = config.FACE_SUGGEST_MIN_DET_SCORE if config.FACE_SUGGEST_MIN_DET_SCORE > 0 else None
     rows = index.list_faces("unlabeled", None, limit, min_det_score=floor)
@@ -530,8 +551,26 @@ def get_unlabeled_matrix(scan_cap: int | None = None
     # blob (a Row is immutable, so rebuild as a dict with the same r["col"] /
     # .keys() surface) or ~2 KB/face of blobs stay pinned beside the matrix.
     rows = [{k: r[k] for k in r.keys() if k != "embedding"} for r in rows]
-    _unlabeled_cache = (gen, scan_cap, rows, unknowns, times)
-    return rows, unknowns, times
+    entry = (gen, epoch, scan_cap, rows, unknowns, times)
+    with _unlabeled_lock:
+        _unlabeled_cache = entry
+    return entry
+
+
+def invalidate_unlabeled_cache():
+    """Force the next unlabeled read to rebuild, WITHOUT bumping the faces
+    generation (so the labeled gallery and negatives caches survive).
+
+    For writes that add unlabeled faces or replace them under new ids — a face
+    scan's replace_faces. Bumping the epoch (not just clearing the cache) is what
+    makes it race-safe: a rebuild already in flight on a request thread read the
+    DB before this write and will store itself under the old epoch, so it can't
+    pass as current."""
+    global _unlabeled_cache, _suggested_scores_cache, _unlabeled_epoch
+    with _unlabeled_lock:
+        _unlabeled_epoch += 1
+        _unlabeled_cache = None
+        _suggested_scores_cache = None
 
 
 def get_suggested_scores(scan_cap: int | None = None,
@@ -546,17 +585,16 @@ def get_suggested_scores(scan_cap: int | None = None,
     ``config.FACE_SUGGEST_SCAN_CAP`` setting.
     """
     global _suggested_scores_cache
-    scan_cap = _cfg(scan_cap, "FACE_SUGGEST_SCAN_CAP")
-    gen = index.faces_generation()
-    rows, unknowns, times = get_unlabeled_matrix(scan_cap)
-    if (_suggested_scores_cache is not None
-            and _suggested_scores_cache[0] == gen
-            and _suggested_scores_cache[1] == scan_cap):
-        return rows, _suggested_scores_cache[2]
+    entry = _unlabeled_entry(_cfg(scan_cap, "FACE_SUGGEST_SCAN_CAP"))
+    key, rows, unknowns, times = entry[:3], entry[3], entry[4], entry[5]
+    cached = _suggested_scores_cache
+    if cached is not None and cached[0] == key:
+        return rows, cached[1]
     gallery = build_gallery()
     scores = (suggest_persons_batch(rows, gallery, unknowns=unknowns, times=times)
               if len(gallery) > 0 else [None] * len(rows))
-    _suggested_scores_cache = (gen, scan_cap, scores)
+    with _unlabeled_lock:
+        _suggested_scores_cache = (key, scores)
     return rows, scores
 
 
@@ -588,39 +626,59 @@ def window_rows(rows, unknowns: np.ndarray, times: np.ndarray,
     return [rows[i] for i in idx], unknowns[idx], times[idx]
 
 
-def drop_from_unlabeled_cache(face_ids):
-    """Prune just-labeled/ignored faces from the cached unlabeled matrix instead
-    of forcing a full re-read on the next scan, and re-tag the cache to the
-    current generation so it survives the accept loop.
+def drop_from_unlabeled_cache(face_ids, gen: int | None = None):
+    """Prune just-labeled/ignored/deleted faces from the cached unlabeled matrix
+    instead of forcing a full re-read, and (with ``gen``) re-tag the cache to
+    that generation so it survives the accept loop.
 
-    Only valid for *removals* from the unlabeled set (assign-to-person, ignore).
-    Additions (unassign, restore, new detections) bump the generation without
-    calling this, so the next ``get_unlabeled_matrix`` rebuilds from scratch.
+    Only valid for *removals* from the unlabeled set (assign-to-person, ignore,
+    delete). Additions (unassign, restore) bump the generation without calling
+    this; new detections call invalidate_unlabeled_cache.
+
+    ``gen`` is the value the caller's own ``index.bump_faces_generation()``
+    returned. Re-tagging claims "this cache now reflects every change up to
+    gen", which only holds if the cache was current just before that bump
+    (built at ``gen - 1``) and nothing has bumped since (``gen`` is still
+    current). Otherwise some other change — an unassign, a restore, a second
+    writer — went unseen, and re-tagging would hide it until restart; the cache
+    is left stale and the next read rebuilds. ``gen=None`` (a removal with no
+    bump) prunes but keeps the existing tag: dropping rows that no longer exist
+    is correct for any cache, stale or not.
     """
     global _unlabeled_cache, _suggested_scores_cache
-    if _unlabeled_cache is None:
-        return
-    old_gen, scan_cap, rows, unknowns, times = _unlabeled_cache
-    drop = set(face_ids)
-    keep = [i for i, r in enumerate(rows) if r["id"] not in drop]
-    if len(keep) != len(rows):
-        idx = np.array(keep, dtype=np.int64)
-        rows = [rows[i] for i in keep]
-        unknowns, times = unknowns[idx], times[idx]
-        # Prune the scores cache in parallel so the next suggested-only call
-        # doesn't trigger a full matmul rebuild just because we labeled some faces.
-        # Guard: scores must come from the same generation as the unlabeled rows —
-        # if they don't match (e.g. an unassign rebuilt the unlabeled cache without
-        # clearing the scores cache) the indices would be out of range.
-        if (_suggested_scores_cache is not None
-                and _suggested_scores_cache[0] == old_gen
-                and _suggested_scores_cache[1] == scan_cap):
-            _, _, scores = _suggested_scores_cache
-            scores = [scores[i] for i in keep]
-            _suggested_scores_cache = (index.faces_generation(), scan_cap, scores)
+    with _unlabeled_lock:
+        cached = _unlabeled_cache
+        if cached is None:
+            return
+        old_gen, epoch, scan_cap, rows, unknowns, times = cached
+        if gen is None:
+            new_gen = old_gen
+        elif old_gen == gen and gen == index.faces_generation():
+            return  # rebuilt after the caller's commit+bump: already excludes them
+        elif old_gen == gen - 1 and gen == index.faces_generation():
+            new_gen = gen
+        else:
+            return  # stale: leave the old tag so the next read rebuilds
+        old_key = (old_gen, epoch, scan_cap)
+        drop = set(face_ids)
+        keep = [i for i, r in enumerate(rows) if r["id"] not in drop]
+        scores_cached = _suggested_scores_cache
+        if len(keep) != len(rows):
+            idx = np.array(keep, dtype=np.int64)
+            rows = [rows[i] for i in keep]
+            unknowns, times = unknowns[idx], times[idx]
+        # Carry the scores cache along (pruned in parallel) so the next
+        # suggested-only call doesn't redo the full matmul just because some
+        # faces were labeled. Only if it was computed for exactly these rows —
+        # otherwise its indices don't line up with them.
+        if scores_cached is not None and scores_cached[0] == old_key:
+            scores = scores_cached[1]
+            if len(keep) != len(scores):
+                scores = [scores[i] for i in keep]
+            _suggested_scores_cache = ((new_gen, epoch, scan_cap), scores)
         else:
             _suggested_scores_cache = None
-    _unlabeled_cache = (index.faces_generation(), scan_cap, rows, unknowns, times)
+        _unlabeled_cache = (new_gen, epoch, scan_cap, rows, unknowns, times)
 
 
 def match_embedding(vec: np.ndarray, photo_datetime, gallery: Gallery,

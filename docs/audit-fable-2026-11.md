@@ -199,7 +199,7 @@ every photo, and neither queue ever retries those rows.
 decode errors; add a "retry failed" action.
 
 <a id="f2"></a>
-**F2 — High — Newly detected faces never reach suggestions during a session** [seen]
+**F2 — High — Newly detected faces never reach suggestions during a session** [seen] — ✅ **DONE** (`drop_from_unlabeled_cache(ids, gen)` re-tags only when the cache was built at `gen - 1` and `gen` is current; `replace_faces` inserts call `invalidate_unlabeled_cache()` via a separate epoch, so the gallery isn't rebuilt per photo; generation bump is now locked)
 `faces.py:573-605`, `index.py:1414-1455`. A first-time `replace_faces` does not bump the generation, relying
 on the next label action to rebuild. But `drop_from_unlabeled_cache` unconditionally re-tags the old cache
 with the current generation (`faces.py:605`), so the rebuild never happens until an unassign or a restart.

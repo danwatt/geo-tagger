@@ -54,6 +54,10 @@ UNDATED_SQL = undated_sql()
 # Bumped on every change to face/person data that affects recognition. faces.py
 # caches decoded embedding matrices keyed on this, rebuilding only when it moves.
 _faces_generation = 0
+# `+=` on a global is a read-modify-write that two executor threads can
+# interleave (losing a bump). The returned value is also the key the caller
+# hands to faces.drop_from_unlabeled_cache, so it must be *this* call's bump.
+_faces_generation_lock = threading.Lock()
 
 
 def faces_generation() -> int:
@@ -61,10 +65,16 @@ def faces_generation() -> int:
     return _faces_generation
 
 
-def bump_faces_generation():
-    """Invalidate cached recognition data after a face/person mutation."""
+def bump_faces_generation() -> int:
+    """Invalidate cached recognition data after a face/person mutation.
+
+    Returns the new generation. A removal-only writer passes it to
+    faces.drop_from_unlabeled_cache, which re-tags the cache only if this bump
+    is the sole change since the cache was built."""
     global _faces_generation
-    _faces_generation += 1
+    with _faces_generation_lock:
+        _faces_generation += 1
+        return _faces_generation
 
 
 # Bumped whenever any photo's coordinates change (a tag added, moved or removed),
@@ -2061,9 +2071,9 @@ def delete_photos(photo_ids: list[int]) -> int:
         deleted = db.execute("DELETE FROM photos WHERE id IN (SELECT value FROM json_each(?))",
                              (pjson,)).rowcount
     if face_ids:
-        bump_faces_generation()
+        gen = bump_faces_generation()
         from geotagger import faces as _faces
-        _faces.drop_from_unlabeled_cache(face_ids)
+        _faces.drop_from_unlabeled_cache(face_ids, gen)
     if had_coords:
         bump_geotag_generation()
     return deleted
@@ -2437,10 +2447,10 @@ def replace_faces(photo_id: int, faces: list[dict], det_dimension: int | None = 
 
     Intentionally does NOT call bump_faces_generation(): the labeled gallery only
     contains confirmed faces (unaffected by detection), so there is nothing to
-    rebuild there. The unlabeled suggestion matrix is pruned in place via
-    drop_from_unlabeled_cache so the cache survives the scan. Newly detected
-    faces will appear in the suggestion matrix on the next full rebuild (triggered
-    by the next label/ignore action by the user).
+    rebuild there, and a face scan calls this once per photo. Inserted faces
+    instead invalidate just the unlabeled suggestion matrix
+    (faces.invalidate_unlabeled_cache), so they show up on the next suggestions
+    read; a rescan that found nothing only prunes its old faces in place.
     """
     with transaction() as db:
         # Capture old face IDs so we can prune them from the in-memory cache below.
@@ -2472,10 +2482,15 @@ def replace_faces(photo_id: int, faces: list[dict], det_dimension: int | None = 
             )
         db.execute("UPDATE photos SET faces_scanned_at=?, faces_det_dimension=?, "
                    "faces_scan_error=NULL WHERE id=?", (now, det_dimension, photo_id))
-    # Prune replaced faces from the cache (re-tags to current generation in place).
-    if old_ids:
+    # No generation bump here (see docstring), so the cache must not be re-tagged:
+    # new faces need a rebuild to be seen (pruning can't add rows); a pure removal
+    # prunes and keeps the cache's existing tag, stale or current.
+    if new_ids or old_ids:
         from geotagger import faces as _faces
-        _faces.drop_from_unlabeled_cache(old_ids)
+        if new_ids:
+            _faces.invalidate_unlabeled_cache()
+        else:
+            _faces.drop_from_unlabeled_cache(old_ids)
 
 
 def delete_photo_faces(photo_ids: list[int]) -> int:
@@ -2505,10 +2520,10 @@ def delete_photo_faces(photo_ids: list[int]) -> int:
             "faces_scan_error=NULL WHERE id=?",
             [(pid,) for pid in photo_ids],
         )
-    bump_faces_generation()
+    gen = bump_faces_generation()
     if old_ids:
         from geotagger import faces as _faces
-        _faces.drop_from_unlabeled_cache(old_ids)
+        _faces.drop_from_unlabeled_cache(old_ids, gen)
     return len(old_ids)
 
 
@@ -2559,9 +2574,9 @@ def delete_manual_face(face_id: int) -> bool:
         db.execute("DELETE FROM face_negatives WHERE face_id=?", (face_id,))
         db.execute("DELETE FROM face_embeddings WHERE face_id=?", (face_id,))
         db.execute("DELETE FROM faces WHERE id=?", (face_id,))
-    bump_faces_generation()
+    gen = bump_faces_generation()
     from geotagger import faces as _faces
-    _faces.drop_from_unlabeled_cache([face_id])
+    _faces.drop_from_unlabeled_cache([face_id], gen)
     return True
 
 
@@ -2913,10 +2928,10 @@ def assign_faces(face_ids: list[int], person_id: int | None) -> int:
                 "DELETE FROM face_negatives WHERE face_id=? AND person_id=?",
                 [(fid, person_id) for fid in face_ids],
             )
-    bump_faces_generation()
+    gen = bump_faces_generation()
     if person_id is not None:  # labeled faces leave the unlabeled queue
         from geotagger import faces as _faces
-        _faces.drop_from_unlabeled_cache(face_ids)
+        _faces.drop_from_unlabeled_cache(face_ids, gen)
     return matched
 
 
@@ -2942,10 +2957,10 @@ def set_faces_ignored(face_ids: list[int], ignored: bool):
                 "UPDATE faces SET ignored=0, ignored_at=NULL WHERE id=?",
                 [(fid,) for fid in face_ids],
             )
-    bump_faces_generation()
+    gen = bump_faces_generation()
     if ignored:  # ignored faces leave the unlabeled queue (restore re-adds → rebuild)
         from geotagger import faces as _faces
-        _faces.drop_from_unlabeled_cache(face_ids)
+        _faces.drop_from_unlabeled_cache(face_ids, gen)
 
 
 def set_faces_come_back(face_ids: list[int], come_back: bool):
@@ -2972,10 +2987,10 @@ def set_faces_come_back(face_ids: list[int], come_back: bool):
                 "UPDATE faces SET come_back=0, come_back_at=NULL WHERE id=?",
                 [(fid,) for fid in face_ids],
             )
-    bump_faces_generation()
+    gen = bump_faces_generation()
     if come_back:  # come-back faces leave the unlabeled queue (restore re-adds → rebuild)
         from geotagger import faces as _faces
-        _faces.drop_from_unlabeled_cache(face_ids)
+        _faces.drop_from_unlabeled_cache(face_ids, gen)
 
 
 def get_face_coverage() -> dict[str, int]:
@@ -3077,9 +3092,9 @@ def ignore_unlabeled_in_photos(photo_ids: list[int]) -> int:
             "representative=0 WHERE id=?",
             [(now, fid) for fid in face_ids],
         )
-    bump_faces_generation()
+    gen = bump_faces_generation()
     from geotagger import faces as _faces
-    _faces.drop_from_unlabeled_cache(face_ids)
+    _faces.drop_from_unlabeled_cache(face_ids, gen)
     return len(face_ids)
 
 
@@ -3109,10 +3124,10 @@ def assign_face(face_id: int, person_id: int | None) -> int:
             # A face can't be both "assigned to P" and "not P" — drop that conflict.
             db.execute("DELETE FROM face_negatives WHERE face_id=? AND person_id=?",
                        (face_id, person_id))
-    bump_faces_generation()
+    gen = bump_faces_generation()
     if person_id is not None:  # labeled face leaves the unlabeled queue
         from geotagger import faces as _faces
-        _faces.drop_from_unlabeled_cache([face_id])
+        _faces.drop_from_unlabeled_cache([face_id], gen)
     return matched
 
 
