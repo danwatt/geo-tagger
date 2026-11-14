@@ -639,96 +639,80 @@ function openFaceActions(anchor, f) {
   });
 }
 
-/* ── Actions ── */
-async function doAssign(faceId, personId) {
+/* ── Actions ──
+ * Every one-click write here acts at once and offers an Undo toast (U3): the
+ * server's reply carries an `undo` token that POST /api/faces/undo puts back
+ * exactly (common.js undoFaceToken). */
+const faceWord = (n) => `${n} face${n === 1 ? "" : "s"}`;
+const personName = (pid) => persons.find(p => p.id === pid)?.name;
+
+/* POST one face write for the photo on screen, refresh its panel, then offer
+ * undo. `message` is the toast text; `failLabel` prefixes a failure. Rethrows
+ * so callers that chain (Done & next) can stop. */
+async function faceWrite(url, body, { message, failLabel, reloadPersons = false, onUndone } = {}) {
   const photoId = currentPhotoId();   // the photo this click was for
   try {
-    const res = await fetch(`/api/faces/${faceId}/assign`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(personId == null ? { clear: true } : { person_id: personId }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    await reloadFacesFor(photoId);
+    const data = await postJson(url, body);
+    await Promise.all([reloadPersons ? loadPersons() : null, reloadFacesFor(photoId)]);
+    offerFaceUndo(message, data.undo, photoId, onUndone);
+    return data;
   } catch (err) {
-    setStatus("Assign failed: " + err.message, true);
+    setStatus(`${failLabel} failed: ` + err.message, true);
+    throw err;
   }
 }
 
-async function doAssignByName(faceId, name) {
-  const photoId = currentPhotoId();   // the photo this click was for
-  try {
-    const res = await fetch(`/api/faces/${faceId}/assign`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    await Promise.all([loadPersons(), reloadFacesFor(photoId)]);
-  } catch (err) {
-    setStatus("Assign failed: " + err.message, true);
-  }
+function offerFaceUndo(message, token, photoId, onUndone) {
+  if (!faceUndoable(token)) return;
+  showUndoToast(message, async () => {
+    const r = await undoFaceToken(token);
+    onUndone?.(r.out);
+    // A name-created person may have been removed again by the undo.
+    await Promise.all([token.created_person_id != null ? loadPersons() : null,
+                       reloadFacesFor(photoId)]);
+    return r;
+  });
 }
 
-async function doAcceptAll(personId, facesArr) {
-  const photoId = currentPhotoId();   // the photo this click was for
-  try {
-    const res = await fetch("/api/faces/assign", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ face_ids: facesArr.map(f => f.id), person_id: personId }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    await reloadFacesFor(photoId);
-  } catch (err) {
-    setStatus("Accept failed: " + err.message, true);
-  }
+function doAssign(faceId, personId) {
+  const f = photoFaces.find(x => x.id === faceId);
+  const message = personId == null
+    ? `Unassigned ${f?.person_name ? `“${f.person_name}”` : "the face"}.`
+    : `Tagged the face as ${personName(personId) ?? "that person"}.`;
+  return faceWrite(`/api/faces/${faceId}/assign`,
+    personId == null ? { clear: true } : { person_id: personId },
+    { message, failLabel: "Assign" }).catch(() => {});
 }
 
-async function ignoreFaces(faceIds) {
-  const photoId = currentPhotoId();   // the photo this click was for
+function doAssignByName(faceId, name) {
+  return faceWrite(`/api/faces/${faceId}/assign`, { name },
+    { message: `Tagged the face as ${name}.`, failLabel: "Assign", reloadPersons: true })
+    .catch(() => {});
+}
+
+function doAcceptAll(personId, facesArr) {
+  return faceWrite("/api/faces/assign",
+    { face_ids: facesArr.map(f => f.id), person_id: personId },
+    { message: `Tagged ${faceWord(facesArr.length)} as ${personName(personId) ?? "that person"}.`,
+      failLabel: "Accept" }).catch(() => {});
+}
+
+function ignoreFaces(faceIds) {
   if (!faceIds.length) return;
-  try {
-    const res = await fetch("/api/faces/ignore", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ face_ids: faceIds, ignored: true }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    await reloadFacesFor(photoId);
-  } catch (err) {
-    setStatus("Ignore failed: " + err.message, true);
-  }
+  return faceWrite("/api/faces/ignore", { face_ids: faceIds, ignored: true },
+    { message: `Ignored ${faceWord(faceIds.length)}.`, failLabel: "Ignore" }).catch(() => {});
 }
 
-async function restoreFace(faceId) {
-  const photoId = currentPhotoId();   // the photo this click was for
-  try {
-    const res = await fetch("/api/faces/ignore", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ face_ids: [faceId], ignored: false }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    await reloadFacesFor(photoId);
-  } catch (err) {
-    setStatus("Restore failed: " + err.message, true);
-  }
+function restoreFace(faceId) {
+  return faceWrite("/api/faces/ignore", { face_ids: [faceId], ignored: false },
+    { message: "Restored the face to the unlabeled queue.", failLabel: "Restore" })
+    .catch(() => {});
 }
 
-async function comeBackFace(faceId, comeBack) {
-  const photoId = currentPhotoId();   // the photo this click was for
-  try {
-    const res = await fetch("/api/faces/come-back", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ face_ids: [faceId], come_back: comeBack }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    await reloadFacesFor(photoId);
-  } catch (err) {
-    setStatus("Come back failed: " + err.message, true);
-  }
+function comeBackFace(faceId, comeBack) {
+  return faceWrite("/api/faces/come-back", { face_ids: [faceId], come_back: comeBack },
+    { message: comeBack ? "Moved the face to Come back." : "Restored the face to the unlabeled queue.",
+      failLabel: "Come back" }).catch(() => {});
 }
 
 /* Nuclear rescan for the photo on screen: wipe every face (detected, assigned,
@@ -778,22 +762,22 @@ async function rescanFaces() {
 
 async function ignoreAllUnlabeled(silent = false) {
   const photo = crowdPhotos[currentIdx];
-  try {
-    const res = await fetch("/api/crowds/ignore-unlabeled", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ photo_ids: [photo.id] }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    await reloadFacesFor(photo.id);
-    // After the reload, not before: renderFaces ends by writing its own
-    // "✓ Done — …" summary, which would replace this at once.
-    if (!silent && photo.id === currentPhotoId()) {
-      setStatus(`Ignored ${data.ignored} unlabeled face(s) — this photo is done.`);
-    }
-  } catch (err) {
-    setStatus("Ignore failed: " + err.message, true);
-    throw err;
+  const unlabeledBefore = photo.unlabeled_faces;
+  const n = photoFaces.filter(f => f.person_id === null && !f.ignored && !f.come_back).length;
+  const data = await faceWrite("/api/crowds/ignore-unlabeled", { photo_ids: [photo.id] }, {
+    message: `Ignored ${faceWord(n)} unlabeled on ${photo.filename}.`,
+    failLabel: "Ignore",
+    // Done & next has moved on by the time Undo is clicked: put the photo's
+    // count back so Prev/Next and "Skip completed" see it as unfinished again.
+    // (If it's still on screen, the reload recomputes the count anyway.)
+    onUndone: (out) => {
+      if (out.restored.length) photo.unlabeled_faces = unlabeledBefore;
+      updateNavButtons();
+    },
+  });
+  // After the reload, not before: renderFaces ends by writing its own
+  // "✓ Done — …" summary, which would replace this at once.
+  if (!silent && photo.id === currentPhotoId()) {
+    setStatus(`Ignored ${data.ignored} unlabeled face(s) — this photo is done.`);
   }
 }

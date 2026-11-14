@@ -448,9 +448,19 @@ async function deletePerson(p) {
     : `Delete "${p.name}"?`;
   if (!confirm(msg)) return;
   try {
-    await api("DELETE", `/api/persons/${p.id}`);
-    toast(`Deleted "${p.name}"`);
+    const { undo } = await api("DELETE", `/api/persons/${p.id}`);
     await reload();
+    // Kept behind the confirm above, and undoable for a few seconds after (U3):
+    // the person comes back with the same attributes and labels.
+    if (faceUndoable(undo)) {
+      showUndoToast(`Deleted “${p.name}”.`, async () => {
+        const r = await undoFaceToken(undo);
+        await reload();
+        return r;
+      });
+    } else {
+      toast(`Deleted "${p.name}"`);
+    }
   } catch (e) {
     toast("Delete failed: " + e.message, true);
   }

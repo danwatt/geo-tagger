@@ -14,11 +14,13 @@ async function untagFaces(ids, who) {
       body: JSON.stringify({ face_ids: ids, clear: true }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
     setStatus(`Un-tagged ${ids.length} face(s).`);
     selectedIds.clear();
     if (ids.includes(focusedFaceId)) focusedFaceId = null;
     await loadPersons();
     await loadFaces();
+    offerPeopleUndo(`Un-tagged ${ids.length} face(s).`, data.undo);
   } catch (err) {
     setStatus("Un-tag failed: " + err.message, true);
   }
@@ -53,9 +55,11 @@ async function assignFocusedFace({ personId = null, name = null, clear = false }
   }
   const body = clear ? { clear: true } : name ? { name } : { person_id: personId };
   try {
-    await postJson(`/api/faces/${f.id}/assign`, body);
+    const data = await postJson(`/api/faces/${f.id}/assign`, body);
     const who = clear ? null : (name || persons.find(p => p.id === personId)?.name);
-    setStatus(clear ? "Unassigned this face." : `Assigned this face${who ? ` to ${who}` : ""}.`);
+    const msg = clear ? "Unassigned this face." : `Assigned this face${who ? ` to ${who}` : ""}.`;
+    setStatus(msg);
+    offerPeopleUndo(msg, data.undo);
     // Only this face changes — drop just it from the selection, keep the rest.
     selectedIds.delete(f.id);
     // Discover's faces are all unlabeled, so a clear leaves its group as it was.
@@ -83,8 +87,10 @@ async function ignoreSelected_ids(ids, ignored) {
     return;
   }
   try {
-    await postJson("/api/faces/ignore", { face_ids: ids, ignored });
-    setStatus(ignored ? `Ignored ${ids.length} face(s).` : `Restored ${ids.length} face(s).`);
+    const data = await postJson("/api/faces/ignore", { face_ids: ids, ignored });
+    const msg = ignored ? `Ignored ${ids.length} face(s).` : `Restored ${ids.length} face(s).`;
+    setStatus(msg);
+    offerPeopleUndo(msg, data.undo);
     // Discover (the detail pane's toggle) only ever ignores: its faces are live.
     if (patchClustersAfter(ignored ? ids : [])) { await loadPersons(); return; }
     selectedIds.clear();
@@ -108,8 +114,10 @@ async function comeBackSelected_ids(ids, comeBack) {
     return;
   }
   try {
-    await postJson("/api/faces/come-back", { face_ids: ids, come_back: comeBack });
-    setStatus(comeBack ? `Moved ${ids.length} face(s) to Come Back.` : `Restored ${ids.length} face(s).`);
+    const data = await postJson("/api/faces/come-back", { face_ids: ids, come_back: comeBack });
+    const msg = comeBack ? `Moved ${ids.length} face(s) to Come Back.` : `Restored ${ids.length} face(s).`;
+    setStatus(msg);
+    offerPeopleUndo(msg, data.undo);
     if (patchClustersAfter(comeBack ? ids : [])) { await loadPersons(); return; }
     selectedIds.clear();
     await loadPersons();
@@ -209,7 +217,8 @@ function openFaceActions(anchor, face) {
         return;
       }
       try {
-        await postJson(`/api/faces/${face.id}/assign`, { name });
+        const data = await postJson(`/api/faces/${face.id}/assign`, { name });
+        offerPeopleUndo(`Assigned this face to ${name} (new person).`, data.undo);
         if (patchClustersAfter([face.id], { assigned: true })) {
           setStatus(`Assigned this face to ${name} (new person).`);
           await loadPersons();
@@ -221,7 +230,8 @@ function openFaceActions(anchor, face) {
     onIgnore: async (ignored) => {
       if (stagingEnabled()) { ignoreSelected_ids([face.id], ignored); return; }
       try {
-        await postJson("/api/faces/ignore", { face_ids: [face.id], ignored });
+        const data = await postJson("/api/faces/ignore", { face_ids: [face.id], ignored });
+        offerPeopleUndo(ignored ? "Ignored 1 face." : "Restored 1 face.", data.undo);
         if (patchClustersAfter(ignored ? [face.id] : [])) { setStatus("Ignored 1 face."); return; }
         await loadFaces();
       } catch (err) { setStatus("Ignore failed: " + err.message, true); }
@@ -229,7 +239,8 @@ function openFaceActions(anchor, face) {
     onComeBack: async (comeBack) => {
       if (stagingEnabled()) { comeBackSelected_ids([face.id], comeBack); return; }
       try {
-        await postJson("/api/faces/come-back", { face_ids: [face.id], come_back: comeBack });
+        const data = await postJson("/api/faces/come-back", { face_ids: [face.id], come_back: comeBack });
+        offerPeopleUndo(comeBack ? "Moved 1 face to Come Back." : "Restored 1 face.", data.undo);
         if (patchClustersAfter(comeBack ? [face.id] : [])) {
           setStatus("Moved 1 face to Come Back.");
           return;
@@ -251,11 +262,13 @@ async function confirmFace(faceId, personId) {
     return;
   }
   try {
-    await postJson(`/api/faces/${faceId}/assign`,
+    const data = await postJson(`/api/faces/${faceId}/assign`,
                    personId == null ? { clear: true } : { person_id: personId });
+    const who = persons.find(p => p.id === personId)?.name;
+    offerPeopleUndo(personId == null ? "Unassigned this face."
+                                     : `Assigned this face${who ? ` to ${who}` : ""}.`, data.undo);
     selectedIds.delete(faceId);
     if (patchClustersAfter(personId == null ? [] : [faceId], { assigned: true })) {
-      const who = persons.find(p => p.id === personId)?.name;
       setStatus(personId == null ? "Unassigned this face."
                                  : `Assigned this face${who ? ` to ${who}` : ""}.`);
       await loadPersons();
@@ -371,6 +384,8 @@ async function acceptSuggestionsFor(faceList, label) {
               `review at the bottom of the grid, then Commit.`);
     return;
   }
+  // One POST per person, disjoint faces: their undo tokens concatenate into one.
+  const undo = { faces: [], person: null, created_person_id: null };
   try {
     for (const [pid, faceIds] of Object.entries(byPerson)) {
       const res = await fetch("/api/faces/assign", {
@@ -379,11 +394,13 @@ async function acceptSuggestionsFor(faceList, label) {
         body: JSON.stringify({ face_ids: faceIds, person_id: parseInt(pid) }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      undo.faces.push(...((await res.json()).undo?.faces || []));
     }
     setStatus(`Accepted suggestions for ${targets.length} face(s)${where}.`);
     selectedIds.clear();
     await loadPersons();
     await loadFaces();
+    offerPeopleUndo(`Accepted suggestions for ${targets.length} face(s).`, undo);
   } catch (err) {
     setStatus("Accept failed: " + err.message, true);
   }

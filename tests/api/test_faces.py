@@ -15,7 +15,7 @@ import face_fixtures as ff
 def test_persons_crud(client):
     pid = client.post("/api/persons", json={"name": "Alice"}).json()["id"]
     assert any(p["id"] == pid for p in client.get("/api/persons").json())
-    assert client.delete(f"/api/persons/{pid}").json() == {"success": True}
+    assert client.delete(f"/api/persons/{pid}").json()["success"] is True
 
 
 def test_person_empty_name_400(client):
@@ -68,12 +68,14 @@ def test_come_back_moves_faces_out_of_unlabeled_and_restores(client):
     rng = np.random.default_rng(2)
     ids = ff.seed_unlabeled(db, ff.unit_vectors(rng, 2))
     r = client.post("/api/faces/come-back", json={"face_ids": ids, "come_back": True})
-    assert r.status_code == 200 and r.json() == {"updated": 2, "come_back": True}
+    assert r.status_code == 200 and r.json() | {"undo": None} == {
+        "updated": 2, "come_back": True, "undo": None}
     assert client.get("/api/faces?scope=unlabeled").json()["total"] == 0
     assert client.get("/api/faces?scope=come_back").json()["total"] == 2
 
     r = client.post("/api/faces/come-back", json={"face_ids": ids, "come_back": False})
-    assert r.status_code == 200 and r.json() == {"updated": 2, "come_back": False}
+    assert r.status_code == 200 and r.json() | {"undo": None} == {
+        "updated": 2, "come_back": False, "undo": None}
     assert client.get("/api/faces?scope=come_back").json()["total"] == 0
     assert client.get("/api/faces?scope=unlabeled").json()["total"] == 2
 
@@ -265,7 +267,7 @@ def test_delete_person_removes_face_negatives(client):
     client.post("/api/faces/negatives", json={"face_ids": [fid], "person_id": alice_id})
     assert db.execute("SELECT COUNT(*) FROM face_negatives").fetchone()[0] == 1
 
-    assert client.delete(f"/api/persons/{alice_id}").json() == {"success": True}
+    assert client.delete(f"/api/persons/{alice_id}").json()["success"] is True
     assert db.execute("SELECT COUNT(*) FROM face_negatives").fetchone()[0] == 0
 
 
@@ -289,7 +291,7 @@ def test_persons_face_count_matches_delete(client):
     assert counts == {alice_id: 2, bob_id: 2, carol_id: 0}
 
     unlabeled_before = client.get("/api/faces?scope=unlabeled").json()["total"]
-    assert client.delete(f"/api/persons/{alice_id}").json() == {"success": True}
+    assert client.delete(f"/api/persons/{alice_id}").json()["success"] is True
     unlabeled_after = client.get("/api/faces?scope=unlabeled").json()["total"]
     assert unlabeled_after - unlabeled_before == counts[alice_id]
     assert db.execute("SELECT COUNT(*) FROM faces WHERE ignored=1").fetchone()[0] == 1
@@ -439,7 +441,7 @@ def test_crowds_groups_and_ignore(client):
     # Ignore all unlabeled faces in the crowd photo. They're still counted in
     # total_faces (so the photo remains a crowd), but unlabeled_faces drops to 0.
     r = client.post("/api/crowds/ignore-unlabeled", json={"photo_ids": [photo_id]})
-    assert r.json() == {"ignored": 3}
+    assert r.json()["ignored"] == 3
     after = client.get("/api/crowds?min_faces=2").json()
     assert after["photo_count"] == 1
     assert after["groups"][0]["unlabeled_faces"] == 0
@@ -493,7 +495,7 @@ def test_delete_person_returns_faces_to_unlabeled(client):
     alice_id, fids = ff.seed_person(db, "Alice", ff.unit_vectors(rng, 3))
     index.set_person_representatives(alice_id, fids[:1])
 
-    assert client.delete(f"/api/persons/{alice_id}").json() == {"success": True}
+    assert client.delete(f"/api/persons/{alice_id}").json()["success"] is True
 
     for fid in fids:
         row = _face_row(db, fid)
@@ -661,7 +663,8 @@ def test_bulk_assign_clear_reports_count(client):
     db, ids, alice = _labeled_pair(client, 51)
     r = client.post("/api/faces/assign", json={"face_ids": ids[:2], "clear": True})
     assert r.status_code == 200
-    assert r.json() == {"assigned": 2, "not_found": 0, "person_id": None}
+    assert r.json() | {"undo": None} == {"assigned": 2, "not_found": 0, "person_id": None,
+                                         "undo": None}
     assert all(_face_row(db, i)["person_id"] is None for i in ids)
 
 
@@ -701,7 +704,7 @@ def test_single_assign_requires_exactly_one_intent(client):
     assert client.post(f"/api/faces/{fid}/assign", json={"person_id": 999}).status_code == 404
     assert client.post("/api/faces/9999/assign", json={"clear": True}).status_code == 404
     r = client.post(f"/api/faces/{fid}/assign", json={"clear": True})
-    assert r.status_code == 200 and r.json() == {"face_id": fid, "person_id": None}
+    assert r.status_code == 200 and r.json() | {"undo": None} == {"face_id": fid, "person_id": None, "undo": None}
     assert _face_row(db, fid)["person_id"] is None
 
 

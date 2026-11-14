@@ -209,25 +209,66 @@ function openFaceActions(anchor, f) {
   openQuickActions(anchor, f, {
     persons,
     onAssign: (pid) => faceAction(cl, f, "/api/faces/assign",
-      pid === null ? { face_ids: [f.id], clear: true } : { face_ids: [f.id], person_id: pid }),
-    onAssignNew: (name) => faceAction(cl, f, "/api/faces/assign", { face_ids: [f.id], name }),
-    onIgnore: (ignored) => faceAction(cl, f, "/api/faces/ignore", { face_ids: [f.id], ignored }),
-    onComeBack: (comeBack) => faceAction(cl, f, "/api/faces/come-back", { face_ids: [f.id], come_back: comeBack }),
+      pid === null ? { face_ids: [f.id], clear: true } : { face_ids: [f.id], person_id: pid },
+      pid === null ? "Unassigned the face."
+                   : `Tagged the face as ${persons.find((p) => p.id === pid)?.name ?? "that person"}.`),
+    onAssignNew: (name) => faceAction(cl, f, "/api/faces/assign", { face_ids: [f.id], name },
+      `Tagged the face as ${name}.`),
+    onIgnore: (ignored) => faceAction(cl, f, "/api/faces/ignore", { face_ids: [f.id], ignored },
+      ignored ? "Ignored the face." : "Restored the face."),
+    onComeBack: (comeBack) => faceAction(cl, f, "/api/faces/come-back", { face_ids: [f.id], come_back: comeBack },
+      comeBack ? "Moved the face to Come back." : "Restored the face."),
     onOpenPhoto: () => openPreview(f),
   });
 }
 
-function faceAction(cl, f, url, body) {
+function faceAction(cl, f, url, body, msg = "Updated the face.") {
   return withGroupBusy(cl, async () => {
     try {
-      await postJson(url, body);
+      const data = await postJson(url, body);
       removeFaceFromGroup(cl.id, f.id);
       if (url.includes("/assign")) loadPersons();   // pick up any newly-created person
-      toast("Updated");
+      offerUndo(msg, data.undo, cl, [f]);
     } catch (e) {
       toast("Failed: " + e.message, true);
     }
   });
+}
+
+/* ── Undo (U3) ──
+ * Accept / Ignore / per-face actions write at once; the shared Undo toast
+ * (common.js) puts the faces back exactly (POST /api/faces/undo) and returns
+ * them to the queue as the group on screen, so the user can act again. Faces
+ * changed elsewhere since are reported and left out. */
+function offerUndo(msg, token, cl, faces) {
+  if (!faceUndoable(token)) { toast(msg); return; }
+  showUndoToast(msg, async () => {
+    const r = await undoFaceToken(token);
+    const back = new Set(r.out.restored);
+    restoreToQueue(cl, faces.filter((f) => back.has(f.id)));
+    if (token.created_person_id != null) loadPersons();   // undo may have removed it
+    return r;
+  });
+}
+
+// Put restored faces back: into their group if it's still queued, else the
+// group comes back (with just those faces) as the one on screen.
+function restoreToQueue(cl, faces) {
+  if (!faces.length) return;
+  const live = queue.find((g) => g.id === cl.id);
+  const g = live || cl;
+  if (live) {
+    const have = new Set(g.face_ids);
+    g.faces.push(...faces.filter((f) => !have.has(f.id)));
+  } else {
+    g.faces = faces.slice();
+    queue.splice(Math.min(pos, queue.length), 0, g);
+  }
+  g.faces.sort((a, b) => (a.photo_datetime || 0) - (b.photo_datetime || 0));
+  g.face_ids = g.faces.map((x) => x.id);
+  g.busy = false;
+  pos = queue.indexOf(g);
+  render();
 }
 
 function removeFaceFromGroup(groupId, faceId) {
@@ -404,10 +445,11 @@ function onSkip() {
 function act(cl, url, body, msg) {
   return withGroupBusy(cl, async () => {
     try {
-      await postJson(url, body);
+      const data = await postJson(url, body);
+      const faces = cl.faces.slice();
       dropGroup(cl.id);   // the next group shifts into pos
-      toast(msg);
       render();
+      offerUndo(msg, data.undo, cl, faces);
       if (url.includes("/assign")) loadPersons();   // pick up any newly-created person
     } catch (e) {
       toast("Failed: " + e.message, true);

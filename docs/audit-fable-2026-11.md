@@ -80,10 +80,6 @@ names. No archive is extracted to disk. Download URLs are fixed HTTPS constants.
 
 ## UX
 
-**U3 — One-click destructive actions without undo** [traced] — the "×" on a tagged card and "Ignore all N"
-(`photo-faces.js:448-450,507,588-590`); group Ignore/Accept on Tag (1.8 s toast only); the hover-only "×"
-beside "✎" in the People list (`people.js:597-615`). An Undo toast pattern would cover all of them.
-
 **U4 — Missing loading states** [traced] — `loadFaces` and `loadPhotoScope` leave the old grid interactive
 with no indication (`people.js:696-714`, `app.js:1315-1319`). The first-load status on People is overwritten
 (`people.js:118-120`).
@@ -134,4 +130,3 @@ already have `--dry-run`; match them and require `--yes`.
 
 1. **Small fixes:** A11, T1, T6.
 2. **Request handling:** A1, A7.
-3. **UX features:** U3 (undo toast).

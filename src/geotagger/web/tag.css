@@ -104,6 +104,10 @@
 
 /* Toast sits above the action bar (overrides theme's bottom offset). */
 #toast { bottom: 92px; font-size: 14px; }
+/* Above the #actions footer, full-width on a phone (theme.css .undo-toast). */
+:root { --undo-toast-bottom: 92px; }
+.undo-toast { right: 16px; max-width: none; font-size: 14px; }
+.undo-toast button { min-height: 36px; }
 
 /* A request for this group is in flight (tag.js paintBusy): taps on the card
    would act on it a second time, so the card goes inert until it settles. */

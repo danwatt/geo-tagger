@@ -180,6 +180,20 @@ function dropFacesFromClusters(ids, { assigned = false } = {}) {
   if (clusterLoadSignal && !clusterLoadSignal.aborted) loadFaces();
 }
 
+// Undo toast (U3) for the People page's immediate (unstaged) group writes —
+// Discover's Accept / Ignore group and Crowds' Ignore unlabeled. The faces go
+// back server-side; the view on screen is reloaded rather than patched (a
+// restored face may re-cluster anywhere).
+function offerPeopleUndo(message, token) {
+  if (!faceUndoable(token)) return;
+  showUndoToast(message, async () => {
+    const r = await undoFaceToken(token);
+    await loadPersons();
+    await loadFaces();
+    return r;
+  });
+}
+
 // For the shared face actions (people-actions.js): in Discover, patch the groups
 // after a successful POST and report true; anywhere else report false so the
 // caller reloads its grid as before.
@@ -191,10 +205,11 @@ function patchClustersAfter(ids, opts) {
 
 async function clusterAssign(cl, who, label) {
   try {
-    await postJson("/api/faces/assign", { face_ids: cl.face_ids, ...who });
+    const data = await postJson("/api/faces/assign", { face_ids: cl.face_ids, ...who });
     setStatus(`Assigned ${cl.face_ids.length} face(s) to ${label}.`);
     dropFacesFromClusters(cl.face_ids, { assigned: true });
     await loadPersons();
+    offerPeopleUndo(`Assigned ${cl.face_ids.length} face(s) to ${label}.`, data.undo);
   } catch (err) {
     setStatus("Assign failed: " + err.message, true);
   }
@@ -203,10 +218,11 @@ async function clusterAssign(cl, who, label) {
 async function clusterIgnore(cl) {
   if (!confirm(`Ignore all ${cl.size} face(s) in this group?`)) return;
   try {
-    await postJson("/api/faces/ignore", { face_ids: cl.face_ids, ignored: true });
+    const data = await postJson("/api/faces/ignore", { face_ids: cl.face_ids, ignored: true });
     setStatus(`Ignored ${cl.face_ids.length} face(s).`);
     dropFacesFromClusters(cl.face_ids);
     await loadPersons();
+    offerPeopleUndo(`Ignored ${cl.face_ids.length} face(s).`, data.undo);
   } catch (err) {
     setStatus("Ignore failed: " + err.message, true);
   }

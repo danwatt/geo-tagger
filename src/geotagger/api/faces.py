@@ -8,12 +8,12 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from geotagger import index, faces, thumbnails, serializers, config
 from geotagger.executor import get_executor
 from geotagger.scan_failures import BatchAborted
-from geotagger.services import faces_service
+from geotagger.services import face_undo_service, faces_service
 from geotagger.timeutil import has_date
 
 logger = logging.getLogger(__name__)
@@ -81,6 +81,64 @@ class FacesByIdsRequest(BaseModel):
 
 class NukePhotoFacesRequest(BaseModel):
     photo_ids: list[int]  # hard-wipe every face + cached rendition for these photos
+
+class FaceStateSnapshot(BaseModel):
+    """A face row's state as face_undo_service snapshots it."""
+    person_id: int | None = None
+    ignored: bool = False
+    ignored_at: float | None = Field(None, allow_inf_nan=False)
+    come_back: bool = False
+    come_back_at: float | None = Field(None, allow_inf_nan=False)
+    representative: bool = False
+    assigned_at: float | None = Field(None, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def _one_state(self):
+        # The four face states are mutually exclusive (see index faces table);
+        # a token that says otherwise was not produced by this server.
+        if sum([self.person_id is not None, self.ignored, self.come_back]) > 1:
+            raise ValueError("a face is labeled, ignored or come-back, not several")
+        return self
+
+class FaceExpect(BaseModel):
+    person_id: int | None = None
+    ignored: bool = False
+    come_back: bool = False
+    assigned_at: float | None = None
+    ignored_at: float | None = None
+    come_back_at: float | None = None
+
+class FaceNegativeSnapshot(BaseModel):
+    person_id: int
+    created_at: float = Field(allow_inf_nan=False)
+
+class FaceSnapshot(BaseModel):
+    face_id: int
+    before: FaceStateSnapshot
+    expect: FaceExpect
+    negatives: list[FaceNegativeSnapshot] = []
+
+class PersonNegativeSnapshot(BaseModel):
+    face_id: int
+    created_at: float = Field(allow_inf_nan=False)
+
+class PersonSnapshot(BaseModel):
+    id: int
+    name: str = Field(min_length=1)
+    birth_date: str | None = None
+    not_before: str | None = None
+    not_after: str | None = None
+    created_at: float | None = Field(None, allow_inf_nan=False)
+    family_id: int | None = None
+    negatives: list[PersonNegativeSnapshot] = []
+
+class UndoFacesRequest(BaseModel):
+    """The ``undo`` token a face/person write returned, handed back verbatim
+    (see face_undo_service). Client input on the way back, so validated."""
+    # A person delete carries every face they labeled; generous but bounded.
+    faces: list[FaceSnapshot] = Field([], max_length=200000)
+    person: PersonSnapshot | None = None
+    created_person_id: int | None = None
 
 class AddManualFaceRequest(BaseModel):
     bbox: list[float]             # [x1, y1, x2, y2], normalized 0..1, DISPLAY space
@@ -247,9 +305,12 @@ async def api_create_person(req: CreatePersonRequest):
 
 @router.delete("/api/persons/{person_id}")
 async def api_delete_person(person_id: int):
-    if not index.delete_person(person_id):
+    """Delete a person; their faces become unlabeled. ``undo`` is the token
+    POST /api/faces/undo takes to bring them back (same id, attributes, faces)."""
+    undo = face_undo_service.delete_person(person_id)
+    if undo is None:
         raise HTTPException(404, "Person not found")
-    return {"success": True}
+    return {"success": True, "undo": undo}
 
 
 @router.get("/api/faces")
@@ -453,18 +514,17 @@ async def api_bulk_assign(req: BulkAssignRequest):
     existing = index.count_existing_faces(ids)
     if existing == 0:
         raise HTTPException(404, "No matching faces")
-    if name:
-        person_id = index.get_or_create_person(name)
-    assigned = index.assign_faces(ids, person_id)
-    return {"assigned": assigned, "not_found": len(ids) - assigned, "person_id": person_id}
+    out, undo = face_undo_service.assign(ids, person_id, name)
+    return {"assigned": out["assigned"], "not_found": len(ids) - out["assigned"],
+            "person_id": out["person_id"], "undo": undo}
 
 
 @router.post("/api/faces/ignore")
 async def api_ignore_faces(req: IgnoreFacesRequest):
     """Hide faces from the unlabeled queue (background strangers, false detections),
-    or restore them with ignored=false."""
-    index.set_faces_ignored(req.face_ids, req.ignored)
-    return {"updated": len(req.face_ids), "ignored": req.ignored}
+    or restore them with ignored=false. ``undo``: see /api/faces/undo."""
+    undo = face_undo_service.set_ignored(req.face_ids, req.ignored)
+    return {"updated": len(req.face_ids), "ignored": req.ignored, "undo": undo}
 
 
 @router.post("/api/faces/come-back")
@@ -472,9 +532,9 @@ async def api_come_back_faces(req: ComeBackFacesRequest):
     """Move faces to the come-back queue: people we know or suspect but aren't
     ready to assign yet. Distinct from /ignore (that's for strangers/false
     detections we never want to see again). come_back=false restores faces to
-    the unlabeled queue."""
-    index.set_faces_come_back(req.face_ids, req.come_back)
-    return {"updated": len(req.face_ids), "come_back": req.come_back}
+    the unlabeled queue. ``undo``: see /api/faces/undo."""
+    undo = face_undo_service.set_come_back(req.face_ids, req.come_back)
+    return {"updated": len(req.face_ids), "come_back": req.come_back, "undo": undo}
 
 
 @router.post("/api/faces/nuke")
@@ -525,6 +585,30 @@ async def api_delete_manual_face(face_id: int):
         raise HTTPException(400, "Only manually added faces can be deleted; "
                                  "use ignore for detected faces")
     return {"success": True, "face_id": face_id}
+
+
+@router.post("/api/faces/undo")
+async def api_undo_faces(req: UndoFacesRequest):
+    """Revert one face/person write: hand back the ``undo`` token its reply
+    carried (assign, ignore, come-back, crowds/ignore-unlabeled, DELETE person).
+    Each face goes back to its exact prior state unless it changed since —
+    those come back in ``conflicts`` and are left alone. A deleted person is
+    re-created first (same id when still free; ``person_id`` either way); 409
+    if their name has been taken meanwhile, with nothing written."""
+    if not req.faces and req.person is None and req.created_person_id is None:
+        raise HTTPException(400, "nothing to undo")
+    token = req.model_dump()
+    if req.person is not None:
+        p = token["person"]
+        p["name"] = p["name"].strip()
+        if not p["name"]:
+            raise HTTPException(400, "person name required")
+        for k in ("birth_date", "not_before", "not_after"):
+            p[k] = _parse_optional_date(k, p[k])
+    try:
+        return face_undo_service.undo(token)
+    except face_undo_service.UndoConflict as e:
+        raise HTTPException(409, str(e))
 
 
 @router.post("/api/faces/rescan")
@@ -680,10 +764,8 @@ async def api_assign_face(face_id: int, req: AssignFaceRequest):
     if not index.get_face(face_id):
         raise HTTPException(404)
     person_id, name = _resolve_assign_target(req.person_id, req.name, req.clear)
-    if name:
-        person_id = index.get_or_create_person(name)
-    index.assign_face(face_id, person_id)
-    return {"face_id": face_id, "person_id": person_id}
+    out, undo = face_undo_service.assign([face_id], person_id, name)
+    return {"face_id": face_id, "person_id": out["person_id"], "undo": undo}
 
 
 @router.post("/api/faces/scan")
@@ -829,7 +911,8 @@ async def api_crowds(
 
 @router.post("/api/crowds/ignore-unlabeled")
 async def api_crowds_ignore_unlabeled(req: CrowdIgnoreRequest):
-    """Ignore all unlabeled faces in the given crowd photos."""
-    count = index.ignore_unlabeled_in_photos(req.photo_ids)
-    return {"ignored": count}
+    """Ignore all unlabeled faces in the given crowd photos. ``undo``: see
+    /api/faces/undo."""
+    count, undo = face_undo_service.ignore_unlabeled_in_photos(req.photo_ids)
+    return {"ignored": count, "undo": undo}
 

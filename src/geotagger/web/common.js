@@ -451,3 +451,155 @@ async function fetchPhotosByIds(ids, chunk = 400) {
   }
   return out;
 }
+
+/* ── Undo toast (U3) ──
+ * One-click destructive actions (unassign a face, ignore a group, delete a
+ * person, …) act at once and then offer this toast instead of a confirm():
+ * showUndoToast(message, undoFn, {timeoutMs}). undoFn is async and returns the
+ * outcome to show — a string, or {message, isError} — so a partial or refused
+ * undo says so rather than reading as success.
+ *
+ * Persistent enough to reach: 9 s by default, and the countdown pauses while
+ * the pointer is over the toast or focus is inside it. Keyboard: Tab reaches the
+ * Undo button like any other, and Ctrl/Cmd+Z triggers it from anywhere on the
+ * page except a text field or an open modal (isTypingTarget / anyModalOpen) —
+ * there it belongs to the field's own undo.
+ *
+ * One at a time: a new action's toast replaces the previous one, and the
+ * previous action simply stays applied (no hidden stack — what you can undo is
+ * always exactly what the toast on screen says). Escape or ✕ dismisses it the
+ * same way the timeout does: the action stands. */
+let _undoToast = null;   // { el, undoFn, remaining, startedAt, timer, busy, done }
+
+function _undoToastEl() {
+  let el = document.getElementById("undo-toast");
+  if (el) return el;
+  el = document.createElement("div");
+  el.id = "undo-toast";
+  el.className = "undo-toast";
+  el.setAttribute("role", "status");
+  el.setAttribute("aria-live", "polite");
+  el.hidden = true;
+  el.innerHTML = `<span class="ut-msg"></span>
+    <button type="button" class="ut-undo" title="Undo (Ctrl+Z)">Undo</button>
+    <button type="button" class="ut-close" aria-label="Dismiss" title="Dismiss — keep the change">✕</button>`;
+  el.querySelector(".ut-undo").addEventListener("click", () => runUndoToast());
+  el.querySelector(".ut-close").addEventListener("click", () => hideUndoToast());
+  // Pause while the user is reading or about to click; resume on the way out.
+  el.addEventListener("mouseenter", () => _undoToastPause());
+  el.addEventListener("mouseleave", () => { if (!el.contains(document.activeElement)) _undoToastResume(); });
+  el.addEventListener("focusin", () => _undoToastPause());
+  el.addEventListener("focusout", (e) => { if (!el.contains(e.relatedTarget) && !el.matches(":hover")) _undoToastResume(); });
+  el.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); hideUndoToast(); } });
+  document.body.appendChild(el);
+  return el;
+}
+
+function _undoToastPause() {
+  const t = _undoToast;
+  if (!t || t.timer == null) return;
+  clearTimeout(t.timer);
+  t.timer = null;
+  t.remaining -= Date.now() - t.startedAt;
+}
+
+function _undoToastResume() {
+  const t = _undoToast;
+  if (!t || t.timer != null || t.busy) return;
+  t.startedAt = Date.now();
+  t.timer = setTimeout(() => { if (_undoToast === t) hideUndoToast(); }, Math.max(t.remaining, 1500));
+}
+
+function showUndoToast(message, undoFn, { timeoutMs = 9000 } = {}) {
+  if (_undoToast?.timer != null) clearTimeout(_undoToast.timer);
+  const el = _undoToastEl();
+  el.classList.remove("ut-result", "err");
+  el.querySelector(".ut-msg").textContent = message;
+  const btn = el.querySelector(".ut-undo");
+  btn.hidden = false;
+  btn.disabled = false;
+  btn.textContent = "Undo";
+  el.hidden = false;
+  _undoToast = { el, undoFn, remaining: timeoutMs, startedAt: Date.now(), timer: null,
+                 busy: false, done: false };
+  // Already under the pointer / holding focus (a quick second action): stay paused.
+  if (!el.matches(":hover") && !el.contains(document.activeElement)) _undoToastResume();
+}
+
+function hideUndoToast() {
+  const t = _undoToast;
+  if (!t) return;
+  if (t.timer != null) clearTimeout(t.timer);
+  _undoToast = null;
+  t.el.hidden = true;
+}
+
+/** Run the toast's undo (button or Ctrl+Z). No-op without a live toast. */
+async function runUndoToast() {
+  const t = _undoToast;
+  if (!t || t.busy || t.done) return;
+  t.busy = true;
+  _undoToastPause();
+  const btn = t.el.querySelector(".ut-undo");
+  btn.disabled = true;
+  btn.textContent = "Undoing…";
+  let result;
+  try {
+    result = await t.undoFn();
+  } catch (err) {
+    result = { message: "Undo failed: " + err.message, isError: true };
+  }
+  if (_undoToast !== t) return;   // replaced by a newer action meanwhile
+  const r = typeof result === "string" ? { message: result } : (result || { message: "Undone." });
+  t.busy = false;
+  t.done = true;
+  t.el.classList.add("ut-result");
+  t.el.classList.toggle("err", !!r.isError);
+  t.el.querySelector(".ut-msg").textContent = r.message;
+  btn.hidden = true;
+  // The outcome stays long enough to read, then goes; hovering still holds it.
+  t.remaining = r.isError ? 7000 : 3500;
+  if (!t.el.matches(":hover")) _undoToastResume();
+}
+
+document.addEventListener("keydown", (e) => {
+  if (!_undoToast || _undoToast.done) return;
+  if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== "z") return;
+  if (isTypingTarget(e) || anyModalOpen()) return;
+  e.preventDefault();
+  runUndoToast();
+});
+
+/* ── Face undo tokens ──
+ * Every one-click face/person write (POST /api/faces/assign, /faces/{id}/assign,
+ * /faces/ignore, /faces/come-back, /crowds/ignore-unlabeled, DELETE
+ * /api/persons/{id}) replies with an `undo` token; POST /api/faces/undo takes it
+ * back verbatim (face_undo_service.py). These two turn a token into a toast
+ * undoFn and its reply into the toast's outcome line. */
+function faceUndoable(token) {
+  return !!token && (token.faces?.length > 0 || !!token.person || token.created_person_id != null);
+}
+
+/** POST the token; resolves to {out, message, isError} (out = the server reply). */
+async function undoFaceToken(token) {
+  const out = await postJson("/api/faces/undo", token);
+  const n = out.restored.length, c = out.conflicts.length + out.not_found.length;
+  const total = n + c;
+  const faces = (k) => `${k} face${k === 1 ? "" : "s"}`;
+  let message;
+  if (token.person) {
+    message = `Restored “${token.person.name}”` + (n ? ` with ${faces(n)}` : "");
+    if (c) message += ` — ${faces(c)} changed since and stayed as they are`;
+    if (out.family_dropped) message += " (their family was deleted, so none)";
+    message += ".";
+  } else if (!total) {
+    message = "Undone.";
+  } else if (!c) {
+    message = total === 1 ? "Undone." : `Undone for ${faces(n)}.`;
+  } else if (n) {
+    message = `Undone for ${n} of ${faces(total)} — ${c} changed since and stayed as they are.`;
+  } else {
+    message = `Not undone — ${total === 1 ? "that face has" : "those faces have"} changed since.`;
+  }
+  return { out, message, isError: !token.person && n === 0 && c > 0 };
+}

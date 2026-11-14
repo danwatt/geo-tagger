@@ -314,6 +314,34 @@ input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
 }
 #toast.err { background: #7a2a2a; }
 
+/* ── Undo toast (U3, common.js showUndoToast) ──
+   Bottom-left, so it never sits on #toast (bottom-centre) or the staged-restore
+   banner; pages with a bottom action row lift it via --undo-toast-bottom.
+   Above Leaflet's controls (1000) like the banner. Interactive, unlike #toast. */
+.undo-toast {
+  position: fixed;
+  left: 16px;
+  bottom: var(--undo-toast-bottom, 34px);
+  z-index: 1150;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(520px, calc(100vw - 32px));
+  padding: 7px 8px 7px 14px;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+  color: var(--text-strong);
+  font-size: var(--font-size);
+}
+.undo-toast .ut-msg { flex: 1; min-width: 0; }
+.undo-toast .ut-undo { font-weight: 600; color: var(--accent-text); }
+.undo-toast .ut-close { background: none; border-color: transparent; color: var(--text-muted); padding: 2px 6px; }
+.undo-toast.ut-result { border-left-color: var(--success); }
+.undo-toast.ut-result.err { border-left-color: var(--danger); }
+
 /* ── Face-group section wrapper + cycling tints (shared by every faces page) ── */
 .face-group-section {
   grid-column: 1 / -1;

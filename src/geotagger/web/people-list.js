@@ -259,25 +259,53 @@ async function editPersonBirth(personId, name, current) {
 }
 
 async function deletePerson(personId, name) {
+  // The confirm stays (the × is small and hover-only, and a person can carry
+  // thousands of labels); the Undo toast covers the click that gets past it.
   if (!confirm(`Delete "${name}"? Their faces will become unassigned.`)) return;
   try {
     const res = await fetch(`/api/persons/${personId}`, { method: "DELETE" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(await httpErrorMessage(res));
+    const { undo } = await res.json();
     // Staged assignments to this person can no longer be committed (the server
-    // 404s an unknown person) — put those faces back in the grid.
+    // 404s an unknown person) — put those faces back in the grid. Kept aside so
+    // Undo can stage them again.
     const orphaned = [];
     pending.forEach((e, id) => {
-      if (e.kind === "assign" && e.personId === personId) orphaned.push(id);
+      if (e.kind === "assign" && e.personId === personId) orphaned.push([id, e]);
     });
-    unstageFaces(orphaned, true);
-    if (scope === "person" && scopePersonId === personId) {
+    unstageFaces(orphaned.map(([id]) => id), true);
+    const wasViewing = scope === "person" && scopePersonId === personId;
+    if (wasViewing) {
       scope = "unlabeled"; scopePersonId = null;
       selectedIds.clear();
       resetPreselection();
     }
     await loadPersons();
     await loadFaces();
+    if (faceUndoable(undo)) {
+      showUndoToast(`Deleted “${name}”.`, () => undoDeletePerson(undo, orphaned, wasViewing));
+    }
   } catch (err) {
     setStatus("Could not delete person: " + err.message, true);
   }
+}
+
+// Undo for deletePerson: the server re-creates the person (same id unless it
+// was reused meanwhile) with their faces; re-stage what the delete unstaged
+// and go back to their scope if the delete moved us off it.
+async function undoDeletePerson(token, orphaned, wasViewing) {
+  const r = await undoFaceToken(token);
+  const pid = r.out.person_id;
+  let restaged = 0;
+  orphaned.forEach(([id, e]) => {
+    if (!pending.has(id)) { pending.set(id, { ...e, personId: pid }); restaged++; }
+  });
+  if (wasViewing && scope === "unlabeled" && scopePersonId == null) {
+    await selectScope("person", pid);
+  } else {
+    await loadPersons();
+    await loadFaces();
+  }
+  if (restaged) afterStaging();
+  return r;
 }

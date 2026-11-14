@@ -56,7 +56,7 @@ def test_places_crud(client):
 
     res = client.patch(f"/api/places/{place_id}", json={"bounds": '{"lat":3,"lng":4,"radius":9}'})
     assert res.status_code == 200
-    assert res.json() == {"success": True}
+    assert res.json()["success"] is True
 
     res = client.delete(f"/api/places/{place_id}")
     assert res.status_code == 200
@@ -76,7 +76,7 @@ def test_persons_and_families(client):
     assert client.get("/api/families").status_code == 200
 
     res = client.delete(f"/api/persons/{person_id}")
-    assert res.json() == {"success": True}
+    assert res.json()["success"] is True
 
 
 def test_faces_and_geocode_status(client):

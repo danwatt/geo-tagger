@@ -184,6 +184,7 @@ async function crowdIgnorePhotos(photoIds, btn) {
     btn.textContent = prevText;
     setStatus(`Ignored ${data.ignored} face(s).`);
     await loadPersons();
+    offerPeopleUndo(`Ignored ${data.ignored} unlabeled face(s).`, data.undo);
   } catch (err) {
     btn.disabled = false;
     btn.textContent = prevText;
