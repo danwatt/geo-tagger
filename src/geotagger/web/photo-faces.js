@@ -163,15 +163,36 @@ async function navigateTo(idx) {
   }
 
   document.getElementById("photo-meta").innerHTML = "";
+  // The face panel still shows the previous photo until this one's faces land;
+  // keep its photo-wide actions from firing against the new photo meanwhile
+  // (renderFaces re-enables them).
+  document.getElementById("ignore-unlabeled-btn").disabled = true;
+  document.getElementById("done-next-btn").disabled = true;
   setStatus("Loading faces…");
   await Promise.all([loadPhotoFaces(photo.id), loadPhotoMeta(photo.id)]);
 }
 
-async function loadPhotoMeta(photoId) {
+/* The photo on screen, or undefined before the playlist loads. */
+function currentPhotoId() {
+  return crowdPhotos[currentIdx]?.id;
+}
+
+/* Refresh the face panel after an action on `photoId` — but only if that photo
+ * is still the one on screen. If the user has already moved on, the new photo's
+ * own load owns the panel, and reloading here would abort it (both go through
+ * loadPhotoFaces' latest-only guard) only to be dropped as off-screen. */
+async function reloadFacesFor(photoId) {
+  if (photoId === currentPhotoId()) await loadPhotoFaces(photoId);
+}
+
+// Latest-only (common.js) with an on-screen check on top: fast Prev/Next must
+// never paint one photo's faces or metadata beside another photo.
+const loadPhotoMeta = latestOnly(async (signal, photoId) => {
   try {
-    const res = await fetch(`/api/photo/${photoId}`);
+    const res = await fetch(`/api/photo/${photoId}`, { signal });
     if (!res.ok) return;
     const d = await res.json();
+    if (signal.aborted || photoId !== currentPhotoId()) return;
     const rows = [
       ["File",       d.filename],
       ["Date",       d.datetime  || "—"],
@@ -181,18 +202,21 @@ async function loadPhotoMeta(photoId) {
     document.getElementById("photo-meta").innerHTML =
       rows.map(([k, v]) => `<tr><td>${k}</td><td>${escapeHtml(v)}</td></tr>`).join("");
   } catch (_) { /* non-fatal */ }
-}
+});
 
-async function loadPhotoFaces(photoId) {
+const loadPhotoFaces = latestOnly(async (signal, photoId) => {
   try {
-    const res = await fetch(`/api/photos/${photoId}/faces`);
+    const res = await fetch(`/api/photos/${photoId}/faces`, { signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    photoFaces = await res.json();
+    const faces = await res.json();
+    if (signal.aborted || photoId !== currentPhotoId()) return;
+    photoFaces = faces;
     renderFaces();
   } catch (err) {
+    if (signal.aborted || photoId !== currentPhotoId()) return;
     setStatus("Failed to load faces: " + err.message, true);
   }
-}
+});
 
 /* ── Bbox overlay ── */
 function renderBboxes() {
@@ -337,7 +361,8 @@ async function submitManualFace(bbox, personId, name) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     setDrawMode(false);
-    await Promise.all([loadPersons(), loadPhotoFaces(photo.id)]);
+    await Promise.all([loadPersons(), reloadFacesFor(photo.id)]);
+    if (photo.id !== currentPhotoId()) return;   // moved on; not this photo's status line
     // Without an embedding the box is still a valid tag, but it can't take part in
     // recognition — worth saying out loud, since that's the usual reason to add one.
     setStatus(data.embedded
@@ -350,11 +375,12 @@ async function submitManualFace(bbox, personId, name) {
 }
 
 async function deleteManualFace(faceId) {
+  const photoId = currentPhotoId();   // the photo this click was for
   if (!confirm("Delete this hand-drawn face box?")) return;
   try {
     const res = await fetch(`/api/faces/${faceId}`, { method: "DELETE" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    await loadPhotoFaces(crowdPhotos[currentIdx].id);
+    await reloadFacesFor(photoId);
     setStatus("Face box deleted.");
   } catch (err) {
     setStatus("Delete failed: " + err.message, true);
@@ -612,6 +638,7 @@ function openFaceActions(anchor, f) {
 
 /* ── Actions ── */
 async function doAssign(faceId, personId) {
+  const photoId = currentPhotoId();   // the photo this click was for
   try {
     const res = await fetch(`/api/faces/${faceId}/assign`, {
       method: "POST",
@@ -619,13 +646,14 @@ async function doAssign(faceId, personId) {
       body: JSON.stringify(personId == null ? { clear: true } : { person_id: personId }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    await loadPhotoFaces(crowdPhotos[currentIdx].id);
+    await reloadFacesFor(photoId);
   } catch (err) {
     setStatus("Assign failed: " + err.message, true);
   }
 }
 
 async function doAssignByName(faceId, name) {
+  const photoId = currentPhotoId();   // the photo this click was for
   try {
     const res = await fetch(`/api/faces/${faceId}/assign`, {
       method: "POST",
@@ -633,13 +661,14 @@ async function doAssignByName(faceId, name) {
       body: JSON.stringify({ name }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    await Promise.all([loadPersons(), loadPhotoFaces(crowdPhotos[currentIdx].id)]);
+    await Promise.all([loadPersons(), reloadFacesFor(photoId)]);
   } catch (err) {
     setStatus("Assign failed: " + err.message, true);
   }
 }
 
 async function doAcceptAll(personId, facesArr) {
+  const photoId = currentPhotoId();   // the photo this click was for
   try {
     const res = await fetch("/api/faces/assign", {
       method: "POST",
@@ -647,13 +676,14 @@ async function doAcceptAll(personId, facesArr) {
       body: JSON.stringify({ face_ids: facesArr.map(f => f.id), person_id: personId }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    await loadPhotoFaces(crowdPhotos[currentIdx].id);
+    await reloadFacesFor(photoId);
   } catch (err) {
     setStatus("Accept failed: " + err.message, true);
   }
 }
 
 async function ignoreFaces(faceIds) {
+  const photoId = currentPhotoId();   // the photo this click was for
   if (!faceIds.length) return;
   try {
     const res = await fetch("/api/faces/ignore", {
@@ -662,13 +692,14 @@ async function ignoreFaces(faceIds) {
       body: JSON.stringify({ face_ids: faceIds, ignored: true }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    await loadPhotoFaces(crowdPhotos[currentIdx].id);
+    await reloadFacesFor(photoId);
   } catch (err) {
     setStatus("Ignore failed: " + err.message, true);
   }
 }
 
 async function restoreFace(faceId) {
+  const photoId = currentPhotoId();   // the photo this click was for
   try {
     const res = await fetch("/api/faces/ignore", {
       method: "POST",
@@ -676,13 +707,14 @@ async function restoreFace(faceId) {
       body: JSON.stringify({ face_ids: [faceId], ignored: false }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    await loadPhotoFaces(crowdPhotos[currentIdx].id);
+    await reloadFacesFor(photoId);
   } catch (err) {
     setStatus("Restore failed: " + err.message, true);
   }
 }
 
 async function comeBackFace(faceId, comeBack) {
+  const photoId = currentPhotoId();   // the photo this click was for
   try {
     const res = await fetch("/api/faces/come-back", {
       method: "POST",
@@ -690,7 +722,7 @@ async function comeBackFace(faceId, comeBack) {
       body: JSON.stringify({ face_ids: [faceId], come_back: comeBack }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    await loadPhotoFaces(crowdPhotos[currentIdx].id);
+    await reloadFacesFor(photoId);
   } catch (err) {
     setStatus("Come back failed: " + err.message, true);
   }
@@ -721,10 +753,13 @@ async function rescanFaces() {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    // Moved on mid-rescan: the new photo owns the preview, panel and status line.
+    if (photo.id !== currentPhotoId()) return;
     // The preview rendition was deleted and regenerated — bust the browser cache
     // so the overlay lines up with a freshly decoded image.
     document.getElementById("photo-full").src = `/api/preview/${photo.id}?t=${Date.now()}`;
     await loadPhotoFaces(photo.id);   // this resets the status line
+    if (photo.id !== currentPhotoId()) return;
     const errs = (data.errors || []).length ? ` (${data.errors.length} error(s))` : "";
     const rot  = data.orientations_updated ? " · orientation corrected" : "";
     setStatus(`Rescanned: ${data.faces_deleted} face(s) removed, ` +
@@ -748,8 +783,8 @@ async function ignoreAllUnlabeled(silent = false) {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    if (!silent) setStatus(`Ignored ${data.ignored} unlabeled face(s).`);
-    await loadPhotoFaces(photo.id);
+    if (!silent && photo.id === currentPhotoId()) setStatus(`Ignored ${data.ignored} unlabeled face(s).`);
+    await reloadFacesFor(photo.id);
   } catch (err) {
     setStatus("Ignore failed: " + err.message, true);
     throw err;

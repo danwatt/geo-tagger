@@ -55,7 +55,6 @@ let areaSelectParams = null;  // { lat, lng, radius }
 /* ── Place filter state ── */
 let placeFilterParams = null;  // { placeId } or { location } — active location filter
 let geocodeLocationPicker = null;
-let locationLoadVersion = 0;
 let placeFilterRect = null;    // L.Rectangle drawn for the (buffered) search bounds
 
 /* ── Date range filter state ── */
@@ -711,7 +710,6 @@ function wireGeocodeLocationPicker() {
 }
 
 async function filterPhotosByRecordedLocation(location) {
-  const request = ++locationLoadVersion;
   selectedYear = selectedMonth = null;
   undatedMode = false;
   areaSelectParams = null;
@@ -731,10 +729,8 @@ async function filterPhotosByRecordedLocation(location) {
   });
   try {
     setStatus(`Loading photos in ${location.label}…`);
-    const res = await fetch(`/api/photos/by-location?${params}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    if (request !== locationLoadVersion) return;
+    const data = await fetchPhotoScope(`/api/photos/by-location?${params}`);
+    if (data === LATEST_ONLY_STALE) return;
     photos = data;
     photos.forEach(p => camColor(p.camera));
     renderLegend();
@@ -742,7 +738,7 @@ async function filterPhotosByRecordedLocation(location) {
     applyFilters(true);
     setStatus(`Loaded ${photos.length} photos in ${location.label}`);
   } catch (err) {
-    if (request === locationLoadVersion) setStatus("Load error: " + err.message, true);
+    setStatus("Load error: " + err.message, true);
   }
 }
 
@@ -805,7 +801,6 @@ async function filterPhotosByPlace(place) {
 }
 
 async function loadPhotosByBounds(box, label) {
-  const request = ++locationLoadVersion;
   dayIsolation = null;
   mapDayOverride = null;   // new scope, so the "show this day" map override is stale
   const window = document.getElementById("window-select").value;
@@ -814,11 +809,8 @@ async function loadPhotosByBounds(box, label) {
     setStatus(`Loading photos in ${label}…`);
     const url = `/api/photos/by-bounds?min_lat=${box.min_lat}&max_lat=${box.max_lat}`
       + `&min_lng=${box.min_lng}&max_lng=${box.max_lng}&geotagged=all&window=${window}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-    const data = await res.json();
-    if (request !== locationLoadVersion) return;
+    const data = await fetchPhotoScope(url);
+    if (data === LATEST_ONLY_STALE) return;
     photos = data;
     photos.forEach(p => camColor(p.camera));
     renderLegend();
@@ -827,12 +819,13 @@ async function loadPhotosByBounds(box, label) {
 
     setStatus(`Loaded ${photos.length} photos in ${label}`);
   } catch (err) {
-    if (request === locationLoadVersion) setStatus("Load error: " + err.message, true);
+    setStatus("Load error: " + err.message, true);
   }
 }
 
+// No need to cancel an in-flight place load here: every caller is switching to
+// another scope, and that scope's load supersedes it through fetchPhotoScope.
 function clearPlaceFilter() {
-  locationLoadVersion++;
   placeFilterParams = null;
   if (placeFilterRect) { map.removeLayer(placeFilterRect); placeFilterRect = null; }
   geocodeLocationPicker?.close();
@@ -1134,7 +1127,8 @@ async function onAreaSelectEnd(e) {
   // Store params for filter changes
   areaSelectParams = { lat: center.lat, lng: center.lng, radius: radius };
 
-  await loadPhotosByArea(center.lat, center.lng, radius);
+  // Superseded by a newer scope load mid-flight: that scope owns the labels now.
+  if (!(await loadPhotosByArea(center.lat, center.lng, radius))) return;
 
   // Update label
   document.getElementById("selected-area-label").textContent =
@@ -1162,6 +1156,7 @@ function stopAreaSelection() {
   }
 }
 
+// Returns false when a newer scope load superseded this one (nothing applied).
 async function loadPhotosByArea(lat, lng, radius) {
   dayIsolation = null;
   mapDayOverride = null;   // new scope, so the "show this day" map override is stale
@@ -1169,11 +1164,10 @@ async function loadPhotosByArea(lat, lng, radius) {
 
   try {
     setStatus("Loading photos in area...");
-    const res = await fetch(`/api/photos/by-area?lat=${lat}&lng=${lng}&radius=${radius}&geotagged=all&window=${window}`);
-
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-    photos = await res.json();
+    const data = await fetchPhotoScope(
+      `/api/photos/by-area?lat=${lat}&lng=${lng}&radius=${radius}&geotagged=all&window=${window}`);
+    if (data === LATEST_ONLY_STALE) return false;
+    photos = data;
 
     // Pre-assign colors so the legend order is stable
     photos.forEach(p => camColor(p.camera));
@@ -1185,9 +1179,21 @@ async function loadPhotosByArea(lat, lng, radius) {
   } catch (err) {
     setStatus("Load error: " + err.message, true);
   }
+  return true;
 }
 
-/* ── Load photos ── */
+/* ── Load photos ──
+ * Every scope loader (month/year/undated, batch, folder, area, place, recorded
+ * location) fills the same `photos`, so they all fetch through this one
+ * latest-only wrapper (common.js): pick month A then month B, and A's response —
+ * cancelled, or arriving late anyway — resolves to LATEST_ONLY_STALE and is
+ * never applied over B. */
+const fetchPhotoScope = latestOnly(async (signal, url) => {
+  const res = await fetch(url, { signal });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return await res.json();
+});
+
 async function loadPhotos(fitMap = false) {
   if (!selectedYear && !undatedMode) {
     setStatus("Please select a month first", true);
@@ -1221,9 +1227,9 @@ async function loadPhotos(fitMap = false) {
  * toolbar; `timeline` false means the scope has no usable dates. */
 async function loadPhotoScope(url, label = null, { timeline = true, fitMap = false } = {}) {
   try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    photos = await res.json();
+    const data = await fetchPhotoScope(url);
+    if (data === LATEST_ONLY_STALE) return;
+    photos = data;
     // Pre-assign colors so the legend order is stable
     photos.forEach(p => camColor(p.camera));
     renderLegend();
@@ -2146,13 +2152,19 @@ function formatAccuracy(meters) {
   return `±${meters.toFixed(1)} m`;
 }
 
-/* ── Detail pane ── */
-async function showDetail(id) {
+/* ── Detail pane ──
+ * Latest-only (common.js): holding j/k fires one of these per photo, and only
+ * the photo focused last may fill the pane. */
+const showDetail = latestOnly(async (signal, id) => {
   focusedPhotoId = id;
+  // A guess still in flight is for the photo we're leaving — drop it.
+  doGuess.cancel();
+  resetGuessButton();
   dismissGuess();
   try {
-    const res = await fetch(`/api/photo/${id}`);
+    const res = await fetch(`/api/photo/${id}`, { signal });
     const data = await res.json();
+    if (signal.aborted) return;
 
     document.getElementById("detail-placeholder").style.display = "none";
     document.getElementById("detail-content").style.display = "";
@@ -2206,7 +2218,7 @@ async function showDetail(id) {
   } catch (err) {
     // ignore
   }
-}
+});
 
 /* ── Guess location ── */
 document.addEventListener("DOMContentLoaded", () => {
@@ -2215,22 +2227,27 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("guess-dismiss-btn").addEventListener("click", dismissGuess);
 });
 
-async function doGuess() {
-  if (!focusedPhotoId) return;
+// Latest-only (common.js), and bound to the photo focused at the time: showDetail
+// cancels it when focus moves, and the pending guess records its own photo id so
+// Apply can never geotag whatever happens to be focused by then.
+const doGuess = latestOnly(async (signal) => {
+  const photoId = focusedPhotoId;
+  if (!photoId) return;
   document.getElementById("guess-btn").disabled = true;
   document.getElementById("guess-btn").textContent = "Searching…";
   dismissGuess(false);   // clear old pin but keep button
 
   try {
     const window = document.getElementById("window-select").value;
-    const res = await fetch(`/api/guess/${focusedPhotoId}?window=${window}`);
+    const res = await fetch(`/api/guess/${photoId}?window=${window}`, { signal });
     const data = await res.json();
+    if (signal.aborted || focusedPhotoId !== photoId) return;
     if (!res.ok) {
       setStatus(data.detail || "No nearby geotagged photos found", true);
       return;
     }
 
-    guessPending = { lat: data.lat, lng: data.lng };
+    guessPending = { photoId, lat: data.lat, lng: data.lng };
 
     // Place source photo pins (before=blue, after=green, brightness by proximity)
     data.sources.forEach(src => {
@@ -2260,7 +2277,7 @@ async function doGuess() {
 
     guessMarker.on("dragend", () => {
       const ll = guessMarker.getLatLng();
-      guessPending = { lat: ll.lat, lng: ll.lng };
+      if (guessPending) guessPending = { ...guessPending, lat: ll.lat, lng: ll.lng };
     });
 
     // Fit map to include the source pins and the guess pin
@@ -2282,18 +2299,28 @@ async function doGuess() {
     document.getElementById("guess-summary").textContent = summaryText;
     document.getElementById("guess-result").style.display = "";
   } catch (err) {
+    if (signal.aborted) return;
     setStatus("Guess error: " + err.message, true);
   } finally {
-    document.getElementById("guess-btn").disabled = false;
-    document.getElementById("guess-btn").textContent = "Guess location";
+    // A newer guess owns the button while it runs; showDetail resets it itself
+    // when it cancels one.
+    if (!signal.aborted) resetGuessButton();
   }
+});
+
+function resetGuessButton() {
+  document.getElementById("guess-btn").disabled = false;
+  document.getElementById("guess-btn").textContent = "Guess location";
 }
 
 async function applyGuess() {
-  if (!guessPending || !focusedPhotoId) return;
-  await geotag([focusedPhotoId], guessPending.lat, guessPending.lng);
+  if (!guessPending) return;
+  // The guess carries the photo it was made for — focus may have moved since.
+  const { photoId, lat, lng } = guessPending;
+  await geotag([photoId], lat, lng);
+  if (focusedPhotoId !== photoId) return;   // the new focus's detail is already shown
   dismissGuess();
-  showDetail(focusedPhotoId);
+  showDetail(photoId);
 }
 
 function dismissGuess(hideResult = true) {

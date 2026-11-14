@@ -478,18 +478,23 @@ function renderWorkQueueTotals(data) {
     `${data.batched_photos.toLocaleString()} photos${tail}`;
 }
 
-async function loadWorkQueue(append = false) {
+// Latest-only (common.js): switching the kind tab mid-load (or Show more racing a
+// tab switch) must not append the old kind's batches to the new list.
+const loadWorkQueue = latestOnly(async (signal, append = false) => {
   const list = document.getElementById("wq-list");
   const more = document.getElementById("wq-more");
   if (!append) {
     wqOffset = 0;
     // The first build on a cold cache sweeps the whole library, so say so.
     list.innerHTML = '<div class="wq-status">Building the queue…</div>';
+    more.style.display = "none";   // no "more" of a list that isn't loaded yet
   }
   try {
-    const res = await fetch(`/api/work-queue?limit=${WQ_PAGE}&offset=${wqOffset}&kind=${wqKind}`);
+    const res = await fetch(`/api/work-queue?limit=${WQ_PAGE}&offset=${wqOffset}&kind=${wqKind}`,
+                            { signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    if (signal.aborted) return;
     clearError("card-geotag");
     if (!append) list.innerHTML = "";
     wqTotal = data.total_batches;
@@ -505,10 +510,11 @@ async function loadWorkQueue(append = false) {
     more.style.display = wqOffset < wqTotal ? "" : "none";
     more.textContent = `Show ${Math.min(WQ_PAGE, wqTotal - wqOffset)} more`;
   } catch (e) {
+    if (signal.aborted) return;
     if (!append) list.innerHTML = "";
     showError("card-geotag", e.message);
   }
-}
+});
 
 document.getElementById("wq-kinds").addEventListener("click", (e) => {
   const btn = e.target.closest("button");

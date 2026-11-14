@@ -76,13 +76,11 @@ let voronoiLayer = null;
 let osmLayer = null;
 let censusLayer = null;
 let zctaLayer = null;
-let probeSeq = 0;
 let refreshTimer = null;
-let fetchSeq = 0;
-let voronoiFetchSeq = 0;
-let osmFetchSeq = 0;
-let censusFetchSeq = 0;
-let zctaFetchSeq = 0;
+// Each refresh* / probePoint below is wrapped in latestOnly (common.js): a pan or
+// zoom starts a new call per layer, which aborts that layer's previous fetch, and
+// a superseded response is never drawn — including when the new call returns
+// early because the zoom is now too far out for the layer.
 
 // Basemap definitions + switcher (and correctWorldWrap) live in basemaps.js.
 
@@ -124,17 +122,18 @@ function initMap() {
 
   map.on("moveend", correctWorldWrap);
   map.on("moveend zoomend", scheduleRefresh);
-  map.on("click", probePoint);
+  map.on("click", (e) => probePoint(e));
 }
 
 // Each overlay's data is fetched per viewport, so toggling one on has to kick off
 // its own fetch rather than just revealing already-drawn geometry — hence the
 // refresh per entry, keyed by the control's own label.
+// (Arrows: the refreshers are consts defined further down.)
 const OVERLAY_REFRESH = {
-  "Place boundaries": refreshVoronoi,
-  "OSM places": refreshOsm,
-  "Census places": refreshCensus,
-  "ZIP areas": refreshZctas,
+  "Place boundaries": () => refreshVoronoi(),
+  "OSM places": () => refreshOsm(),
+  "Census places": () => refreshCensus(),
+  "ZIP areas": () => refreshZctas(),
 };
 
 function addOverlayControl() {
@@ -186,7 +185,7 @@ function scheduleRefresh() {
   }, REFRESH_DEBOUNCE_MS);
 }
 
-async function refreshMarkers() {
+const refreshMarkers = latestOnly(async (signal) => {
   const zoom = map.getZoom();
   if (zoom < MIN_ZOOM_FOR_MARKERS) {
     markerCluster.clearLayers();
@@ -198,10 +197,10 @@ async function refreshMarkers() {
 
   const b = map.getBounds();
   const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
-  const seq = ++fetchSeq;
   setStatus("Loading places…");
   try {
-    const res = await fetch(`/api/geocode/places?bbox=${encodeURIComponent(bbox)}`);
+    const res = await fetch(`/api/geocode/places?bbox=${encodeURIComponent(bbox)}`, { signal });
+    if (signal.aborted) return;
     if (res.status === 503) {
       markerCluster.clearLayers();
       showHint("GeoNames data not installed — run scripts/get_geonames.py");
@@ -210,7 +209,7 @@ async function refreshMarkers() {
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    if (seq !== fetchSeq) return; // a newer request superseded this one
+    if (signal.aborted) return;
     renderMarkers(data.places);
     updateZoomHint();
     const shown = data.places.length.toLocaleString();
@@ -218,9 +217,9 @@ async function refreshMarkers() {
       ? `Showing ${shown} largest of ${data.total.toLocaleString()} places in view — zoom in for the rest`
       : `${shown} place${data.places.length === 1 ? "" : "s"} in view`);
   } catch (e) {
-    if (seq === fetchSeq) setStatus("Error loading places: " + e.message, true);
+    if (!signal.aborted) setStatus("Error loading places: " + e.message, true);
   }
-}
+});
 
 // Each overlay only draws past its own zoom threshold, so an overlay switched on
 // from too far out would silently show nothing and read as broken. Say so instead.
@@ -239,7 +238,7 @@ function updateZoomHint() {
   else hideHint();
 }
 
-async function refreshVoronoi() {
+const refreshVoronoi = latestOnly(async (signal) => {
   const zoom = map.getZoom();
   if (!map.hasLayer(voronoiLayer) || zoom < MIN_ZOOM_FOR_VORONOI) {
     voronoiLayer.clearLayers();
@@ -248,19 +247,19 @@ async function refreshVoronoi() {
 
   const b = map.getBounds();
   const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
-  const seq = ++voronoiFetchSeq;
   try {
-    const res = await fetch(`/api/geocode/voronoi?bbox=${encodeURIComponent(bbox)}`);
+    const res = await fetch(`/api/geocode/voronoi?bbox=${encodeURIComponent(bbox)}`, { signal });
+    if (signal.aborted) return;
     if (!res.ok) return; // the marker fetch already surfaces load errors in the status bar
     const data = await res.json();
-    if (seq !== voronoiFetchSeq) return; // a newer request superseded this one
+    if (signal.aborted) return;
     renderVoronoi(data.cells);
   } catch (e) {
     // best-effort visual overlay; the marker fetch already reports errors
   }
-}
+});
 
-async function refreshOsm() {
+const refreshOsm = latestOnly(async (signal) => {
   const zoom = map.getZoom();
   if (!map.hasLayer(osmLayer) || zoom < MIN_ZOOM_FOR_OSM) {
     osmLayer.clearLayers();
@@ -270,11 +269,12 @@ async function refreshOsm() {
   const b = map.getBounds();
   const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
   const buildings = zoom >= MIN_ZOOM_FOR_BUILDINGS;
-  const seq = ++osmFetchSeq;
   try {
     const res = await fetch(
-      `/api/geocode/osm-places?bbox=${encodeURIComponent(bbox)}&buildings=${buildings}`
+      `/api/geocode/osm-places?bbox=${encodeURIComponent(bbox)}&buildings=${buildings}`,
+      { signal }
     );
+    if (signal.aborted) return;
     if (res.status === 503) {
       osmLayer.clearLayers();
       setStatus("OSM places DB not built — run scripts/build_osm_places.py <region>.osm.pbf", true);
@@ -282,15 +282,15 @@ async function refreshOsm() {
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const geojson = await res.json();
-    if (seq !== osmFetchSeq) return; // a newer request superseded this one
+    if (signal.aborted) return;
     osmLayer.clearLayers();
     osmLayer.addData(geojson);
   } catch (e) {
-    if (seq === osmFetchSeq) setStatus("Error loading OSM places: " + e.message, true);
+    if (!signal.aborted) setStatus("Error loading OSM places: " + e.message, true);
   }
-}
+});
 
-async function refreshCensus() {
+const refreshCensus = latestOnly(async (signal) => {
   const zoom = map.getZoom();
   if (!map.hasLayer(censusLayer) || zoom < MIN_ZOOM_FOR_CENSUS) {
     censusLayer.clearLayers();
@@ -299,9 +299,9 @@ async function refreshCensus() {
 
   const b = map.getBounds();
   const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
-  const seq = ++censusFetchSeq;
   try {
-    const res = await fetch(`/api/geocode/census-places?bbox=${encodeURIComponent(bbox)}`);
+    const res = await fetch(`/api/geocode/census-places?bbox=${encodeURIComponent(bbox)}`, { signal });
+    if (signal.aborted) return;
     if (res.status === 503) {
       censusLayer.clearLayers();
       setStatus("Census places DB not built — run scripts/get_census_places.py", true);
@@ -309,13 +309,13 @@ async function refreshCensus() {
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const geojson = await res.json();
-    if (seq !== censusFetchSeq) return; // a newer request superseded this one
+    if (signal.aborted) return;
     censusLayer.clearLayers();
     censusLayer.addData(geojson);
   } catch (e) {
-    if (seq === censusFetchSeq) setStatus("Error loading Census places: " + e.message, true);
+    if (!signal.aborted) setStatus("Error loading Census places: " + e.message, true);
   }
-}
+});
 
 // style/onEachFeature callbacks for the osmLayer L.geoJSON() instance (created
 // once in initMap; refreshOsm just swaps the data via clearLayers()/addData()).
@@ -324,7 +324,7 @@ function osmFeatureStyle(feature) {
   return { color, weight: 2, opacity: 0.9, fillColor: color, fillOpacity: 0.12 };
 }
 
-async function refreshZctas() {
+const refreshZctas = latestOnly(async (signal) => {
   const zoom = map.getZoom();
   if (!map.hasLayer(zctaLayer) || zoom < MIN_ZOOM_FOR_ZCTA) {
     zctaLayer.clearLayers();
@@ -333,24 +333,25 @@ async function refreshZctas() {
 
   const b = map.getBounds();
   const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
-  const seq = ++zctaFetchSeq;
   try {
-    const res = await fetch(`/api/geocode/zctas?bbox=${encodeURIComponent(bbox)}`);
+    const res = await fetch(`/api/geocode/zctas?bbox=${encodeURIComponent(bbox)}`, { signal });
+    if (signal.aborted) return;
     if (res.status === 503) {
       zctaLayer.clearLayers();
       const body = await res.json().catch(() => ({}));
+      if (signal.aborted) return;
       setStatus(body.detail || "Census ZIP areas not built — run scripts/get_census_places.py", true);
       return;
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const geojson = await res.json();
-    if (seq !== zctaFetchSeq) return; // a newer request superseded this one
+    if (signal.aborted) return;
     zctaLayer.clearLayers();
     zctaLayer.addData(geojson);
   } catch (e) {
-    if (seq === zctaFetchSeq) setStatus("Error loading ZIP areas: " + e.message, true);
+    if (!signal.aborted) setStatus("Error loading ZIP areas: " + e.message, true);
   }
-}
+});
 
 // ZIP areas: solid outline in their own hue, plus a permanent centroid label —
 // "77070" alone means nothing on a map, and the mailing city next to it is exactly
@@ -391,27 +392,27 @@ function censusFeatureStyle(feature) {
 // Click anywhere on the map to reverse-geocode that exact point the way a photo
 // taken there would be, and show what would be persisted. Opens a popup with a
 // loading state, then fills it in once /api/geocode/lookup responds.
-async function probePoint(e) {
+const probePoint = latestOnly(async (signal, e) => {
   const { lat, lng } = e.latlng;
   const popup = L.popup({ className: "map-popup-wrap" })
     .setLatLng(e.latlng)
     .setContent(`<div class="map-popup"><div class="map-popup-meta">Geocoding…</div></div>`)
     .openOn(map);
-  const seq = ++probeSeq;
   try {
-    const res = await fetch(`/api/geocode/lookup?lat=${lat}&lng=${lng}`);
+    const res = await fetch(`/api/geocode/lookup?lat=${lat}&lng=${lng}`, { signal });
+    if (signal.aborted) return;
     if (res.status === 503) {
-      if (seq === probeSeq) popup.setContent(probeMessage("No geocode data installed"));
+      popup.setContent(probeMessage("No geocode data installed"));
       return;
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    if (seq !== probeSeq) return; // superseded by a newer click
+    if (signal.aborted) return;
     popup.setContent(renderProbe(data));
   } catch (err) {
-    if (seq === probeSeq) popup.setContent(probeMessage("Error: " + err.message));
+    if (!signal.aborted) popup.setContent(probeMessage("Error: " + err.message));
   }
-}
+});
 
 function probeMessage(msg) {
   return `<div class="map-popup"><div class="map-popup-meta">${escapeHtml(msg)}</div></div>`;

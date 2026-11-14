@@ -103,7 +103,7 @@ function bindToolbar() {
   });
 
   document.getElementById("crowd-reload-btn").addEventListener("click", () => {
-    if (scope === "crowds") loadCrowds();
+    if (scope === "crowds") loadFaces();   // routes to loadCrowds under the grid's latest-only guard
   });
   document.getElementById("crowd-hide-done").addEventListener("change", e => {
     hideCompletedCrowds = e.target.checked;

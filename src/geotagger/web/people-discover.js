@@ -2,16 +2,19 @@
  * unlabeled faces). */
 
 /* ── Discover view (unsupervised clusters of unlabeled faces) ── */
-async function loadClusters() {
+// Called only via loadFaces(), whose latest-only wrapper owns `signal`.
+async function loadClusters(signal) {
   selectedIds.clear();
   focusedFaceId = null;
   updateActionButtons();
   updateDetail();
   setStatus("Finding groups… this can take a few seconds on a large library.");
   try {
-    const res = await fetch("/api/faces/clusters" + (focusActive() ? "?" + focusQuery() : ""));
+    const res = await fetch("/api/faces/clusters" + (focusActive() ? "?" + focusQuery() : ""),
+                            { signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    if (signal.aborted) return;
     clusters = data.clusters || [];
     renderClusters();
     if (!clusters.length) {
@@ -23,6 +26,7 @@ async function loadClusters() {
         `faces. Name or assign each group, or Ignore it.`);
     }
   } catch (err) {
+    if (signal.aborted) return;
     setStatus("Clustering failed: " + err.message, true);
   }
 }

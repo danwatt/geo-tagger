@@ -695,7 +695,9 @@ function photosInsidePlace(place, photosList) {
   return photosList.filter(p => center.distanceTo(L.latLng(p.lat, p.lng)) <= b.radius);
 }
 
-async function openRepPicker(place) {
+// Latest-only (common.js): open place A's picker, close it and open B's, and A's
+// slower photo list must not fill B's grid. closeRepPicker cancels it too.
+const openRepPicker = latestOnly(async (signal, place) => {
   repPickerPlace = place;
   const modal = document.getElementById("rep-picker-modal");
   const grid = document.getElementById("rep-picker-grid");
@@ -710,15 +712,18 @@ async function openRepPicker(place) {
   // time-neighbours by-bounds folds in for the geocode page's benefit.
   const params = new URLSearchParams({ ...box, geotagged: "yes", window: "0" });
   try {
-    const res = await fetch(`/api/photos/by-bounds?${params}`);
+    const res = await fetch(`/api/photos/by-bounds?${params}`, { signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const inside = photosInsidePlace(place, await res.json());
+    const found = await res.json();
+    if (signal.aborted) return;
+    const inside = photosInsidePlace(place, found);
     inside.reverse();                      // the endpoint sorts oldest-first
     renderRepPicker(inside.slice(0, REP_PICKER_LIMIT), inside.length);
   } catch (err) {
+    if (signal.aborted) return;
     grid.innerHTML = `<div class="rep-picker-empty">Couldn't load photos: ${escapeHtml(err.message)}</div>`;
   }
-}
+});
 
 function renderRepPicker(shown, total) {
   const grid = document.getElementById("rep-picker-grid");
@@ -748,6 +753,7 @@ function renderRepPicker(shown, total) {
 }
 
 function closeRepPicker() {
+  openRepPicker.cancel();
   document.getElementById("rep-picker-modal").style.display = "none";
   repPickerPlace = null;
 }
@@ -932,7 +938,11 @@ function viewBbox() {
 // `append` asks the server for the page after what's already loaded instead of
 // the first one — the list is a queue to work through, and 2000 hotspots at 60
 // a go is otherwise unreachable past the first screen.
-async function loadHotspots({ append = false } = {}) {
+//
+// Latest-only (common.js): every settled pan, sort change and Load-more starts
+// one, and a slower earlier answer (a different view or sort) must not replace
+// the newer list. clearHotspots cancels it when the overlay is switched off.
+const loadHotspots = latestOnly(async (signal, { append = false } = {}) => {
   const list = document.getElementById("hotspot-list");
   document.getElementById("hotspot-section").style.display = "";
   if (!append && !hotspots.length) list.innerHTML = `<div class="hotspot-empty">Loading…</div>`;
@@ -947,14 +957,16 @@ async function loadHotspots({ append = false } = {}) {
   hotspotLoading = true;
   let failure = null;
   try {
-    const res = await fetch(`/api/geotag/hotspots?${params}`);
+    const res = await fetch(`/api/geotag/hotspots?${params}`, { signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    if (signal.aborted) return;   // the newer call owns hotspotLoading and the list
     const page = data.hotspots || [];
     hotspots = append ? hotspots.concat(page) : page;
     hotspotTotal = data.total ?? hotspots.length;
     if (data.merge_meters) hotspotRadius = data.merge_meters;
   } catch (err) {
+    if (signal.aborted) return;
     failure = err;
   }
   // Cleared before rendering, not in a `finally` after it: the Load-more button
@@ -973,7 +985,7 @@ async function loadHotspots({ append = false } = {}) {
   renderHotspotShapes();
   list.innerHTML = `<div class="hotspot-empty">Couldn't load hotspots: ${escapeHtml(failure.message)}</div>`;
   document.getElementById("hotspot-count").textContent = "";
-}
+});
 
 // Panning is continuous and the query is a full clustering pass, so the refresh
 // waits for the map to settle rather than firing on every frame of a drag.
@@ -984,6 +996,10 @@ function onMapMovedForHotspots() {
 }
 
 function clearHotspots() {
+  // A load still in flight would redraw the overlay we're switching off.
+  clearTimeout(hotspotMoveTimer);
+  loadHotspots.cancel();
+  hotspotLoading = false;
   hotspots = [];
   renderHotspotShapes();
   document.getElementById("hotspot-section").style.display = "none";

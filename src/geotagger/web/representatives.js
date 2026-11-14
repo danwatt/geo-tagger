@@ -48,7 +48,8 @@ function renderPersonList() {
   });
 }
 
-async function selectPerson(personId) {
+// Latest-only (common.js): click person A then B, and only B's groups may land.
+const selectPerson = latestOnly(async (signal, personId) => {
   selectedPersonId = personId;
   renderPersonList();
   document.getElementById("groups-empty").style.display = "none";
@@ -56,14 +57,16 @@ async function selectPerson(personId) {
   grid.innerHTML = "";
   setStatus("Loading groups…");
   try {
-    const res = await fetch(`/api/faces/dedup/groups?person_id=${personId}`);
+    const res = await fetch(`/api/faces/dedup/groups?person_id=${personId}`, { signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    if (signal.aborted) return;
     renderGroups(data.groups, data.total);
   } catch (e) {
+    if (signal.aborted) return;
     setStatus("Failed to load groups: " + e.message, true);
   }
-}
+});
 
 function renderGroups(groups, total) {
   const grid = document.getElementById("groups-grid");

@@ -1,8 +1,8 @@
 /* Shared saved-place and photo-metadata autocomplete. */
 function createLocationPicker({ input, box, onSelect, onEdit, emptyMessage, errorMessage }) {
-  let matches = [], active = -1, timer, version = 0;
+  let matches = [], active = -1, timer;
   function close() {
-    version++;
+    suggest.cancel();   // a reply still in flight must not reopen the box
     clearTimeout(timer);
     box.hidden = true;
     input.setAttribute("aria-expanded", "false");
@@ -16,18 +16,19 @@ function createLocationPicker({ input, box, onSelect, onEdit, emptyMessage, erro
     onSelect(item);
     input.dispatchEvent(new Event("change", { bubbles: true }));
   }
-  async function suggest() {
-    const request = ++version;
+  // Latest-only (common.js): each keystroke's reply supersedes the last.
+  const suggest = latestOnly(async (signal) => {
     box.hidden = false;
     input.setAttribute("aria-expanded", "true");
     input.removeAttribute("aria-activedescendant");
     matches = []; active = -1;
     box.textContent = "Loading locations…";
     try {
-      const res = await fetch(`/api/search/locations?q=${encodeURIComponent(input.value.trim())}`);
+      const res = await fetch(`/api/search/locations?q=${encodeURIComponent(input.value.trim())}`,
+                              { signal });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      if (request !== version) return;
+      if (signal.aborted) return;
       matches = data.locations;
       box.innerHTML = "";
       if (!matches.length) box.textContent = emptyMessage;
@@ -48,15 +49,15 @@ function createLocationPicker({ input, box, onSelect, onEdit, emptyMessage, erro
         box.appendChild(option);
       });
     } catch (e) {
-      if (request !== version) return;
+      if (signal.aborted) return;
       box.textContent = errorMessage;
     }
-  }
-  input.addEventListener("focus", suggest);
+  });
+  input.addEventListener("focus", () => suggest());
   input.addEventListener("input", () => {
     close();
     onEdit();
-    timer = setTimeout(suggest, 180);
+    timer = setTimeout(() => suggest(), 180);
   });
   input.addEventListener("blur", close);
   input.addEventListener("keydown", e => {

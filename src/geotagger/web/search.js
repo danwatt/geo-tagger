@@ -250,7 +250,14 @@ function buildQuery() {
   return params;
 }
 
-async function runSearch() {
+// The plain and untagged-face searches both fill the one results grid, so they
+// share one latest-only guard (common.js): a second search started before the
+// first returns supersedes it, whichever kind either is.
+const runResultsLoad = latestOnly((signal, body) => body(signal));
+function runSearch() { return runResultsLoad(searchPhotos); }
+function runUntaggedSearch() { return runResultsLoad(searchUntaggedFaces); }
+
+async function searchPhotos(signal) {
   const grid = document.getElementById("grid");
   const summary = document.getElementById("search-summary");
   resultsMode = "photos";
@@ -263,7 +270,7 @@ async function runSearch() {
   showPlaceholder();
   try {
     const params = buildQuery();
-    const res = await fetch(`/api/search?${params.toString()}`);
+    const res = await fetch(`/api/search?${params.toString()}`, { signal });
     if (!res.ok) {
       // 409/400 carry a human-readable reason (model not downloaded, photo not
       // indexed yet) — show it instead of a bare status code.
@@ -271,6 +278,7 @@ async function runSearch() {
       throw new Error(body?.detail || `HTTP ${res.status}`);
     }
     const data = await res.json();
+    if (signal.aborted) return;
     resultPhotos = data.photos;
     rankedResults = params.has("text") || params.has("similar_to");
     rankedBySort = rankedResults && (params.get("sort") || "relevance") === "relevance";
@@ -280,8 +288,9 @@ async function runSearch() {
     summary.textContent = `${data.total.toLocaleString()} photo${data.total === 1 ? "" : "s"} found${what}`;
     refreshHandoffUI();
     setStatus("");
-    if (rankedResults) await noteIndexCoverage();
+    if (rankedResults) await noteIndexCoverage(signal);
   } catch (e) {
+    if (signal.aborted) return;
     setStatus(`Search failed: ${e.message}`, true);
   }
 }
@@ -294,11 +303,13 @@ let rankedResults = false;  // last results came from a text/similar query (have
 let rankedBySort = false;   // ...and are ordered by score, so don't month-group them
 
 // Warn when results are partial because indexing hasn't finished; silent otherwise.
-async function noteIndexCoverage() {
+// `signal` is the calling search's: a newer search owns the status line.
+async function noteIndexCoverage(signal) {
   try {
-    const res = await fetch("/api/semantic/status");
+    const res = await fetch("/api/semantic/status", { signal });
     if (!res.ok) return;
     const s = await res.json();
+    if (signal.aborted) return;
     if (s.remaining > 0) {
       setStatus(`${s.remaining.toLocaleString()} photos aren't indexed for text search yet — results are partial. Index them from Data Management.`);
     }
@@ -349,7 +360,7 @@ function openInPeople() {
 /* ── Untagged-face search: candidates where the searched people appear via an
  * untagged near-match face, not yet a plain-search hit. ── */
 
-async function runUntaggedSearch() {
+async function searchUntaggedFaces(signal) {
   const grid = document.getElementById("grid");
   const summary = document.getElementById("search-summary");
   resultsMode = "untagged";
@@ -363,14 +374,16 @@ async function runUntaggedSearch() {
   showPlaceholder();
   try {
     const params = buildQuery();
-    const res = await fetch(`/api/search/untagged-faces?${params.toString()}`);
+    const res = await fetch(`/api/search/untagged-faces?${params.toString()}`, { signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    if (signal.aborted) return;
     untaggedCandidates = data.candidates;
     renderUntaggedGrid();
     summary.textContent = `${data.total.toLocaleString()} photo${data.total === 1 ? "" : "s"} found`;
     setStatus(data.warnings && data.warnings.length ? data.warnings.join(" ") : "", !!(data.warnings && data.warnings.length));
   } catch (e) {
+    if (signal.aborted) return;
     setStatus(`Search failed: ${e.message}`, true);
   }
 }
@@ -876,11 +889,14 @@ function showPlaceholder() {
   document.getElementById("detail-content").style.display = "none";
 }
 
-async function showDetail(id) {
+// Latest-only (common.js): arrowing through results fires one per photo, and
+// only the photo focused last may fill the pane.
+const showDetail = latestOnly(async (signal, id) => {
   focusedPhotoId = id;
   try {
-    const res = await fetch(`/api/photo/${id}`);
+    const res = await fetch(`/api/photo/${id}`, { signal });
     const data = await res.json();
+    if (signal.aborted) return;
 
     document.getElementById("detail-placeholder").style.display = "none";
     document.getElementById("detail-content").style.display = "";
@@ -912,7 +928,7 @@ async function showDetail(id) {
   } catch (err) {
     // ignore
   }
-}
+});
 
 /* ── Select all ── */
 

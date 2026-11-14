@@ -2,7 +2,10 @@
  * and person CRUD (add / edit birth / delete). */
 
 /* ── People list ── */
-async function loadPersons() {
+// Latest-only (common.js): it runs after every mutation and on each Focus change,
+// often overlapping itself (e.g. Promise.all with loadFaces), and an older
+// response must not repaint the list with stale counts or the wrong highlight.
+const loadPersons = latestOnly(async (signal) => {
   try {
     const q = focusActive() ? "?" + focusQuery() : "";
     // `persons` stays the FULL list — it feeds the Assign dropdowns, quick-action
@@ -10,17 +13,19 @@ async function loadPersons() {
     // window yet. The left nav renders `navPersons`, which is windowed when a Focus
     // is active (only in-range people, with in-range counts).
     const [pRes, sRes] = await Promise.all([
-      fetch("/api/persons"),
-      fetch("/api/faces/scan/status" + q),
+      fetch("/api/persons", { signal }),
+      fetch("/api/faces/scan/status" + q, { signal }),
     ]);
-    persons = await pRes.json();
+    const allPersons = await pRes.json();
     const status = await sRes.json();
-
-    navPersons = persons;
+    let nav = allPersons;
     if (focusActive()) {
-      const navRes = await fetch("/api/persons" + q);
-      if (navRes.ok) navPersons = await navRes.json();
+      const navRes = await fetch("/api/persons" + q, { signal });
+      if (navRes.ok) nav = await navRes.json();
     }
+    if (signal.aborted) return;
+    persons = allPersons;
+    navPersons = nav;
 
     const totalFaces = status.total_faces || 0;
     renderPeopleList(status.unlabeled_faces || 0, totalFaces,
@@ -28,9 +33,10 @@ async function loadPersons() {
                      status.tagged_faces || 0);
     populatePersonSelects();
   } catch (err) {
+    if (signal.aborted) return;
     setStatus("Failed to load people: " + err.message, true);
   }
-}
+});
 
 function renderPeopleList(unlabeledCount, allCount, ignoredCount, comeBackCount, taggedCount) {
   const list = document.getElementById("people-list");

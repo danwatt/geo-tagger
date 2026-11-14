@@ -1,7 +1,8 @@
 /* people-crowds.js — People page: the Crowds view (crowd photo groups). */
 
 /* ── Crowds view ── */
-async function loadCrowds() {
+// Called only via loadFaces(), whose latest-only wrapper owns `signal`.
+async function loadCrowds(signal) {
   selectedIds.clear();
   focusedFaceId = null;
   updateActionButtons();
@@ -12,9 +13,10 @@ async function loadCrowds() {
   try {
     let url = `/api/crowds?min_faces=${minFaces}&group_gap=${gap}`;
     if (focusActive()) url += "&" + focusQuery();
-    const res = await fetch(url);
+    const res = await fetch(url, { signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    if (signal.aborted) return;
     crowdGroups = data.groups || [];
     renderCrowds();
     if (!crowdGroups.length) {
@@ -26,6 +28,7 @@ async function loadCrowds() {
         `Open a photo, tag the key people, then ignore the rest.`);
     }
   } catch (err) {
+    if (signal.aborted) return;
     setStatus("Failed to load crowds: " + err.message, true);
   }
 }

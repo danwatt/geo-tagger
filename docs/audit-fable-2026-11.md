@@ -410,7 +410,7 @@ Open June 2019, then a folder dated 2021: "Showing 0 of N".
 `web/app.js:2082-2096`. On a 4xx/5xx, local state is mutated, staged entries are deleted, and the UI reports
 "Committed N".
 
-**W3 — High — Stale async responses overwrite newer state, in several places** [traced]
+**W3 — High — Stale async responses overwrite newer state, in several places** [traced] — ✅ **DONE** (`common.latestOnly(loader)`: aborts the previous call, drops superseded results; used by every named loader plus search, timesync and location-picker; photo-faces actions and Guess location capture the photo id at click time; rep picker and map overlays not exercised with real data)
 No request token or abort in: `people.js:696-714,1967-1978,2109-2124` (click "Discover groups" then
 "Unlabeled" and the cluster response replaces the grid); `photo-faces.js:151-196` (fast Prev/Next shows one
 photo's faces on another, and "Ignore unlabeled" then posts for the wrong photo); `app.js:1258-1335,2189-2336`

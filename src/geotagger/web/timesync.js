@@ -231,10 +231,13 @@ async function selectMonth(year, month) {
   await loadPhotos(true);
 }
 
-async function loadMonthHistogram(year, month) {
+// Latest-only (common.js), like loadPhotos below: pick month A then month B and
+// only B's histogram and photos may land.
+const loadMonthHistogram = latestOnly(async (signal, year, month) => {
   try {
-    const res = await fetch(`/api/stats/dates?year=${year}&month=${month}`);
+    const res = await fetch(`/api/stats/dates?year=${year}&month=${month}`, { signal });
     const data = await res.json();
+    if (signal.aborted) return;
 
     if (!data.dates || data.dates.length === 0) {
       histBuckets = [];
@@ -257,9 +260,10 @@ async function loadMonthHistogram(year, month) {
       updateHistLabels();
     }
   } catch (err) {
+    if (signal.aborted) return;
     console.error("Failed to load histogram:", err);
   }
-}
+});
 
 /* ── Timeline histogram ── */
 function bindTimeline() {
@@ -332,7 +336,7 @@ function drawHistogram() {
 }
 
 /* ── Load photos ── */
-async function loadPhotos(fitTimeline = false) {
+const loadPhotos = latestOnly(async (signal, fitTimeline = false) => {
   if (!selectedYear || !selectedMonth) return;
 
   const filter = document.getElementById("filter-select").value;
@@ -342,8 +346,10 @@ async function loadPhotos(fitTimeline = false) {
 
   try {
     let url = `/api/photos?geotagged=${filter}&date_from=${dateFrom}&date_to=${dateTo}`;
-    const res = await fetch(url);
-    photos = await res.json();
+    const res = await fetch(url, { signal });
+    const data = await res.json();
+    if (signal.aborted) return;
+    photos = data;
 
     // Pre-assign colors
     photos.forEach(p => camColor(p.camera));
@@ -352,9 +358,10 @@ async function loadPhotos(fitTimeline = false) {
     buildTimeline();
     applyFilters(fitTimeline);
   } catch (err) {
+    if (signal.aborted) return;
     setStatus("Load error: " + err.message, true);
   }
-}
+});
 
 /* ── Build timeline ── */
 function buildTimeline() {

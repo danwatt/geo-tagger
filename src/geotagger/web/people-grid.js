@@ -2,12 +2,15 @@
  * rendering the main face grid (incl. the Unlabeled-queue filter/status and
  * in-place selection repaint). */
 
-/* ── Faces grid ── */
-async function loadFaces() {
+/* ── Faces grid ──
+ * One latest-only loader (common.js) for everything that fills #grid — faces,
+ * Discover clusters and Crowds — so switching scope mid-load (Discover, then
+ * Unlabeled) drops the slower response instead of letting it replace the grid. */
+const loadFaces = latestOnly(async (signal) => {
   taggedPeopleCache.clear();   // person tags may have changed since last fetch
   updateGridNavVisibility();
-  if (scope === "discover") { await loadClusters(); return; }
-  if (scope === "crowds")   { await loadCrowds();   return; }
+  if (scope === "discover") { await loadClusters(signal); return; }
+  if (scope === "crowds")   { await loadCrowds(signal);   return; }
   try {
     let url = `/api/faces?scope=${scope}&limit=${FACE_LIMIT}`;
     if ((scope === "person" || scope === "suggested") && scopePersonId) {
@@ -19,8 +22,9 @@ async function loadFaces() {
     if ((scope === "unlabeled" || scope === "suggested") && focusActive()) {
       url += "&" + focusQuery();
     }
-    const res = await fetch(url);
+    const res = await fetch(url, { signal });
     const data = await res.json();
+    if (signal.aborted) return;
     faces = data.faces;
 
     if (scope === "suggested") {
@@ -95,9 +99,10 @@ async function loadFaces() {
       setStatus(msg);
     }
   } catch (err) {
+    if (signal.aborted) return;
     setStatus("Failed to load faces: " + err.message, true);
   }
-}
+});
 
 /* ── Unlabeled queue: suggested-person filter ──
  * Fill the sticky-nav dropdown with the people who appear as a *top* suggestion
