@@ -137,3 +137,70 @@ def test_drop_with_current_cache_retags(db, population):
     faces.drop_from_unlabeled_cache([unl[0]], gen)
     assert faces._unlabeled_cache[0] == gen
     assert unl[0] not in _ids(faces.get_unlabeled_matrix()[0])
+
+
+# ── Rescan of a photo whose faces feed the gallery / negatives (audit F5) ──
+
+def _scan_one(photo_id: int, vec) -> int:
+    index.replace_faces(photo_id, [{"bbox": "0.1,0.1,0.5,0.5", "det_score": 0.95,
+                                    "embedding": faces.encode_embedding(vec)}])
+    return index.get_db().execute(
+        "SELECT id FROM faces WHERE photo_id=? AND source='detected'", (photo_id,)
+    ).fetchone()[0]
+
+
+def _gallery_has(gallery, vec) -> bool:
+    return len(gallery) > 0 and bool(np.any(np.all(gallery._s_embs == vec, axis=1)))
+
+
+def test_rescan_of_labeled_face_drops_it_from_warm_gallery(db, population):
+    pid, centroid, _, rng = population
+    photo_id = _new_photo(db, "tagged.jpg")
+    old_vec = ff.cluster_around(rng, centroid, 1)[0]
+    index.assign_face(_scan_one(photo_id, old_vec), pid)
+    gallery = faces.build_gallery()                      # warm, holds old_vec
+    assert _gallery_has(gallery, old_vec)
+    neg_map = faces.get_negatives_map()
+
+    _scan_one(photo_id, ff.cluster_around(rng, centroid, 1)[0])   # rescan
+    fresh = faces.build_gallery()
+    assert fresh is not gallery
+    assert not _gallery_has(fresh, old_vec)
+    assert len(fresh) == len(gallery) - 1
+    # No negatives were involved, so the targeted gallery invalidation is used
+    # and the negatives map survives (no generation bump).
+    assert faces.get_negatives_map() is neg_map
+
+
+def test_rescan_of_unlabeled_faces_keeps_gallery(db, population):
+    _, centroid, _, rng = population
+    photo_id = _new_photo(db, "plain.jpg")
+    _scan_one(photo_id, ff.cluster_around(rng, centroid, 1)[0])
+    gallery = faces.build_gallery()
+    neg_map = faces.get_negatives_map()
+    gen = index.faces_generation()
+
+    _scan_one(photo_id, ff.cluster_around(rng, centroid, 1)[0])   # rescan
+    index.replace_faces(photo_id, [])                              # and an empty one
+    assert faces.build_gallery() is gallery
+    assert faces.get_negatives_map() is neg_map
+    assert index.faces_generation() == gen
+
+
+def test_rescan_drops_negatives_of_deleted_faces(db, population):
+    pid, centroid, _, rng = population
+    photo_id = _new_photo(db, "rejected.jpg")
+    old_id = _scan_one(photo_id, ff.cluster_around(rng, centroid, 1)[0])
+    index.add_face_negatives([old_id], pid)
+    assert faces.get_negatives_map().get(old_id) == {pid}       # warm
+
+    # SQLite may hand old_id's rowid to the new face; either way it must not
+    # inherit the rejected face's exclusions from a stale cached map.
+    new_id = _scan_one(photo_id, ff.cluster_around(rng, centroid, 1)[0])
+    assert index.get_db().execute(
+        "SELECT COUNT(*) FROM face_negatives WHERE face_id=?", (old_id,)).fetchone()[0] == 0
+    neg_map = faces.get_negatives_map()
+    assert old_id not in neg_map and new_id not in neg_map
+    rows, scores = faces.get_suggested_scores()
+    by_id = dict(zip((r["id"] for r in rows), scores))
+    assert by_id[new_id] is not None and by_id[new_id][0] == pid

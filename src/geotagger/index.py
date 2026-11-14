@@ -2445,25 +2445,37 @@ def replace_faces(photo_id: int, faces: list[dict], det_dimension: int | None = 
     re-runs from scratch; assignments live by face id and are reapplied by the
     caller if it chooses to. For a first pass, faces start unassigned.
 
-    Intentionally does NOT call bump_faces_generation(): the labeled gallery only
-    contains confirmed faces (unaffected by detection), so there is nothing to
-    rebuild there, and a face scan calls this once per photo. Inserted faces
-    instead invalidate just the unlabeled suggestion matrix
-    (faces.invalidate_unlabeled_cache), so they show up on the next suggestions
-    read; a rescan that found nothing only prunes its old faces in place.
+    Cache invalidation is scoped to what the deleted faces actually fed, because
+    a face scan calls this once per photo and the common case — a photo whose
+    detected faces are all unlabeled — must not rebuild the labeled gallery on
+    every refetch for the whole scan. Inserted faces invalidate just the
+    unlabeled suggestion matrix (faces.invalidate_unlabeled_cache), so they show
+    up on the next suggestions read; a rescan that found nothing only prunes its
+    old faces in place. Only when a deleted face was labeled (the gallery holds
+    its embedding) or carried negatives (the negatives map holds its id — and
+    SQLite can hand that rowid straight to a new face here, which would then
+    inherit the stale exclusions) does a wider cache have to go; see the end.
     """
     with transaction() as db:
-        # Capture old face IDs so we can prune them from the in-memory cache below.
-        old_ids = [r[0] for r in db.execute(
-            "SELECT id FROM faces WHERE photo_id=? AND source='detected'", (photo_id,)
-        ).fetchall()]
+        # Capture old face IDs so we can prune them from the in-memory cache
+        # below, plus whether any was labeled (in the cached gallery).
+        old = db.execute(
+            "SELECT id, person_id FROM faces WHERE photo_id=? AND source='detected'",
+            (photo_id,),
+        ).fetchall()
+        old_ids = [r[0] for r in old]
+        had_labeled = any(r[1] is not None for r in old)
+        had_negatives = False
         if old_ids:
             # Rescan mints new face ids, so negatives keyed on the old ones would
             # otherwise dangle (FKs aren't enforced — no cascade). Known, accepted
             # limitation: a rescan drops negatives, same as it already drops
             # assignments (see docstring above).
             old_json = ids_json(old_ids)
-            db.execute("DELETE FROM face_negatives WHERE face_id IN (SELECT value FROM json_each(?))", (old_json,))
+            had_negatives = db.execute(
+                "DELETE FROM face_negatives WHERE face_id IN (SELECT value FROM json_each(?))",
+                (old_json,),
+            ).rowcount > 0
             db.execute("DELETE FROM face_embeddings WHERE face_id IN (SELECT value FROM json_each(?))", (old_json,))
         db.execute("DELETE FROM faces WHERE photo_id=? AND source='detected'", (photo_id,))
         now = time.time()
@@ -2482,15 +2494,29 @@ def replace_faces(photo_id: int, faces: list[dict], det_dimension: int | None = 
             )
         db.execute("UPDATE photos SET faces_scanned_at=?, faces_det_dimension=?, "
                    "faces_scan_error=NULL WHERE id=?", (now, det_dimension, photo_id))
-    # No generation bump here (see docstring), so the cache must not be re-tagged:
-    # new faces need a rebuild to be seen (pruning can't add rows); a pure removal
-    # prunes and keeps the cache's existing tag, stale or current.
-    if new_ids or old_ids:
-        from geotagger import faces as _faces
-        if new_ids:
-            _faces.invalidate_unlabeled_cache()
-        else:
-            _faces.drop_from_unlabeled_cache(old_ids)
+    if not (new_ids or old_ids):
+        return
+    from geotagger import faces as _faces
+    gen = None
+    if had_negatives:
+        # The negatives map has no targeted invalidation — it's keyed on the
+        # generation alone — so this is the one case that pays for a bump (which
+        # also rebuilds the gallery, covering had_labeled). Rare: negatives only
+        # exist on faces the user explicitly rejected a suggestion for.
+        gen = bump_faces_generation()
+    elif had_labeled:
+        # Only the gallery held these embeddings: drop it via its own epoch so
+        # the negatives map and (when nothing was inserted) the unlabeled
+        # matrix survive.
+        _faces.invalidate_gallery_cache()
+    if new_ids:
+        # New faces need a rebuild to be seen (pruning can't add rows).
+        _faces.invalidate_unlabeled_cache()
+    else:
+        # A pure removal prunes in place. Without a bump the cache keeps its
+        # existing tag, stale or current; with one, drop_from_unlabeled_cache
+        # re-tags only if this bump was the sole change since it was built.
+        _faces.drop_from_unlabeled_cache(old_ids, gen)
 
 
 def delete_photo_faces(photo_ids: list[int]) -> int:

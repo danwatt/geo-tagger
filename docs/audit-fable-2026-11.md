@@ -214,7 +214,7 @@ and related knobs are baked into three caches, and with F2 they survive indefini
 `faces.py:899-911,950-958`. The comment says the rank pass recovers false negatives, but the rank pass only
 runs on candidates that already passed the threshold.
 
-**F5 — Low — `replace_faces` deletes labelled faces without bumping the generation** [traced]
+**F5 — Low — `replace_faces` deletes labelled faces without bumping the generation** [traced] — ✅ **DONE** (deleted negatives = generation bump, since the negatives map could hand a reused rowid the old exclusions; deleted labelled face = gallery epoch only; unlabelled-only rescans stay cheap. Tags on detected faces are still lost on explicit re-detection, per D5)
 `index.py:1434`. A rescan of a photo with tagged faces leaves the gallery cache holding deleted embeddings.
 
 **F6 — Low — Batch and gate paths ignore `date_precision`** [traced]
