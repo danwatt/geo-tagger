@@ -143,6 +143,120 @@ class TestAgeMath:
         assert faces.suggest_person(g, past_window, gallery, date_precision="month") is None
 
 
+def _set_precision(db, face_ids: list[int], precision: str | None) -> None:
+    """Flag the photos behind ``face_ids`` with a date_precision, then drop the
+    recognition caches so the next read sees it."""
+    import face_fixtures as _ff
+    db.executemany(
+        "UPDATE photos SET date_precision=? WHERE id=(SELECT photo_id FROM faces WHERE id=?)",
+        [(precision, fid) for fid in face_ids])
+    db.commit()
+    _ff.reset_faces_caches()
+
+
+def _three_paths(person_id: int, precision: str | None) -> list[tuple[int, float] | None]:
+    """The one unlabeled face's suggestion via the single-face lookup, the cached
+    batch scorer and the per-person gate, in that order."""
+    rows, unknowns, times = faces.get_unlabeled_matrix()
+    assert len(rows) == 1
+    gallery = faces.build_gallery()
+    assert rows[0]["date_precision"] == precision   # the cache carries it
+    single = faces.suggest_person(unknowns[0], rows[0]["photo_datetime"], gallery,
+                                  date_precision=precision)
+    _, batch = faces.get_suggested_scores()
+    gate = faces.suggest_for_person(rows, gallery, person_id, unknowns=unknowns,
+                                    times=times, neg_map={})
+    per_person = (person_id, gate[0][1]) if gate else None
+    return [single, batch[0], per_person]
+
+
+class TestDatePrecisionAcrossPaths:
+    """Audit F6: the single-face lookup, the batch scorer and the per-person
+    gate apply the same date_precision rule, so they agree on every face."""
+
+    def test_year_precision_baby_photo_agrees_and_is_not_excluded(self, db):
+        """A photo assigned year-precision '2000' is stored as 2000-01-01. For a
+        child born 2000-10-01 that's 0.75yr "before birth" — past the default
+        0.5yr tolerance, so treating the date as exact excludes the person. The
+        true date is anywhere in 2000, so every path must keep the match, with
+        the same softened score."""
+        rng = np.random.default_rng(21)
+        g = ff.unit_vectors(rng, 1)[0]
+        kid, _ = ff.seed_person(db, "Kid", g[None, :], birth_date="2000-10-01",
+                                photo_datetimes=ff.epoch(2001, 4))
+        query = ff.vec_at_cosine(rng, g, 0.9)
+        fids = ff.seed_unlabeled(db, query[None, :], photo_datetimes=ff.epoch(2000))
+
+        # Exact date: excluded everywhere.
+        assert _three_paths(kid, None) == [None, None, None]
+
+        _set_precision(db, fids, "year")
+        single, batch, per_person = _three_paths(kid, "year")
+        assert single is not None and single[0] == kid
+        assert batch is not None and batch[0] == kid
+        assert per_person is not None
+        assert abs(batch[1] - single[1]) < 1e-6
+        assert abs(per_person[1] - single[1]) < 1e-6
+        # Gap = |(-0.75) - 0.5| - 0.5 (year uncertainty) = 0.75yr of penalty.
+        age_u = (ff.epoch(2000) - faces._birth_ts("2000-10-01")) / faces.YEAR_SECONDS
+        age_f = (ff.epoch(2001, 4) - faces._birth_ts("2000-10-01")) / faces.YEAR_SECONDS
+        gap = abs(age_u - age_f) - 0.5
+        want = 0.9 - gap * faces.config.FACE_AGE_PENALTY_PER_YEAR
+        assert abs(single[1] - want) < 1e-3
+
+    def test_year_precision_near_not_before_agrees(self, db):
+        """Same disagreement via a not_before window: '2000' (stored Jan 1) for
+        a person known only from 2000-09-01 on is excluded when exact, kept by
+        all three paths once flagged year-precision."""
+        rng = np.random.default_rng(22)
+        g = ff.unit_vectors(rng, 1)[0]
+        pid, _ = ff.seed_person(db, "Windowed", g[None, :], not_before="2000-09-01",
+                                photo_datetimes=ff.epoch(2001))
+        fids = ff.seed_unlabeled(db, ff.vec_at_cosine(rng, g, 0.8)[None, :],
+                                 photo_datetimes=ff.epoch(2000))
+
+        assert _three_paths(pid, None) == [None, None, None]
+        _set_precision(db, fids, "year")
+        res = _three_paths(pid, "year")
+        assert all(r is not None and r[0] == pid for r in res)
+        assert max(r[1] for r in res) - min(r[1] for r in res) < 1e-6
+        assert abs(res[0][1] - 0.8) < 1e-3   # no birth date → no age penalty
+
+    def test_exact_dates_unchanged(self, db):
+        """Exact-dated photos: the plain age-gap penalty, identical on all
+        three paths — the precision plumbing is a no-op for them."""
+        rng = np.random.default_rng(23)
+        g = ff.unit_vectors(rng, 1)[0]
+        pid, _ = ff.seed_person(db, "Adult", g[None, :], birth_date="1960-06-15",
+                                photo_datetimes=ff.epoch(1965))   # pre-1970 example
+        ff.seed_unlabeled(db, ff.vec_at_cosine(rng, g, 0.9)[None, :],
+                          photo_datetimes=ff.epoch(1969))
+        res = _three_paths(pid, None)
+        assert all(r is not None and r[0] == pid for r in res)
+        assert max(r[1] for r in res) - min(r[1] for r in res) < 1e-6
+        gap = (ff.epoch(1969) - ff.epoch(1965)) / faces.YEAR_SECONDS
+        assert abs(res[0][1] - (0.9 - gap * faces.config.FACE_AGE_PENALTY_PER_YEAR)) < 1e-3
+
+    def test_approximate_dated_example_softens_gap_everywhere(self, db):
+        """An example whose own photo is year-precision has a fuzzy age too, so
+        the gap shrinks by its uncertainty on every path."""
+        rng = np.random.default_rng(24)
+        g = ff.unit_vectors(rng, 1)[0]
+        pid, ex = ff.seed_person(db, "Kid", g[None, :], birth_date="2000-01-01",
+                                 photo_datetimes=ff.epoch(2003))
+        ff.seed_unlabeled(db, ff.vec_at_cosine(rng, g, 0.9)[None, :],
+                          photo_datetimes=ff.epoch(2008))
+        exact = _three_paths(pid, None)
+        _set_precision(db, ex, "year")
+        fuzzy = _three_paths(pid, None)
+        for r in exact + fuzzy:
+            assert r is not None and r[0] == pid
+        assert max(r[1] for r in fuzzy) - min(r[1] for r in fuzzy) < 1e-6
+        # 0.5yr less gap → 0.5 × per-year more score.
+        bonus = 0.5 * faces.config.FACE_AGE_PENALTY_PER_YEAR
+        assert abs((fuzzy[0][1] - exact[0][1]) - bonus) < 1e-4
+
+
 def _fixed_vec(theta_deg: float) -> np.ndarray:
     """A unit vector at exactly ``theta_deg`` in the plane of the first two
     dims (rest zero), so cosine to another ``_fixed_vec`` is exactly

@@ -217,7 +217,7 @@ runs on candidates that already passed the threshold.
 **F5 — Low — `replace_faces` deletes labelled faces without bumping the generation** [traced] — ✅ **DONE** (deleted negatives = generation bump, since the negatives map could hand a reused rowid the old exclusions; deleted labelled face = gallery epoch only; unlabelled-only rescans stay cheap. Tags on detected faces are still lost on explicit re-detection, per D5)
 `index.py:1434`. A rescan of a photo with tagged faces leaves the gallery cache holding deleted embeddings.
 
-**F6 — Low — Batch and gate paths ignore `date_precision`** [traced]
+**F6 — Low — Batch and gate paths ignore `date_precision`** [traced] — ✅ **DONE** (single, batch and per-person gate share `faces._apply_date_rules`; `date_precision` carried in unlabeled rows and gallery examples, and an approximate example date now also softens the gap. Still symmetric ±0.5 y although stored dates are the start of their period)
 `faces.py:716-741,920-933` versus `:636-649`. Single and batch lookups can disagree for year-precision photos.
 
 ## Geocoding and datasets

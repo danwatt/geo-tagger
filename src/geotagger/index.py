@@ -2664,7 +2664,7 @@ def get_labeled_faces() -> list[sqlite3.Row]:
     labeled few — ~6x slower here.
     """
     return get_db().execute(
-        """SELECT f.person_id, fe.embedding, f.bbox, ph.photo_datetime,
+        """SELECT f.person_id, fe.embedding, f.bbox, ph.photo_datetime, ph.date_precision,
                   p.birth_date, p.not_before, p.not_after
            FROM faces f INDEXED BY idx_faces_person
            JOIN face_embeddings fe ON fe.face_id = f.id
@@ -2822,7 +2822,7 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
         f"""SELECT f.id, f.photo_id, f.person_id, f.bbox, f.det_score, {embed_col}
                    f.ignored, f.assigned_at, f.ignored_at, f.come_back, f.come_back_at,
                    p.name AS person_name, ph.filename,
-                   ph.photo_datetime, ph.orientation, ph.dir,
+                   ph.photo_datetime, ph.date_precision, ph.orientation, ph.dir,
                    ph.loc_city, ph.loc_sublocation, ph.loc_state, ph.loc_country
             FROM faces f
             {embed_join}

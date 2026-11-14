@@ -339,7 +339,11 @@ def _find_together(pids: list[int], allowed_ids: set[int],
                    gallery, names: dict, rows, unknowns, times, neg_map,
                    threshold: float, limit: int) -> dict:
     u_rows, u_embs, u_times = faces.window_rows(rows, unknowns, times, None, None, allowed_ids)
-    per_person = faces._best_per_person_f32(gallery, u_embs, u_times) if len(u_rows) else None
+    # Pass the rows' date uncertainty so approximate-dated photos score the
+    # same here as in every other suggestion path (audit F6).
+    per_person = (faces._best_per_person_f32(gallery, u_embs, u_times,
+                                             faces._precision_years(u_rows))
+                  if len(u_rows) else None)
     p_row = {pp: gallery._pid_to_group[pp] for pp in pids if pp in gallery._pid_to_group}
 
     def uscore(j: int, pp: int) -> float:
