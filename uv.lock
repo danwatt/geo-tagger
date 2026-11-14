@@ -254,14 +254,18 @@ dependencies = [
     { name = "av" },
     { name = "fastapi" },
     { name = "insightface" },
+    { name = "numpy" },
     { name = "onnxruntime", marker = "sys_platform == 'darwin'" },
     { name = "onnxruntime-gpu", extra = ["cuda", "cudnn"], marker = "sys_platform != 'darwin'" },
+    { name = "opencv-python" },
     { name = "osmium" },
     { name = "pillow" },
     { name = "pillow-heif" },
+    { name = "pydantic" },
     { name = "pyexiftool" },
     { name = "pyshp" },
     { name = "rawpy" },
+    { name = "scipy" },
     { name = "tokenizers" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -276,19 +280,23 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "av" },
+    { name = "av", specifier = ">=17.1" },
     { name = "fastapi", specifier = ">=0.132" },
     { name = "insightface", specifier = ">=1.0.1" },
+    { name = "numpy", specifier = ">=2.5" },
     { name = "onnxruntime", marker = "sys_platform == 'darwin'", specifier = ">=1.27.0" },
     { name = "onnxruntime-gpu", extras = ["cuda", "cudnn"], marker = "sys_platform != 'darwin'", specifier = ">=1.27.0" },
+    { name = "opencv-python", specifier = ">=4.13" },
     { name = "osmium", specifier = ">=4.3.1" },
-    { name = "pillow" },
-    { name = "pillow-heif" },
-    { name = "pyexiftool" },
+    { name = "pillow", specifier = ">=12.2" },
+    { name = "pillow-heif", specifier = ">=1.4" },
+    { name = "pydantic", specifier = ">=2.13" },
+    { name = "pyexiftool", specifier = ">=0.5.6" },
     { name = "pyshp", specifier = ">=2.3.1" },
     { name = "rawpy", specifier = ">=0.27.0" },
+    { name = "scipy", specifier = ">=1.18" },
     { name = "tokenizers", specifier = ">=0.23.3" },
-    { name = "uvicorn", extras = ["standard"] },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.49" },
 ]
 
 [package.metadata.requires-dev]

@@ -20,11 +20,11 @@ classifiers = [
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.132",
-    "uvicorn[standard]",
-    "pyexiftool",
-    "pillow",
-    "pillow-heif",
-    "av",
+    "uvicorn[standard]>=0.49",
+    "pyexiftool>=0.5.6",
+    "pillow>=12.2",
+    "pillow-heif>=1.4",
+    "av>=17.1",
     "insightface>=1.0.1",
     # GPU build; the extras pull CUDA 12 + cuDNN in as pip wheels, so no system
     # CUDA install is needed. Same `onnxruntime` module as the CPU package, and it
@@ -35,6 +35,10 @@ dependencies = [
     "osmium>=4.3.1",
     "pyshp>=2.3.1",
     "tokenizers>=0.23.3",
+    "numpy>=2.5",
+    "scipy>=1.18",
+    "opencv-python>=4.13",
+    "pydantic>=2.13",
 ]
 
 [project.urls]

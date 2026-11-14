@@ -98,9 +98,6 @@ A shared modal helper and a `<button>` sweep would address most of this.
 
 **T1 — A test pins a bug.** `tests/test_sidecar.py:153-163` asserts the D1 asymmetry.
 
-**T7 — Undeclared direct dependencies.** `numpy`, `scipy`, `cv2` and `pydantic` are imported but arrive only
-transitively. `fastapi`, `uvicorn`, `pillow`, `pyexiftool` and `av` have no lower bounds.
-
 **T8 — Two scripts reset the library with no confirmation.** `scripts/backfill_checksums.py:51-54` and
 `scripts/scan_faces.py:53-56` run `UPDATE photos SET …=NULL` immediately under `--rescan`. The other scripts
 already have `--dry-run`; match them and require `--yes`.
