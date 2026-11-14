@@ -203,6 +203,17 @@ def _polygons_bbox(polygons: list) -> tuple[float, float, float, float]:
 _FACTORY = osmium.geom.GeoJSONFactory()
 
 
+# Sentinel place_regions.region_id for rows that predate per-region membership
+# (audit G8): "a member of every region still listed in meta 'legacy_regions'".
+# See _migrate_region_membership.
+LEGACY_REGION_ID = 0
+
+# Rows staged before being applied to places as one set of joins. Large enough to
+# amortise the per-batch statements, small enough that the staged rings (the bulk
+# of each row) stay a few MB of temp memory.
+_BATCH_ROWS = 5_000
+
+
 def init_db(db: sqlite3.Connection):
     # Deliberately NOT WAL: this DB is built once and then opened read-only by the
     # app (osm_places.py). A rollback journal leaves a clean single file that a
@@ -219,7 +230,7 @@ def init_db(db: sqlite3.Connection):
             area REAL NOT NULL,            -- polygon area (deg²) for smallest-containing tiebreak
             min_lat REAL, max_lat REAL, min_lng REAL, max_lng REAL,
             rings TEXT NOT NULL,           -- JSON [[outer, [hole,...]], ...], ring = [[lat,lng],...]
-            UNIQUE(osm_type, osm_id)       -- dedupe when regions overlap on --append
+            UNIQUE(osm_type, osm_id)       -- one row per feature when regions overlap on --append
         )
     """)
     db.execute("""
@@ -228,19 +239,203 @@ def init_db(db: sqlite3.Connection):
         )
     """)
     db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+    # Which extract(s) each place came from (audit G8), so re-merging a region can
+    # delete the features its new extract no longer has — but only once no other
+    # ingested extract still has them: adjacent GeoFabrik extracts overlap at the
+    # border, so e.g. a park straddling a state line is in both.
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS osm_regions (
+            id INTEGER PRIMARY KEY,        -- 1.. (0 is LEGACY_REGION_ID)
+            file TEXT NOT NULL UNIQUE      -- extract file name, as in meta 'regions'
+        )
+    """)
+    legacy = db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='place_regions'"
+    ).fetchone() is None
+    # region_id first: a re-merge reads one region's members; the place_id index
+    # serves the "is it still in any region?" check before a delete.
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS place_regions (
+            region_id INTEGER NOT NULL,
+            place_id INTEGER NOT NULL,
+            PRIMARY KEY (region_id, place_id)
+        ) WITHOUT ROWID
+    """)
+    db.execute("CREATE INDEX IF NOT EXISTS place_regions_place ON place_regions(place_id)")
+    if legacy:
+        _migrate_region_membership(db)
     db.commit()
+
+
+def _meta_json(db: sqlite3.Connection, key: str, default):
+    row = db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    return json.loads(row[0]) if row else default
+
+
+def _set_meta_json(db: sqlite3.Connection, key: str, value) -> None:
+    db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, json.dumps(value)))
+
+
+def _migrate_region_membership(db: sqlite3.Connection) -> None:
+    """Give the rows of a DB built before per-region membership a provenance.
+
+    Which extract each old row came from is unknown, so every one is treated as
+    belonging to every region ingested so far (meta 'regions'), stored as a single
+    LEGACY_REGION_ID row per place rather than places x regions rows. That is the
+    conservative reading — a stale row can outlive a re-merge, a live one is never
+    deleted — and it converges without a forced rebuild: re-merging a legacy
+    region gives the rows it still has explicit membership and drops it from
+    'legacy_regions'; once the last one has been re-merged, legacy rows no
+    extract claimed are deleted.
+
+    Rows with no recorded region at all (no meta 'regions') get no membership and
+    are never deleted by a re-merge — only a full rebuild clears them."""
+    files = list(dict.fromkeys(r["file"] for r in _meta_json(db, "regions", [])))
+    if not files or db.execute("SELECT 1 FROM places LIMIT 1").fetchone() is None:
+        return
+    db.execute("INSERT OR IGNORE INTO place_regions (region_id, place_id) SELECT ?, id FROM places",
+               (LEGACY_REGION_ID,))
+    _set_meta_json(db, "legacy_regions", files)
+
+
+def _region_id(db: sqlite3.Connection, file: str) -> int:
+    db.execute("INSERT OR IGNORE INTO osm_regions (file) VALUES (?)", (file,))
+    return db.execute("SELECT id FROM osm_regions WHERE file=?", (file,)).fetchone()[0]
+
+
+def _create_staging(db: sqlite3.Connection) -> None:
+    """Temp tables for one extract's merge: `_batch` (the rows being applied now)
+    and `_seen` (every place id this extract has, for the end-of-region diff).
+    TEMP, so none of it lands in the DB file that gets swapped in."""
+    db.execute("PRAGMA temp_store = MEMORY")
+    db.execute("DROP TABLE IF EXISTS temp._batch")
+    db.execute("DROP TABLE IF EXISTS temp._seen")
+    db.execute("""
+        CREATE TEMP TABLE _batch (
+            osm_type TEXT NOT NULL, osm_id INTEGER NOT NULL, name TEXT NOT NULL,
+            category TEXT NOT NULL, admin_level INTEGER, rank INTEGER NOT NULL,
+            area REAL NOT NULL, min_lat REAL, max_lat REAL, min_lng REAL, max_lng REAL,
+            rings TEXT NOT NULL,
+            place_id INTEGER, is_new INTEGER NOT NULL DEFAULT 0,
+            moved INTEGER NOT NULL DEFAULT 0, changed INTEGER NOT NULL DEFAULT 0,
+            UNIQUE (osm_type, osm_id)
+        )
+    """)
+    db.execute("CREATE TEMP TABLE _seen (place_id INTEGER PRIMARY KEY)")
+
+
+def _apply_batch(db: sqlite3.Connection, rows: list[tuple]) -> tuple[int, int]:
+    """Upsert one batch of extracted features into places + places_spatial as a
+    handful of set-based statements (no per-row queries). An existing feature
+    (same osm_type/osm_id) takes the new name/category/geometry in place, keeping
+    its id; its R*Tree entry is rewritten only if its bbox moved. Returns
+    (added, updated)."""
+    # OR REPLACE: a feature repeated within one batch keeps its last occurrence.
+    db.executemany(
+        "INSERT OR REPLACE INTO _batch (osm_type, osm_id, name, category, admin_level, rank, "
+        "area, min_lat, max_lat, min_lng, max_lng, rings) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        rows)
+    # Match on places' UNIQUE(osm_type, osm_id) index and flag what differs,
+    # comparing with the *old* row before places is overwritten.
+    db.execute("""
+        UPDATE _batch SET place_id = p.id,
+            moved = (p.min_lat IS NOT _batch.min_lat OR p.max_lat IS NOT _batch.max_lat
+                     OR p.min_lng IS NOT _batch.min_lng OR p.max_lng IS NOT _batch.max_lng),
+            changed = (p.name IS NOT _batch.name OR p.category IS NOT _batch.category
+                       OR p.admin_level IS NOT _batch.admin_level OR p.rank IS NOT _batch.rank
+                       OR p.area IS NOT _batch.area OR p.rings IS NOT _batch.rings
+                       OR p.min_lat IS NOT _batch.min_lat OR p.max_lat IS NOT _batch.max_lat
+                       OR p.min_lng IS NOT _batch.min_lng OR p.max_lng IS NOT _batch.max_lng)
+        FROM places p WHERE p.osm_type = _batch.osm_type AND p.osm_id = _batch.osm_id
+    """)
+    # Skipping unchanged rows matters: re-merging a region rewrites only what OSM
+    # actually edited, not every rings blob in the extract.
+    updated = db.execute("""
+        UPDATE places SET name = b.name, category = b.category, admin_level = b.admin_level,
+            rank = b.rank, area = b.area, min_lat = b.min_lat, max_lat = b.max_lat,
+            min_lng = b.min_lng, max_lng = b.max_lng, rings = b.rings
+        FROM _batch b WHERE places.id = b.place_id AND b.changed
+    """).rowcount
+    db.execute("DELETE FROM places_spatial WHERE id IN (SELECT place_id FROM _batch WHERE moved)")
+    db.execute("UPDATE _batch SET is_new = 1 WHERE place_id IS NULL")
+    added = db.execute("""
+        INSERT INTO places (osm_type, osm_id, name, category, admin_level, rank, area,
+                            min_lat, max_lat, min_lng, max_lng, rings)
+        SELECT osm_type, osm_id, name, category, admin_level, rank, area,
+               min_lat, max_lat, min_lng, max_lng, rings FROM _batch WHERE is_new
+    """).rowcount
+    if added:
+        db.execute("""
+            UPDATE _batch SET place_id = p.id FROM places p
+            WHERE _batch.is_new AND p.osm_type = _batch.osm_type AND p.osm_id = _batch.osm_id
+        """)
+    db.execute("""
+        INSERT INTO places_spatial (id, min_lat, max_lat, min_lng, max_lng)
+        SELECT place_id, min_lat, max_lat, min_lng, max_lng FROM _batch WHERE moved OR is_new
+    """)
+    db.execute("INSERT OR IGNORE INTO _seen (place_id) SELECT place_id FROM _batch")
+    db.execute("DELETE FROM _batch")
+    return added, updated
+
+
+def _finish_region(db: sqlite3.Connection, file: str) -> int:
+    """Once an extract has been fully applied: make `_seen` that region's exact
+    membership, and delete the places it used to have, now gone from it, that no
+    other ingested region still has (audit G8). Returns the number deleted."""
+    region_id = _region_id(db, file)
+    db.execute("DROP TABLE IF EXISTS temp._dropped")
+    db.execute("""
+        CREATE TEMP TABLE _dropped AS
+        SELECT place_id FROM place_regions
+        WHERE region_id = ? AND place_id NOT IN (SELECT place_id FROM _seen)
+    """, (region_id,))
+    legacy = _meta_json(db, "legacy_regions", [])
+    if file in legacy:
+        # Legacy rows "belong" to this region too; the ones it no longer has are
+        # gone unless another region still claims them (checked below).
+        db.execute("""
+            INSERT INTO _dropped SELECT place_id FROM place_regions
+            WHERE region_id = ? AND place_id NOT IN (SELECT place_id FROM _seen)
+        """, (LEGACY_REGION_ID,))
+        legacy.remove(file)
+        _set_meta_json(db, "legacy_regions", legacy)
+        if not legacy:
+            # Every legacy region has been re-merged, so each row still claimed
+            # has explicit membership; the sentinel no longer means anything.
+            db.execute("DELETE FROM place_regions WHERE region_id = ?", (LEGACY_REGION_ID,))
+    db.execute("""
+        DELETE FROM place_regions
+        WHERE region_id = ? AND place_id NOT IN (SELECT place_id FROM _seen)
+    """, (region_id,))
+    db.execute("INSERT OR IGNORE INTO place_regions (region_id, place_id) "
+               "SELECT ?, place_id FROM _seen", (region_id,))
+    db.execute("""
+        DELETE FROM _dropped WHERE EXISTS
+            (SELECT 1 FROM place_regions r WHERE r.place_id = _dropped.place_id)
+    """)
+    # Both tables, so no R*Tree entry is left pointing at a deleted place.
+    db.execute("DELETE FROM places_spatial WHERE id IN (SELECT place_id FROM _dropped)")
+    removed = db.execute("DELETE FROM places WHERE id IN (SELECT place_id FROM _dropped)").rowcount
+    db.execute("DROP TABLE temp._dropped")
+    return removed
 
 
 def process_file(db: sqlite3.Connection, pbf: Path, index: str,
                   progress_cb: Callable[[int, int], None] | None = None) -> dict:
-    """Stream one .osm.pbf, insert matching named areas. Returns kept counts per
-    category (`kept`), skipped counts per reason (`skipped`), geometry-error
-    count (`errors`), and elapsed seconds (`seconds`). progress_cb(seen, kept),
+    """Stream one .osm.pbf and merge its matching named areas, with the file name
+    as the region key. Re-merging a region replaces its features (audit G8): ones
+    still in the extract are updated in place, ones gone from it are deleted
+    unless another ingested region still has them.
+
+    Returns per-category counts of the extract's places (`kept`), skipped counts
+    per reason (`skipped`), geometry-error count (`errors`), `added` / `updated` /
+    `removed` row counts, and elapsed seconds (`seconds`). progress_cb(seen, kept),
     if given, is called every 500k areas scanned (for job-status reporting)."""
     counts: dict[str, int] = {}
     skipped: dict[str, int] = {}
     errors = 0
     seen = 0
+    added = updated = applied = 0
     t0 = time.time()
 
     fp = (osmium.FileProcessor(str(pbf))
@@ -248,8 +443,21 @@ def process_file(db: sqlite3.Connection, pbf: Path, index: str,
           .with_areas()
           .with_filter(osmium.filter.EntityFilter(osmium.osm.AREA)))
 
-    cur = db.cursor()
-    batch = 0
+    _create_staging(db)
+    rows: list[tuple] = []
+
+    def flush():
+        nonlocal added, updated, applied
+        a, u = _apply_batch(db, rows)
+        added += a
+        updated += u
+        applied += len(rows)
+        rows.clear()
+        # Bounds the rollback journal on a big append. It's the temp build file,
+        # so a partial commit is harmless: a failure deletes the whole file.
+        if applied % 20_000 < _BATCH_ROWS:
+            db.commit()
+
     for area in fp:
         seen += 1
         if seen % 500_000 == 0:
@@ -267,28 +475,21 @@ def process_file(db: sqlite3.Connection, pbf: Path, index: str,
             continue
         min_lat, max_lat, min_lng, max_lng = _polygons_bbox(polygons)
         osm_type = "way" if area.from_way() else "relation"
-        cur.execute(
-            "INSERT OR IGNORE INTO places "
-            "(osm_type, osm_id, name, category, admin_level, rank, area, "
-            " min_lat, max_lat, min_lng, max_lng, rings) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (osm_type, area.orig_id(), area.tags.get("name"), category, admin_level,
-             CATEGORY_RANK[category], _polygons_area(polygons),
-             min_lat, max_lat, min_lng, max_lng, json.dumps(polygons)),
-        )
-        if cur.rowcount == 1:  # not a duplicate that got IGNOREd
-            cur.execute(
-                "INSERT INTO places_spatial (id, min_lat, max_lat, min_lng, max_lng) "
-                "VALUES (?,?,?,?,?)",
-                (cur.lastrowid, min_lat, max_lat, min_lng, max_lng),
-            )
-            counts[category] = counts.get(category, 0) + 1
-        batch += 1
-        if batch % 20_000 == 0:
-            db.commit()
+        rows.append((osm_type, area.orig_id(), area.tags.get("name"), category, admin_level,
+                     CATEGORY_RANK[category], _polygons_area(polygons),
+                     min_lat, max_lat, min_lng, max_lng, json.dumps(polygons)))
+        counts[category] = counts.get(category, 0) + 1
+        if len(rows) >= _BATCH_ROWS:
+            flush()
+    if rows:
+        flush()
+    removed = _finish_region(db, pbf.name)
     db.commit()
+    db.execute("DROP TABLE temp._batch")
+    db.execute("DROP TABLE temp._seen")
 
     return {"kept": counts, "skipped": skipped, "errors": errors,
+            "added": added, "updated": updated, "removed": removed,
             "seconds": round(time.time() - t0, 1)}
 
 
@@ -321,7 +522,8 @@ def build_or_append(db_path: Path, pbf_paths: list[Path], append: bool,
     used to drive a polling job-status endpoint.
 
     The work happens in a "<db>.tmp" file next to db_path (a copy of the live DB
-    when appending, since a merge is additive across regions), which is swapped in
+    when appending: a merge adds regions, and re-merging one replaces only that
+    region's features — see process_file), which is swapped in
     only once complete (audit G2). Merging into the live file meant lookups during
     a multi-minute merge saw a half-inserted region: a point whose city polygon
     wasn't in yet resolved, and was cached, as "no city". The swap goes through
@@ -366,15 +568,16 @@ def _build_into(db_path: Path, pbf_paths: list[Path], index: str,
             kept = sum(result["kept"].values())
             if progress_cb:
                 progress_cb(f"{pbf.name}: kept {kept:,} places in {result['seconds']}s "
-                            f"({result['errors']:,} geometry errors skipped)")
+                            f"({result.get('added', 0):,} added, {result.get('updated', 0):,} "
+                            f"updated, {result.get('removed', 0):,} removed; "
+                            f"{result['errors']:,} geometry errors skipped)")
             regions.append({"file": pbf.name, "kept": kept, "built_at": time.time()})
 
-            cur = db.execute("SELECT value FROM meta WHERE key='regions'")
-            row = cur.fetchone()
-            all_regions = json.loads(row[0]) if row else []
+            # One entry per file: a re-merge replaces the region's entry instead
+            # of listing it twice.
+            all_regions = [r for r in _meta_json(db, "regions", []) if r["file"] != pbf.name]
             all_regions.append(regions[-1])
-            db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('regions', ?)",
-                       (json.dumps(all_regions),))
+            _set_meta_json(db, "regions", all_regions)
             db.commit()
 
         grand = db.execute("SELECT COUNT(*) FROM places").fetchone()[0]

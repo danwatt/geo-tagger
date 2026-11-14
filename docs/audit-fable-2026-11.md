@@ -255,7 +255,7 @@ GeoNames point. `census.lookup()` already returns `state` and it is discarded.
 `services/geocode_service.py:13,41-43`. An OSM- or Census-only install never geocodes, and
 `export_to_sidecars` skips cities when `loc_country_code` is null.
 
-**G8 — Medium — OSM re-merge never refreshes existing places** [traced]
+**G8 — Medium — OSM re-merge never refreshes existing places** [traced] — ✅ **DONE** (`osm_regions`/`place_regions` membership; batched temp-table upsert keeps ids and R*Tree in sync; features gone from a region are deleted unless another region still has them; legacy DBs use a sentinel membership until every old region is re-merged; region key is the extract file name)
 `osm_builder.py:270-271,331-336`. `INSERT OR IGNORE` keeps old geometry and names; deleted features persist.
 
 **G9 — Low — Roadtrip extrapolation goes the wrong way on a reversed route** [traced]
