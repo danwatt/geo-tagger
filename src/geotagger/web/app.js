@@ -381,7 +381,27 @@ function bindToolbar() {
     if (e.key !== "Escape" || !mapDayOverride) return;
     if (typeof isPersonPickerOpen === "function" && isPersonPickerOpen()) return;
     if (anyModalOpen()) return;
+    if (drawingMode) return;          // the area draw below takes this press
     clearDayOnMap();
+  });
+
+  // Esc disarms Area Select / drops a half-drawn circle — but only when nothing
+  // stacked above the map wants the key. Whether something was up is read in the
+  // capture phase, before any handler runs: the shortcuts sheet and the photo
+  // menu close on this same press, and by the bubble phase they are already gone,
+  // so one Escape would shut them AND drop the drawing.
+  let escapeHadLayerAbove = false;
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    escapeHadLayerAbove =
+      (typeof isPersonPickerOpen === "function" && isPersonPickerOpen()) ||
+      anyModalOpen() || isShortcutsHelpOpen() || !!photoCtxMenuEl ||
+      !!document.querySelector(".drp-panel:not([hidden])");
+  }, true);
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !drawingMode || escapeHadLayerAbove) return;
+    stopAreaSelection();
+    setStatus("Area selection cancelled", false);
   });
 
   // Modal close handlers
@@ -1004,6 +1024,10 @@ async function openLocationPicker(ids = [...selectedIds]) {
 let drawStartLatLng = null;
 
 /* ── Area Selection ── */
+// The press/drag/release itself is armMapDrawGesture (basemaps.js): it re-enables
+// map dragging however the gesture ends, including a release outside the map.
+let disarmAreaGesture = null;
+
 function startAreaSelection() {
   if (drawingMode) {
     stopAreaSelection();
@@ -1011,38 +1035,36 @@ function startAreaSelection() {
 
   areaSelectMode = true;
   drawingMode = "area-select";
-  setStatus("Draw a circle on the map to select photos in that area", false);
-  map.getContainer().style.cursor = "crosshair";
-
-  // Disable map dragging while drawing
-  map.dragging.disable();
-
-  // Set up drawing handlers
-  map.once("mousedown", onAreaSelectStart);
+  setStatus("Draw a circle on the map to select photos in that area (Esc cancels)", false);
+  disarmAreaGesture = armMapDrawGesture(map, {
+    onStart: onAreaSelectStart,
+    onMove: onAreaSelectMove,
+    onEnd: onAreaSelectEnd,
+    onCancel: () => { stopAreaSelection(); setStatus("Area selection cancelled", false); },
+  });
 }
 
-function onAreaSelectStart(e) {
-  drawStartLatLng = e.latlng;
+function onAreaSelectStart(latlng) {
+  drawStartLatLng = latlng;
 
-  drawingShape = L.circle(e.latlng, {
+  drawingShape = L.circle(latlng, {
     radius: 0,
     color: "#e0a040",
     weight: 2,
     fillOpacity: 0.2
   }).addTo(map);
-
-  map.on("mousemove", onAreaSelectMove);
-  map.once("mouseup", onAreaSelectEnd);
 }
 
-function onAreaSelectMove(e) {
+function onAreaSelectMove(latlng) {
   if (!drawingShape || !drawStartLatLng) return;
-  const radius = drawStartLatLng.distanceTo(e.latlng);
+  const radius = drawStartLatLng.distanceTo(latlng);
   drawingShape.setRadius(radius);
 }
 
-async function onAreaSelectEnd(e) {
-  map.off("mousemove", onAreaSelectMove);
+async function onAreaSelectEnd(latlng) {
+  // The release point counts too: a quick flick may have no move in between.
+  onAreaSelectMove(latlng);
+  disarmAreaGesture = null;   // the gesture already restored map dragging
 
   if (!drawingShape || !drawStartLatLng) {
     stopAreaSelection();
@@ -1051,9 +1073,10 @@ async function onAreaSelectEnd(e) {
 
   const radius = drawingShape.getRadius();
 
-  // Check minimum size
+  // Check minimum size. A status line, not an alert(): nothing happened, so
+  // there is nothing to acknowledge — the drag just didn't take.
   if (radius < 2) {
-    alert("Area is too small. Please drag to create a larger area.");
+    setStatus("That area is too small — drag further to set its size.", true);
     stopAreaSelection();
     return;
   }
@@ -1067,8 +1090,7 @@ async function onAreaSelectEnd(e) {
   // Clear drawing state
   drawingShape = null;
   drawingMode = null;
-  map.getContainer().style.cursor = "";
-  map.dragging.enable();
+  areaSelectMode = false;
 
   // Load photos in this area
   const center = areaSelectCircle.getLatLng();
@@ -1084,11 +1106,8 @@ async function onAreaSelectEnd(e) {
 function stopAreaSelection() {
   areaSelectMode = false;
   drawingMode = null;
-  map.getContainer().style.cursor = "";
-  map.dragging.enable();
-  map.off("mousedown", onAreaSelectStart);
-  map.off("mousemove", onAreaSelectMove);
-  map.off("mouseup", onAreaSelectEnd);
+  if (disarmAreaGesture) { disarmAreaGesture(); disarmAreaGesture = null; }
+  drawStartLatLng = null;
 
   if (drawingShape) {
     map.removeLayer(drawingShape);

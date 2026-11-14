@@ -160,11 +160,14 @@ function bindToolbar() {
   });
   // One Escape handler for every layer. Innermost first, and only one closes per
   // press, so Escape out of a dialog opened over the picker doesn't shut both.
+  // Dialogs first, then an armed or half-drawn shape (which only exists with no
+  // dialog up — the name dialog opens once the drag is released).
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     if (placeDialogDone) closePlaceDialog(null);
     else if (confirmDialogDone) closeConfirmDialog(false);
-    else closeRepPicker();
+    else if (document.getElementById("rep-picker-modal").style.display !== "none") closeRepPicker();
+    else if (drawingMode) { stopDrawing(); setStatus("Drawing cancelled"); }
   });
 }
 
@@ -1267,10 +1270,14 @@ function closeConfirmDialog(result) {
 function bindDialogs() {
   const nameInput = document.getElementById("place-dialog-name");
   nameInput.addEventListener("input", checkDuplicateName);
-  // Enter anywhere in the form saves; the dialog has no <form>, so this is the
-  // keyboard path a form would have given for free.
+  // Enter in a field saves; the dialog has no <form>, so this is the keyboard
+  // path a form would have given for free. Only in a field: on a focused button
+  // Enter is that button's own click (Cancel cancels, Save saves), as in a form.
   document.getElementById("place-dialog-content").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { e.preventDefault(); submitPlaceDialog(); }
+    if (e.key !== "Enter" || e.isComposing) return;
+    if (!(e.target instanceof Element) || e.target.tagName !== "INPUT") return;
+    e.preventDefault();
+    submitPlaceDialog();
   });
   document.getElementById("place-dialog-save").addEventListener("click", submitPlaceDialog);
   document.getElementById("place-dialog-cancel").addEventListener("click", () => closePlaceDialog(null));
@@ -1286,55 +1293,61 @@ function bindDialogs() {
 }
 
 /* ── Drawing (click-drag rectangle/circle) ── */
+// The press/drag/release itself is armMapDrawGesture (basemaps.js): it re-enables
+// map dragging however the gesture ends, including a release outside the map.
+let disarmDrawGesture = null;
+
 function startDrawing(type) {
   if (drawingMode) stopDrawing();
 
   drawingMode = type;
   document.getElementById(`draw-${type}-btn`).classList.add("active");
-  setStatus(`Drawing ${type}… click, hold and drag to set size, then release`);
-  map.getContainer().style.cursor = "crosshair";
-  map.dragging.disable();
-  map.once("mousedown", onDrawStart);
+  setStatus(`Drawing ${type}… click, hold and drag to set size, then release (Esc cancels)`);
+  disarmDrawGesture = armMapDrawGesture(map, {
+    onStart: onDrawStart,
+    onMove: onDrawMove,
+    onEnd: onDrawEnd,
+    onCancel: () => { stopDrawing(); setStatus("Drawing cancelled"); },
+  });
 }
 
 function stopDrawing() {
   document.querySelectorAll("#draw-rectangle-btn, #draw-circle-btn")
     .forEach(b => b.classList.remove("active"));
   drawingMode = null;
-  map.getContainer().style.cursor = "";
-  map.off("mousedown", onDrawStart);
-  map.off("mousemove", onDrawMove);
-  map.off("mouseup", onDrawEnd);
-  map.dragging.enable();
+  if (disarmDrawGesture) { disarmDrawGesture(); disarmDrawGesture = null; }
   if (drawingShape) { map.removeLayer(drawingShape); drawingShape = null; }
+  drawStartLatLng = null;
 }
 
-function onDrawStart(e) {
-  drawStartLatLng = e.latlng;
+function onDrawStart(latlng) {
+  drawStartLatLng = latlng;
   if (drawingMode === "rectangle") {
-    drawingShape = L.rectangle([e.latlng, e.latlng], {
+    drawingShape = L.rectangle([latlng, latlng], {
       color: "#e0a040", weight: 2, fillOpacity: 0.2,
     }).addTo(map);
   } else if (drawingMode === "circle") {
-    drawingShape = L.circle(e.latlng, {
+    drawingShape = L.circle(latlng, {
       radius: 0, color: "#e0a040", weight: 2, fillOpacity: 0.2,
     }).addTo(map);
   }
-  map.on("mousemove", onDrawMove);
-  map.once("mouseup", onDrawEnd);
 }
 
-function onDrawMove(e) {
+function onDrawMove(latlng) {
   if (!drawingShape || !drawStartLatLng) return;
   if (drawingMode === "rectangle") {
-    drawingShape.setBounds([drawStartLatLng, e.latlng]);
+    drawingShape.setBounds([drawStartLatLng, latlng]);
   } else if (drawingMode === "circle") {
-    drawingShape.setRadius(drawStartLatLng.distanceTo(e.latlng));
+    drawingShape.setRadius(drawStartLatLng.distanceTo(latlng));
   }
 }
 
-async function onDrawEnd(e) {
-  map.off("mousemove", onDrawMove);
+async function onDrawEnd(latlng) {
+  // The release point counts too: a quick flick may have no move in between.
+  onDrawMove(latlng);
+  // The gesture is over and has restored map dragging; drawingMode stays set
+  // until the name dialog answers, so Escape there closes the dialog first.
+  disarmDrawGesture = null;
 
   if (!drawingShape || !drawStartLatLng) { stopDrawing(); return; }
 
@@ -1364,7 +1377,7 @@ async function onDrawEnd(e) {
     radius: type === "circle" ? drawingShape.getRadius() : null,
     submitLabel: "Save place",
   });
-  if (!answer) { stopDrawing(); return; }
+  if (!answer) { stopDrawing(); setStatus("Drawing cancelled"); return; }
   const name = answer.name;
 
   let boundsData;
