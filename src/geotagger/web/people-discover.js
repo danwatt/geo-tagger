@@ -82,11 +82,16 @@ function makeClusterCard(cl) {
   buttons.push({
     icon: "✏️", label: cl.suggestion ? "Name instead…" : "Name…",
     kind: cl.suggestion ? "" : "primary",
-    onClick: () => {
-      const name = prompt(`Name this group of ${cl.size} face(s):`,
-                          cl.suggestion ? cl.suggestion.person_name : "");
-      if (name && name.trim()) clusterAssign(cl, { name: name.trim() }, name.trim());
-    },
+    // The shared picker, not prompt(): typing shows existing people (and
+    // near-spellings) first, so naming a group can't quietly mint a duplicate.
+    // Prefilled with the suggestion, as the old prompt was.
+    onClick: () => openPersonPicker(persons, {
+      title: `Name this group of ${cl.size} face(s)`,
+      placeholder: "Search people, or type a new name…",
+      initialQuery: cl.suggestion ? cl.suggestion.person_name : "",
+      onPick: (who, label) => clusterAssign(
+        cl, who.person_id ? { person_id: who.person_id } : { name: who.name }, label),
+    }),
   });
   buttons.push({
     icon: "🚫", label: "Ignore all", kind: "danger",

@@ -162,6 +162,15 @@
 .pp-item .pp-count { color: #9aa; font-size: 11px; flex: none; }
 .pp-new { background: #2a4a6e; border-color: #4a90d9; color: #eaf4ff; }
 .pp-new:hover { background: #305686; }
+/* The Create row is blue already, so its keyboard highlight needs a ring. */
+.pp-new.pp-hl { outline: 2px solid var(--accent-text); outline-offset: -2px; }
+/* A typo-distance match ("Jon" for John): listed, but marked as only similar. */
+.pp-item.pp-similar { border-style: dashed; }
+.pp-item.pp-similar .pp-name::after {
+  content: " · similar";
+  color: var(--text-muted);
+  font-size: 11px;
+}
 .pp-empty { color: #888; text-align: center; padding: 14px; font-size: 12px; }
 
 /* Rows carrying a thumbnail and a second line — the geocode page's location

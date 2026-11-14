@@ -164,7 +164,9 @@ function bindToolbar() {
   // dialog up — the name dialog opens once the drag is released).
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
-    if (placeDialogDone) closePlaceDialog(null);
+    // A handle drag in progress goes first: it's the thing under the pointer.
+    if (cancelHandleDrag()) setStatus("Edit cancelled");
+    else if (placeDialogDone) closePlaceDialog(null);
     else if (confirmDialogDone) closeConfirmDialog(false);
     else if (document.getElementById("rep-picker-modal").style.display !== "none") closeRepPicker();
     else if (drawingMode) { stopDrawing(); setStatus("Drawing cancelled"); }
@@ -461,10 +463,13 @@ function selectPlace(placeId) {
  * `draggable: true` on a path needs the Leaflet.Path.Drag plugin, which this app
  * doesn't load. A circle gets a centre (move) and an east-edge (radius) handle;
  * a rectangle gets one handle per corner, each dragging that corner while its
- * diagonal opposite stays put.
+ * diagonal opposite stays put, plus a centre (move) handle like the circle's
+ * that translates the whole rectangle.
  *
  * Every handle writes through updatePlaceBounds, which reads the live shape, so
- * there's one save path however the shape got where it is. */
+ * there's one save path however the shape got where it is. Every handle is also
+ * wired through armHandle, so Escape mid-drag puts the shape back and saves
+ * nothing. */
 
 const MIN_RADIUS_M = 2;          // same floor the draw tool enforces
 const METERS_PER_DEG_LAT = 111320;
@@ -472,6 +477,57 @@ const METERS_PER_DEG_LAT = 111320;
 let moveHandle = null;
 let radiusHandle = null;
 let rectHandles = {};   // corner key ("nw"/"ne"/"se"/"sw") -> marker
+let rectMoveHandle = null;
+// The handle drag in progress: { marker, restore, cancelled } — or null.
+let activeHandleDrag = null;
+
+// Wire a draggable handle: `onDrag` runs per move, `onEnd` (async, saves) on a
+// release. Snapshots the shape's geometry at dragstart; cancelHandleDrag puts
+// it back, and the drag's remaining events are then swallowed so nothing is
+// saved. `resync` re-places every handle onto the (restored) shape.
+function armHandle(marker, shape, { onDrag, onEnd, resync }) {
+  marker.on("dragstart", () => {
+    const snap = shape.getRadius
+      ? { latlng: shape.getLatLng(), radius: shape.getRadius() }
+      : { bounds: shape.getBounds() };
+    activeHandleDrag = {
+      marker, cancelled: false,
+      restore: () => {
+        if (snap.bounds) shape.setBounds(snap.bounds);
+        else { shape.setLatLng(snap.latlng); shape.setRadius(snap.radius); }
+        resync();
+      },
+    };
+  });
+  marker.on("drag", () => {
+    if (activeHandleDrag?.cancelled) return;
+    onDrag();
+  });
+  marker.on("dragend", async () => {
+    const drag = activeHandleDrag;
+    activeHandleDrag = null;
+    // Re-synced again here: Leaflet leaves the handle wherever the pointer was.
+    if (drag?.cancelled) { resync(); return; }
+    await onEnd();
+  });
+}
+
+// Escape mid-drag. True if a drag was cancelled (the caller reports it).
+function cancelHandleDrag() {
+  const drag = activeHandleDrag;
+  if (!drag || drag.cancelled) return false;
+  drag.cancelled = true;
+  drag.restore();
+  // End Leaflet's own drag too, so the handle stops following the pointer.
+  // finishDrag fires dragend, which clears activeHandleDrag and re-syncs.
+  // (Internal to L.Draggable, hence the guard — without it the handle just
+  // keeps tracking the pointer until release, still saving nothing.)
+  const draggable = drag.marker.dragging?._draggable;
+  if (draggable && draggable._moving && typeof draggable.finishDrag === "function") {
+    try { draggable.finishDrag(); } catch (e) { /* the release ends it instead */ }
+  }
+  return true;
+}
 
 function circleRadius(place) {
   try {
@@ -528,30 +584,42 @@ function showCircleHandles(place) {
   radiusHandle = handle(edgeLatLng(shape.getLatLng(), shape.getRadius()),
                         "radius-handle", formatRadius(shape.getRadius()), "right");
 
+  const resync = () => {
+    moveHandle.setLatLng(shape.getLatLng());
+    radiusHandle.setLatLng(edgeLatLng(shape.getLatLng(), shape.getRadius()));
+    radiusHandle.setTooltipContent(formatRadius(shape.getRadius()));
+  };
+
   // Move: the circle follows the centre handle, and the edge handle rides along
   // so the radius it reports doesn't lie mid-drag.
-  moveHandle.on("drag", () => {
-    const c = moveHandle.getLatLng();
-    shape.setLatLng(c);
-    radiusHandle.setLatLng(edgeLatLng(c, shape.getRadius()));
+  armHandle(moveHandle, shape, {
+    resync,
+    onDrag: () => {
+      const c = moveHandle.getLatLng();
+      shape.setLatLng(c);
+      radiusHandle.setLatLng(edgeLatLng(c, shape.getRadius()));
+    },
+    onEnd: () => updatePlaceBounds(place),
   });
-  moveHandle.on("dragend", () => updatePlaceBounds(place));
 
   // Resize: dragging anywhere works — it's the distance from the centre that
   // counts, not staying on the ring — so the handle only snaps back due east
   // once released. The centre is read live, since the move handle may have
   // shifted it since this listener was wired.
-  radiusHandle.on("drag", () => {
-    const c = shape.getLatLng();
-    const r = Math.max(MIN_RADIUS_M, c.distanceTo(radiusHandle.getLatLng()));
-    shape.setRadius(r);
-    // The handle tooltip is the only live size readout now — the sidebar row
-    // shows the name and photo, nothing about geometry.
-    radiusHandle.setTooltipContent(formatRadius(r));
-  });
-  radiusHandle.on("dragend", async () => {
-    radiusHandle.setLatLng(edgeLatLng(shape.getLatLng(), shape.getRadius()));
-    await updatePlaceBounds(place);
+  armHandle(radiusHandle, shape, {
+    resync,
+    onDrag: () => {
+      const c = shape.getLatLng();
+      const r = Math.max(MIN_RADIUS_M, c.distanceTo(radiusHandle.getLatLng()));
+      shape.setRadius(r);
+      // The handle tooltip is the only live size readout now — the sidebar row
+      // shows the name and photo, nothing about geometry.
+      radiusHandle.setTooltipContent(formatRadius(r));
+    },
+    onEnd: async () => {
+      radiusHandle.setLatLng(edgeLatLng(shape.getLatLng(), shape.getRadius()));
+      await updatePlaceBounds(place);
+    },
   });
 }
 
@@ -572,6 +640,8 @@ function rectCorner(bounds, key) {
 function clearRectHandles() {
   Object.values(rectHandles).forEach(h => { if (h) map.removeLayer(h); });
   rectHandles = {};
+  if (rectMoveHandle) map.removeLayer(rectMoveHandle);
+  rectMoveHandle = null;
 }
 
 function showRectangleHandles(place) {
@@ -579,6 +649,13 @@ function showRectangleHandles(place) {
   if (!place || place.type !== "rectangle") return;
   const shape = placeShapes[place.id];
   if (!shape || !shape.getBounds) return;
+
+  // Every handle (corners + centre) back onto the shape's actual geometry.
+  const resync = () => {
+    const b = shape.getBounds();
+    Object.entries(rectHandles).forEach(([k, m]) => m.setLatLng(rectCorner(b, k)));
+    if (rectMoveHandle) rectMoveHandle.setLatLng(b.getCenter());
+  };
 
   Object.keys(RECT_OPPOSITE_CORNER).forEach(key => {
     const marker = L.marker(rectCorner(shape.getBounds(), key), {
@@ -589,27 +666,58 @@ function showRectangleHandles(place) {
 
     // The dragged corner and its fixed diagonal opposite define the new
     // rectangle; the other two corners (and their handles) follow along.
-    marker.on("drag", () => {
-      const fixed = rectCorner(shape.getBounds(), RECT_OPPOSITE_CORNER[key]);
-      let dragged = marker.getLatLng();
-      if (Math.abs(dragged.lat - fixed.lat) < MIN_RECT_DEG) {
-        dragged = L.latLng(fixed.lat + Math.sign(dragged.lat - fixed.lat || 1) * MIN_RECT_DEG, dragged.lng);
-      }
-      if (Math.abs(dragged.lng - fixed.lng) < MIN_RECT_DEG) {
-        dragged = L.latLng(dragged.lat, fixed.lng + Math.sign(dragged.lng - fixed.lng || 1) * MIN_RECT_DEG);
-      }
-      shape.setBounds(L.latLngBounds(fixed, dragged));
-      const b = shape.getBounds();
-      Object.entries(rectHandles).forEach(([k, m]) => m.setLatLng(rectCorner(b, k)));
-    });
-    marker.on("dragend", async () => {
-      // Snap every handle back onto the saved shape's actual corners, same as
-      // the circle's radius handle does after a drag that hit the size floor.
-      const b = shape.getBounds();
-      Object.entries(rectHandles).forEach(([k, m]) => m.setLatLng(rectCorner(b, k)));
-      await updatePlaceBounds(place);
+    armHandle(marker, shape, {
+      resync,
+      onDrag: () => {
+        const fixed = rectCorner(shape.getBounds(), RECT_OPPOSITE_CORNER[key]);
+        let dragged = marker.getLatLng();
+        if (Math.abs(dragged.lat - fixed.lat) < MIN_RECT_DEG) {
+          dragged = L.latLng(fixed.lat + Math.sign(dragged.lat - fixed.lat || 1) * MIN_RECT_DEG, dragged.lng);
+        }
+        if (Math.abs(dragged.lng - fixed.lng) < MIN_RECT_DEG) {
+          dragged = L.latLng(dragged.lat, fixed.lng + Math.sign(dragged.lng - fixed.lng || 1) * MIN_RECT_DEG);
+        }
+        shape.setBounds(L.latLngBounds(fixed, dragged));
+        resync();
+      },
+      onEnd: async () => {
+        // Snap every handle back onto the saved shape's actual corners, same as
+        // the circle's radius handle does after a drag that hit the size floor.
+        resync();
+        await updatePlaceBounds(place);
+      },
     });
     rectHandles[key] = marker;
+  });
+
+  // Move: translate the whole rectangle by however far the centre handle has
+  // gone since dragstart — an offset in degrees, so its lat/lng extent is kept
+  // exactly (a metre-preserving move would reshape it with latitude).
+  rectMoveHandle = L.marker(shape.getBounds().getCenter(), {
+    draggable: true,
+    icon: L.divIcon({ className: "move-handle", html: "", iconSize: [14, 14], iconAnchor: [7, 7] }),
+    zIndexOffset: 1000,
+  }).addTo(map).bindTooltip("Drag to move", { direction: "left" });
+  let startBounds = null;
+  rectMoveHandle.on("dragstart", () => { startBounds = shape.getBounds(); });
+  armHandle(rectMoveHandle, shape, {
+    resync,
+    onDrag: () => {
+      if (!startBounds) return;
+      const c = rectMoveHandle.getLatLng(), c0 = startBounds.getCenter();
+      const sw = startBounds.getSouthWest(), ne = startBounds.getNorthEast();
+      // Clamped so the rectangle can't be pushed past either pole.
+      const dLat = Math.max(-90 - sw.lat, Math.min(90 - ne.lat, c.lat - c0.lat));
+      const dLng = c.lng - c0.lng;
+      shape.setBounds(L.latLngBounds([sw.lat + dLat, sw.lng + dLng], [ne.lat + dLat, ne.lng + dLng]));
+      const b = shape.getBounds();
+      Object.entries(rectHandles).forEach(([k, m]) => m.setLatLng(rectCorner(b, k)));
+    },
+    onEnd: async () => {
+      startBounds = null;
+      resync();
+      await updatePlaceBounds(place);
+    },
   });
 }
 

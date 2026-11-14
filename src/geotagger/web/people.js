@@ -75,6 +75,7 @@ function bindToolbar() {
   document.getElementById("grid-paging-all-btn").addEventListener("click", loadAllFaces);
   document.getElementById("suggested-only-chk").addEventListener("change", (e) => {
     suggestedOnly = e.target.checked;
+    saveViewPref(SUGGESTED_ONLY_LS_KEY, suggestedOnly);
     if (scope === "unlabeled") loadFaces();
   });
   // Suggested-person filter (Unlabeled queue): filters the loaded queue in place,
@@ -121,8 +122,11 @@ function bindToolbar() {
   document.getElementById("discover-refresh-btn").addEventListener("click", () => {
     if (scope === "discover") loadFaces();   // routes to loadClusters under the latest-only guard
   });
-  document.getElementById("crowd-hide-done").addEventListener("change", e => {
+  const crowdHideDone = document.getElementById("crowd-hide-done");
+  crowdHideDone.checked = hideCompletedCrowds;   // the HTML default may be stale
+  crowdHideDone.addEventListener("change", e => {
     hideCompletedCrowds = e.target.checked;
+    saveViewPref(HIDE_DONE_CROWDS_LS_KEY, hideCompletedCrowds);
     if (scope === "crowds") renderCrowds();
   });
 

@@ -78,12 +78,6 @@ Mutations return `{"success"}`, `{"id"}`, `{"updated"}`, or bare lists. `/api/st
 No SQL injection was found: every f-string interpolates fixed fragments, `int()` casts or whitelisted field
 names. No archive is extracted to disk. Download URLs are fixed HTTPS constants.
 
-## UX
-
-**U10 — Smaller items** [traced] — `prompt()` for naming people hides near-duplicates (`people.js:2022,3166`);
-no arrow keys for Prev/Next in Crowd Review; Crowd Review ignores the Focus window (`people.js:2243-2244`);
-pane widths and Show toggles are not persisted; Custom Places rectangles can be resized but not moved.
-
 ## Accessibility
 
 **Y1** [traced] — Thumbnails, month cards, nav items, face cells and edit/delete glyphs are click-only

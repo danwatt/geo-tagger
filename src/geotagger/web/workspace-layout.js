@@ -6,11 +6,41 @@ document.addEventListener("DOMContentLoaded", () => {
   const preview = document.getElementById("detail-pane");
   const toggle = document.getElementById("preview-toggle");
   const panes = mapPane ? [mapPane, grid, preview] : [grid, preview];
-  let weights = mapPane ? [30, 44, 26] : [70, 30];
+  const defaultWeights = mapPane ? [30, 44, 26] : [70, 30];
+  let weights = defaultWeights.slice();
   let previewVisible = true;
   const dividers = [];
+
+  // ── Persisted layout ──
+  // Pane widths and the preview toggle are a per-viewer convenience, so they
+  // live in this browser's localStorage, one key per page (Geocode has the map
+  // pane, Search doesn't). Versioned: a change to the pane set bumps the key
+  // rather than misreading an old layout. Anything that doesn't validate —
+  // wrong pane count, a pane under the 15 % floor the dividers enforce, a total
+  // nowhere near 100 — falls back to the defaults.
+  const layoutKey = `geotagger.workspace.${mapPane ? "geocode" : "search"}.v1`;
+  try {
+    const saved = JSON.parse(localStorage.getItem(layoutKey) || "null");
+    if (saved && Array.isArray(saved.weights) && saved.weights.length === weights.length &&
+        saved.weights.every(w => Number.isFinite(w) && w >= 15 && w <= 100 - 15 * (weights.length - 1))) {
+      const sum = saved.weights.reduce((a, b) => a + b, 0);
+      if (sum > 90 && sum < 110) weights = saved.weights.map(w => w * 100 / sum);
+    }
+    if (saved && typeof saved.previewVisible === "boolean") previewVisible = saved.previewVisible;
+  } catch (e) { /* storage blocked or junk — keep the defaults */ }
+  let saveTimer = null;
+  function saveLayout() {
+    // Debounced: a divider drag calls layout() per pointer move.
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      try {
+        localStorage.setItem(layoutKey, JSON.stringify({ weights, previewVisible }));
+      } catch (e) { /* storage full/blocked — the layout just won't stick */ }
+    }, 250);
+  }
   main.classList.add("workspace-panes");
-  function layout() {
+  function layout(persist = true) {
+    if (persist) saveLayout();
     preview.hidden = !previewVisible;
     const visible = previewVisible ? panes.length : panes.length - 1;
     const columns = [];
@@ -57,7 +87,7 @@ document.addEventListener("DOMContentLoaded", () => {
     divider.addEventListener("lostpointercapture", () => { previousX = null; });
   });
   toggle.addEventListener("click", () => { previewVisible = !previewVisible; layout(); });
-  layout();
+  layout(false);   // the initial paint of a restored layout needn't re-save it
 
   if (mapPane) {
     const actions = document.createElement("div");

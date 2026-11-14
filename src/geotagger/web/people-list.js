@@ -216,8 +216,27 @@ function updateGridNavVisibility() {
 }
 
 /* ── Person CRUD ── */
-async function addPerson() {
-  const name = prompt("New person's name:");
+// The shared picker rather than prompt(): existing people (and near-spellings)
+// are listed as you type, with "Create" a separate row — picking an existing
+// one just opens them instead of adding a duplicate.
+function addPerson() {
+  openPersonPicker(persons, {
+    title: "Add person",
+    placeholder: "Type a name…",
+    onPick: async (who) => {
+      if (who.person_id) {
+        const p = persons.find(q => q.id === who.person_id);
+        // After the load, which writes its own status line.
+        await selectScope("person", who.person_id);
+        setStatus(`${p ? p.name : "That person"} already exists — showing them.`);
+      } else {
+        createPerson(who.name);
+      }
+    },
+  });
+}
+
+async function createPerson(name) {
   if (!name || !name.trim()) return;
   try {
     const res = await fetch("/api/persons", {

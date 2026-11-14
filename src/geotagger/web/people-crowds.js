@@ -141,8 +141,11 @@ function makeCrowdPhotoThumb(ph, group, groupIgnoreBtn) {
   const minFaces = parseInt(document.getElementById("crowd-min-faces").value) || 50;
   const gap = parseInt(document.getElementById("crowd-gap-select").value) || 86400;
   reviewBtn.addEventListener("click", () => {
+    // The Focus window rides along, so Crowd Review's Prev/Next walks the same
+    // photos this view lists — not every crowd photo in the library.
     window.location.href =
-      `/photo-faces.html?photo_id=${ph.id}&mode=crowd&min_faces=${minFaces}&group_gap=${gap}`;
+      `/photo-faces.html?photo_id=${ph.id}&mode=crowd&min_faces=${minFaces}&group_gap=${gap}` +
+      (focusActive() ? "&" + focusQuery() : "");
   });
   actions.appendChild(reviewBtn);
 

@@ -19,7 +19,11 @@ let renderOrder = [];
 let scope = "unlabeled";        // "unlabeled" | "all" | "person"
 let scopePersonId = null;       // when scope === "person"
 
-let suggestedOnly = false;      // Unlabeled queue: hide faces with no guess
+// Remembered per browser (common.js loadViewPref), as the sort/hierarchy are.
+const SUGGESTED_ONLY_LS_KEY = "geotagger.people.suggestedOnly.v1";
+const HIDE_DONE_CROWDS_LS_KEY = "geotagger.people.crowdHideDone.v1";
+const isBool = v => typeof v === "boolean";
+let suggestedOnly = loadViewPref(SUGGESTED_ONLY_LS_KEY, false, isBool);  // Unlabeled queue: hide faces with no guess
 // Unlabeled queue: narrow the grid to faces whose *top* guess is one person.
 // The filter is applied client-side over the loaded queue, so `unlabeledAll`
 // keeps the full flattened list and `faces` is the filtered view actually shown.
@@ -34,7 +38,7 @@ let unlabeledMeta = { total: 0, returned: 0 };  // server counts for the loaded 
 let runOrderRank = new Map();
 let clusters = [];              // discovered groups (Discover view)
 let crowdGroups = [];           // crowd photo groups (Crowds view)
-let hideCompletedCrowds = true; // hide crowd photos with no unlabeled faces
+let hideCompletedCrowds = loadViewPref(HIDE_DONE_CROWDS_LS_KEY, true, isBool); // hide crowd photos with no unlabeled faces
 
 // Staged, not-yet-saved decisions: face id → { face, kind, personId, name }.
 // Every non-destructive action on a flat grid (assign / unassign / ignore /

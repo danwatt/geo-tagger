@@ -444,6 +444,9 @@ function openQuickActions(anchor, face, opts) {
  *   wide,         // widen the modal — for rows carrying a thumbnail + meta line
  *   allowCreate,  // default true — offer "Create “name”" for unmatched text
  *   createLabel,  // (query) => string   label for that create row
+ *   initialQuery, // prefill (selected) for the search box
+ *   fuzzy,        // also list typo-distance matches, marked "similar"; Enter
+ *                 //   then defaults to Create when they're the only matches
  *   onPick,       // (item, label) => void                            REQUIRED
  *                 //   item is the caller's own object, or {__new:true, name}
  *   onClose,      // () => void — DISMISSED without picking (Esc, ✕, backdrop)
@@ -456,7 +459,9 @@ function openQuickActions(anchor, face, opts) {
  *
  * openPersonPicker(persons, opts) is the person-shaped wrapper — same modal,
  * with onPick handing back {person_id} | {name} as its callers expect
- * (opts: title, placeholder, allowCreate, onPick, onClose). */
+ * (opts: title, placeholder, allowCreate, initialQuery, onPick, onClose).
+ * Matching is case/accent-insensitive everywhere; the person wrapper adds
+ * fuzzy, so naming someone surfaces near-duplicates before Create. */
 let _ppBackdrop = null;
 let _ppOnClose = null;
 
@@ -488,6 +493,10 @@ function openPersonPicker(persons, opts) {
     emptyText: "No people yet — type a name to create one.",
     allowCreate: opts.allowCreate ?? true,
     createLabel: (q) => `➕ Create "${q}"`,
+    initialQuery: opts.initialQuery,
+    // Typo-distance matches too: a person list is where a near-duplicate
+    // ("Jon" beside "John") is worth catching before it's created.
+    fuzzy: true,
     onClose: opts.onClose,
     onPick: (item, label) =>
       opts.onPick(item.__new ? { name: item.name } : { person_id: item.id }, label),
@@ -545,19 +554,36 @@ function openEntityPicker(items, opts) {
   // that away. Ungrouped items sort by name, as the person list always has.
   const grouped = items.some((it) => it.group);
 
+  // Folded once up front: the list is re-filtered on every keystroke.
+  const folded = new Map(items.map((it) => [it, {
+    name: _ppFold(it.name), meta: _ppFold(it.meta || ""),
+  }]));
+
   function renderList(q) {
     list.innerHTML = "";
-    const ql = q.trim().toLowerCase();
-    const hit = (it) =>
-      it.name.toLowerCase().includes(ql) ||
-      (it.meta || "").toLowerCase().includes(ql);
-    let matches = items.filter(hit);
-    if (!grouped) matches = matches.slice().sort((a, b) => a.name.localeCompare(b.name));
+    const ql = _ppFold(q.trim());
+    // Rank every item against the query (null = no match). Ungrouped lists sort
+    // by rank, then name, so "Ann" puts Ann above Joanne; grouped lists keep
+    // the caller's order. Fuzzy (typo-distance) hits only when opts.fuzzy.
+    const ranked = [];
+    items.forEach((it) => {
+      const r = ql ? _ppRank(folded.get(it), ql, !!opts.fuzzy) : 2;
+      if (r !== null) ranked.push({ it, r });
+    });
+    if (!grouped) {
+      ranked.sort((a, b) => a.r - b.r || a.it.name.localeCompare(b.it.name));
+    }
+    const matches = ranked.map((m) => m.it);
+    const strong = ranked.filter((m) => m.r < _PP_RANK_FUZZY).length;
 
-    const offerCreate = ql && allowCreate && !items.some((it) => it.name.toLowerCase() === ql);
+    // Suppressed only when the query *is* an existing name once case and
+    // accents are folded — "jose" next to "José" is a near-duplicate, not a
+    // new person. Anything else gets the explicit Create row.
+    const offerCreate = ql && allowCreate &&
+      !items.some((it) => folded.get(it).name === ql);
 
     let lastGroup = null;
-    matches.forEach((it) => {
+    ranked.forEach(({ it, r }) => {
       if (grouped && it.group !== lastGroup) {
         lastGroup = it.group;
         const head = document.createElement("div");
@@ -565,7 +591,14 @@ function openEntityPicker(items, opts) {
         head.textContent = it.group || "";
         list.appendChild(head);
       }
-      list.appendChild(makeItemRow(it));
+      const row = makeItemRow(it);
+      if (r === _PP_RANK_FUZZY) {
+        // Shown so a near-miss spelling surfaces the existing person, but
+        // tagged — and never the Enter default (see below).
+        row.classList.add("pp-similar");
+        row.title = row.title || "Similar spelling to what you typed";
+      }
+      list.appendChild(row);
     });
 
     // Create goes at the *end* of the list so the keyboard highlight lands on
@@ -588,7 +621,13 @@ function openEntityPicker(items, opts) {
       list.appendChild(empty);
     }
 
-    _ppHighlightIdx = list.querySelectorAll(".pp-item").length ? 0 : -1;
+    // Enter's default: the first real match. When only typo-distance matches
+    // exist, Enter means "create what I typed" — a similar-looking name is a
+    // suggestion to look at, not something to tag silently.
+    const rowCount = list.querySelectorAll(".pp-item").length;
+    if (!rowCount) _ppHighlightIdx = -1;
+    else if (strong || !offerCreate) _ppHighlightIdx = 0;
+    else _ppHighlightIdx = rowCount - 1;   // the Create row, always last
     _ppUpdateHighlight(list);
   }
 
@@ -666,12 +705,68 @@ function openEntityPicker(items, opts) {
   backdrop.appendChild(modal);
   document.body.appendChild(backdrop);
   _ppBackdrop = backdrop;
-  renderList("");
+  // A prefilled query (e.g. the suggested name when naming a group) is selected,
+  // so typing replaces it while Enter still takes it as-is.
+  search.value = opts.initialQuery || "";
+  renderList(search.value);
   search.focus();
+  search.select();
   document.addEventListener("keydown", _ppEscape);
 }
 
 let _ppHighlightIdx = -1;
+
+// Case- and accent-insensitive form for matching: "José" and "jose" fold alike.
+function _ppFold(s) {
+  return String(s).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+}
+
+// Match ranks, best first. _PP_RANK_FUZZY must stay the largest.
+const _PP_RANK_FUZZY = 4;
+
+// How well folded item `f` ({name, meta}) matches folded query `q`, or null:
+//   0 exact name · 1 name prefix · 2 every query word prefixes a name word
+//   ("jo sm" → "John Smith") · 3 substring of name or meta · 4 within a
+//   small edit distance of the name or one of its words ("Jon" → "John").
+function _ppRank(f, q, fuzzy) {
+  if (f.name === q) return 0;
+  if (f.name.startsWith(q)) return 1;
+  const words = f.name.split(/[\s\-'.]+/).filter(Boolean);
+  const qWords = q.split(/\s+/).filter(Boolean);
+  if (qWords.every((w) => words.some((nw) => nw.startsWith(w)))) return 2;
+  if (f.name.includes(q) || f.meta.includes(q)) return 3;
+  if (!fuzzy || q.length < 3) return null;
+  // One typo per ~4 letters, at most 2 — loose enough for Jon/John, Katherine/
+  // Catherine, tight enough that short names don't match everything.
+  const max = Math.min(2, Math.floor(q.length / 4) + 1);
+  const close = (s) => Math.abs(s.length - q.length) <= max && _ppEditDistance(s, q, max) <= max;
+  if (close(f.name) || words.some(close)) return _PP_RANK_FUZZY;
+  return null;
+}
+
+// Optimal-string-alignment distance (Levenshtein + adjacent swaps), bailing
+// out once every cell in a row exceeds `max` — callers only need "within max".
+function _ppEditDistance(a, b, max) {
+  let prev2 = null;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (prev2 && i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        v = Math.min(v, prev2[j - 2] + 1);
+      }
+      cur.push(v);
+      rowMin = Math.min(rowMin, v);
+    }
+    if (rowMin > max) return max + 1;
+    prev2 = prev;
+    prev = cur;
+  }
+  return prev[b.length];
+}
 
 function _ppUpdateHighlight(list) {
   const rows = Array.from(list.querySelectorAll(".pp-item"));

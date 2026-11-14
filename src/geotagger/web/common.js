@@ -204,6 +204,27 @@ function anyModalOpen() {
   return [...document.querySelectorAll(".modal")].some(m => m.style.display !== "none");
 }
 
+/* ── Per-viewer view preferences ──
+ * Small remembered UI choices (a Show toggle, a "hide completed" checkbox) in
+ * this browser's localStorage. Never fatal: blocked or full storage, or a
+ * stored value that fails `valid`, just yields `fallback`. Keys are versioned
+ * by the caller ("geotagger.<page>.<thing>.v1") so a change of shape bumps the
+ * key instead of misreading old data. */
+function loadViewPref(key, fallback, valid = () => true) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return fallback;
+    const v = JSON.parse(raw);
+    return valid(v) ? v : fallback;
+  } catch (e) {
+    return fallback;
+  }
+}
+
+function saveViewPref(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* not remembered */ }
+}
+
 /** Reduce an untrusted URL (query param, stored value) to a same-origin
  *  path+query+hash, or return `fallback`. Guards `location.href = <param>`
  *  against javascript:/data: URLs and off-site redirects: anything that does

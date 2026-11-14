@@ -155,8 +155,27 @@ async function deleteFamily(f) {
   }
 }
 
-async function promptAddFamily() {
-  const name = prompt("New family name:")?.trim();
+// The shared typeahead (face-grid.js) instead of prompt(): existing families
+// and near-spellings show as you type, with Create as its own row. Picking an
+// existing family filters the list to it rather than adding a second one.
+function promptAddFamily() {
+  const items = families.map((f) => ({ id: f.id, name: f.name, count: f.person_count }));
+  openEntityPicker(items, {
+    title: "Add family",
+    placeholder: "Type a family name…",
+    emptyText: "No families yet — type a name to create one.",
+    fuzzy: true,
+    createLabel: (q) => `➕ Create family "${q}"`,
+    onPick: (item) => {
+      if (item.__new) { addFamily(item.name.trim()); return; }
+      el("family-filter-sel").value = String(item.id);
+      renderPersons();
+      toast(`Family "${item.name}" already exists — showing its members`);
+    },
+  });
+}
+
+async function addFamily(name) {
   if (!name) return;
   try {
     await api("POST", "/api/families", { name });
@@ -464,8 +483,26 @@ async function deletePerson(p) {
   }
 }
 
-async function promptAddPerson() {
-  const name = prompt("New person name:")?.trim();
+// Same picker as everywhere a person is named: existing people (and
+// near-spellings) first, Create as a separate row. Picking an existing person
+// narrows the table to them instead of adding a duplicate.
+function promptAddPerson() {
+  openPersonPicker(persons, {
+    title: "Add person",
+    placeholder: "Type a name…",
+    onPick: (who) => {
+      if (!who.person_id) { addPerson(who.name.trim()); return; }
+      const p = persons.find((q) => q.id === who.person_id);
+      if (!p) return;
+      el("person-search").value = p.name;
+      el("family-filter-sel").value = "";
+      renderPersons();
+      toast(`"${p.name}" already exists — showing them`);
+    },
+  });
+}
+
+async function addPerson(name) {
   if (!name) return;
   try {
     await api("POST", "/api/persons", { name });

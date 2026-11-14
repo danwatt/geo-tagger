@@ -44,6 +44,19 @@ const FILTER_TOGGLES = {
   screenshots: true,
   ignored: false,
 };
+// What the viewer last clicked them to, remembered per browser. Only known keys
+// with boolean values are taken from storage, so a stale/garbled entry can't
+// add a filter or hide everything with a non-boolean.
+const FILTER_TOGGLES_KEY = "geotagger.geocode.showToggles.v1";
+{
+  const saved = loadViewPref(FILTER_TOGGLES_KEY, null,
+    v => v !== null && typeof v === "object" && !Array.isArray(v));
+  if (saved) {
+    for (const k of Object.keys(FILTER_TOGGLES)) {
+      if (typeof saved[k] === "boolean") FILTER_TOGGLES[k] = saved[k];
+    }
+  }
+}
 
 // Group heading for staged "needs no location" marks. Doubles as their key in
 // groupPendingGeo, so it must not collide with a real geocoded place name.
@@ -287,6 +300,13 @@ function bindToolbar() {
     }
   }
   // Show is a pure client-side view of the already-loaded scope — no reload.
+  // The buttons start as geocode.html has them; bring them in line with any
+  // remembered state before the first render reads FILTER_TOGGLES.
+  document.querySelectorAll("#filter-toggles .filter-toggle").forEach(btn => {
+    const on = !!FILTER_TOGGLES[btn.dataset.filter];
+    btn.classList.toggle("on", on);
+    btn.setAttribute("aria-pressed", String(on));
+  });
   document.getElementById("filter-toggles").addEventListener("click", (e) => {
     const btn = e.target.closest(".filter-toggle");
     if (!btn) return;
@@ -294,6 +314,9 @@ function bindToolbar() {
     FILTER_TOGGLES[key] = !FILTER_TOGGLES[key];
     btn.classList.toggle("on", FILTER_TOGGLES[key]);
     btn.setAttribute("aria-pressed", String(FILTER_TOGGLES[key]));
+    // Saved on a click only — setFilterToggle's programmatic flips (the work
+    // queue forcing Not tagged on) are for that pass, not a preference.
+    saveViewPref(FILTER_TOGGLES_KEY, FILTER_TOGGLES);
     applyFilters();
   });
   document.getElementById("window-select").addEventListener("change", reloadCurrentView);

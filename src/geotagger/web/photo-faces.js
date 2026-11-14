@@ -9,10 +9,17 @@ let persons      = [];
 let photoFaces   = [];
 let minFaces     = 50;
 let groupGap     = 86400;
-let hideCompleted = true;
+// "Skip completed", remembered per browser (common.js loadViewPref).
+const HIDE_DONE_LS_KEY = "geotagger.photoFaces.skipCompleted.v1";
+let hideCompleted = loadViewPref(HIDE_DONE_LS_KEY, true, v => typeof v === "boolean");
 let mode         = "crowd";
 let backHref     = "/people.html";
 let drawMode     = false;   // "Add face": drag a box over the photo (see setDrawMode)
+// The People page's time Focus (epoch secs, or null), carried in on the URL so
+// the playlist is the same window the Crowds view showed.
+let focusStartTs = null;
+let focusEndTs   = null;
+let doneNextBusy = false;   // "Done & next" is mid-ignore (see the ←/→ handler)
 
 /* ── Init ── */
 document.addEventListener("DOMContentLoaded", async () => {
@@ -20,6 +27,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   minFaces      = parseInt(params.get("min_faces")  || "50");
   groupGap      = parseInt(params.get("group_gap")  || "86400");
   const startId = parseInt(params.get("photo_id")   || "0");
+  focusStartTs  = intParam(params, "start_ts");
+  focusEndTs    = intParam(params, "end_ts");
   // Crowd mode is opt-in: any bare ?photo_id= link lands in single-photo mode.
   mode          = params.get("mode") === "crowd" ? "crowd" : "single";
   // ?back= is untrusted (navigated to on Back) — same-origin paths only.
@@ -46,13 +55,28 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   if (!crowdPhotos.length) {
-    setStatus(`No crowd photos with ≥ ${minFaces} faces found.`);
+    setStatus(`No crowd photos with ≥ ${minFaces} faces found` +
+      (focusStartTs != null || focusEndTs != null ? " in the People Focus window." : "."));
     return;
   }
 
   const idx = startId ? crowdPhotos.findIndex(p => p.id === startId) : -1;
   await navigateTo(idx >= 0 ? idx : 0);
 });
+
+/* An integer query param, or null when absent / not a number. */
+function intParam(params, key) {
+  const v = parseInt(params.get(key) ?? "", 10);
+  return Number.isFinite(v) ? v : null;
+}
+
+/* The crowd playlist's query string: thresholds plus any Focus window. */
+function crowdQuery() {
+  let q = `min_faces=${minFaces}&group_gap=${groupGap}`;
+  if (focusStartTs != null) q += `&start_ts=${focusStartTs}`;
+  if (focusEndTs != null) q += `&end_ts=${focusEndTs}`;
+  return q;
+}
 
 /* Hide the playlist-only controls when reviewing a single photo. */
 function applyMode() {
@@ -86,19 +110,44 @@ function bindToolbar() {
   document.getElementById("ignore-unlabeled-btn").addEventListener("click",
     () => ignoreAllUnlabeled().catch(() => {}));
   document.getElementById("done-next-btn").addEventListener("click", async () => {
-    await ignoreAllUnlabeled(true);
+    doneNextBusy = true;
+    try {
+      await ignoreAllUnlabeled(true);
+    } finally {
+      doneNextBusy = false;
+    }
     const i = nextAvailableIdx();
     if (i >= 0) navigateTo(i);
   });
-  document.getElementById("hide-done-chk").addEventListener("change", e => {
+  const hideDone = document.getElementById("hide-done-chk");
+  hideDone.checked = hideCompleted;
+  hideDone.addEventListener("change", e => {
     hideCompleted = e.target.checked;
+    saveViewPref(HIDE_DONE_LS_KEY, hideCompleted);
     updateNavButtons();
+  });
+
+  // ←/→ step through the playlist, same as the Prev/Next buttons (and so
+  // honouring their disabled state). Off while typing, while a modal or the
+  // person picker is up, while drawing a box, and while "Done & next" is still
+  // ignoring (it navigates itself once that lands — an arrow meanwhile would
+  // step twice).
+  document.addEventListener("keydown", (e) => {
+    if (mode !== "crowd") return;
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    if (isTypingTarget(e) || anyModalOpen() || isPersonPickerOpen() || drawMode) return;
+    if (doneNextBusy) return;
+    const btn = document.getElementById(e.key === "ArrowLeft" ? "prev-btn" : "next-btn");
+    if (btn.disabled) return;
+    e.preventDefault();
+    btn.click();
   });
 }
 
 /* ── Data loading ── */
 async function loadCrowdPhotos() {
-  const res = await fetch(`/api/crowds?min_faces=${minFaces}&group_gap=${groupGap}`);
+  const res = await fetch(`/api/crowds?${crowdQuery()}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   crowdPhotos = data.groups.flatMap(g => g.photos);
@@ -161,8 +210,7 @@ async function navigateTo(idx) {
   document.getElementById("bbox-overlay").innerHTML = "";
 
   if (mode === "crowd") {
-    history.replaceState(null, "",
-      `?photo_id=${photo.id}&mode=crowd&min_faces=${minFaces}&group_gap=${groupGap}`);
+    history.replaceState(null, "", `?photo_id=${photo.id}&mode=crowd&${crowdQuery()}`);
   }
 
   document.getElementById("photo-meta").innerHTML = "";
