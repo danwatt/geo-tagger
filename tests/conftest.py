@@ -114,19 +114,7 @@ def thumbs_dir(tmp_path, monkeypatch):
 
 
 def _reset_geocode_state():
-    geocode._state = "unloaded"
-    geocode._error = None
-    geocode._tree = None
-    geocode._names = []
-    geocode._ccs = []
-    geocode._admin1 = []
-    geocode._admin2 = []
-    geocode._lats = None
-    geocode._lngs = None
-    geocode._populations = None
-    geocode._admin1_names = {}
-    geocode._admin2_names = {}
-    geocode._country_names = {}
+    geocode.reset()
 
 
 @pytest.fixture
@@ -148,6 +136,7 @@ def _reset_osm_places_state():
     osm_places._state = "unloaded"
     osm_places._error = None
     osm_places._conn = None
+    osm_places._sig = None
 
 
 @pytest.fixture(autouse=True)
@@ -160,6 +149,9 @@ def _isolate_osm_places(tmp_path, monkeypatch):
     _reset_osm_places_state()
     # The memoized geocode-cache dataset version fingerprints these per-test paths.
     geocode._cache_version = None
+    # The lookup-time dataset re-check (G3) would otherwise fire whenever 30 s of
+    # suite time happened to elapse; tests of it turn it back on explicitly.
+    monkeypatch.setattr(config, "DATASET_RECHECK_SECONDS", float("inf"))
     yield
     _reset_osm_places_state()
     geocode._cache_version = None

@@ -20,6 +20,9 @@ lookup returns None and `status()` reports it — the rest of the app keeps work
 import logging
 import math
 import threading
+import time
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 from geotagger import config
@@ -27,26 +30,64 @@ from geotagger.config import GEOCODE_PRECISION
 
 logger = logging.getLogger(__name__)
 
-# Load state machine: "unloaded" -> "ready" | "unavailable". Guarded by _lock.
+
+@dataclass(frozen=True, slots=True)
+class _Tables:
+    """Everything one GeoNames load produced, published as a single object.
+
+    Readers take one reference to it (_tables()) and use only that for the whole
+    lookup, so a reset() or reload on another thread can never hand them the new
+    KD-tree with the old name list (row indices would point at the wrong places,
+    or past the end)."""
+    tree: object                    # scipy.spatial.cKDTree over city XYZ
+    names: list[str]                # parallel to the KD-tree points
+    ccs: list[str]
+    admin1: list[str]
+    admin2: list[str]
+    lats: object                    # numpy arrays, parallel to names — for bbox queries
+    lngs: object
+    populations: object
+    admin1_names: dict[str, str]    # "<cc>.<a1>"      -> state/province name
+    admin2_names: dict[str, str]    # "<cc>.<a1>.<a2>" -> county/district name
+    country_names: dict[str, str]   # cc               -> country name
+
+
+# Load state machine: "unloaded" -> "ready" | "unavailable", and back to
+# "unloaded" on reset(). _lock guards the state below and is only ever held for
+# assignments and a few stat() calls; _load_lock serializes the parse itself
+# (seconds, for cities500), so reset() never waits on a load in progress.
 _lock = threading.Lock()
+_load_lock = threading.Lock()
 _state = "unloaded"
 _error: str | None = None
-
-_tree = None                       # scipy.spatial.cKDTree over city XYZ
-_names: list[str] = []             # parallel to the KD-tree points
-_ccs: list[str] = []
-_admin1: list[str] = []
-_admin2: list[str] = []
-_lats = None                        # numpy array, parallel to _names — for bbox queries
-_lngs = None
-_populations = None
-_admin1_names: dict[str, str] = {}  # "<cc>.<a1>"        -> state/province name
-_admin2_names: dict[str, str] = {}  # "<cc>.<a1>.<a2>"   -> county/district name
-_country_names: dict[str, str] = {}  # cc                -> country name
+_data: _Tables | None = None
+# Bumped by reset(): a load that started under an older generation read files that
+# may since have been replaced, so it parses again instead of publishing.
+_generation = 0
+_sig: tuple | None = None          # file signature the published state was loaded from
+_loading_sig: tuple | None = None  # ... and the one a load in progress started from
 
 
 def _cities_file() -> Path:
     return config.GEONAMES_DIR / "cities500.txt"
+
+
+def _geonames_files() -> list[Path]:
+    return [_cities_file(), config.GEONAMES_DIR / "admin1CodesASCII.txt",
+            config.GEONAMES_DIR / "admin2Codes.txt", config.GEONAMES_DIR / "countryInfo.txt"]
+
+
+def _signature() -> tuple:
+    """(size, mtime) per GeoNames file, None for a missing one. Every downloader
+    swaps in a whole new file, so changed data always changes this."""
+    sig = []
+    for path in _geonames_files():
+        try:
+            st = path.stat()
+            sig.append((st.st_size, st.st_mtime_ns))
+        except OSError:
+            sig.append(None)
+    return tuple(sig)
 
 
 def is_available() -> bool:
@@ -55,106 +96,146 @@ def is_available() -> bool:
 
 
 def status() -> dict:
-    """Health/diagnostics for the /api/status endpoint."""
+    """Health/diagnostics for the status endpoints. Re-checks the dataset files
+    first (check_datasets), so an install made by any means shows up here at once.
+    Doesn't force the load itself — that's seconds of parsing — so straight after
+    an install or reset the state reads "unloaded" until the next lookup."""
+    check_datasets()
+    with _lock:
+        state, error, data = _state, _error, _data
     return {
         "available": is_available(),
-        "state": _state,
-        "error": _error,
-        "cities": len(_names) if _state == "ready" else 0,
+        "state": state,
+        "error": error,
+        "cities": len(data.names) if data is not None else 0,
     }
 
 
+def _parse() -> _Tables:
+    """Read the GeoNames files and build the KD-tree. Pure: touches no module
+    state, so it runs outside _lock and can be thrown away if reset() lands
+    mid-parse."""
+    import numpy as np
+    from scipy.spatial import cKDTree
+
+    names: list[str] = []
+    ccs: list[str] = []
+    admin1: list[str] = []
+    admin2: list[str] = []
+    lats: list[float] = []
+    lngs: list[float] = []
+    pops: list[int] = []
+    with _cities_file().open(encoding="utf-8") as f:
+        for line in f:
+            p = line.rstrip("\n").split("\t")
+            if len(p) < 11:
+                continue
+            try:
+                lat = float(p[4])
+                lng = float(p[5])
+            except ValueError:
+                continue
+            lats.append(lat)
+            lngs.append(lng)
+            names.append(p[1])
+            ccs.append(p[8])
+            admin1.append(p[10])
+            admin2.append(p[11] if len(p) > 11 else "")
+            try:
+                pops.append(int(p[14]) if len(p) > 14 and p[14] else 0)
+            except ValueError:
+                pops.append(0)
+
+    lat_a = np.asarray(lats)
+    lng_a = np.asarray(lngs)
+    # Unit-sphere XYZ so nearest-neighbour by Euclidean (chord) distance
+    # matches nearest-by-great-circle and is correct near poles/antimeridian.
+    lat_r = np.radians(lat_a)
+    lng_r = np.radians(lng_a)
+    cos_lat = np.cos(lat_r)
+    xyz = np.column_stack((cos_lat * np.cos(lng_r),
+                           cos_lat * np.sin(lng_r),
+                           np.sin(lat_r)))
+    return _Tables(
+        tree=cKDTree(xyz), names=names, ccs=ccs, admin1=admin1, admin2=admin2,
+        lats=lat_a, lngs=lng_a, populations=np.asarray(pops, dtype=np.int64),
+        admin1_names=_load_admin1(), admin2_names=_load_admin2(),
+        country_names=_load_countries(),
+    )
+
+
 def _load():
-    """Parse the GeoNames files and build the KD-tree. Idempotent; call via
-    _ensure_loaded() so it runs once under the lock."""
-    global _state, _error, _tree, _lats, _lngs, _populations
-    if _state != "unloaded":
+    """Load the GeoNames tables and publish them. Idempotent; call via
+    _ensure_loaded() so concurrent first lookups parse once, not once each.
+
+    The parse runs outside _lock and is published in one assignment under it,
+    so a lookup sees either no tables or a complete set. If reset() ran while
+    parsing (the files may have been replaced under us), the result is dropped
+    and the files parsed again."""
+    global _state, _error, _data, _sig, _loading_sig
+    while True:
+        with _lock:
+            if _state != "unloaded":
+                return
+            gen = _generation
+            # Stat'd under the lock, so refresh_if_changed() either sees this load
+            # (and can invalidate it) or runs wholly before it starts.
+            sig = _loading_sig = _signature()
+        data: _Tables | None = None
+        error: str | None = None
+        if sig[0] is None:
+            error = (f"GeoNames data not found in {config.GEONAMES_DIR}. "
+                     "Run: uv run python scripts/get_geonames.py")
+        else:
+            try:
+                data = _parse()
+            except Exception as e:  # noqa: BLE001 — degrade gracefully, never crash startup
+                error = f"Failed to load GeoNames data: {e}"
+                logger.exception("Reverse geocoder failed to load")
+        with _lock:
+            _loading_sig = None
+            if gen != _generation:
+                continue
+            _data, _sig, _error = data, sig, error
+            _state = "ready" if data is not None else "unavailable"
+        if data is not None:
+            logger.info("Reverse geocoder ready: %d cities from %s", len(data.names), config.GEONAMES_DIR)
+        else:
+            logger.warning(error)
         return
-    if not is_available():
-        _state = "unavailable"
-        _error = (f"GeoNames data not found in {config.GEONAMES_DIR}. "
-                  "Run: uv run python scripts/get_geonames.py")
-        logger.warning(_error)
-        return
-    try:
-        import numpy as np
-        from scipy.spatial import cKDTree
-
-        _load_admin1()
-        _load_admin2()
-        _load_countries()
-
-        lats: list[float] = []
-        lngs: list[float] = []
-        pops: list[int] = []
-        with _cities_file().open(encoding="utf-8") as f:
-            for line in f:
-                p = line.rstrip("\n").split("\t")
-                if len(p) < 11:
-                    continue
-                try:
-                    lat = float(p[4])
-                    lng = float(p[5])
-                except ValueError:
-                    continue
-                lats.append(lat)
-                lngs.append(lng)
-                _names.append(p[1])
-                _ccs.append(p[8])
-                _admin1.append(p[10])
-                _admin2.append(p[11] if len(p) > 11 else "")
-                try:
-                    pops.append(int(p[14]) if len(p) > 14 and p[14] else 0)
-                except ValueError:
-                    pops.append(0)
-
-        _lats = np.asarray(lats)
-        _lngs = np.asarray(lngs)
-        _populations = np.asarray(pops, dtype=np.int64)
-
-        # Unit-sphere XYZ so nearest-neighbour by Euclidean (chord) distance
-        # matches nearest-by-great-circle and is correct near poles/antimeridian.
-        lat_r = np.radians(_lats)
-        lng_r = np.radians(_lngs)
-        cos_lat = np.cos(lat_r)
-        xyz = np.column_stack((cos_lat * np.cos(lng_r),
-                               cos_lat * np.sin(lng_r),
-                               np.sin(lat_r)))
-        _tree = cKDTree(xyz)
-        _state = "ready"
-        logger.info("Reverse geocoder ready: %d cities from %s", len(_names), config.GEONAMES_DIR)
-    except Exception as e:  # noqa: BLE001 — degrade gracefully, never crash startup
-        _state = "unavailable"
-        _error = f"Failed to load GeoNames data: {e}"
-        logger.exception("Reverse geocoder failed to load")
 
 
-def _load_admin1():
+def _load_admin1() -> dict[str, str]:
+    out: dict[str, str] = {}
     path = config.GEONAMES_DIR / "admin1CodesASCII.txt"
     if not path.exists():
-        return
+        return out
     with path.open(encoding="utf-8") as f:
         for line in f:
             parts = line.rstrip("\n").split("\t")
             if len(parts) >= 2:
-                _admin1_names[parts[0]] = parts[1]
+                out[parts[0]] = parts[1]
+    return out
 
 
-def _load_admin2():
+def _load_admin2() -> dict[str, str]:
+    out: dict[str, str] = {}
     path = config.GEONAMES_DIR / "admin2Codes.txt"
     if not path.exists():
-        return
+        return out
     with path.open(encoding="utf-8") as f:
         for line in f:
             parts = line.rstrip("\n").split("\t")
             if len(parts) >= 2:
-                _admin2_names[parts[0]] = parts[1]
+                out[parts[0]] = parts[1]
+    return out
 
 
-def _load_countries():
+def _load_countries() -> dict[str, str]:
+    out: dict[str, str] = {}
     path = config.GEONAMES_DIR / "countryInfo.txt"
     if not path.exists():
-        return
+        return out
     with path.open(encoding="utf-8") as f:
         for line in f:
             if line.startswith("#"):
@@ -162,13 +243,63 @@ def _load_countries():
             parts = line.rstrip("\n").split("\t")
             # ISO(0)  ISO3(1)  ISO-Numeric(2)  fips(3)  Country(4) ...
             if len(parts) >= 5 and parts[0]:
-                _country_names[parts[0]] = parts[4]
+                out[parts[0]] = parts[4]
+    return out
 
 
 def _ensure_loaded():
     if _state == "unloaded":
-        with _lock:
+        with _load_lock:
             _load()
+
+
+def _tables() -> _Tables | None:
+    """The loaded tables (loading them first if needed), or None if GeoNames is
+    unavailable. Callers use only the returned object — see _Tables. Loops because
+    a reset() can land between the load and this read; that must mean "load the
+    new files", never "GeoNames is missing" for this lookup."""
+    while True:
+        _ensure_loaded()
+        with _lock:
+            if _state != "unloaded":
+                return _data
+
+
+def reset():
+    """Drop the loaded tables and forget the load state (including a latched
+    "unavailable"), so the next lookup parses whatever is on disk. Mirrors
+    osm_places/census_places.reset(). Cheap: the reload is lazy, on the next
+    lookup, and a lookup already holding the old tables finishes on them.
+
+    The old tables are dropped, not kept serving until the new ones are parsed:
+    the caller is about to move the cache version on (datasets_changed), and an
+    answer from old tables must not be cached under the new version."""
+    global _state, _error, _data, _sig, _generation
+    with _lock:
+        _generation += 1
+        _state = "unloaded"
+        _error = None
+        _data = None
+        _sig = None
+
+
+def refresh_if_changed() -> bool:
+    """reset() if the GeoNames files on disk differ from the ones the current
+    state (ready, or latched unavailable) was loaded from — a first install, a
+    re-download, a removal. Returns True if it reset. A few stat() calls; reloads
+    nothing itself."""
+    global _generation
+    with _lock:
+        if _state == "unloaded":
+            # Nothing published to invalidate, but a load in progress may be parsing
+            # files that have since been replaced: make it start over.
+            if _loading_sig is not None and _signature() != _loading_sig:
+                _generation += 1
+            return False
+        if _signature() == _sig:
+            return False
+    reset()
+    return True
 
 
 def quantize(lat: float, lng: float) -> tuple[int, int]:
@@ -177,19 +308,19 @@ def quantize(lat: float, lng: float) -> tuple[int, int]:
     return round(lat * scale), round(lng * scale)
 
 
-def _place_dict(i: int) -> dict:
+def _place_dict(t: _Tables, i: int) -> dict:
     """Resolve GeoNames row i's admin codes into the {city, state, county,
     country, country_code} shape shared by lookup() and cities_in_bbox()."""
-    cc = _ccs[i]
-    a1 = _admin1[i]
-    a2 = _admin2[i]
-    state = _admin1_names.get(f"{cc}.{a1}") if a1 else None
-    county = _admin2_names.get(f"{cc}.{a1}.{a2}") if (a1 and a2) else None
+    cc = t.ccs[i]
+    a1 = t.admin1[i]
+    a2 = t.admin2[i]
+    state = t.admin1_names.get(f"{cc}.{a1}") if a1 else None
+    county = t.admin2_names.get(f"{cc}.{a1}.{a2}") if (a1 and a2) else None
     return {
-        "city": _names[i] or None,
+        "city": t.names[i] or None,
         "state": state,
         "county": county,
-        "country": _country_names.get(cc),
+        "country": t.country_names.get(cc),
         "country_code": cc or None,
     }
 
@@ -202,7 +333,7 @@ def _chord_to_km(chord: float) -> float:
     return 2 * _EARTH_RADIUS_KM * math.asin(min(1.0, chord / 2))
 
 
-def _pick_weighted(dists: list[float], idxs: list[int]) -> int:
+def _pick_weighted(t: _Tables, dists: list[float], idxs: list[int]) -> int:
     """Choose among k nearest candidates (parallel chord distances / row indices,
     nearest first) by `km / (1 + log10(population))`, so a much larger place can
     win a near-tie in distance — see config.GEOCODE_POP_WEIGHT for why.
@@ -213,17 +344,17 @@ def _pick_weighted(dists: list[float], idxs: list[int]) -> int:
     areas), and a survivor must beat the nearest place's own score by
     config.GEOCODE_POP_WEIGHT_MARGIN to win (no flipping on near-ties).
 
-    Returns a row index into _names/_populations.
+    Returns a row index into t.names/t.populations.
     """
     # cKDTree pads a k larger than the point count with inf distances and
     # out-of-range indices; drop those before doing any arithmetic.
     pairs = [(_chord_to_km(d), i) for d, i in zip(dists, idxs)
-             if math.isfinite(d) and 0 <= i < len(_names)]
+             if math.isfinite(d) and 0 <= i < len(t.names)]
     if not pairs:
         return int(idxs[0])
 
     def score(km: float, i: int) -> float:
-        pop = int(_populations[i]) if _populations is not None else 0
+        pop = int(t.populations[i])
         return km / (1 + math.log10(max(pop, 1)))
 
     nearest_km, nearest_i = pairs[0]
@@ -248,21 +379,21 @@ def _raw_lookup(lat: float, lng: float) -> dict | None:
     "Nearest" is population-weighted when config.GEOCODE_POP_WEIGHT is on (see
     _pick_weighted); otherwise it's the plain nearest point.
     """
-    _ensure_loaded()
-    if _state != "ready" or _tree is None:
+    t = _tables()
+    if t is None:
         return None
     lat_r = math.radians(lat)
     lng_r = math.radians(lng)
     cos_lat = math.cos(lat_r)
     point = [cos_lat * math.cos(lng_r), cos_lat * math.sin(lng_r), math.sin(lat_r)]
     if not config.GEOCODE_POP_WEIGHT:
-        _, idx = _tree.query(point)
-        return _place_dict(int(idx))
-    k = max(1, min(config.GEOCODE_CANDIDATES, len(_names)))
-    dists, idxs = _tree.query(point, k=k)
+        _, idx = t.tree.query(point)
+        return _place_dict(t, int(idx))
+    k = max(1, min(config.GEOCODE_CANDIDATES, len(t.names)))
+    dists, idxs = t.tree.query(point, k=k)
     if k == 1:  # scipy returns scalars, not arrays, for k=1
-        return _place_dict(int(idxs))
-    return _place_dict(_pick_weighted([float(d) for d in dists], [int(i) for i in idxs]))
+        return _place_dict(t, int(idxs))
+    return _place_dict(t, _pick_weighted(t, [float(d) for d in dists], [int(i) for i in idxs]))
 
 
 def cities_in_bbox(min_lat: float, max_lat: float, min_lng: float, max_lng: float,
@@ -275,23 +406,23 @@ def cities_in_bbox(min_lat: float, max_lat: float, min_lng: float, max_lng: floa
     returned places are the largest by population so the capped view still
     shows the most recognizable places first.
     """
-    _ensure_loaded()
-    if _state != "ready" or _lats is None:
+    t = _tables()
+    if t is None:
         return [], 0
     import numpy as np
 
-    mask = (_lats >= min_lat) & (_lats <= max_lat) & (_lngs >= min_lng) & (_lngs <= max_lng)
+    mask = (t.lats >= min_lat) & (t.lats <= max_lat) & (t.lngs >= min_lng) & (t.lngs <= max_lng)
     idxs = np.nonzero(mask)[0]
     total = int(len(idxs))
     if total > limit:
-        idxs = idxs[np.argsort(-_populations[idxs])][:limit]
+        idxs = idxs[np.argsort(-t.populations[idxs])][:limit]
     places = []
     for i in idxs:
         i = int(i)
-        d = _place_dict(i)
-        d["lat"] = float(_lats[i])
-        d["lng"] = float(_lngs[i])
-        d["population"] = int(_populations[i])
+        d = _place_dict(t, i)
+        d["lat"] = float(t.lats[i])
+        d["lng"] = float(t.lngs[i])
+        d["population"] = int(t.populations[i])
         places.append(d)
     return places, total
 
@@ -393,14 +524,14 @@ def _finite_voronoi_regions(vor, radius: float):
     return new_regions, np.asarray(new_vertices)
 
 
-def _label_grid(lat_grid, lng_grid):
+def _label_grid(t: _Tables, lat_grid, lng_grid):
     """Vectorized twin of _pick_weighted: resolve a whole array of coordinates to
     winning GeoNames row indices in one KD-tree query. Same scoring, same reach
     cap, same margin — kept in lockstep with _pick_weighted so the map's
     boundaries describe the lookup that actually runs, not a lookalike.
 
     ``lat_grid``/``lng_grid`` are flat float arrays of equal length; returns an
-    int array of row indices into _names/_populations.
+    int array of row indices into t.names/t.populations.
     """
     import numpy as np
 
@@ -409,8 +540,8 @@ def _label_grid(lat_grid, lng_grid):
     cos_lat = np.cos(lat_r)
     pts = np.column_stack((cos_lat * np.cos(lng_r), cos_lat * np.sin(lng_r), np.sin(lat_r)))
 
-    k = max(1, min(config.GEOCODE_CANDIDATES, len(_names)))
-    dists, idxs = _tree.query(pts, k=k)
+    k = max(1, min(config.GEOCODE_CANDIDATES, len(t.names)))
+    dists, idxs = t.tree.query(pts, k=k)
     # k=1 collapses scipy's (N, k) result to (N,); reshape so the rest is uniform.
     dists = np.reshape(dists, (len(lat_grid), k))
     idxs = np.reshape(idxs, (len(lat_grid), k))
@@ -419,7 +550,7 @@ def _label_grid(lat_grid, lng_grid):
         return nearest
 
     km = 2 * _EARTH_RADIUS_KM * np.arcsin(np.clip(dists / 2, 0.0, 1.0))
-    pops = np.maximum(_populations[idxs], 1)
+    pops = np.maximum(t.populations[idxs], 1)
     score = km / (1 + np.log10(pops))
 
     threshold = score[:, 0] * (1.0 - config.GEOCODE_POP_WEIGHT_MARGIN)
@@ -547,7 +678,7 @@ def _simplify_ring(ring: list[tuple[float, float]], tolerance: float) -> list[tu
     return simplified if len(simplified) >= 3 else ring
 
 
-def _weighted_cells(min_lat: float, max_lat: float, min_lng: float, max_lng: float,
+def _weighted_cells(t: _Tables, min_lat: float, max_lat: float, min_lng: float, max_lng: float,
                      in_view_idxs) -> dict[int, list[list[list[float]]]]:
     """Region outlines for the population-weighted lookup, as {row index: [ring, …]}
     with each ring a list of [lat, lng].
@@ -575,7 +706,7 @@ def _weighted_cells(min_lat: float, max_lat: float, min_lng: float, max_lng: flo
     lng_centers = min_lng + (np.arange(nx) + 0.5) * lng_step
     grid_lat, grid_lng = np.meshgrid(lat_centers, lng_centers, indexing="ij")
 
-    labels = _label_grid(grid_lat.ravel(), grid_lng.ravel())
+    labels = _label_grid(t, grid_lat.ravel(), grid_lng.ravel())
 
     # Group the grid cells by winning site once, so each region is traced out of a
     # mask its own size instead of a full-grid mask per site — a dense viewport can
@@ -645,13 +776,13 @@ def voronoi_cells(min_lat: float, max_lat: float, min_lng: float, max_lng: float
     pairs (a weighted region can be pinched into more than one piece), and
     "polygon": the largest of those rings, for callers that want just one.
     """
-    _ensure_loaded()
-    if _state != "ready" or _lats is None:
+    t = _tables()
+    if t is None:
         return [], 0
     import numpy as np
     from scipy.spatial import Voronoi, QhullError
 
-    in_view = (_lats >= min_lat) & (_lats <= max_lat) & (_lngs >= min_lng) & (_lngs <= max_lng)
+    in_view = (t.lats >= min_lat) & (t.lats <= max_lat) & (t.lngs >= min_lng) & (t.lngs <= max_lng)
     total = int(np.count_nonzero(in_view))
     if total == 0:
         return [], 0
@@ -663,15 +794,15 @@ def voronoi_cells(min_lat: float, max_lat: float, min_lng: float, max_lng: float
             # here every candidate is already in view, so it caps the cells drawn.
             center_lat = (min_lat + max_lat) / 2.0
             center_lng = (min_lng + max_lng) / 2.0
-            d2 = (_lats[in_view_idxs] - center_lat) ** 2 + (_lngs[in_view_idxs] - center_lng) ** 2
+            d2 = (t.lats[in_view_idxs] - center_lat) ** 2 + (t.lngs[in_view_idxs] - center_lng) ** 2
             in_view_idxs = in_view_idxs[np.argsort(d2)[:limit]]
-        rings_by_site = _weighted_cells(min_lat, max_lat, min_lng, max_lng, in_view_idxs)
+        rings_by_site = _weighted_cells(t, min_lat, max_lat, min_lng, max_lng, in_view_idxs)
         cells = []
         for site, rings in rings_by_site.items():
-            d = _place_dict(site)
-            d["lat"] = float(_lats[site])
-            d["lng"] = float(_lngs[site])
-            d["population"] = int(_populations[site])
+            d = _place_dict(t, site)
+            d["lat"] = float(t.lats[site])
+            d["lng"] = float(t.lngs[site])
+            d["population"] = int(t.populations[site])
             d["polygons"] = rings
             d["polygon"] = max(rings, key=len)
             cells.append(d)
@@ -686,26 +817,26 @@ def voronoi_cells(min_lat: float, max_lat: float, min_lng: float, max_lng: float
     pad_min_lng = min_lng - lng_pad
     pad_max_lng = max_lng + lng_pad
 
-    mask = (_lats >= pad_min_lat) & (_lats <= pad_max_lat) & (_lngs >= pad_min_lng) & (_lngs <= pad_max_lng)
+    mask = (t.lats >= pad_min_lat) & (t.lats <= pad_max_lat) & (t.lngs >= pad_min_lng) & (t.lngs <= pad_max_lng)
     idxs = np.nonzero(mask)[0]
     if len(idxs) > limit:
         # Prioritize sites nearest the viewport center, so the in-view sites
         # (what we actually return cells for) are the ones kept.
         center_lat = (min_lat + max_lat) / 2.0
         center_lng = (min_lng + max_lng) / 2.0
-        d2 = (_lats[idxs] - center_lat) ** 2 + (_lngs[idxs] - center_lng) ** 2
+        d2 = (t.lats[idxs] - center_lat) ** 2 + (t.lngs[idxs] - center_lng) ** 2
         idxs = idxs[np.argsort(d2)[:limit]]
 
     # Dedupe exact-duplicate coordinates (rare data glitches) — Voronoi()
     # raises on degenerate/coincident generators.
-    lat_lng = np.column_stack((_lats[idxs], _lngs[idxs]))
+    lat_lng = np.column_stack((t.lats[idxs], t.lngs[idxs]))
     _, first = np.unique(np.round(lat_lng, 7), axis=0, return_index=True)
     idxs = idxs[np.sort(first)]
     if len(idxs) < 3:
         return [], total
 
     cos_lat = max(math.cos(math.radians((min_lat + max_lat) / 2.0)), 1e-6)
-    pts = np.column_stack((_lngs[idxs] * cos_lat, _lats[idxs]))
+    pts = np.column_stack((t.lngs[idxs] * cos_lat, t.lats[idxs]))
     radius = 10 * max(pad_max_lat - pad_min_lat, (pad_max_lng - pad_min_lng) * cos_lat)
 
     try:
@@ -718,7 +849,7 @@ def voronoi_cells(min_lat: float, max_lat: float, min_lng: float, max_lng: float
     cells = []
     for i, orig_idx in enumerate(idxs):
         orig_idx = int(orig_idx)
-        lat, lng = float(_lats[orig_idx]), float(_lngs[orig_idx])
+        lat, lng = float(t.lats[orig_idx]), float(t.lngs[orig_idx])
         if not (min_lat <= lat <= max_lat and min_lng <= lng <= max_lng):
             continue  # only return cells for sites the viewport actually contains
         region = regions[i]
@@ -728,10 +859,10 @@ def voronoi_cells(min_lat: float, max_lat: float, min_lng: float, max_lng: float
         poly = _clip_polygon_to_bbox(poly, pad_min_lat, pad_max_lat, pad_min_lng, pad_max_lng)
         if len(poly) < 3:
             continue
-        d = _place_dict(orig_idx)
+        d = _place_dict(t, orig_idx)
         d["lat"] = lat
         d["lng"] = lng
-        d["population"] = int(_populations[orig_idx])
+        d["population"] = int(t.populations[orig_idx])
         d["polygon"] = [[round(la, 6), round(ln, 6)] for la, ln in poly]
         d["polygons"] = [d["polygon"]]  # exact cells are always a single ring
         cells.append(d)
@@ -808,10 +939,7 @@ _cache_version: str | None = None
 
 def _dataset_files() -> list[Path]:
     """Every file whose contents can change a lookup()'s answer."""
-    return [config.OSM_DB_PATH, config.CENSUS_DB_PATH, _cities_file(),
-            config.GEONAMES_DIR / "admin1CodesASCII.txt",
-            config.GEONAMES_DIR / "admin2Codes.txt",
-            config.GEONAMES_DIR / "countryInfo.txt"]
+    return [config.OSM_DB_PATH, config.CENSUS_DB_PATH, *_geonames_files()]
 
 
 def _compute_cache_version() -> str:
@@ -841,13 +969,15 @@ def cache_version() -> str:
     return _cache_version
 
 
-def datasets_changed() -> dict:
+def datasets_changed(version: str | None = None) -> dict:
     """Call after any job that may have changed a geocoding dataset (OSM merge,
     Census build, GeoNames download), whether or not it succeeded: a failed
     GeoNames download can still have replaced some of its files. The caller must
     already have made the new data visible to lookups (osm_places.replace_db,
-    census_places.reset()), so any lookup that reads the new version also reads
-    the new data. A no-op when no file actually changed.
+    census_places.reset(), geocode.refresh_if_changed()), so any lookup that reads
+    the new version also reads the new data. A no-op when no file actually changed.
+    `version` is a fingerprint the caller computed before making the data visible
+    (see check_datasets); by default it is computed here.
 
     When one did: deletes cache rows of other versions and re-queues photos whose
     earlier lookup found no city (geocoded_at -> NULL), so the next scan/backfill
@@ -857,7 +987,7 @@ def datasets_changed() -> dict:
     global _cache_version
     with _version_lock:
         old = _cache_version
-        new = _compute_cache_version()
+        new = version or _compute_cache_version()
         _cache_version = new
     if old == new:
         return {"changed": False, "purged": 0, "requeued": 0}
@@ -874,6 +1004,80 @@ def datasets_changed() -> dict:
     return {"changed": True, "purged": purged, "requeued": requeued}
 
 
+# ── Out-of-band dataset changes (audit G3) ──
+# In-app jobs make new data visible themselves (replace_db / reset) and then call
+# datasets_changed(). Files that change any other way — a CLI script run while the
+# app is up, files copied in by hand — would otherwise go unnoticed until restart:
+# each source latches "unavailable" (or keeps its loaded data) and the cache
+# version stays pinned. check_datasets() closes that gap for all three sources at
+# the cost of ~10 stat() calls, so lookups run it every
+# config.DATASET_RECHECK_SECONDS and the status endpoints on every call.
+_check_lock = threading.Lock()      # one check at a time (see check_datasets)
+_jobs_lock = threading.Lock()
+_jobs_active = 0                    # in-app dataset jobs running (dataset_job)
+_last_check = 0.0                   # time.monotonic() of the last throttled check
+
+
+@contextmanager
+def dataset_job():
+    """Held by an in-app dataset job for its whole run. check_datasets() stands
+    down meanwhile: the job swaps its files in one at a time (GeoNames has four)
+    and settles everything itself when it ends, so checking halfway would only
+    load, and version, a mix of old and new files."""
+    global _jobs_active
+    with _jobs_lock:
+        _jobs_active += 1
+    try:
+        yield
+    finally:
+        with _jobs_lock:
+            _jobs_active -= 1
+
+
+def check_datasets() -> bool:
+    """Pick up dataset files installed, replaced or removed by anything other than
+    an in-app job. Each source that loaded (or latched "unavailable" on) files
+    which have since changed is reset, so its next lookup reads what is on disk;
+    then the cache version moves if any file changed. Returns True if it did.
+
+    The version is fingerprinted *before* the sources are reset. If a file changes
+    again in between, the sources may serve data newer than the version — those
+    answers are cached under the older version and purged on the next check, which
+    sees the newer file. The reverse order could publish a version newer than the
+    data still loaded, and caching old answers under it would never be undone."""
+    with _jobs_lock:
+        if _jobs_active:
+            return False
+    # Concurrent checks could publish their fingerprints out of order (an older
+    # one last); skipping is fine, the running check covers this caller too.
+    if not _check_lock.acquire(blocking=False):
+        return False
+    try:
+        from geotagger import census_places, osm_places
+        cache_version()   # pin first, so a never-computed version isn't "a change"
+        version = _compute_cache_version()
+        osm_places.refresh_if_changed()
+        census_places.refresh_if_changed()
+        refresh_if_changed()
+        return datasets_changed(version)["changed"]
+    finally:
+        _check_lock.release()
+
+
+def _maybe_check_datasets():
+    """check_datasets() at most once per config.DATASET_RECHECK_SECONDS. Never
+    raises: a lookup must not fail because the check did."""
+    global _last_check
+    now = time.monotonic()
+    if now - _last_check < config.DATASET_RECHECK_SECONDS:
+        return
+    _last_check = now   # unlocked: a racing duplicate is skipped by _check_lock
+    try:
+        check_datasets()
+    except Exception:  # noqa: BLE001
+        logger.exception("Geocoding dataset re-check failed")
+
+
 def lookup(lat: float | None, lng: float | None, use_cache: bool = True) -> dict | None:
     """Reverse-geocode a coordinate to
     {city, sublocation, postal_code, state, county, country, country_code}.
@@ -888,6 +1092,7 @@ def lookup(lat: float | None, lng: float | None, use_cache: bool = True) -> dict
     if lat is None or lng is None:
         return None
     qlat, qlng = quantize(lat, lng)
+    _maybe_check_datasets()
     # Read once, before the lookup: if the datasets change mid-lookup, this result
     # is written under the old version and never served.
     version = cache_version() if use_cache else None

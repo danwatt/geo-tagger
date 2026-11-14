@@ -186,6 +186,12 @@ GEOCODE_CANDIDATES = int(os.environ.get("GEOTAGGER_GEOCODE_CANDIDATES", "12"))
 # lookup and traces each place's region, making boundary error ~one grid step of
 # the viewport. Higher = smoother outlines, more CPU per pan and a bigger payload.
 GEOCODE_BOUNDARY_GRID = int(os.environ.get("GEOTAGGER_GEOCODE_BOUNDARY_GRID", "192"))
+# How often (seconds) lookups re-stat the geocoding dataset files to notice ones
+# installed or replaced outside this process (a CLI script while the app runs, or
+# files copied in by hand). A check is ~10 stat() calls and reloads nothing unless
+# a file actually changed, so the interval only bounds how stale the app can be.
+# "inf" disables it (in-app downloads still take effect immediately).
+DATASET_RECHECK_SECONDS = float(os.environ.get("GEOTAGGER_DATASET_RECHECK_SECONDS", "30"))
 
 # ── OSM places (offline, polygon reverse geocoding) ──
 # SQLite DB of OSM area polygons (cities, parks, stadiums, campuses, neighborhoods,

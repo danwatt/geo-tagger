@@ -112,7 +112,7 @@ class TestStatus:
         _write_geonames_files(geonames_dir, [CITY_A])
         geocode._ensure_loaded()
         geocode._ensure_loaded()
-        assert len(geocode._names) == 1
+        assert len(geocode._data.names) == 1
 
     def test_load_itself_is_a_noop_once_already_loaded(self, geonames_dir):
         # _load()'s own state guard (belt-and-suspenders alongside
@@ -121,7 +121,7 @@ class TestStatus:
         _write_geonames_files(geonames_dir, [CITY_A])
         geocode._load()
         geocode._load()
-        assert len(geocode._names) == 1
+        assert len(geocode._data.names) == 1
 
 
 class TestMalformedData:

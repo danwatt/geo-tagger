@@ -43,11 +43,22 @@ _conn: sqlite3.Connection | None = None
 # Whether the open DB carries the ZCTA layer. Probed once in _load(): the schema can't
 # change while the connection is open, so it isn't re-checked on every lookup.
 _zctas_present = False
+# (size, mtime) of the DB file when the current state was loaded, None if it was
+# absent — lets refresh_if_changed() notice a DB built or replaced out of process.
+_sig: tuple | None = None
 
 
 def is_available() -> bool:
     """True if the census places DB has been built."""
     return config.CENSUS_DB_PATH.exists()
+
+
+def _signature() -> tuple | None:
+    try:
+        st = config.CENSUS_DB_PATH.stat()
+    except OSError:
+        return None
+    return st.st_size, st.st_mtime_ns
 
 
 def status() -> dict:
@@ -90,10 +101,11 @@ def _probe_zctas(conn: sqlite3.Connection) -> bool:
 
 def _load():
     """Open the read-only connection. Idempotent; call via _ensure_loaded()."""
-    global _state, _error, _conn, _zctas_present
+    global _state, _error, _conn, _zctas_present, _sig
     if _state != "unloaded":
         return
-    if not is_available():
+    _sig = _signature()
+    if _sig is None:
         _state = "unavailable"
         _error = (f"Census places DB not found at {config.CENSUS_DB_PATH}. "
                   "Build it: uv run python scripts/get_census_places.py")
@@ -123,17 +135,33 @@ def reset():
     """Drop the open handle and go back to "unloaded", so the next lookup reopens
     whatever is on disk. Needed before a (re)build replaces the file — Windows
     won't let it be replaced while this connection holds it open."""
-    global _state, _error, _conn, _zctas_present
     with _lock:
-        if _conn is not None:
-            try:
-                _conn.close()
-            except Exception:
-                pass
-        _conn = None
-        _zctas_present = False
-        _state = "unloaded"
-        _error = None
+        _close_locked()
+
+
+def _close_locked():
+    """reset()'s body, for callers already holding _lock."""
+    global _state, _error, _conn, _zctas_present, _sig
+    if _conn is not None:
+        try:
+            _conn.close()
+        except Exception:
+            pass
+    _conn = None
+    _zctas_present = False
+    _state = "unloaded"
+    _error = None
+    _sig = None
+
+
+def refresh_if_changed() -> bool:
+    """reset() if the DB file differs from the one the current state was loaded
+    from — see osm_places.refresh_if_changed(). Returns True if it reset."""
+    with _lock:
+        if _state == "unloaded" or _signature() == _sig:
+            return False
+        _close_locked()
+    return True
 
 
 def _containing_rows(lat: float, lng: float) -> list[sqlite3.Row]:

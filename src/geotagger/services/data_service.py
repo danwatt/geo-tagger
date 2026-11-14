@@ -155,15 +155,19 @@ def _geocoding_dataset_job():
     and not just a version this process had never computed; then, however the job
     ends, retires geocode_cache rows and re-queues city-less photos if any dataset
     file changed (geocode.datasets_changed). That runs after the job has made its
-    new data visible, which each job body does before returning."""
+    new data visible, which each job body does before returning.
+
+    geocode.dataset_job() keeps the periodic out-of-band check (G3) off this
+    job's half-replaced files until the job has settled them here."""
     geocode.cache_version()
-    try:
-        yield
-    finally:
+    with geocode.dataset_job():
         try:
-            geocode.datasets_changed()
-        except Exception:  # noqa: BLE001 — never mask the job's own outcome
-            logger.exception("Could not invalidate the geocode cache after a dataset job")
+            yield
+        finally:
+            try:
+                geocode.datasets_changed()
+            except Exception:  # noqa: BLE001 — never mask the job's own outcome
+                logger.exception("Could not invalidate the geocode cache after a dataset job")
 
 
 # ── GeoNames download job ──
@@ -173,6 +177,9 @@ _geonames_job: dict = {"running": False, "done": False, "error": None, "message"
 
 def geonames_status() -> dict:
     """Which GeoNames files are present, for the Data Management page."""
+    # Files are stat'd directly below; this also loads GeoNames' state in step
+    # with them if they changed out of process (G3).
+    geocode.check_datasets()
     files = []
     for name, _url, _is_zip in GEONAMES_FILES:
         path = config.GEONAMES_DIR / name
@@ -189,7 +196,16 @@ def geonames_job_status() -> dict:
 
 def _run_geonames_download(force: bool = False):
     with _geocoding_dataset_job():
-        _geonames_download(force)
+        try:
+            _geonames_download(force)
+        finally:
+            # Make the new files visible before the cache version moves (G3):
+            # drops the loaded tables, or a latched "unavailable" on a first
+            # install, if any file was replaced — even by a download that failed
+            # partway. Lazy: the next lookup reparses, this job doesn't wait on it.
+            # A no-op when every file was skipped, so the tables aren't reparsed
+            # for nothing.
+            geocode.refresh_if_changed()
 
 
 def _geonames_download(force: bool):
@@ -273,6 +289,7 @@ def _ingested_region_keys() -> list[str]:
 def osm_status() -> dict:
     """OSM places DB presence + region list, for the Data Management page."""
     from geotagger import osm_places
+    geocode.check_datasets()   # un-latch "unavailable" for a DB built by the CLI (G3)
     st = osm_places.status()
     return {**st, "db_path": str(config.OSM_DB_PATH), "groups": geofabrik_region_groups(),
             "ingested_keys": _ingested_region_keys()}
@@ -438,6 +455,7 @@ def census_status() -> dict:
     """Census DB presence + counts (places, ZCTAs, ZIP names), for the Data
     Management page."""
     from geotagger import census_builder, census_places
+    geocode.check_datasets()   # un-latch "unavailable" for a DB built by the CLI (G3)
     st = census_places.status()
     return {**st, "db_path": str(config.CENSUS_DB_PATH),
             "year": config.CENSUS_CB_YEAR,

@@ -233,7 +233,7 @@ while lookups run, so a point whose polygon is not inserted yet caches `city=Non
 the cache, so pre-install answers are served forever for that cell.
 *Fix:* build to a temp file and swap (as the census builder does); clear or version the cache after every dataset job.
 
-**G3 — High — A first-time OSM or GeoNames install has no effect until restart** [seen, for the missing `reset()`]
+**G3 — High — A first-time OSM or GeoNames install has no effect until restart** [seen, for the missing `reset()`] — ✅ **DONE** (GeoNames tables are one snapshot with `reset()`/`refresh_if_changed()`, called by the job before the cache version moves; all three datasets keep a file signature and re-check every `GEOTAGGER_DATASET_RECHECK_SECONDS` (30 s) on lookup and on every status call, so CLI or copied installs are picked up too)
 `osm_places.py:72-79`, `geocode.py:71-78`. `_state` latches to `"unavailable"`, and only `census_places` has a
 `reset()`.
 

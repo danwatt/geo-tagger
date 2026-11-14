@@ -37,6 +37,9 @@ _lock = threading.Lock()
 _state = "unloaded"
 _error: str | None = None
 _conn: sqlite3.Connection | None = None
+# (size, mtime) of the DB file when the current state was loaded, None if it was
+# absent — lets refresh_if_changed() notice a DB built or replaced out of process.
+_sig: tuple | None = None
 
 # Sub-location categories, most-specific-preferred order only used as a final
 # tiebreak; primary selection is by smallest polygon area.
@@ -46,6 +49,14 @@ _SUB_CATEGORIES = {"neighbourhood", "park", "venue", "campus", "attraction", "bu
 def is_available() -> bool:
     """True if the OSM places DB has been built."""
     return config.OSM_DB_PATH.exists()
+
+
+def _signature() -> tuple | None:
+    try:
+        st = config.OSM_DB_PATH.stat()
+    except OSError:
+        return None
+    return st.st_size, st.st_mtime_ns
 
 
 def status() -> dict:
@@ -72,10 +83,11 @@ def status() -> dict:
 
 def _load():
     """Open the read-only connection. Idempotent; call via _ensure_loaded()."""
-    global _state, _error, _conn
+    global _state, _error, _conn, _sig
     if _state != "unloaded":
         return
-    if not is_available():
+    _sig = _signature()
+    if _sig is None:
         _state = "unavailable"
         _error = (f"OSM places DB not found at {config.OSM_DB_PATH}. "
                   "Build it: uv run python scripts/build_osm_places.py <region>.osm.pbf")
@@ -105,7 +117,7 @@ def _ensure_loaded():
 def _close_locked():
     """Drop the open handle and go back to "unloaded" so the next lookup reopens
     whatever is on disk. Caller holds _lock."""
-    global _state, _error, _conn
+    global _state, _error, _conn, _sig
     if _conn is not None:
         try:
             _conn.close()
@@ -114,6 +126,7 @@ def _close_locked():
     _conn = None
     _state = "unloaded"
     _error = None
+    _sig = None
 
 
 def reset():
@@ -121,6 +134,19 @@ def reset():
     file). Mirrors census_places.reset()."""
     with _lock:
         _close_locked()
+
+
+def refresh_if_changed() -> bool:
+    """reset() if the DB file differs from the one the current state was loaded
+    from: built by the CLI while "unavailable" was latched, or (POSIX only — on
+    Windows the open handle blocks it) replaced underneath the open handle, which
+    would otherwise keep reading the old inode. One stat(). Returns True if it
+    reset. Called by geocode.check_datasets()."""
+    with _lock:
+        if _state == "unloaded" or _signature() == _sig:
+            return False
+        _close_locked()
+    return True
 
 
 def replace_db(src: Path, dest: Path) -> None:
