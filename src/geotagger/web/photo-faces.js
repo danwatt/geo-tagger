@@ -22,7 +22,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   const startId = parseInt(params.get("photo_id")   || "0");
   // Crowd mode is opt-in: any bare ?photo_id= link lands in single-photo mode.
   mode          = params.get("mode") === "crowd" ? "crowd" : "single";
-  backHref      = params.get("back") || (mode === "crowd" ? "/people.html" : "");
+  // ?back= is untrusted (navigated to on Back) — same-origin paths only.
+  backHref      = safeSameOriginPath(params.get("back"), mode === "crowd" ? "/people.html" : "");
 
   applyMode();
   bindToolbar();

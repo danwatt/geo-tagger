@@ -342,7 +342,7 @@ CLAUDE.md sanctions only Leaflet and OSM tiles and forbids online geocoders. The
 No CDN tag carries a Subresource Integrity hash. *Decide:* sanction these in CLAUDE.md, or replace place
 search with the offline `/api/search/locations` and vendor the rest. Add `integrity` attributes either way.
 
-**X3 — Medium — `?back=` is navigated to unvalidated** [traced]
+**X3 — Medium — `?back=` is navigated to unvalidated** [traced] — ✅ **DONE** (shared `safeSameOriginPath` in `common.js`; non-same-origin or non-http(s) values fall back to the default; no other URL-param navigation sinks found)
 `web/photo-faces.js:25,75`. `photo-faces.html?photo_id=1&back=javascript:…` runs script in the app origin when
 Back is clicked. *Fix:* accept only same-origin paths.
 

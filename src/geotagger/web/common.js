@@ -26,3 +26,21 @@ const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
 /** localStorage key for the work-queue batches skipped on the Geocode page
  *  (written by app.js, counted/cleared by home.js). */
 const SKIPPED_BATCHES_KEY = "geotagger.workqueue.skipped";
+
+/** Reduce an untrusted URL (query param, stored value) to a same-origin
+ *  path+query+hash, or return `fallback`. Guards `location.href = <param>`
+ *  against javascript:/data: URLs and off-site redirects: anything that does
+ *  not resolve to this origin over http(s) is rejected. Parsing against
+ *  location.origin also normalises `//evil.com` and `/\evil.com` (browsers
+ *  treat `\` as `/`), so those resolve off-origin and fail the check. */
+function safeSameOriginPath(raw, fallback) {
+  if (!raw) return fallback;
+  try {
+    const url = new URL(raw, location.origin);
+    if (url.origin !== location.origin) return fallback;
+    if (url.protocol !== "http:" && url.protocol !== "https:") return fallback;
+    return url.pathname + url.search + url.hash;
+  } catch (_) {
+    return fallback;
+  }
+}
