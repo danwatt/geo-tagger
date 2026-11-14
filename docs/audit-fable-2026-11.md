@@ -210,7 +210,7 @@ cache when it inserts faces.
 `api/status.py:52-58`, `faces.py:407-418`. `_invalidate_for` only handles `WORKQUEUE_*`. `FACE_MATCH_THRESHOLD`
 and related knobs are baked into three caches, and with F2 they survive indefinitely.
 
-**F4 — Medium — Per-person gate drops matches for people with more than 200 examples** [traced]
+**F4 — Medium — Per-person gate drops matches for people with more than 200 examples** [traced] — ✅ **DONE** (exact two-stage gate: raw max-cosine against every example, then age math only on survivors; `FACE_GATE_MAX_EXAMPLES` removed; per-person and batch now agree; ~100 ms at 2000 × 20000)
 `faces.py:899-911,950-958`. The comment says the rank pass recovers false negatives, but the rank pass only
 runs on candidates that already passed the threshold.
 

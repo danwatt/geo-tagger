@@ -618,8 +618,8 @@ def invalidate_gallery_cache():
 # Which cache bakes in which runtime-tunable setting (config.SETTINGS_SPEC), so a
 # settings change drops exactly what it made wrong — see
 # settings_service.invalidate_for, the one place that dispatches these. Face
-# settings NOT listed are read fresh on every call (suggest_for_person's gate /
-# ambiguity knobs, clustering and crowd params, the People page's frontend
+# settings NOT listed are read fresh on every call (suggest_for_person's
+# ambiguity knob, clustering and crowd params, the People page's frontend
 # knobs) or key their cache already (FACE_SUGGEST_SCAN_CAP is part of the
 # unlabeled key); settings_service.CACHE_FREE_SETTINGS lists them with reasons.
 SETTING_INVALIDATORS = {
@@ -1002,8 +1002,10 @@ def suggest_for_person(rows, gallery: Gallery, person_id: int,
 
     A face can only be a suggestion for this person if its score against the
     person's *own* examples clears the threshold, so we compute that cheap
-    single-person gate first and run the full all-persons ranking only on the few
-    candidates that pass — the win that makes the accept→refetch loop fast. An
+    single-person gate first (exact, over all of the person's examples) and run
+    the full all-persons ranking only on the few candidates that pass — the win
+    that makes the accept→refetch loop fast. The result is therefore the same
+    face set ``suggest_persons_batch`` attributes to ``person_id``. An
     *alternative* is another person whose own best example scores within
     ``margin`` of ``person_id``'s: a near-tie that often means the face is really
     that look-alike family member. Returns ``(row, score, alternatives)`` tuples
@@ -1042,19 +1044,36 @@ def suggest_for_person(rows, gallery: Gallery, person_id: int,
     p_nb_yr = gallery._s_nb_yr[p_start:p_end]   # (K,) f32
     p_na_yr = gallery._s_na_yr[p_start:p_end]   # (K,) f32
 
-    # Cap examples used in the gate pass so a heavily-labeled person (e.g. 3000+
-    # faces) doesn't make the gate as expensive as the full-gallery rank pass.
-    # Any genuine match hits at least one of config.FACE_GATE_MAX_EXAMPLES
-    # evenly-spread examples; false negatives here are recovered by the rank
-    # pass later.
+    # The gate must be exact against EVERY example: the rank pass below only
+    # sees faces that pass it, so a face dropped here is lost for good (it used
+    # to subsample heavily-labeled persons to 200 examples, silently dropping
+    # faces whose only good match was a skipped example — audit F4). Two stages
+    # keep that cheap. Age adjustment only ever lowers a score (penalty >= 0,
+    # exclusion -> -inf), so the raw cosine max is an upper bound: stage 1 is a
+    # plain chunked matmul over all examples that discards every face whose raw
+    # best is under threshold — nearly all of them. Stage 2 applies the
+    # age/window math, the expensive elementwise part (~3x the matmul), to the
+    # few survivors only. Measured at 2000 examples × 20000 unlabeled, dated:
+    # ~0.3s with age math on everything vs ~0.1s for this.
     K = p_embs.shape[0]
-    if K > config.FACE_GATE_MAX_EXAMPLES:
-        idx     = np.linspace(0, K - 1, config.FACE_GATE_MAX_EXAMPLES, dtype=np.intp)
-        p_embs  = np.ascontiguousarray(p_embs[idx])
-        p_ft_yr = p_ft_yr[idx]
-        p_bt_yr = p_bt_yr[idx]
-        p_nb_yr = p_nb_yr[idx]
-        p_na_yr = p_na_yr[idx]
+    _tg0 = _time.perf_counter()
+    raw_best = np.empty(len(rows), dtype=np.float32)
+    for c0 in range(0, len(rows), CHUNK):
+        c1 = min(c0 + CHUNK, len(rows))
+        raw_best[c0:c1] = (p_embs @ unknowns[c0:c1].T).max(axis=0)
+    if neg_map:
+        # Faces the user already marked "not person_id" can never be a
+        # suggestion for them — drop at the gate, the cheapest possible place.
+        for j, r in enumerate(rows):
+            if person_id in neg_map.get(r["id"], ()):
+                raw_best[j] = np.float32(-np.inf)
+    if config.FACE_AGE_PENALTY_PER_YEAR >= 0 and config.FACE_AGE_PENALTY_CAP_YEARS >= 0:
+        surv = np.flatnonzero(raw_best >= threshold)
+    else:
+        # A negative penalty (only reachable via env var — the settings UI
+        # floors it at 0) is a bonus, so raw cosine stops being an upper bound.
+        surv = np.flatnonzero(raw_best > -np.inf)
+    s_unknowns, s_times = unknowns[surv], times[surv]
 
     has_birth = ~np.isnan(p_bt_yr)
     has_ft    = ~np.isnan(p_ft_yr)
@@ -1062,16 +1081,16 @@ def suggest_for_person(rows, gallery: Gallery, person_id: int,
     has_na    = ~np.isnan(p_na_yr)
     can_pen   = has_birth & has_ft
     age_f     = p_ft_yr - p_bt_yr               # (K,) example age-at-photo
-    times_yr  = (times / YEAR_SECONDS).astype(np.float32)   # (N,)
+    times_yr  = (s_times / YEAR_SECONDS).astype(np.float32)   # (S,)
     tol       = np.float32(config.FACE_BIRTH_TOLERANCE_YEARS)
 
-    _tg0 = _time.perf_counter()
-    best = np.full(len(rows), np.float32(-np.inf))
-    for c0 in range(0, len(rows), CHUNK):
-        c1       = min(c0 + CHUNK, len(rows))
+    # Stage 2: exact age-adjusted best over all K examples, survivors only.
+    best = np.full(len(surv), np.float32(-np.inf))
+    for c0 in range(0, len(surv), CHUNK):
+        c1       = min(c0 + CHUNK, len(surv))
         t_chunk  = times_yr[c0:c1]
-        scores   = p_embs @ unknowns[c0:c1].T   # (K, chunk) f32
-        dated_c  = ~np.isnan(times[c0:c1])
+        scores   = p_embs @ s_unknowns[c0:c1].T   # (K, chunk) f32
+        dated_c  = ~np.isnan(s_times[c0:c1])
         if dated_c.any():
             age_u = t_chunk[None, :] - p_bt_yr[:, None]   # (K, chunk) f32
             excl  = (has_birth[:, None] & dated_c[None, :]) & (age_u < -tol)
@@ -1086,27 +1105,20 @@ def suggest_for_person(rows, gallery: Gallery, person_id: int,
         best[c0:c1] = scores.max(axis=0)
     _tg1 = _time.perf_counter()
 
-    if neg_map:
-        # Faces the user already marked "not person_id" can never be a
-        # suggestion for them — drop at the gate, the cheapest possible place.
-        for j, r in enumerate(rows):
-            if person_id in neg_map.get(r["id"], ()):
-                best[j] = np.float32(-np.inf)
-
-    cand = np.nonzero(best >= threshold)[0]
+    cand = surv[best >= threshold]
     if len(cand) == 0:
-        _log.debug("suggest_for_person pid=%d unlabeled=%d gate_embs=%d(/%d) "
-                   "gate=%.3fs candidates=0", person_id, len(rows),
-                   p_embs.shape[0], p_end - p_start, _tg1 - _tg0)
+        _log.debug("suggest_for_person pid=%d unlabeled=%d gate_embs=%d "
+                   "gate=%.3fs survivors=%d candidates=0", person_id, len(rows),
+                   K, _tg1 - _tg0, len(surv))
         return []
     cand_rows = [rows[i] for i in cand]
     # Rank from the embeddings we already decoded instead of re-reading cand_rows.
     ranked = _rank_from_matrix(cand_rows, unknowns[cand], times[cand], gallery, threshold, neg_map)
     _tr1 = _time.perf_counter()
-    _log.debug("suggest_for_person pid=%d unlabeled=%d gate_embs=%d(/%d) gallery=%d "
-               "gate=%.3fs candidates=%d rank=%.3fs",
-               person_id, len(rows), p_embs.shape[0], p_end - p_start, len(gallery),
-               _tg1 - _tg0, len(cand), _tr1 - _tg1)
+    _log.debug("suggest_for_person pid=%d unlabeled=%d gate_embs=%d gallery=%d "
+               "gate=%.3fs survivors=%d candidates=%d rank=%.3fs",
+               person_id, len(rows), K, len(gallery),
+               _tg1 - _tg0, len(surv), len(cand), _tr1 - _tg1)
 
     out = []
     for row, persons in zip(cand_rows, ranked):

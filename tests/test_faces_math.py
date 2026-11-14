@@ -232,6 +232,81 @@ class TestNegatives:
                                          times=times, neg_map={300: {1}})
         assert gated == []
 
+    def test_suggest_for_person_heavily_labeled_person_matches_any_example(self):
+        """Audit F4: a person with more labeled examples than the old gate
+        subsample (200) still gets a face whose only above-threshold match is an
+        example the evenly-spaced subsample skipped — and the single-person
+        path agrees with the all-persons batch path on every face."""
+        rng = np.random.default_rng(11)
+        K = 300
+        # Random 512-d unit vectors are near-orthogonal (|cos| ~ 0.04), so each
+        # query below matches exactly one example and nothing else.
+        examples = ff.unit_vectors(rng, K)
+        other = ff.unit_vectors(rng, 5)
+        n = K + len(other)
+        nan = np.full(n, np.nan)
+        gallery = faces.Gallery(
+            embeddings=np.concatenate([examples, other]),
+            person_ids=np.array([1] * K + [2] * len(other), dtype=np.int64),
+            face_times=nan, birth_times=nan, not_before_times=nan, not_after_times=nan,
+        )
+        # Examples the old linspace subsample (0..K-1, 200 points) left out, read
+        # off the gallery's own (possibly reordered) row order.
+        start = int(gallery._group_starts[gallery._pid_to_group[1]])
+        p_embs = gallery._s_embs[start:start + K]
+        sampled = set(np.linspace(0, K - 1, 200, dtype=np.intp).tolist())
+        skipped = [i for i in range(K) if i not in sampled]
+        assert skipped
+
+        queries = np.stack([ff.vec_at_cosine(rng, p_embs[skipped[0]], 0.6),
+                            ff.vec_at_cosine(rng, p_embs[0], 0.6),          # sampled
+                            ff.vec_at_cosine(rng, other[0], 0.6),           # person 2
+                            ff.unit_vectors(rng, 1)[0]])                     # nobody
+        rows = [{"id": 400 + i} for i in range(len(queries))]
+        times = np.full(len(queries), np.nan)
+
+        got = faces.suggest_for_person(rows, gallery, 1, unknowns=queries,
+                                       times=times, neg_map={})
+        assert sorted(r["id"] for r, _, _ in got) == [400, 401]
+        for _, score, _ in got:
+            assert abs(score - 0.6) < 1e-3
+
+        batch = faces.suggest_persons_batch(rows, gallery, unknowns=queries,
+                                            times=times, neg_map={})
+        assert {rows[i]["id"] for i, s in enumerate(batch) if s and s[0] == 1} == {400, 401}
+
+    def test_suggest_for_person_agrees_with_batch_on_dated_gallery(self):
+        """With birth dates, windows and dated/undated unknowns in play, the
+        two-stage gate (raw-cosine prune, then exact age math) leaves
+        suggest_for_person attributing exactly the faces the batch path does."""
+        rng = np.random.default_rng(12)
+        centroids = ff.unit_vectors(rng, 4)
+        sizes = [250, 40, 30, 20]
+        embs = np.concatenate([ff.cluster_around(rng, c, k, intra_cos=0.5)
+                               for c, k in zip(centroids, sizes)])
+        pids = np.concatenate([[p + 1] * k for p, k in enumerate(sizes)]).astype(np.int64)
+        n = len(pids)
+        births = np.array([ff.epoch(2000), np.nan, ff.epoch(1990), np.nan])[pids - 1]
+        nb = np.array([np.nan, np.nan, np.nan, ff.epoch(2010)])[pids - 1]
+        ftimes = np.where(rng.random(n) < 0.8,
+                          rng.uniform(ff.epoch(2001), ff.epoch(2020), n), np.nan)
+        gallery = faces.Gallery(embs, pids, ftimes, births, nb, np.full(n, np.nan))
+
+        unknowns = np.concatenate([ff.cluster_around(rng, c, 60, intra_cos=0.45)
+                                   for c in centroids])
+        times = np.where(rng.random(len(unknowns)) < 0.7,
+                         rng.uniform(ff.epoch(1995), ff.epoch(2022), len(unknowns)), np.nan)
+        rows = [{"id": 1000 + i} for i in range(len(unknowns))]
+
+        batch = faces.suggest_persons_batch(rows, gallery, unknowns=unknowns,
+                                            times=times, neg_map={})
+        for pid in range(1, 5):
+            want = {rows[i]["id"] for i, s in enumerate(batch) if s and s[0] == pid}
+            got = faces.suggest_for_person(rows, gallery, pid, unknowns=unknowns,
+                                           times=times, neg_map={})
+            assert {r["id"] for r, _, _ in got} == want
+        assert any(s for s in batch)
+
     def test_match_embedding_and_suggest_person_exclude(self):
         """The single-face path (match_embedding/suggest_person) drops
         excluded person_ids from the ranking the same way the batch paths do."""

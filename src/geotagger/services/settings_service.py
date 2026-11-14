@@ -23,7 +23,6 @@ CACHE_FREE_SETTINGS: dict[str, str] = {
     "FACE_DECODE_MAX_DIM": "face-detect decode is built in memory per scan, not cached; "
                            "only affects future detections",
     "FACE_AMBIGUITY_MARGIN": "read per suggest_for_person call",
-    "FACE_GATE_MAX_EXAMPLES": "read per suggest_for_person call",
     "FACE_SUGGEST_SCAN_CAP": "part of the unlabeled-cache key",
     "FACE_PRESELECT_MIN_SCORE": "frontend-only; people.js reads it from /api/settings on load",
     "FACE_QUERY_LIMIT": "frontend-only; people.js reads it from /api/settings on load",
