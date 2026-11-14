@@ -104,13 +104,13 @@ async function saveSetting(key, input) {
   const value =
     input.type === "checkbox" ? (input.checked ? 1 : 0) : parseFloat(input.value);
   try {
-    const res = await fetch("/api/settings", {
+    // fetchJson checks res.ok before parsing: a non-JSON error body (500) or a
+    // 422's list-shaped detail still becomes one readable line.
+    const data = await fetchJson("/api/settings", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ values: { [key]: value } }),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
     rowError(row, null);
     if (input.type === "checkbox") input.checked = !!data.updated[key];
     else input.value = data.updated[key];

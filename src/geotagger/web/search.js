@@ -491,12 +491,8 @@ function groupCandidatesByMonth(candidates) {
   const groups = [];
   let cur = null;
   sorted.forEach((c) => {
-    let year = null, month = null;
-    if (c.photo.photo_datetime) {
-      const d = new Date(c.photo.photo_datetime * 1000);
-      year = d.getFullYear();
-      month = d.getMonth();
-    }
+    const p = wallClockParts(c.photo.photo_datetime);   // UTC getters — see common.js
+    const year = p ? p.year : null, month = p ? p.month : null;
     if (!cur || cur.year !== year || cur.month !== month) {
       cur = { year, month, candidates: [] };
       groups.push(cur);
@@ -810,12 +806,8 @@ function renderGrid() {
   const groups = [];
   let cur = null;
   photos.forEach((photo, idx) => {
-    let year = null, month = null;
-    if (photo.photo_datetime) {
-      const d = new Date(photo.photo_datetime * 1000);
-      year = d.getFullYear();
-      month = d.getMonth();
-    }
+    const p = wallClockParts(photo.photo_datetime);   // UTC getters — see common.js
+    const year = p ? p.year : null, month = p ? p.month : null;
     if (!cur || cur.year !== year || cur.month !== month) {
       cur = { year, month, photos: [] };
       groups.push(cur);
@@ -885,7 +877,9 @@ function clearSelection() {
 
 function showPlaceholder() {
   focusedPhotoId = null;
-  document.getElementById("detail-placeholder").style.display = "";
+  const ph = document.getElementById("detail-placeholder");
+  ph.textContent = "Select a photo to view details";   // showDetail may have left an error here
+  ph.style.display = "";
   document.getElementById("detail-content").style.display = "none";
 }
 
@@ -894,8 +888,7 @@ function showPlaceholder() {
 const showDetail = latestOnly(async (signal, id) => {
   focusedPhotoId = id;
   try {
-    const res = await fetch(`/api/photo/${id}`, { signal });
-    const data = await res.json();
+    const data = await fetchJson(`/api/photo/${id}`, { signal });
     if (signal.aborted) return;
 
     document.getElementById("detail-placeholder").style.display = "none";
@@ -926,7 +919,12 @@ const showDetail = latestOnly(async (signal, id) => {
       `<tr><td>${k}</td><td>${escapeHtml(String(v ?? "—"))}</td></tr>`
     ).join("");
   } catch (err) {
-    // ignore
+    if (signal.aborted) return;
+    // Don't leave the previous photo's details up under this one's selection.
+    showPlaceholder();
+    focusedPhotoId = id;
+    document.getElementById("detail-placeholder").textContent =
+      `Could not load photo details: ${err.message}`;
   }
 });
 
@@ -1246,16 +1244,15 @@ function bindTimeline() {
     const bucket = histBuckets[bucketIdx];
     if (!bucket) return;
 
-    const d = new Date(bucket.ts * 1000);
+    // Bucket ts are photo_datetime values (wall clock as UTC) — format in UTC.
     let label;
     if (histBucketSecs <= 86400) {
-      label = d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+      label = formatWallClockDate(bucket.ts, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
     } else if (histBucketSecs <= 86400 * 7) {
-      const end = new Date((bucket.ts + histBucketSecs - 86400) * 1000);
-      label = d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) +
-              " – " + end.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+      label = formatWallClockDate(bucket.ts, { month: "short", day: "numeric" }) + " – " +
+              formatWallClockDate(bucket.ts + histBucketSecs - 86400, { month: "short", day: "numeric", year: "numeric" });
     } else {
-      label = d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+      label = formatWallClockDate(bucket.ts, { month: "long", year: "numeric" });
     }
     if (bucket.count) label += ` · ${bucket.count}`;
 
@@ -1331,8 +1328,7 @@ function updateDateLabels() {
 
 function fmtDate(ts) {
   if (!ts) return "";
-  const d = new Date(ts * 1000);
-  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
+  return formatWallClockDate(ts, { year: "numeric", month: "short", day: "numeric" });
 }
 
 function applyTimelineFilter() {

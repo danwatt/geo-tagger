@@ -434,10 +434,10 @@ reloads the old folder. `selectedIds` is never pruned, so `L`/`I` act on photos 
 `web/app.js:3095`. The check runs before the input guard at line 3098, so typing "?" in a search box opens
 the help modal. `people.js:1906` has the same order [seen; whether its guard precedes was not checked].
 
-**W8 — Medium — Time Sync shows saved photos double-shifted** [seen]
+**W8 — Medium — Time Sync shows saved photos double-shifted** [seen] — ✅ **DONE** (ordering was already right; save now patches saved times locally, clears offsets for written/conflict/not-found ids, keeps failed ones for retry; also fixed the day histogram reading `total` instead of `count` and a stale month range)
 `web/timesync.js:656-657`. `await loadPhotos(); appliedOffsets = {};` is in the wrong order.
 
-**W9 — Medium — Local-time getters on wall-clock-as-UTC values** [traced]
+**W9 — Medium — Local-time getters on wall-clock-as-UTC values** [traced] — ✅ **DONE** (`wallClock*` / `formatWallClock*` helpers in `common.js`; month bucketing fixed in People grouping/grid and Search; reproduced and checked in UTC-6. Remaining unchecked fetches in timesync/map/search/settings now use `fetchJson`)
 `web/search.js:488-490,807-809,1206-1215`, `web/timesync.js:399,559-561`, `web/people.js:1101-1103,1156-1158,2391`,
 `web/face-grid.js:72-87`. West of UTC, a photo taken 1 Jan 00:30 lands under the previous December.
 *Fix:* one shared UTC date helper.

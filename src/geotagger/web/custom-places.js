@@ -219,7 +219,7 @@ function placeMeta(p) {
   if (typeof p.photo_count === "number") {
     bits.push(p.photo_count === 1 ? "1 photo" : `${p.photo_count} photos`);
   }
-  if (p.last_ts) bits.push(`last ${new Date(p.last_ts * 1000).toLocaleDateString(undefined, { timeZone: "UTC" })}`);
+  if (p.last_ts) bits.push(`last ${formatWallClockDate(p.last_ts)}`);
   bits.push(p.type === "circle" ? formatRadius(circleRadius(p)) : "rectangle");
   // Time-neighbour inference, not a spatial count — see index.get_place_stats.
   // Worth a callout because it's the backlog this place could clear in one sitting.
@@ -1064,7 +1064,7 @@ function renderHotspotSidebar() {
       <div class="hotspot-body">
         <div class="hotspot-label">${escapeHtml(h.label)}</div>
         <div class="hotspot-meta">${h.count} photo${h.count !== 1 ? "s" : ""}${
-          h.last_ts ? ` · last ${new Date(h.last_ts * 1000).toLocaleDateString(undefined, { timeZone: "UTC" })}` : ""}</div>
+          h.last_ts ? ` · last ${formatWallClockDate(h.last_ts)}` : ""}</div>
         <div class="hotspot-actions">
           <button class="zoom-btn">Zoom</button>
           <button class="name-btn primary">✏️ Name it…</button>

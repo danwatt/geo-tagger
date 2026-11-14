@@ -173,7 +173,7 @@ function updateDetail() {
   updatePhotoPeople(face);   // async, fills in when the photo's tags arrive
 
   const when = face.photo_datetime
-    ? new Date(face.photo_datetime * 1000).toLocaleString(undefined, { timeZone: "UTC" }) : "Unknown";
+    ? formatWallClock(face.photo_datetime) : "Unknown";
   const personCell = face.ignored
     ? "<i style='color:#999'>Ignored</i>"
     : face.come_back

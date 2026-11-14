@@ -8,12 +8,9 @@ function computeMonthGroups(list) {
   const groups = [];
   let cur = null;
   list.forEach(f => {
-    let year = null, month = null;
-    if (f.photo_datetime) {
-      const d = new Date(f.photo_datetime * 1000);
-      year = d.getFullYear();
-      month = d.getMonth();
-    }
+    // Wall-clock calendar month (UTC getters — see common.js).
+    const p = wallClockParts(f.photo_datetime);
+    const year = p ? p.year : null, month = p ? p.month : null;
     if (!cur || cur.year !== year || cur.month !== month) {
       cur = { year, month, faces: [] };
       groups.push(cur);
@@ -92,13 +89,12 @@ function computeUnlabeledPhotoGroups(list) {
   list.forEach(f => {
     let b = buckets.get(f.photo_id);
     if (!b) {
-      const ts = f.photo_datetime;
-      const d = ts ? new Date(ts * 1000) : null;
+      const p = wallClockParts(f.photo_datetime);
       b = {
         photoId: f.photo_id,
         filename: f.filename || dirLabel(f),
-        year: d ? d.getFullYear() : null,
-        month: d ? d.getMonth() : null,
+        year: p ? p.year : null,
+        month: p ? p.month : null,
         faces: [],
       };
       buckets.set(f.photo_id, b);
@@ -231,6 +227,9 @@ function computeTagBatches(list) {
   return groups;
 }
 
+// `ts` here is a real instant (ignored_at / come-back / assigned_at batch
+// times), compared against Date.now() — not a wall-clock photo time — so the
+// local-zone formatting below is correct.
 function formatRelativeTime(ts) {
   if (!ts) return "unknown time";
   const sec = Date.now() / 1000 - ts;

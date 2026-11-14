@@ -52,8 +52,7 @@ function bindKeyboardEvents() {
 
 async function checkStatus() {
   try {
-    const res = await fetch("/api/status");
-    const data = await res.json();
+    const data = await fetchJson("/api/status");
     if (data.scan_needed) {
       setStatus("No scan data found. Please run a scan first.", true);
     }
@@ -167,8 +166,7 @@ async function showMonthPicker() {
   modal.style.display = "flex";
 
   try {
-    const res = await fetch("/api/stats/months");
-    const data = await res.json();
+    const data = await fetchJson("/api/stats/months");
 
     if (!data.months || data.months.length === 0) {
       list.innerHTML = "<p style='color:#888'>No photos found</p>";
@@ -195,7 +193,7 @@ async function showMonthPicker() {
       section.appendChild(header);
 
       byYear[year].forEach(m => {
-        const monthName = new Date(m.year, m.month - 1, 1).toLocaleString('default', { month: 'long' });
+        const monthName = formatWallClockDate(wallClockTs(m.year, m.month), { month: 'long' });
         const item = document.createElement("div");
         item.className = "month-item";
         item.innerHTML = `
@@ -224,7 +222,7 @@ async function selectMonth(year, month) {
   selectedYear = year;
   selectedMonth = month;
 
-  const monthName = new Date(year, month - 1, 1).toLocaleString('default', { month: 'long' });
+  const monthName = formatWallClockDate(wallClockTs(year, month), { month: 'long' });
   document.getElementById("selected-month-label").textContent = `${monthName} ${year}`;
 
   await loadMonthHistogram(year, month);
@@ -235,18 +233,19 @@ async function selectMonth(year, month) {
 // only B's histogram and photos may land.
 const loadMonthHistogram = latestOnly(async (signal, year, month) => {
   try {
-    const res = await fetch(`/api/stats/dates?year=${year}&month=${month}`, { signal });
-    const data = await res.json();
+    const data = await fetchJson(`/api/stats/dates?year=${year}&month=${month}`, { signal });
     if (signal.aborted) return;
 
     if (!data.dates || data.dates.length === 0) {
-      histBuckets = [];
+      clearMonthHistogram();
       return;
     }
 
+    // d.date is a "YYYY-MM-DD" wall-clock day (SQLite DATE(...,'unixepoch'));
+    // the endpoint reports it as `count`.
     histBuckets = data.dates.map(d => ({
-      ts: new Date(d.date).getTime() / 1000,
-      count: d.total
+      ts: parseWallClockDay(d.date),
+      count: d.count
     }));
 
     if (histBuckets.length > 0) {
@@ -261,9 +260,20 @@ const loadMonthHistogram = latestOnly(async (signal, year, month) => {
     }
   } catch (err) {
     if (signal.aborted) return;
-    console.error("Failed to load histogram:", err);
+    // Drop the previous month's range too: left in place, applyFilters would
+    // filter this month's photos against last month's dates and hide them all.
+    clearMonthHistogram();
+    setStatus("Could not load the day histogram: " + err.message, true);
   }
 });
+
+// No histogram for the month: no buckets and no date range (applyFilters skips
+// range filtering when dateRangeMin === dateRangeMax).
+function clearMonthHistogram() {
+  histBuckets = [];
+  dateRangeMin = dateRangeMax = dateFilterLo = dateFilterHi = 0;
+  updateHistLabels();
+}
 
 /* ── Timeline histogram ── */
 function bindTimeline() {
@@ -300,8 +310,7 @@ function bindTimeline() {
 function updateHistLabels() {
   const formatDate = (ts) => {
     if (ts === 0) return "";
-    const d = new Date(ts * 1000);
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+    return formatWallClockDate(ts, { month: 'short', day: 'numeric' });
   };
   document.getElementById("hist-label-lo").textContent = formatDate(dateFilterLo);
   document.getElementById("hist-label-hi").textContent = formatDate(dateFilterHi);
@@ -341,13 +350,12 @@ const loadPhotos = latestOnly(async (signal, fitTimeline = false) => {
 
   const filter = document.getElementById("filter-select").value;
   const dateFrom = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-01`;
-  const lastDay = new Date(selectedYear, selectedMonth, 0).getDate();
+  const lastDay = daysInMonth(selectedYear, selectedMonth);
   const dateTo = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${lastDay}`;
 
   try {
     let url = `/api/photos?geotagged=${filter}&date_from=${dateFrom}&date_to=${dateTo}`;
-    const res = await fetch(url, { signal });
-    const data = await res.json();
+    const data = await fetchJson(url, { signal });
     if (signal.aborted) return;
     photos = data;
 
@@ -525,10 +533,9 @@ function updateDetailPane() {
   const table = document.getElementById("detail-meta");
   const offset = appliedOffsets[photo.id] || 0;
   // Wall clock stored as a UTC epoch: format in UTC, not the browser's zone.
-  const wallClock = (ts) => new Date(ts * 1000).toLocaleString(undefined, { timeZone: "UTC" });
-  const originalTime = photo.photo_datetime ? wallClock(photo.photo_datetime) : "Unknown";
+  const originalTime = photo.photo_datetime ? formatWallClock(photo.photo_datetime) : "Unknown";
   const adjustedTime = offset !== 0 && photo.photo_datetime
-    ? wallClock(photo.photo_datetime + offset)
+    ? formatWallClock(photo.photo_datetime + offset)
     : originalTime;
 
   table.innerHTML = `
@@ -644,23 +651,35 @@ async function saveTimesToSidecars() {
     });
 
     // 200 carries a {results, written, failed, not_found} breakdown; 502/404/409
-    // carry the same body when nothing was written. Anything else (400/422/500)
-    // has no `written`.
-    const out = await res.json().catch(() => null);
-    if (!out || !Array.isArray(out.written)) {
-      throw new Error(out && typeof out.detail === "string" ? out.detail : `HTTP ${res.status}`);
-    }
+    // carry the same body when nothing was written, so !res.ok alone isn't a
+    // request-level failure here. Anything else (400/422/500) has no `written`.
+    // Parse a clone so httpErrorMessage can still read the original body.
+    const out = await res.clone().json().catch(() => null);
+    if (!out || !Array.isArray(out.written)) throw new Error(await httpErrorMessage(res));
 
+    // Order matters (audit W8): an offset is a delta on the photo's *loaded*
+    // time, so it must be gone before (or together with) that photo's new time
+    // arriving — otherwise the reload's already-shifted time gets the offset
+    // added again and the photo shows double-shifted.
     // Clear only what landed; failed photos keep their offset so Save can be
     // pressed again (safe: the request is idempotent). A conflict can't be
-    // retried as-is (the photo's date moved), so its offset is dropped.
-    out.written.forEach(id => { delete appliedOffsets[id]; delete baseTimes[id]; });
-    const conflicted = out.failed.filter(f => f.conflict).map(f => f.id);
-    conflicted.forEach(id => { delete appliedOffsets[id]; delete baseTimes[id]; });
+    // retried as-is (the photo's date moved), nor can a photo that no longer
+    // exists, so those offsets are dropped too.
+    const settled = [...out.written, ...out.not_found,
+                     ...out.failed.filter(f => f.conflict).map(f => f.id)];
+    settled.forEach(id => { delete appliedOffsets[id]; delete baseTimes[id]; });
     const retryable = out.failed.filter(f => !f.conflict).map(f => f.id);
     hasUnsavedChanges = Object.keys(appliedOffsets).length > 0;
 
-    // Reload photos to get updated times
+    // Patch the saved times in locally first, so the view is right even if the
+    // reload below fails (it would otherwise show the old time, offset gone).
+    const savedTimes = new Map((out.results || []).map(r => [r.id, r.photo_datetime]));
+    photos.forEach(p => { if (savedTimes.has(p.id)) p.photo_datetime = savedTimes.get(p.id); });
+    buildTimeline();
+    applyFilters();
+    updateDetailPane();
+
+    // Reload photos to pick up the server's view (sidecar-backed times).
     await loadPhotos();
 
     const problems = batchProblems(out);

@@ -156,8 +156,7 @@ function addOverlayControl() {
 
 async function fitToLibrary() {
   try {
-    const res = await fetch("/api/stats/bounds");
-    const data = await res.json();
+    const data = await fetchJson("/api/stats/bounds");
     if (data.has_data) {
       map.fitBounds(
         [[data.min_lat, data.min_lng], [data.max_lat, data.max_lng]],

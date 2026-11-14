@@ -85,8 +85,7 @@ const UTC = { timeZone: "UTC" };
 
 function dayKey(photo) {
   if (!photo.photo_datetime) return null;
-  const d = new Date(photo.photo_datetime * 1000);
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+  return wallClockDay(photo.photo_datetime);
 }
 
 function isolateDay(key) {
@@ -1119,7 +1118,7 @@ async function loadPhotos(fitMap = false) {
     let dateFrom, dateTo;
     if (selectedMonth) {
       dateFrom = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-01`;
-      const lastDay = new Date(selectedYear, selectedMonth, 0).getDate();
+      const lastDay = daysInMonth(selectedYear, selectedMonth);
       dateTo = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${lastDay}`;
     } else {
       dateFrom = `${selectedYear}-01-01`;
@@ -2437,7 +2436,7 @@ function dayCountsFromPhotos() {
   for (const p of photos) {
     const ts = p.photo_datetime;
     if (!ts) continue;   // undated; negative (pre-1970) is a real date
-    const key = new Date(ts * 1000).toISOString().slice(0, 10);
+    const key = wallClockDay(ts);
     byDay.set(key, (byDay.get(key) || 0) + 1);
   }
   return [...byDay].map(([date, count]) => ({ date, count }));
@@ -2453,8 +2452,8 @@ function bindTimeline() {
     onChange({ from, to }) {
       // A bound day is inclusive, so the end bound runs to that day's last
       // second; an unset bound falls back to the scope's own edge.
-      const lo = from ? Date.parse(`${from}T00:00:00Z`) / 1000 : dateRangeMin;
-      const hi = to ? Date.parse(`${to}T00:00:00Z`) / 1000 + 86399 : dateRangeMax;
+      const lo = from ? parseWallClockDay(from) : dateRangeMin;
+      const hi = to ? parseWallClockDay(to) + 86399 : dateRangeMax;
       // A scrubber drag commits on every pointermove, most of which land on the
       // same day as the last one — those change nothing.
       if (lo === dateFilterLo && hi === dateFilterHi) return;
@@ -2941,7 +2940,7 @@ function saveSkippedBatches(ids) {
 // date_to as UTC days, so the batch's span has to be formatted in UTC too — a
 // local-time conversion would clip the first or last photos of the outing.
 function utcDay(ts) {
-  return new Date(ts * 1000).toISOString().slice(0, 10);
+  return wallClockDay(ts);
 }
 
 async function enterBatch(id) {

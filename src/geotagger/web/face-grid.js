@@ -93,13 +93,11 @@ function applyBbox(el, bbox) {
  * depending on where the *viewer* is. */
 function formatDateRange(startTs, endTs) {
   if (!startTs) return "Undated";
-  const opts = { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" };
-  const s = new Date(startTs * 1000);
-  const e = new Date((endTs || startTs) * 1000);
-  const sStr = s.toLocaleDateString(undefined, opts);
-  const eStr = e.toLocaleDateString(undefined, opts);
+  const opts = { year: "numeric", month: "short", day: "numeric" };
+  const sStr = formatWallClockDate(startTs, opts);
+  const eStr = formatWallClockDate(endTs || startTs, opts);
   if (sStr === eStr) return sStr;
-  return `${s.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" })} – ${eStr}`;
+  return `${formatWallClockDate(startTs, { month: "short", day: "numeric" })} – ${eStr}`;
 }
 
 /* ── Location label for a group of faces ──

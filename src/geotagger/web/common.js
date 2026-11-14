@@ -23,6 +23,68 @@ function escapeHtml(value) {
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
                      "July", "August", "September", "October", "November", "December"];
 
+/* ── Wall-clock timestamps ──
+ * photo_datetime — and every value derived from it (a group's last_ts, a
+ * histogram bucket's ts, a date-picker day turned into a bound) — is the
+ * camera's wall clock stored *as if* it were UTC (see timeutil.py). It is not an
+ * instant: reading it with the local-zone Date API (getFullYear, getMonth,
+ * toLocaleString without a timeZone, new Date(y, m, d)) shifts it by the
+ * viewer's UTC offset, so west of UTC a photo taken 1 Jan 00:30 lands under the
+ * previous December. Everything here goes through getUTC* / Date.UTC /
+ * timeZone "UTC", which hands back exactly what the camera wrote, and matches
+ * the backend (strftime(..., 'unixepoch'), calendar.timegm date filters).
+ * Genuine instants (Date.now(), assigned_at, job times) are NOT wall-clock
+ * values and keep the local-zone API.
+ * Month numbers: `month` in wallClockParts is 0-based (like MONTH_NAMES and
+ * getUTCMonth); wallClockTs / daysInMonth take a 1-based month (like the API's
+ * year/month params). */
+
+/** {year, month (0-11), day, hour, minute, second, weekday} of a wall-clock
+ *  epoch, or null when undated (null/0; negative = pre-1970, a real date). */
+function wallClockParts(ts) {
+  if (!ts) return null;
+  const d = new Date(ts * 1000);
+  return {
+    year: d.getUTCFullYear(), month: d.getUTCMonth(), day: d.getUTCDate(),
+    hour: d.getUTCHours(), minute: d.getUTCMinutes(), second: d.getUTCSeconds(),
+    weekday: d.getUTCDay(),
+  };
+}
+
+/** Wall-clock epoch (seconds) for a calendar date/time; month is 1-based. */
+function wallClockTs(year, month, day = 1, hour = 0, minute = 0, second = 0) {
+  return Date.UTC(year, month - 1, day, hour, minute, second) / 1000;
+}
+
+/** "YYYY-MM-DD" day key of a wall-clock epoch (the API's date_from/date_to form). */
+function wallClockDay(ts) {
+  return new Date(ts * 1000).toISOString().slice(0, 10);
+}
+
+/** Wall-clock epoch of a "YYYY-MM-DD" day's midnight. Parsed with an explicit
+ *  Z: a date-only string parses as UTC but "YYYY-MM-DDT00:00" as *local*, so
+ *  never hand a date-picker value straight to new Date(). */
+function parseWallClockDay(s) {
+  return Date.parse(`${s}T00:00:00Z`) / 1000;
+}
+
+/** Days in a month (1-based month). */
+function daysInMonth(year, month) {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+/** Locale formatting of a wall-clock epoch; `opts` are Intl options (timeZone
+ *  is forced to UTC). Date+time, date only, time only. */
+function formatWallClock(ts, opts = {}) {
+  return new Date(ts * 1000).toLocaleString(undefined, { ...opts, timeZone: "UTC" });
+}
+function formatWallClockDate(ts, opts = {}) {
+  return new Date(ts * 1000).toLocaleDateString(undefined, { ...opts, timeZone: "UTC" });
+}
+function formatWallClockTime(ts, opts = {}) {
+  return new Date(ts * 1000).toLocaleTimeString(undefined, { ...opts, timeZone: "UTC" });
+}
+
 /** localStorage key for the work-queue batches skipped on the Geocode page
  *  (written by app.js, counted/cleared by home.js). */
 const SKIPPED_BATCHES_KEY = "geotagger.workqueue.skipped";

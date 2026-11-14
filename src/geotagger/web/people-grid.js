@@ -419,10 +419,10 @@ function renderGridInner() {
     grid.appendChild(makePersonHeader(list.length));
     let curYear = null, curMonth = null;
     list.forEach((face) => {
-      if (face.photo_datetime) {
-        const d = new Date(face.photo_datetime * 1000);
-        const year = d.getFullYear();
-        const month = d.getMonth();  // 0-based
+      const p = wallClockParts(face.photo_datetime);   // UTC getters — see common.js
+      if (p) {
+        const year = p.year;
+        const month = p.month;  // 0-based
         if (year !== curYear) {
           curYear = year; curMonth = month;
           const div = document.createElement("div");
