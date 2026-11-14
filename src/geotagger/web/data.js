@@ -320,10 +320,7 @@ async function startOsmDownload() {
       body: JSON.stringify({ regions, force }),
     });
     if (res.status === 409) { pollOsm(); return; }
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.detail || `HTTP ${res.status}`);
-    }
+    if (!res.ok) throw new Error(await httpErrorMessage(res));
     pollOsm();
   } catch (e) {
     errorEl.textContent = e.message;
@@ -647,10 +644,7 @@ async function startStreetSearch() {
       }),
     });
     if (res.status === 409) { pollStreets(); return; }
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.detail || `HTTP ${res.status}`);
-    }
+    if (!res.ok) throw new Error(await httpErrorMessage(res));
     pollStreets();
   } catch (e) {
     errorEl.textContent = e.message;

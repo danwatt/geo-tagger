@@ -30,8 +30,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   } else {
     await loadFaces();
   }
-  // Don't paint the hint over a "Failed to load …" from the loads above.
-  if (!statusIsError) setStatus("Select a person on the left, or scan for faces to begin.");
+  // The first load reports what it found ("N of M unlabeled faces…", or why
+  // nothing is there); the generic hint only fills a bar it left empty, and
+  // never paints over a "Failed to load …" (U4).
+  if (!statusIsError && !document.getElementById("status-bar").textContent.trim()) {
+    setStatus("Select a person on the left, or scan for faces to begin.");
+  }
   // Staged work from before a reload / crash (U7). After the first load, so the
   // restored faces leave a grid that is already there, like a fresh stage does.
   pending.onSaveError = () => setStatus(STAGED_SAVE_FAILED_MSG, true);

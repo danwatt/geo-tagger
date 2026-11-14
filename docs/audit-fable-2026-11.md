@@ -80,15 +80,9 @@ names. No archive is extracted to disk. Download URLs are fixed HTTPS constants.
 
 ## UX
 
-**U4 — Missing loading states** [traced] — `loadFaces` and `loadPhotoScope` leave the old grid interactive
-with no indication (`people.js:696-714`, `app.js:1315-1319`). The first-load status on People is overwritten
-(`people.js:118-120`).
-
 **U8 — Dialog and drawing papercuts** [traced] — Enter on a focused Cancel button saves
 (`custom-places.js:1307-1309`); releasing the mouse outside the map leaves draw mode armed with dragging
 disabled; Escape does not cancel drawing here or in `app.js:1171-1185`.
-
-**U9 — Error toasts show raw JSON for 2.2 s** [traced] — `people-manage.js:15,24-26`.
 
 **U10 — Smaller items** [traced] — `prompt()` for naming people hides near-duplicates (`people.js:2022,3166`);
 no arrow keys for Prev/Next in Crowd Review; Crowd Review ignores the Focus window (`people.js:2243-2244`);

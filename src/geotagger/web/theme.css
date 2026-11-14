@@ -312,7 +312,69 @@ input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
   text-align: center;
   pointer-events: none;
 }
-#toast.err { background: #7a2a2a; }
+/* common.js showToast (U9): errors get a red edge, stay longer and carry a ✕,
+   so the pill takes the pointer only then (hover also holds it). */
+#toast.ok  { box-shadow: inset 3px 0 0 var(--success); }
+#toast.err {
+  background: #5a1f1f;
+  border: 1px solid var(--danger);
+  color: var(--text-strong);
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: var(--radius-lg);
+  padding: 8px 8px 8px 16px;
+  text-align: left;
+}
+#toast[hidden] { display: none; }
+#toast .toast-msg { flex: 1; min-width: 0; }
+#toast .toast-close {
+  background: none;
+  border-color: transparent;
+  color: var(--danger-text);
+  padding: 2px 6px;
+}
+
+/* ── Loading state (U4, common.js setBusy) ──
+   .is-busy is set at once (clicks/keys inside are swallowed in JS; the cursor
+   says why); .is-busy-shown and the .busy-pill only after a short delay, so a
+   fast load doesn't flicker. The pill is fixed-position over the visible part
+   of the container, so it works in any layout without repositioning it. */
+.is-busy { cursor: progress; }
+.is-busy * { cursor: progress !important; }
+.is-busy-shown { opacity: .45; transition: opacity .15s ease-in; }
+/* A container emptied before its load (Search) still needs room for the pill. */
+.is-busy-shown:empty { min-height: 160px; }
+.busy-pill {
+  position: fixed;
+  transform: translate(-50%, -50%);
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-panel);
+  color: var(--text-strong);
+  font-size: 13px;
+  pointer-events: none;
+}
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border-btn);
+  border-top-color: var(--accent-text);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+  vertical-align: -2px;
+  flex: none;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
 
 /* ── Undo toast (U3, common.js showUndoToast) ──
    Bottom-left, so it never sits on #toast (bottom-centre) or the staged-restore

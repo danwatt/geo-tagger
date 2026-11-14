@@ -114,7 +114,7 @@ const loadGroups = latestOnly(async (signal) => {
     // full=true → every face per group, so the grid can show them all.
     const res = await fetch(`/api/faces/clusters?full=true&threshold=${settings.threshold}`,
                             { signal });
-    if (!res.ok) throw new Error("HTTP " + res.status);
+    if (!res.ok) throw new Error(await httpErrorMessage(res));
     const data = await res.json();
     if (signal.aborted) return;
     // Split each person-group into chunks that are tight in both time and place.
@@ -471,12 +471,7 @@ function closePreview() {
 }
 
 /* ── Toast ── */
-let toastTimer;
+// common.js showToast (U9): errors stay 6 s with a ✕, the rest ~2 s.
 function toast(msg, isErr = false) {
-  const t = el("toast");
-  t.textContent = msg;
-  t.className = isErr ? "err" : "";
-  t.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, 1800);
+  showToast(msg, isErr ? { kind: "error" } : { timeoutMs: 1800 });
 }

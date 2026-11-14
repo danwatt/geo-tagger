@@ -370,6 +370,8 @@ function bindToolbar() {
     // Don't stack the picker on top of the month/timeline modals.
     if (anyModalOpen()) return;
     e.preventDefault();
+    // Mid scope load (U4) the selection is the outgoing scope's.
+    if (isBusy(document.getElementById("grid"))) return;
     openLocationPicker();
   });
 
@@ -1118,10 +1120,21 @@ async function loadPhotosByArea(lat, lng, radius) {
  * latest-only wrapper (common.js): pick month A then month B, and A's response —
  * cancelled, or arriving late anyway — resolves to LATEST_ONLY_STALE and is
  * never applied over B. */
+//
+// U4: the grid keeps showing the previous scope until the new one lands, so it
+// is held busy (dimmed after 150 ms, clicks and grid shortcuts ignored) for the
+// fetch. The caller renders in the microtask right after release, so there is
+// no window where the stale grid is live again. A superseded fetch's release is
+// a no-op (setBusy hold tokens); .cancel() aborts and so releases too.
 const fetchPhotoScope = latestOnly(async (signal, url) => {
-  const res = await fetch(url, { signal });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
+  const release = setBusy(document.getElementById("grid"), true, "Loading photos…");
+  try {
+    const res = await fetch(url, { signal });
+    if (!res.ok) throw new Error(await httpErrorMessage(res));
+    return await res.json();
+  } finally {
+    release();
+  }
 });
 
 async function loadPhotos(fitMap = false) {
@@ -3497,6 +3510,13 @@ function bindGridKeyboardShortcuts() {
     if (e.target instanceof Element && e.target.tagName === "BUTTON") return;
     if (typeof isPersonPickerOpen === "function" && isPersonPickerOpen()) return;
     if (anyModalOpen()) return;
+    // A new scope is loading (U4): the grid's cells and selection are the old
+    // scope's, so its focus/select/stage keys would act on photos about to go.
+    if (isBusy(document.getElementById("grid")) &&
+        ["j", "k", "g", "i", " ", "ArrowDown", "ArrowUp", "Delete"].includes(e.key)) {
+      e.preventDefault();
+      return;
+    }
 
     switch (e.key) {
       case "ArrowDown": case "j":

@@ -97,14 +97,21 @@ const SKIPPED_BATCHES_KEY = "geotagger.workqueue.skipped";
  * parse" pair so callers can't forget the check (a 4xx body parsed as data is
  * how state ends up undefined). */
 async function httpErrorMessage(res) {
-  const body = await res.json().catch(() => null);
+  return httpErrorText(await res.json().catch(() => null), res.status);
+}
+
+/** The one-line message for an already-parsed error body (null when it wasn't
+ *  JSON) — for callers that also need the body itself (e.g. a 409's detail). */
+function httpErrorText(body, status) {
   const d = body?.detail;
   if (typeof d === "string" && d) return d;
   if (d && typeof d === "object" && !Array.isArray(d) && typeof d.message === "string") return d.message;
   if (Array.isArray(d) && d.length && typeof d[0]?.msg === "string") {
-    return `HTTP ${res.status}: ${d[0].msg}`;
+    // A 422 validation list: the first problem, with where it was ("body → name").
+    const loc = Array.isArray(d[0].loc) ? d[0].loc.filter(x => x !== "body").join(" → ") : "";
+    return `${loc ? loc + ": " : ""}${d[0].msg}`;
   }
-  return `HTTP ${res.status}`;
+  return `HTTP ${status}`;
 }
 
 async function fetchJson(url, opts) {
@@ -602,4 +609,143 @@ async function undoFaceToken(token) {
     message = `Not undone — ${total === 1 ? "that face has" : "those faces have"} changed since.`;
   }
   return { out, message, isError: !token.person && n === 0 && c > 0 };
+}
+
+/* ── Loading state (U4) ──
+ * A latest-only loader that replaces a grid or list used to leave the old one
+ * on screen and fully live until the reply landed: no sign anything was
+ * happening, and a click or shortcut on the stale cells acted on data that was
+ * about to be thrown away. setBusy(el, true, label) marks the container for the
+ * length of the load:
+ *   - at once: aria-busy="true", and pointer/keyboard activation inside it is
+ *     swallowed by capture-phase listeners, so the stale content can't be
+ *     acted on. Scrolling (wheel and scrollbar) and Tab still work — which is
+ *     why this isn't pointer-events:none (the wheel would fall through to the
+ *     parent) or `inert` (that would yank focus out of a focused cell and drop
+ *     it on <body>);
+ *   - after `delayMs` (150 ms): the container dims and a small spinner pill
+ *     with `label` sits over the visible part of it. Loads faster than that
+ *     never flicker.
+ * It returns release(), to call in the loader's finally. Holds are tokens: a
+ * newer setBusy on the same element supersedes the older hold, so the older
+ * (superseded) call's release() is a no-op and can't clear the newer call's
+ * busy state — which is exactly the latestOnly ordering, without the loader
+ * having to look at its signal. release() is idempotent; setBusy(el, false)
+ * force-clears whatever hold is current.
+ *   const release = setBusy(grid, true, "Loading faces…");
+ *   try { … } finally { release(); }
+ * Document-level shortcut handlers that act on the container's contents check
+ * isBusy(el) first and ignore the key while it's loading. */
+const _busyHolds = new WeakMap();   // el → { token, timer, pill }
+let _busyToken = 0;
+
+function _busySwallow(e) {
+  if (!_busyHolds.has(e.currentTarget)) return;
+  // Tab / Shift+Tab move focus and Escape closes things; neither acts on content.
+  if (e.type === "keydown" && (e.key === "Tab" || e.key === "Escape")) return;
+  // A press on the container itself is its scrollbar (cells cover the content).
+  if (e.type === "mousedown" && e.target === e.currentTarget) return;
+  e.preventDefault();
+  e.stopPropagation();
+}
+
+function _busyPlacePill(el, pill) {
+  // Centre the pill on the part of the container that is actually on screen —
+  // a tall scrolled grid's own centre is often far off the viewport.
+  const r = el.getBoundingClientRect();
+  const top = Math.max(r.top, 0), bottom = Math.min(r.bottom, window.innerHeight);
+  const left = Math.max(r.left, 0), right = Math.min(r.right, window.innerWidth);
+  if (bottom - top < 24 || right - left < 24) { pill.hidden = true; return; }
+  pill.hidden = false;
+  pill.style.top = `${Math.round(top + Math.min(80, (bottom - top) / 2))}px`;
+  pill.style.left = `${Math.round((left + right) / 2)}px`;
+}
+
+function setBusy(el, busy, label = "Loading…", { delayMs = 150 } = {}) {
+  if (!el) return () => {};
+  const prev = _busyHolds.get(el);
+  if (prev) { clearTimeout(prev.timer); prev.pill?.remove(); }
+  if (!busy) {
+    _busyHolds.delete(el);
+    el.removeAttribute("aria-busy");
+    el.classList.remove("is-busy", "is-busy-shown");
+    return () => {};
+  }
+  if (!el._busyListeners) {
+    el._busyListeners = true;
+    for (const type of ["click", "dblclick", "contextmenu", "keydown", "mousedown", "dragstart"]) {
+      el.addEventListener(type, _busySwallow, true);
+    }
+  }
+  const hold = { token: ++_busyToken, timer: null, pill: null };
+  _busyHolds.set(el, hold);
+  el.setAttribute("aria-busy", "true");
+  el.classList.add("is-busy");
+  hold.timer = setTimeout(() => {
+    if (_busyHolds.get(el) !== hold) return;
+    el.classList.add("is-busy-shown");
+    const pill = document.createElement("div");
+    pill.className = "busy-pill";
+    pill.setAttribute("role", "status");
+    pill.innerHTML = `<span class="spinner" aria-hidden="true"></span><span></span>`;
+    pill.lastChild.textContent = label;
+    document.body.appendChild(pill);
+    hold.pill = pill;
+    _busyPlacePill(el, pill);
+  }, delayMs);
+  return () => { if (_busyHolds.get(el) === hold) setBusy(el, false); };
+}
+
+/** True while `el` is held by setBusy (its stale content is being replaced). */
+function isBusy(el) {
+  return !!el && _busyHolds.has(el);
+}
+
+/* ── Toast (U9) ──
+ * The one transient message pill (#toast, bottom-centre; theme.css) for pages
+ * that report outcomes as toasts rather than in a status bar:
+ * showToast(msg, {kind, timeoutMs}). kind is "info" (default), "success" or
+ * "error". Errors are styled distinctly, announced assertively (role="alert"),
+ * stay 6 s instead of 2.5 s — long enough to read a server message — and carry
+ * a ✕ to dismiss early; hovering any toast holds it. Server errors should reach
+ * it already readable: fetchJson / postJson / httpErrorMessage turn FastAPI's
+ * {"detail": …} into one line, never raw JSON.
+ * The Undo toast (showUndoToast) stays separate: it is interactive, lives
+ * bottom-left so the two never overlap, and has its own pause/Ctrl+Z rules. */
+let _toastTimer = null;
+
+function showToast(msg, { kind = "info", timeoutMs } = {}) {
+  let t = document.getElementById("toast");
+  if (!t) {
+    t = document.createElement("div");
+    t.id = "toast";
+    t.hidden = true;
+    document.body.appendChild(t);
+  }
+  if (!t._toastBound) {
+    t._toastBound = true;
+    t.addEventListener("mouseenter", () => clearTimeout(_toastTimer));
+    t.addEventListener("mouseleave", () => {
+      if (t.hidden) return;
+      clearTimeout(_toastTimer);
+      _toastTimer = setTimeout(hideToast, 1500);
+    });
+    t.addEventListener("click", (e) => { if (e.target.closest(".toast-close")) hideToast(); });
+  }
+  const isErr = kind === "error";
+  t.className = isErr ? "err" : kind === "success" ? "ok" : "";
+  t.setAttribute("role", isErr ? "alert" : "status");
+  t.setAttribute("aria-live", isErr ? "assertive" : "polite");
+  t.innerHTML = `<span class="toast-msg"></span>` +
+    (isErr ? `<button type="button" class="toast-close" aria-label="Dismiss" title="Dismiss">✕</button>` : "");
+  t.firstChild.textContent = msg;
+  t.hidden = false;
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(hideToast, timeoutMs ?? (isErr ? 6000 : 2500));
+}
+
+function hideToast() {
+  clearTimeout(_toastTimer);
+  const t = document.getElementById("toast");
+  if (t) t.hidden = true;
 }

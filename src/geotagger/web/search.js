@@ -267,9 +267,18 @@ let resultsLoading = false;
 // Both loaders call this before fetching (W12): previously the untagged search
 // left resultPhotos/filteredPhotos and the handoff toolbar in place, so
 // "Select all" / "Open in Geocode" acted on the invisible previous search.
+// The grid's loading state (U4, common.js setBusy) — a spinner pill over the
+// emptied grid while a search runs. Taken here, released by the load that still
+// owns the grid (finishResultsLoad), and force-cleared by a non-loading reset
+// (Clear), so a superseded search can never clear the newer one's.
+let releaseResultsBusy = () => {};
+
 function resetResults(mode, loading) {
   resultsMode = mode;
   resultsLoading = loading;
+  const grid = document.getElementById("grid");
+  if (loading) releaseResultsBusy = setBusy(grid, true, mode === "untagged" ? "Scanning faces…" : "Searching…");
+  else setBusy(grid, false);
   resultPhotos = [];
   filteredPhotos = [];
   untaggedCandidates = [];
@@ -291,6 +300,7 @@ function resetResults(mode, loading) {
 function finishResultsLoad(signal) {
   if (signal.aborted) return;
   resultsLoading = false;
+  releaseResultsBusy();
   refreshSelectionUI();
   refreshHandoffUI();
 }
@@ -302,12 +312,11 @@ async function searchPhotos(signal) {
   try {
     const params = buildQuery();
     const res = await fetch(`/api/search?${params.toString()}`, { signal });
-    if (!res.ok) {
-      // 409/400 carry a human-readable reason (model not downloaded, photo not
-      // indexed yet) — show it instead of a bare status code.
-      const body = await res.json().catch(() => null);
-      throw new Error(body?.detail || `HTTP ${res.status}`);
-    }
+    // 409/400 carry a human-readable reason (model not downloaded, photo not
+    // indexed yet) — show it instead of a bare status code. httpErrorMessage
+    // also flattens a 422's detail list, which `body.detail` would print as
+    // "[object Object]".
+    if (!res.ok) throw new Error(await httpErrorMessage(res));
     const data = await res.json();
     if (signal.aborted) return;
     resultPhotos = data.photos;
@@ -411,7 +420,7 @@ async function searchUntaggedFaces(signal) {
   try {
     const params = buildQuery();
     const res = await fetch(`/api/search/untagged-faces?${params.toString()}`, { signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(await httpErrorMessage(res));
     const data = await res.json();
     if (signal.aborted) return;
     untaggedCandidates = data.candidates;
@@ -1041,10 +1050,7 @@ async function applyAssignDate() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ photo_ids: ids, year, month }),
     });
-    if (!res.ok) {
-      const detail = await res.json().catch(() => ({}));
-      throw new Error(detail.detail || `HTTP ${res.status}`);
-    }
+    if (!res.ok) throw new Error(await httpErrorMessage(res));
     const result = await res.json();
     closeAssignDateModal();
     setStatus(`Assigned approximate date to ${result.updated} photo(s).`);
@@ -1190,11 +1196,7 @@ async function downloadSelected() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ photo_ids: ids }),
     });
-    if (!res.ok) {
-      let detail = `HTTP ${res.status}`;
-      try { detail = (await res.json()).detail || detail; } catch (_) { /* non-JSON error body */ }
-      throw new Error(detail);
-    }
+    if (!res.ok) throw new Error(await httpErrorMessage(res));
     const info = await res.json();
     // A plain form POST (navigation download): the response is an
     // attachment, so the browser streams it to disk and the page stays put. The

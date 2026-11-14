@@ -5,14 +5,9 @@ let families = [];
 
 const el = (id) => document.getElementById(id);
 
-let toastTimer;
+// common.js showToast (U9): errors stay 6 s with a ✕; successes 2.5 s.
 function toast(msg, isErr = false) {
-  const t = el("toast");
-  t.textContent = msg;
-  t.className = isErr ? "err" : "";
-  t.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, 2200);
+  showToast(msg, { kind: isErr ? "error" : "success" });
 }
 
 async function api(method, url, body) {
@@ -22,16 +17,14 @@ async function api(method, url, body) {
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
-    // FastAPI errors are {"detail": "..."} — show just the message. An object
-    // detail ({message, …}, e.g. the rename 409's existing_person_id) rides
-    // along on the error so a caller can act on it.
-    const e = await res.json().catch(() => ({}));
-    const d = e.detail;
-    const msg = typeof d === "string" ? d
-      : (d && typeof d.message === "string" ? d.message : `HTTP ${res.status}`);
-    const err = new Error(msg);
+    // FastAPI errors are {"detail": …} — httpErrorText (common.js) reduces any
+    // shape (string, {message}, a 422's list) to one readable line, never raw
+    // JSON (U9). An object detail ({message, …}, e.g. the rename 409's
+    // existing_person_id) rides along on the error so a caller can act on it.
+    const body = await res.json().catch(() => null);
+    const err = new Error(httpErrorText(body, res.status));
     err.status = res.status;
-    err.detail = d;
+    err.detail = body?.detail;
     throw err;
   }
   return res.json();
@@ -47,6 +40,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 });
 
 async function reload() {
+  // Every edit reloads the whole list; until it lands the rows are the old ones,
+  // so hold them busy (U4) rather than let a click edit a row being replaced.
+  const release = setBusy(el("persons-table-wrap"), true, "Loading people…");
   try {
     [persons, families] = await Promise.all([
       // face_counts is opt-in on the server (the People page skips it for speed).
@@ -56,6 +52,8 @@ async function reload() {
   } catch (e) {
     toast("Failed to load: " + e.message, true);
     return;
+  } finally {
+    release();
   }
   renderFamilies();
   renderPersons();

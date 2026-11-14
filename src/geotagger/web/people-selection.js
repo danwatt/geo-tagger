@@ -196,6 +196,12 @@ function bindKeyboardShortcuts() {
     if (e.key === "?") { e.preventDefault(); openShortcutsHelp(); return; }
 
     if (!isFlatGridScope()) return;
+    // The grid is being replaced (U4): its cells are the previous view's, so a
+    // j/k/space/assign now would act on faces about to vanish. Swallow the key.
+    if (isBusy(document.getElementById("grid"))) {
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key !== "Escape") e.preventDefault();
+      return;
+    }
 
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
       e.preventDefault();

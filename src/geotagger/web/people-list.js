@@ -225,10 +225,7 @@ async function addPerson() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: name.trim() }),
     });
-    if (!res.ok) {
-      const e = await res.json().catch(() => ({}));
-      throw new Error(e.detail || `HTTP ${res.status}`);
-    }
+    if (!res.ok) throw new Error(await httpErrorMessage(res));
     await loadPersons();
   } catch (err) {
     setStatus("Could not add person: " + err.message, true);
@@ -245,10 +242,7 @@ async function editPersonBirth(personId, name, current) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ birth_date: birth }),
     });
-    if (!res.ok) {
-      const e = await res.json().catch(() => ({}));
-      throw new Error(e.detail || `HTTP ${res.status}`);
-    }
+    if (!res.ok) throw new Error(await httpErrorMessage(res));
     setStatus(birth ? `Set ${name}'s birth date to ${birth}.` : `Cleared ${name}'s birth date.`);
     await loadPersons();
     // Suggestions depend on birth dates, so refresh the current view.

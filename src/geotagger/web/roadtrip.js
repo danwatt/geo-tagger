@@ -217,10 +217,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ start_id: startPhoto.id, end_id: endPhoto.id }),
       });
-      if (!res.ok) {
-        const detail = await res.json().catch(() => ({}));
-        throw new Error(detail.detail || `HTTP ${res.status}`);
-      }
+      if (!res.ok) throw new Error(await httpErrorMessage(res));
       const data = await res.json();
 
       points = data.points;

@@ -14,8 +14,28 @@
 const loadFaces = latestOnly(async (signal, more = null) => {
   taggedPeopleCache.clear();   // person tags may have changed since last fetch
   updateGridNavVisibility();
-  if (scope === "discover") { await loadClusters(signal); return; }
-  if (scope === "crowds")   { await loadCrowds(signal);   return; }
+  // U4: the grid on screen belongs to the previous view until the reply lands —
+  // mark it busy (dimmed, clicks/shortcuts ignored) for the whole load. A Load
+  // more appends instead, so it keeps the grid live and shows its progress on
+  // the paging banner's button. The hold's token means a superseded call's
+  // release can't clear the newer call's busy state.
+  const grid = document.getElementById("grid");
+  if (scope === "discover" || scope === "crowds") {
+    const release = setBusy(grid, true, scope === "discover" ? "Grouping faces…" : "Finding crowds…");
+    try {
+      if (scope === "discover") await loadClusters(signal);
+      else                      await loadCrowds(signal);
+    } finally { release(); }
+    return;
+  }
+  const appending = !!more && facePaging.key === facesBaseUrl() && facesTruncated();
+  const release = appending ? () => {} : setBusy(grid, true, "Loading faces…");
+  try {
+    await loadFlatFaces(signal, more);
+  } finally { release(); }
+});
+
+async function loadFlatFaces(signal, more) {
   const url = facesBaseUrl();
   const sameView = facePaging.key === url;
   let prior = [], offset = 0, want;
@@ -66,7 +86,7 @@ const loadFaces = latestOnly(async (signal, more = null) => {
   } finally {
     if (!signal.aborted) { facePaging.busy = false; renderPagingBanner(); }
   }
-});
+}
 
 // /api/faces URL for the current flat scope, without offset/limit — doubles as
 // the paging key, so a Focus change or the "Only suggested" toggle (both part of
@@ -136,7 +156,10 @@ function renderPagingBanner() {
     `Showing ${loadedN.toLocaleString()} of ${facePaging.total.toLocaleString()} faces. ` +
     `Select all, group buttons and bulk actions only cover the loaded faces.`;
   const moreBtn = document.getElementById("grid-paging-more-btn");
-  moreBtn.textContent = facePaging.busy ? "Loading…" : `Load ${nextN.toLocaleString()} more`;
+  // While a page is in flight the button is the footer spinner (U4) — the grid
+  // itself stays live for an append.
+  if (facePaging.busy) moreBtn.innerHTML = `<span class="spinner" aria-hidden="true"></span> Loading…`;
+  else moreBtn.textContent = `Load ${nextN.toLocaleString()} more`;
   moreBtn.disabled = facePaging.busy;
   const allBtn = document.getElementById("grid-paging-all-btn");
   allBtn.hidden = remaining <= nextN;   // one more page is all there is

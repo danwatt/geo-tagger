@@ -494,13 +494,18 @@ const loadWorkQueue = latestOnly(async (signal, append = false) => {
   if (!append) {
     wqOffset = 0;
     // The first build on a cold cache sweeps the whole library, so say so.
-    list.innerHTML = '<div class="wq-status">Building the queue…</div>';
+    // (U4) The old kind's rows go at once, so nothing stale stays clickable.
+    list.innerHTML = '<div class="wq-status"><span class="spinner" aria-hidden="true"></span> Building the queue…</div>';
     more.style.display = "none";   // no "more" of a list that isn't loaded yet
+  } else {
+    // An append keeps the rows live; the button is the footer spinner (U4).
+    more.disabled = true;
+    more.innerHTML = '<span class="spinner" aria-hidden="true"></span> Loading…';
   }
   try {
     const res = await fetch(`/api/work-queue?limit=${WQ_PAGE}&offset=${wqOffset}&kind=${wqKind}`,
                             { signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(await httpErrorMessage(res));
     const data = await res.json();
     if (signal.aborted) return;
     clearError("card-geotag");
@@ -520,7 +525,11 @@ const loadWorkQueue = latestOnly(async (signal, append = false) => {
   } catch (e) {
     if (signal.aborted) return;
     if (!append) list.innerHTML = "";
+    else more.textContent = `Show ${Math.min(WQ_PAGE, wqTotal - wqOffset)} more`;
     showError("card-geotag", e.message);
+  } finally {
+    // Every path re-enables it — a superseding full load hides it anyway.
+    more.disabled = false;
   }
 });
 

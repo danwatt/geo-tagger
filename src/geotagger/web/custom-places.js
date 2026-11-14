@@ -170,17 +170,22 @@ function bindToolbar() {
 
 /* ── API ── */
 async function loadPlaces() {
+  // A reload after an edit keeps the old rows up until the reply lands — hold
+  // the list busy meanwhile (U4) so a click can't open a place being replaced.
+  const release = setBusy(document.getElementById("place-list"), true, "Loading places…");
   try {
     // stats=true adds photo_count and last_ts — a spatial query per place, so
     // only this page asks for them.
     const res = await fetch("/api/places?stats=true");
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(await httpErrorMessage(res));
     places = await res.json();
     renderSidebar();
     renderPlaces();
     fitToPlaces();
   } catch (e) {
     setStatus("Failed to load places: " + e.message, true);
+  } finally {
+    release();
   }
 }
 
@@ -956,9 +961,14 @@ const loadHotspots = latestOnly(async (signal, { append = false } = {}) => {
 
   hotspotLoading = true;
   let failure = null;
+  // U4: a refresh (pan, sort) over rows already listed holds them busy until the
+  // new page lands; an append keeps them live (its Load-more button says it's
+  // loading). A superseded call's release is a no-op (setBusy hold tokens), and
+  // cancel() aborts this call, whose finally then releases.
+  const release = !append && hotspots.length ? setBusy(list, true, "Loading hotspots…") : () => {};
   try {
     const res = await fetch(`/api/geotag/hotspots?${params}`, { signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(await httpErrorMessage(res));
     const data = await res.json();
     if (signal.aborted) return;   // the newer call owns hotspotLoading and the list
     const page = data.hotspots || [];
@@ -968,6 +978,8 @@ const loadHotspots = latestOnly(async (signal, { append = false } = {}) => {
   } catch (err) {
     if (signal.aborted) return;
     failure = err;
+  } finally {
+    release();
   }
   // Cleared before rendering, not in a `finally` after it: the Load-more button
   // reads this flag to decide whether it draws itself disabled.
@@ -1095,7 +1107,8 @@ function renderHotspotSidebar() {
     more.addEventListener("click", () => {
       if (hotspotLoading) return;
       more.disabled = true;
-      more.textContent = "Loading…";
+      // The footer spinner (U4): an append leaves the rows above live.
+      more.innerHTML = `<span class="spinner" aria-hidden="true"></span> Loading…`;
       loadHotspots({ append: true });
     });
     list.appendChild(more);

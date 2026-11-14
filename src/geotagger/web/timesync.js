@@ -354,6 +354,10 @@ const loadPhotos = latestOnly(async (signal, fitTimeline = false) => {
   const lastDay = daysInMonth(selectedYear, selectedMonth);
   const dateTo = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${lastDay}`;
 
+  // U4: the timeline shows the previous month's items until the reply lands —
+  // hold it busy (dimmed, drags/clicks ignored) meanwhile. A superseded call's
+  // release is a no-op (setBusy hold tokens), so it can't clear the newer one's.
+  const release = setBusy(document.getElementById("timeline-container"), true, "Loading photos…");
   try {
     let url = `/api/photos?geotagged=${filter}&date_from=${dateFrom}&date_to=${dateTo}`;
     const data = await fetchJson(url, { signal });
@@ -369,6 +373,8 @@ const loadPhotos = latestOnly(async (signal, fitTimeline = false) => {
   } catch (err) {
     if (signal.aborted) return;
     setStatus("Load error: " + err.message, true);
+  } finally {
+    release();
   }
 });
 
