@@ -104,11 +104,6 @@ A shared modal helper and a `<button>` sweep would address most of this.
 
 **T1 — A test pins a bug.** `tests/test_sidecar.py:153-163` asserts the D1 asymmetry.
 
-**T6 — Stray files tracked in git.** [seen] `tempgeotagger-test/`, `tempgeotagger-test2/` and
-`tempgeotagger-test3/` (`index.db`, `-wal`, `-shm`, and `.last_scan_roots` containing an absolute local path),
-added in `e682bc7`. Also `.mcp.json` (an ephemeral local port) and `.claude/settings.local.json`.
-`git rm --cached` and ignore them.
-
 **T7 — Undeclared direct dependencies.** `numpy`, `scipy`, `cv2` and `pydantic` are imported but arrive only
 transitively. `fastapi`, `uvicorn`, `pillow`, `pyexiftool` and `av` have no lower bounds.
 
@@ -118,5 +113,5 @@ already have `--dry-run`; match them and require `--yes`.
 
 ## Suggested order of work
 
-1. **Small fixes:** A11, T1, T6.
+1. **Small fixes:** A11, T1.
 2. **Request handling:** A1, A7.

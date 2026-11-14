@@ -18,3 +18,7 @@ data/
 .idea
 
 .claude/worktrees
+# Local scratch DBs, editor/agent session files (audit T6)
+/tempgeotagger-test*/
+.mcp.json
+.claude/settings.local.json
