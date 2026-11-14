@@ -84,48 +84,136 @@ def quantize(points: list[tuple[float, float, float | None, int | None]]) -> lis
     return sorted(cells.values(), key=lambda c: -c["n"])
 
 
+def _wrap_lng(lng: float) -> float:
+    """Longitude folded into [-180, 180)."""
+    return (lng + 180.0) % 360.0 - 180.0
+
+
 def meters_between(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     """Equirectangular distance in metres. Good to a fraction of a percent over
     the tens-of-kilometres spans the palette ranks by, and much cheaper than
-    haversine in the inner loops here."""
+    haversine in the inner loops here. The longitude gap takes the short way
+    round, so 179.999 and -179.999 are metres apart, not the width of the Earth."""
     dy = (lat2 - lat1) * _METERS_PER_DEG_LAT
-    dx = (lng2 - lng1) * _lng_scale(lat1)
+    dx = _wrap_lng(lng2 - lng1) * _lng_scale(lat1)
     return math.hypot(dx, dy)
 
 
-def _bucket_of(lat: float, lng: float, bucket_deg: float) -> tuple[int, int]:
-    """Grid cell for a coordinate. Longitude buckets are sized in
-    degrees-at-this-latitude so they stay ~bucket_deg wide in metres near the
-    poles instead of collapsing to slivers."""
-    lng_bucket_deg = bucket_deg / max(math.cos(math.radians(lat)), 1e-6)
-    return int(lat / bucket_deg), int(lng / lng_bucket_deg)
+class _Grid:
+    """Spatial hash over clusters for "nearest cluster within the merge radius".
+
+    Latitude is cut into bands `bucket_deg` (= radius) tall. Each band gets ONE
+    longitude bucket width for every point in it — sized at the band's
+    highest-|lat| edge, where a degree of longitude is shortest, so a bucket is
+    never narrower than the radius anywhere in the band. (The old grid sized the
+    width from each point's own latitude, so two points a few metres apart
+    north-south were bucketed on different scales and their column indices
+    didn't line up: a neighbour 90 m away was missed in ~a third of directions at
+    Seattle's latitude — audit G5.) The width is then rounded up so a whole
+    number of buckets spans 360°, which makes the column index wrap cleanly
+    modulo the band's bucket count across the antimeridian.
+
+    A query doesn't assume "±1 column": it converts its own exact longitude reach
+    (radius / metres-per-degree at the query latitude — the same scale
+    meters_between measures with) into a column range in each of the three bands
+    it touches, since adjacent bands have different widths. That's usually 3
+    columns per band, so ~9 buckets as before, and it degrades gracefully toward
+    the poles (bands there have only a handful of buckets, and a query whose reach
+    spans the whole band just scans all of them).
+
+    Clusters are re-filed when a merge moves their centroid into another bucket,
+    so the index never lags the coordinates it is compared against.
+    """
+
+    __slots__ = ("bucket_deg", "max_m", "_rows", "_key_of")
+
+    def __init__(self, max_m: float):
+        self.max_m = max_m
+        self.bucket_deg = max_m / _METERS_PER_DEG_LAT
+        # band -> (n_cols, col_width_deg, {col: [cluster, ...]}). Nested rather
+        # than keyed on (band, col) tuples: a query skips an empty band with one
+        # lookup and never builds key tuples in the hot loop.
+        self._rows: dict[int, tuple[int, float, dict[int, list[dict]]]] = {}
+        self._key_of: dict[int, tuple[int, int]] = {}    # id(cluster) -> (band, col)
+
+    def _band_shape(self, i: int) -> tuple[int, float]:
+        """(n_cols, col_width_deg) for band i. Width is sized at the band's
+        highest-|lat| edge and rounded up to divide 360° evenly."""
+        edge = min(max(abs(i), abs(i + 1)) * self.bucket_deg, 90.0)
+        cos_edge = math.cos(math.radians(edge))
+        # How many radius-wide buckets fit round the band's shortest parallel; at
+        # least 1 (the bands touching a pole collapse to a single bucket).
+        n_cols = max(1, int(360.0 * cos_edge / self.bucket_deg)) if cos_edge > 1e-12 else 1
+        return n_cols, 360.0 / n_cols
+
+    def _file(self, cl: dict) -> tuple[int, int]:
+        i = math.floor(cl["lat"] / self.bucket_deg)
+        row = self._rows.get(i)
+        if row is None:
+            row = self._rows[i] = (*self._band_shape(i), {})
+        n_cols, width, cols = row
+        j = int((_wrap_lng(cl["lng"]) + 180.0) // width) % n_cols
+        cols.setdefault(j, []).append(cl)
+        return i, j
+
+    def add(self, cl: dict) -> None:
+        self._key_of[id(cl)] = self._file(cl)
+
+    def moved(self, cl: dict) -> None:
+        """Re-file `cl` after its centroid changed. Most merges nudge a centroid a
+        few metres inside its bucket, so check that first and skip the re-file."""
+        i, j = self._key_of[id(cl)]
+        n_cols, width, cols = self._rows[i]
+        if (math.floor(cl["lat"] / self.bucket_deg) == i
+                and int((_wrap_lng(cl["lng"]) + 180.0) // width) % n_cols == j):
+            return
+        cols[j].remove(cl)
+        self._key_of[id(cl)] = self._file(cl)
+
+    def nearest(self, lat: float, lng: float) -> dict | None:
+        """Closest indexed cluster strictly within max_m, or None."""
+        bd = self.bucket_deg
+        max_m = self.max_m
+        # Same metric as meters_between (scaled at the query latitude), inlined
+        # and compared squared: this is the O(cells x neighbours) hot loop, and
+        # the per-call cos() + hypot() roughly doubled its cost.
+        lng_scale = _lng_scale(lat)
+        # Longitude reach of the radius at the query latitude — exact for that
+        # metric, so nothing within max_m can sit outside the columns scanned.
+        reach = 360.0 if lng_scale <= 1e-6 else min(max_m / lng_scale, 360.0)
+        x = _wrap_lng(lng) + 180.0
+        rows = self._rows
+        best, best_d2 = None, max_m * max_m
+        for i in range(math.floor((lat - bd) / bd), math.floor((lat + bd) / bd) + 1):
+            row = rows.get(i)
+            if row is None:
+                continue
+            n_cols, width, cols = row
+            lo = int((x - reach) // width)
+            hi = int((x + reach) // width)
+            if hi - lo + 1 >= n_cols:
+                lo, hi = 0, n_cols - 1
+            for j in range(lo, hi + 1):
+                bucket = cols.get(j % n_cols)
+                if not bucket:
+                    continue
+                for cl in bucket:
+                    dy = (cl["lat"] - lat) * _METERS_PER_DEG_LAT
+                    dx = ((cl["lng"] - lng + 180.0) % 360.0 - 180.0) * lng_scale
+                    d2 = dx * dx + dy * dy
+                    if d2 < best_d2:
+                        best, best_d2 = cl, d2
+        return best
 
 
-def _grid_nearest(grid: dict, lat: float, lng: float, bucket_deg: float,
-                  max_m: float) -> dict | None:
-    """Closest indexed cluster within `max_m`, or None. Only the 9 surrounding
-    buckets are searched — with buckets sized at the search radius, nothing
-    within range can live further out."""
-    bi, bj = _bucket_of(lat, lng, bucket_deg)
-    best, best_d = None, max_m
-    for di in (-1, 0, 1):
-        for dj in (-1, 0, 1):
-            for cl in grid.get((bi + di, bj + dj), ()):
-                d = meters_between(lat, lng, cl["lat"], cl["lng"])
-                if d < best_d:
-                    best, best_d = cl, d
-    return best
-
-
-def build_grid(clusters: list[dict], merge_m: float) -> tuple[dict, float]:
-    """Spatial index over existing clusters, as (grid, bucket_deg) for
-    _grid_nearest. Used to fold a second pass of cells onto an already-computed
-    (and cached) clustering without redoing the agglomeration."""
-    bucket_deg = merge_m / _METERS_PER_DEG_LAT
-    grid: dict[tuple[int, int], list[dict]] = {}
+def build_grid(clusters: list[dict], merge_m: float) -> _Grid:
+    """Spatial index over existing clusters, for _Grid.nearest. Used to fold a
+    second pass of cells onto an already-computed (and cached) clustering without
+    redoing the agglomeration."""
+    grid = _Grid(merge_m)
     for cl in clusters:
-        grid.setdefault(_bucket_of(cl["lat"], cl["lng"], bucket_deg), []).append(cl)
-    return grid, bucket_deg
+        grid.add(cl)
+    return grid
 
 
 def cluster_cells(cells: list, merge_m: float) -> list[dict]:
@@ -139,26 +227,28 @@ def cluster_cells(cells: list, merge_m: float) -> list[dict]:
     cluster and its satellites get absorbed into it — the centroid stays anchored
     on where the user actually drops, instead of drifting toward the outliers.
     """
-    bucket_deg = merge_m / _METERS_PER_DEG_LAT
-    grid: dict[tuple[int, int], list[dict]] = {}
+    grid = _Grid(merge_m)
     clusters: list[dict] = []
 
     for c in cells:
         lat, lng = c["alat"], c["alng"]
         n = c["n"]
-        best = _grid_nearest(grid, lat, lng, bucket_deg, merge_m)
+        best = grid.nearest(lat, lng)
 
         if best is not None:
             # Photo-count-weighted centroid: a place with 200 photos shouldn't be
-            # dragged half a cell by a 2-photo neighbour.
+            # dragged half a cell by a 2-photo neighbour. The longitude is averaged
+            # as an offset from the cluster's own, so a pair straddling the
+            # antimeridian (179.999 / -179.999) averages to ±180, not to 0.
             total = best["count"] + n
             best["lat"] = (best["lat"] * best["count"] + lat * n) / total
-            best["lng"] = (best["lng"] * best["count"] + lng * n) / total
+            best["lng"] = _wrap_lng(best["lng"] + _wrap_lng(lng - best["lng"]) * n / total)
             best["count"] = total
             best["cells"] += 1
             if (c["last_ts"] or 0) > (best["last_ts"] or 0):
                 best["last_ts"] = c["last_ts"]
                 best["sample_photo_id"] = c["sample_id"]
+            grid.moved(best)
             continue
 
         cl = {
@@ -166,7 +256,7 @@ def cluster_cells(cells: list, merge_m: float) -> list[dict]:
             "last_ts": c["last_ts"], "sample_photo_id": c["sample_id"],
         }
         clusters.append(cl)
-        grid.setdefault(_bucket_of(lat, lng, bucket_deg), []).append(cl)
+        grid.add(cl)
 
     return clusters
 
@@ -390,10 +480,10 @@ def _window_counts(clusters: list[dict], merge_meters: float,
         GROUP BY ROUND(lat, {_CELL_DECIMALS}), ROUND(lng, {_CELL_DECIMALS})
     """, (from_ts, to_ts)).fetchall()
 
-    grid, bucket_deg = build_grid(clusters, merge_meters)
+    grid = build_grid(clusters, merge_meters)
     counts: dict[int, dict] = {}
     for r in rows:
-        cl = _grid_nearest(grid, r["alat"], r["alng"], bucket_deg, merge_meters)
+        cl = grid.nearest(r["alat"], r["alng"])
         if cl is None:
             continue
         acc = counts.setdefault(id(cl), {"count": 0, "last_ts": None,

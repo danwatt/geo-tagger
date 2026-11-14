@@ -242,7 +242,7 @@ the cache, so pre-install answers are served forever for that cell.
 any lookup in between reopens the old file, and `unlink`/`replace` then raises `PermissionError`.
 *Fix:* reset and swap together under the lock; drop the `unlink` before `replace`.
 
-**G5 — Medium — Hotspot grid misses neighbours within the merge radius** [run]
+**G5 — Medium — Hotspot grid misses neighbours within the merge radius** [run] — ✅ **DONE** (`_Grid`: radius-tall bands, one longitude width per band sized at its poleward edge, per-band column range on query, clusters re-filed when they move, antimeridian-aware `meters_between`; 0 of 72 missed; ~1.4x slower on 100k cells, ~90 ms at the 20k cap)
 `services/hotspots_service.py:94-99`. Longitude bucket width depends on each point's own latitude, so indices
 are not comparable across rows. A cell 90 m from a seed with a 100 m radius failed to merge in 22 of 72
 directions at Seattle's latitude. Result: duplicate hotspots and duplicate work-queue proposals.
