@@ -175,6 +175,7 @@ async function selectScope(newScope, personId) {
   scope = newScope;
   scopePersonId = personId;
   selectedIds.clear();
+  resetPreselection();            // a new visit pre-selects afresh; reloads within it don't
   lastClickedIndex = -1;
   focusedFaceId = null;
   suggestFilterPersonId = null;   // the queue filter is per-visit to the Unlabeled scope
@@ -266,6 +267,8 @@ async function deletePerson(personId, name) {
     unstageFaces(orphaned, true);
     if (scope === "person" && scopePersonId === personId) {
       scope = "unlabeled"; scopePersonId = null;
+      selectedIds.clear();
+      resetPreselection();
     }
     await loadPersons();
     await loadFaces();

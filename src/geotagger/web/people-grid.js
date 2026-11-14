@@ -31,12 +31,15 @@ const loadFaces = latestOnly(async (signal) => {
 
     if (scope === "suggested") {
       // Order chronologically (undated last) so event groups are contiguous,
-      // then pre-select every guess (Accept suggestions confirms them in bulk).
+      // then pre-select every guess (Accept suggestions confirms them in bulk) —
+      // on entry only; a reload keeps the user's deselections (applyPreselection).
       faces.sort((a, b) => (a.photo_datetime || Infinity) - (b.photo_datetime || Infinity));
       // Staged faces aren't in the grid, so they're neither selected nor focused.
       const visible = gridFaces();
-      selectedIds = new Set(visible.map(f => f.id));
-      focusedFaceId = visible.length ? visible[0].id : null;
+      applyPreselection(visible, () => true);
+      if (!visible.some(f => f.id === focusedFaceId)) {
+        focusedFaceId = visible.length ? visible[0].id : null;
+      }
     } else if (scope === "recent") {
       // Newest tag first (the server already orders this way; keep it explicit).
       faces.sort((a, b) => (b.assigned_at || 0) - (a.assigned_at || 0));
@@ -61,6 +64,7 @@ const loadFaces = latestOnly(async (signal) => {
     } else if (scope === "person") {
       faces.sort((a, b) => (a.photo_datetime || 0) - (b.photo_datetime || 0));
     }
+    if (scope !== "suggested") pruneSelectionToGrid();
 
     // Keep the toolbar's "Review guesses for" aimed at whoever you're viewing.
     if ((scope === "person" || scope === "suggested") && scopePersonId) {
@@ -81,7 +85,9 @@ const loadFaces = latestOnly(async (signal) => {
         const ambiguous = faces.filter(f => f.alternatives && f.alternatives.length).length;
         const ambigNote = ambiguous
           ? `${ambiguous} (amber) may be someone else — check those. ` : "";
-        setStatus(`${data.returned} guesses for ${personName}, all selected. ${ambigNote}` +
+        const shownN = gridFaces().length;
+        const selNote = selectedIds.size === shownN ? "all selected" : `${selectedIds.size} of ${shownN} selected`;
+        setStatus(`${data.returned} guesses for ${personName}, ${selNote}. ${ambigNote}` +
                   `Click any wrong ones to deselect, then Assign to approve the rest.` +
                   focusStatusSuffix());
       }
@@ -146,14 +152,15 @@ function applyUnlabeledView() {
     : unlabeledAll.filter(f => f.suggestion && f.suggestion.person_id === pid);
 
   // Pre-select only the confident guesses among the visible faces — accept those
-  // in bulk, then triage the weaker/unguessed ones by hand.
+  // in bulk, then triage the weaker/unguessed ones by hand. Reloads and filter
+  // switches keep the user's deselections (applyPreselection, W15).
   // Staged faces aren't in the grid, so they're neither selected nor focused.
   const visible = gridFaces();
-  selectedIds = new Set(
-    visible.filter(f => f.suggestion && f.suggestion.score >= CONFIDENT_SCORE
-                        && !f.person_name && !f.ignored)
-           .map(f => f.id));
-  focusedFaceId = visible.length ? visible[0].id : null;
+  applyPreselection(visible, f => f.suggestion && f.suggestion.score >= CONFIDENT_SCORE
+                                  && !f.person_name && !f.ignored);
+  if (!visible.some(f => f.id === focusedFaceId)) {
+    focusedFaceId = visible.length ? visible[0].id : null;
+  }
 
   updateActionButtons();
   renderGrid();

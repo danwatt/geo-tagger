@@ -448,7 +448,7 @@ the help modal. `people.js:1906` has the same order [seen; whether its guard pre
 **W11 — Medium — Shift-click after a filter change reads past the array** [traced] — ✅ **DONE** (anchor remapped by photo id in `applyFilters`, -1 when hidden)
 `web/app.js:1844-1850`. `lastClickedIndex` is not reset by `applyFilters`.
 
-**W12 — Medium — Search "untagged faces" mode leaves old results actionable** [traced]
+**W12 — Medium — Search "untagged faces" mode leaves old results actionable** [traced] — ✅ **DONE** (`resetResults()` on every load and on Clear; bulk actions gated on visible, loaded results; Select all takes only on-screen photos; untagged mode hides the Select all toolbar, including "Open in People")
 `web/search.js:343-368,924-928`. "Select all" and "Open in Geocode" act on the previous, invisible result set.
 
 **W13 — Medium — Tag page double-submit drops a group** [traced] — ✅ **DONE** (groups carry an id and a `busy` flag; the whole card is disabled in flight; removal by id via `dropGroup`; `loadGroups` is latest-only)
@@ -458,7 +458,7 @@ the help modal. `people.js:1906` has the same order [seen; whether its guard pre
 `web/data.js:166-195,218-248,293-322,345-374,654-678,767-781`. A failed status fetch freezes progress with no
 error. One generic `pollJob()` would also remove about 200 duplicated lines.
 
-**W15 — Medium — Reloads re-select faces the user deselected** [traced]
+**W15 — Medium — Reloads re-select faces the user deselected** [traced] — ✅ **DONE** (`applyPreselection` remembers deselections per visit for Review guesses and the Unlabeled threshold; other scopes prune selection to the grid; a new visit preselects afresh)
 `web/people.js:719-723,834-839,2814-2818`. In "Review guesses" every reload re-selects everything, so the
 next Assign stages the wrong faces.
 

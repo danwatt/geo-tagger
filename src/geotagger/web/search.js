@@ -257,17 +257,48 @@ const runResultsLoad = latestOnly((signal, body) => body(signal));
 function runSearch() { return runResultsLoad(searchPhotos); }
 function runUntaggedSearch() { return runResultsLoad(searchUntaggedFaces); }
 
-async function searchPhotos(signal) {
-  const grid = document.getElementById("grid");
-  const summary = document.getElementById("search-summary");
-  resultsMode = "photos";
-  setStatus("Searching…");
-  summary.textContent = "";
-  grid.innerHTML = "";
+// True from the moment a results load starts until the latest one settles.
+// Bulk actions (Select all, Open in Geocode, the selection toolbar) refuse to
+// run meanwhile: there is no result set on screen for them to act on.
+let resultsLoading = false;
+
+// Drop every piece of result state at once — both modes' results, the
+// timeline's narrowing, the selection and the focused photo — and enter `mode`.
+// Both loaders call this before fetching (W12): previously the untagged search
+// left resultPhotos/filteredPhotos and the handoff toolbar in place, so
+// "Select all" / "Open in Geocode" acted on the invisible previous search.
+function resetResults(mode, loading) {
+  resultsMode = mode;
+  resultsLoading = loading;
+  resultPhotos = [];
+  filteredPhotos = [];
+  untaggedCandidates = [];
+  histBuckets = [];
+  rankedResults = rankedBySort = false;
   selectedIds.clear();
   lastClickedIndex = -1;
+  document.getElementById("timeline").style.display = "none";
+  document.getElementById("grid").innerHTML = "";
+  document.getElementById("search-summary").textContent = "";
   refreshSelectionUI();
+  refreshHandoffUI();
   showPlaceholder();
+}
+
+// Settle the loading flag — only for the load that still owns the grid (a
+// superseded one returns early on its aborted signal and must not clear the
+// newer load's flag).
+function finishResultsLoad(signal) {
+  if (signal.aborted) return;
+  resultsLoading = false;
+  refreshSelectionUI();
+  refreshHandoffUI();
+}
+
+async function searchPhotos(signal) {
+  resetResults("photos", true);
+  const summary = document.getElementById("search-summary");
+  setStatus("Searching…");
   try {
     const params = buildQuery();
     const res = await fetch(`/api/search?${params.toString()}`, { signal });
@@ -286,12 +317,14 @@ async function searchPhotos(signal) {
     renderGrid();
     const what = params.has("similar_to") ? ` similar to ${similarTo.filename}` : "";
     summary.textContent = `${data.total.toLocaleString()} photo${data.total === 1 ? "" : "s"} found${what}`;
-    refreshHandoffUI();
     setStatus("");
+    finishResultsLoad(signal);
     if (rankedResults) await noteIndexCoverage(signal);
   } catch (e) {
     if (signal.aborted) return;
     setStatus(`Search failed: ${e.message}`, true);
+  } finally {
+    finishResultsLoad(signal);
   }
 }
 
@@ -339,14 +372,21 @@ function searchSimilar() {
 /* ── Handoff: send the current results into Geocode or People, so Search can
  * act as the selection tool for the rest of the app instead of a dead end. ── */
 
+// Select all / Open in Geocode only have a meaning over a settled plain-photo
+// result set that is on screen.
+function photoResultsActionable() {
+  return resultsMode === "photos" && !resultsLoading && filteredPhotos.length > 0;
+}
+
 function refreshHandoffUI() {
   const group = document.getElementById("handoff-group");
   const peopleBtn = document.getElementById("open-people-btn");
-  group.style.display = resultsMode === "photos" && resultPhotos.length > 0 ? "" : "none";
+  group.style.display = photoResultsActionable() ? "" : "none";
   peopleBtn.style.display = selectedPersons.length === 1 ? "" : "none";
 }
 
 function openInGeocode() {
+  if (!photoResultsActionable()) return;
   const ids = (selectedIds.size > 0 ? [...selectedIds] : filteredPhotos.map((p) => p.id));
   if (!ids.length) return;
   window.location.href = `/geocode.html?ids=${ids.join(",")}`;
@@ -361,17 +401,9 @@ function openInPeople() {
  * untagged near-match face, not yet a plain-search hit. ── */
 
 async function searchUntaggedFaces(signal) {
-  const grid = document.getElementById("grid");
+  resetResults("untagged", true);
   const summary = document.getElementById("search-summary");
-  resultsMode = "untagged";
   setStatus("Scanning for untagged faces…");
-  summary.textContent = "";
-  grid.innerHTML = "";
-  document.getElementById("timeline").style.display = "none";
-  selectedIds.clear();
-  lastClickedIndex = -1;
-  refreshSelectionUI();
-  showPlaceholder();
   try {
     const params = buildQuery();
     const res = await fetch(`/api/search/untagged-faces?${params.toString()}`, { signal });
@@ -385,6 +417,8 @@ async function searchUntaggedFaces(signal) {
   } catch (e) {
     if (signal.aborted) return;
     setStatus(`Search failed: ${e.message}`, true);
+  } finally {
+    finishResultsLoad(signal);
   }
 }
 
@@ -860,7 +894,7 @@ function refreshSelectionUI() {
   });
   const group = document.getElementById("selection-group");
   const count = document.getElementById("selection-count");
-  if (selectedIds.size > 0) {
+  if (selectionActionable()) {
     group.style.display = "";
     count.textContent = `${selectedIds.size} selected`;
   } else {
@@ -930,10 +964,19 @@ const showDetail = latestOnly(async (signal, id) => {
 
 /* ── Select all ── */
 
+// The visible photos only: filteredPhotos is what renderGrid draws. (It used to
+// fall back to resultPhotos when the timeline narrowed to nothing, selecting
+// photos that weren't on screen.)
 function selectAllResults() {
-  const source = filteredPhotos.length > 0 ? filteredPhotos : resultPhotos;
-  selectedIds = new Set(source.map((p) => p.id));
+  if (!photoResultsActionable()) return;
+  selectedIds = new Set(filteredPhotos.map((p) => p.id));
   refreshSelectionUI();
+}
+
+// The selection toolbar's actions act on selectedIds; refuse while a load is
+// replacing the results under it.
+function selectionActionable() {
+  return resultsMode === "photos" && !resultsLoading && selectedIds.size > 0;
 }
 
 /* ── Assign approximate date ── */
@@ -945,7 +988,7 @@ function selectAllResults() {
 let assignDateIds = [];
 
 function openAssignDateModal() {
-  if (selectedIds.size === 0) return;
+  if (!selectionActionable()) return;
   assignDateIds = [...selectedIds];
   const n = assignDateIds.length;
   document.getElementById("assign-date-summary").textContent =
@@ -1022,7 +1065,7 @@ function formatGuessLabel(guess) {
 }
 
 async function openGuessDatesModal() {
-  if (selectedIds.size === 0) return;
+  if (!selectionActionable()) return;
   const modal = document.getElementById("guess-dates-modal");
   const tbody = document.getElementById("guess-dates-tbody");
   document.getElementById("guess-dates-summary").textContent =
@@ -1129,7 +1172,7 @@ async function undoDateCommit() {
 /* ── Download selected as ZIP ── */
 
 async function downloadSelected() {
-  if (selectedIds.size === 0) return;
+  if (!selectionActionable()) return;
   const btn = document.getElementById("download-selected-btn");
   const ids = [...selectedIds];
   btn.disabled = true;
@@ -1193,18 +1236,10 @@ function clearForm() {
   selectedPersons = [];
   renderPersonChips();
   updatePersonModeVisibility();
-  resultsMode = "photos";
-  resultPhotos = [];
-  filteredPhotos = [];
-  untaggedCandidates = [];
-  histBuckets = [];
-  document.getElementById("timeline").style.display = "none";
-  document.getElementById("handoff-group").style.display = "none";
-  selectedIds.clear();
-  refreshSelectionUI();
-  showPlaceholder();
-  document.getElementById("grid").innerHTML = "";
-  document.getElementById("search-summary").textContent = "";
+  // Supersede any in-flight search (its results must not land after Clear),
+  // then drop the result state the same way a new search does.
+  runResultsLoad(async () => {});
+  resetResults("photos", false);
   setStatus("");
 }
 
@@ -1339,6 +1374,7 @@ function applyTimelineFilter() {
   selectedIds.clear();
   lastClickedIndex = -1;
   refreshSelectionUI();
+  refreshHandoffUI();   // nothing visible → nothing for Select all / Geocode to act on
   showPlaceholder();
   renderGrid();
   drawHistogram();

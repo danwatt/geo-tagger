@@ -90,6 +90,13 @@ sizeCropImgCache(FACE_LIMIT);   // the grid reuses crop <img>s; keep them all ca
 // FACE_PRESELECT_MIN_SCORE setting (see loadLiveSettings); this default is
 // only used if that fetch hasn't resolved yet.
 let CONFIDENT_SCORE = 0.5;
+// Auto-preselect memory for the scopes that pre-select on load (Review guesses,
+// the Unlabeled queue — see applyPreselection in people-selection.js). `key`
+// names the scope visit it belongs to; `shown` is the faces visible at the last
+// (re)selection; `deselected` the preselect-eligible faces the user has since
+// left unselected. Reset on every scope entry (selectScope), so only the first
+// load of a visit pre-selects everything eligible.
+let preselectMemory = { key: null, shown: new Set(), deselected: new Set() };
 // Reverting more staged changes than this at once asks for confirmation
 // (see revertPending).
 const SELECTION_CONFIRM_THRESHOLD = 3;

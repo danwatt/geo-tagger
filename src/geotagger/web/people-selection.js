@@ -13,6 +13,56 @@ function selectGroupFaces(group, additive, label) {
     `Assign to approve, or refine with click/Ctrl-click.`);
 }
 
+/* ── Auto-preselect (Review guesses, Unlabeled queue) ──
+ * Those scopes pre-select faces on load, but the same load also runs after every
+ * commit, "not this person", Focus change and filter switch. Re-selecting from
+ * scratch each time used to undo the user's deselections, so the next Assign
+ * staged exactly the faces they had rejected (W15). Instead the first load of a
+ * scope visit pre-selects everything eligible; later loads keep the selection as
+ * shown, re-derive what the user deselected since last time, and pre-select only
+ * eligible faces they haven't deselected (new ones, or ones a filter had hidden). */
+
+function resetPreselection() {
+  preselectMemory = { key: null, shown: new Set(), deselected: new Set() };
+}
+
+// Set selectedIds for `visible` (the faces the grid will draw). `eligible(face)`
+// decides which faces a fresh visit pre-selects.
+function applyPreselection(visible, eligible) {
+  const key = `${scope}:${scopePersonId ?? ""}`;
+  if (preselectMemory.key !== key) {
+    preselectMemory = { key, shown: new Set(), deselected: new Set() };
+    selectedIds = new Set();
+  }
+  const mem = preselectMemory;
+  // Anything that was on screen, eligible and isn't selected now was deselected
+  // by the user (click, Space, Escape, arrow-collapse); re-selected ones come off
+  // the list. Staged faces left the grid via staging, not a deselection — skip.
+  for (const id of mem.shown) {
+    if (pending.has(id)) continue;
+    if (selectedIds.has(id)) mem.deselected.delete(id);
+    else mem.deselected.add(id);
+  }
+  const present = new Set(visible.map(f => f.id));
+  const next = new Set([...selectedIds].filter(id => present.has(id)));
+  const shown = new Set();
+  visible.forEach(f => {
+    if (!eligible(f)) return;   // never pre-selected, so "unselected" says nothing
+    shown.add(f.id);
+    if (!mem.deselected.has(f.id)) next.add(f.id);
+  });
+  selectedIds = next;
+  mem.shown = shown;
+}
+
+// Reloads of the scopes without auto-preselect: keep the user's selection, but
+// only the faces still on screen — a selected face that the reload dropped (or
+// that is now staged) must not ride along into the next bulk action.
+function pruneSelectionToGrid() {
+  const present = new Set(gridFaces().map(f => f.id));
+  selectedIds = new Set([...selectedIds].filter(id => present.has(id)));
+}
+
 function deselectAll() {
   selectedIds.clear();
   lastClickedIndex = -1;
