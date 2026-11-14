@@ -1802,13 +1802,39 @@ function focusPhotoAt(idx) {
   document.querySelector(`.thumb-cell[data-id="${photo.id}"]`)?.scrollIntoView({ block: "nearest" });
 }
 
+// Index `delta` grid cells away from filteredPhotos[from], counting only photos
+// still in the grid — staged ones have moved to the staging area (renderGrid
+// skips them), so j/k must step over them rather than focus an invisible photo.
+// Clamps at the first/last visible photo; -1 when none is visible. `from` -1
+// means "before the first", filteredPhotos.length "after the last".
+function stepGridIndex(from, delta) {
+  const step = delta > 0 ? 1 : -1;
+  let idx = from, last = -1;
+  for (let left = Math.abs(delta); left > 0;) {
+    idx += step;
+    if (idx < 0 || idx >= filteredPhotos.length) break;
+    if (pendingGeo.has(filteredPhotos[idx].id)) continue;
+    last = idx;
+    left--;
+  }
+  if (last !== -1) return last;
+  // Nothing visible that way (already at the edge): stay put if `from` is
+  // visible, else take the nearest visible photo the other way.
+  if (from >= 0 && from < filteredPhotos.length && !pendingGeo.has(filteredPhotos[from].id)) return from;
+  for (let i = from - step; i >= 0 && i < filteredPhotos.length; i -= step) {
+    if (!pendingGeo.has(filteredPhotos[i].id)) return i;
+  }
+  return -1;
+}
+
 // j/k (or arrow keys): move keyboard focus by `delta` photos, collapsing the
 // selection to just that one — mirrors a plain click on the destination cell.
 function moveGridFocus(delta) {
-  if (!filteredPhotos.length) return;
   let idx = filteredPhotos.findIndex(p => p.id === focusedPhotoId);
-  idx = idx === -1 ? (delta > 0 ? -1 : 0) : idx;
-  idx = Math.max(0, Math.min(filteredPhotos.length - 1, idx + delta));
+  // Nothing focused: start before the first photo (k, finding nothing above,
+  // falls back to the first visible one — as before).
+  idx = stepGridIndex(idx, delta);
+  if (idx === -1) return;
   selectedIds.clear();
   selectedIds.add(filteredPhotos[idx].id);
   focusPhotoAt(idx);
@@ -1821,8 +1847,8 @@ function extendGridFocus(delta) {
   const anchor = lastClickedIndex >= 0 ? lastClickedIndex :
     Math.max(0, filteredPhotos.findIndex(p => p.id === focusedPhotoId));
   let idx = filteredPhotos.findIndex(p => p.id === focusedPhotoId);
-  idx = idx === -1 ? anchor : idx;
-  idx = Math.max(0, Math.min(filteredPhotos.length - 1, idx + delta));
+  idx = stepGridIndex(idx === -1 ? anchor : idx, delta);
+  if (idx === -1) return;
   const lo = Math.min(anchor, idx);
   const hi = Math.max(anchor, idx);
   for (let i = lo; i <= hi; i++) {
@@ -2476,8 +2502,7 @@ function buildHistogram() {
     return;
   }
 
-  dateRangeMin = Math.min(...tsList);
-  dateRangeMax = Math.max(...tsList);
+  [dateRangeMin, dateRangeMax] = minMaxOf(tsList);  // not Math.min(...): overflows past ~100k
   dateFilterLo = dateRangeMin;
   dateFilterHi = dateRangeMax;
 

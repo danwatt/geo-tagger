@@ -278,7 +278,7 @@ function dropGroup(groupId) {
 function dateRange(cl) {
   const ts = cl.faces.map((f) => f.photo_datetime).filter(Boolean);
   if (!ts.length) return "Undated";
-  return formatDateRange(Math.min(...ts), Math.max(...ts));
+  return formatDateRange(...minMaxOf(ts));
 }
 
 function showDone() {

@@ -81,7 +81,10 @@ function bindToolbar() {
   });
   document.getElementById("add-face-btn").addEventListener("click", () => setDrawMode(!drawMode));
   document.getElementById("rescan-faces-btn").addEventListener("click", rescanFaces);
-  document.getElementById("ignore-unlabeled-btn").addEventListener("click", ignoreAllUnlabeled);
+  // Wrapped, not passed directly: the click event would land in `silent` (truthy)
+  // and suppress the "Ignored N" status. The failure is already in the status bar.
+  document.getElementById("ignore-unlabeled-btn").addEventListener("click",
+    () => ignoreAllUnlabeled().catch(() => {}));
   document.getElementById("done-next-btn").addEventListener("click", async () => {
     await ignoreAllUnlabeled(true);
     const i = nextAvailableIdx();
@@ -783,8 +786,12 @@ async function ignoreAllUnlabeled(silent = false) {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    if (!silent && photo.id === currentPhotoId()) setStatus(`Ignored ${data.ignored} unlabeled face(s).`);
     await reloadFacesFor(photo.id);
+    // After the reload, not before: renderFaces ends by writing its own
+    // "✓ Done — …" summary, which would replace this at once.
+    if (!silent && photo.id === currentPhotoId()) {
+      setStatus(`Ignored ${data.ignored} unlabeled face(s) — this photo is done.`);
+    }
   } catch (err) {
     setStatus("Ignore failed: " + err.message, true);
     throw err;

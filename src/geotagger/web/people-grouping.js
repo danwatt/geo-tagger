@@ -185,7 +185,7 @@ function sortBucketBySuggestion(faceList, cacheKey) {
 function facesDateRange(faceList) {
   const ts = faceList.map(f => f.photo_datetime).filter(Boolean);
   if (!ts.length) return "Undated";
-  return formatDateRange(Math.min(...ts), Math.max(...ts));
+  return formatDateRange(...minMaxOf(ts));
 }
 
 /* ── Ignore-batch grouping (ignored view) ── */

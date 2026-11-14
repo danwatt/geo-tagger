@@ -38,7 +38,7 @@ function renderClusters() {
   // person, so it's normally one face per photo, but a sample capped at 24 would
   // understate a big group — cl.size is the better count when it's truncated.
   sortGroups(clusters, gridSort, cl => ({
-    date: Math.min(...cl.sample.map(f => f.photo_datetime || Infinity)),
+    date: minOf(cl.sample.map(f => f.photo_datetime || Infinity)),
     count: Math.max(cl.size, new Set(cl.sample.map(f => f.photo_id)).size),
     place: primaryLocationKey(cl.sample),
     dir: primaryDirKey(cl.sample),

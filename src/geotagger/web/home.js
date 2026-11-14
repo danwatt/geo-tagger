@@ -282,8 +282,10 @@ async function runBackfill() {
   backfillRunning = true;
   const btn = document.getElementById("backfill-btn");
   btn.disabled = true;
+  let errorMsg = null;
   try {
     let remaining = Infinity;
+    const checkProgress = stallGuard("Backfill");
     while (remaining > 0) {
       const res = await fetch("/api/geocode/backfill", {
         method: "POST",
@@ -298,14 +300,18 @@ async function runBackfill() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       remaining = data.remaining;
+      checkProgress(remaining);
       btn.textContent = remaining > 0 ? `Backfilling… ${remaining.toLocaleString()} left` : "Run backfill";
     }
   } catch (e) {
-    showError("card-reverse-geocode", e.message);
+    errorMsg = e.message;
   } finally {
     backfillRunning = false;
     btn.textContent = "Run backfill";
     await loadSummary();
+    // Shown after loadSummary, which clears the card's error when it succeeds —
+    // shown before it, the failure flashed and vanished.
+    if (errorMsg) showError("card-reverse-geocode", errorMsg);
   }
 }
 
@@ -340,6 +346,7 @@ async function runFacesScan() {
   try {
     let remaining = Infinity;
     let allowFailures = false;
+    const checkProgress = stallGuard("Face detection");
     while (remaining > 0 && !facesScanStopRequested) {
       const res = await fetch("/api/faces/scan", {
         method: "POST",
@@ -359,6 +366,7 @@ async function runFacesScan() {
       }
       const data = await res.json();
       remaining = data.remaining;
+      checkProgress(remaining);
       btn.textContent = remaining > 0 ? `Scanning… ${remaining.toLocaleString()} left` : "Detect faces";
     }
   } catch (e) {

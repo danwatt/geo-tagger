@@ -214,3 +214,44 @@ function safeSameOriginPath(raw, fallback) {
     return fallback;
   }
 }
+
+/* ── Large-array min/max ──
+ * Math.min(...arr) passes every element as a call argument, and engines cap the
+ * argument count (V8 throws RangeError somewhere past ~100k), so a library-sized
+ * timestamp list breaks it. A plain loop has no such limit. Empty input gives
+ * [Infinity, -Infinity], the same as the spread form. */
+function minMaxOf(values) {
+  let lo = Infinity, hi = -Infinity;
+  for (const v of values) {
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  }
+  return [lo, hi];
+}
+
+/** Smallest value of `values` (Infinity when empty). */
+function minOf(values) {
+  return minMaxOf(values)[0];
+}
+
+/* ── Batch-loop stall guard ──
+ * The client batch loops (POST a batch, read `remaining`, repeat until 0) trust
+ * the server to make progress. It usually does, but not always: a photo whose
+ * lookup throws stays queued and is picked again next batch, so a batch made
+ * entirely of such rows leaves `remaining` unchanged and the loop would spin
+ * forever. stallGuard(label) returns check(remaining), called once per batch;
+ * it throws after `maxStalls` consecutive batches that didn't lower `remaining`
+ * against the previous one. Compared to the previous batch rather than the
+ * best seen, so a count that jumps up (a scan added photos meanwhile) and then
+ * drains again isn't mistaken for a stall. */
+function stallGuard(label, maxStalls = 3) {
+  let prev = Infinity, stalls = 0;
+  return (remaining) => {
+    if (remaining < prev) stalls = 0;
+    else if (++stalls >= maxStalls) {
+      throw new Error(`${label} stopped: ${maxStalls} batches in a row made no progress ` +
+                      `(${Number(remaining).toLocaleString()} still left). Check the server log.`);
+    }
+    prev = remaining;
+  };
+}

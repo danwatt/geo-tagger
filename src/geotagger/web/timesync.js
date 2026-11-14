@@ -434,8 +434,7 @@ function applyFilters(fitTimeline = false) {
       });
 
     if (times.length > 0) {
-      const minTime = Math.min(...times);
-      const maxTime = Math.max(...times);
+      const [minTime, maxTime] = minMaxOf(times);
       timeline.setWindow(new Date(minTime), new Date(maxTime), { animation: true });
     }
   }

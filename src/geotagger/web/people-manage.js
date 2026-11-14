@@ -183,6 +183,50 @@ function renderPersons() {
   rows.forEach((p) => tbody.appendChild(makePersonRow(p)));
 }
 
+// <input type="date"> fires `change` on every keystroke that leaves a complete
+// date, so typing the year 2019 saved 0002, 0020 and 0201 on the way — and
+// blanking one segment mid-edit fires it with value "", which saved a clear.
+// Save once typing pauses (or at once on blur), and only a plausible complete
+// date or a deliberately emptied field; a half-typed one reverts on blur.
+const DATE_SAVE_DEBOUNCE_MS = 1000;
+
+function wireDateSave(input, p, field, label) {
+  let timer = null;
+  const saved = () => p[field] || "";
+
+  async function flush(final) {
+    clearTimeout(timer);
+    timer = null;
+    const v = input.value;
+    // badInput: some segments filled, some not (value reads "").
+    // A year below 1000 is a 4-digit year still being typed.
+    const incomplete = input.validity.badInput || (v && Number(v.slice(0, 4)) < 1000);
+    if (incomplete) {
+      if (final) {
+        input.value = saved();
+        toast(`${label} not saved — enter a full date (YYYY-MM-DD).`, true);
+      }
+      return;
+    }
+    if (v === saved()) return;
+    const value = v || null;
+    try {
+      await api("PATCH", `/api/persons/${p.id}`, { [field]: value });
+      p[field] = value;
+      toast(value ? `${label} set` : `${label} cleared`);
+    } catch (e) {
+      input.value = saved();
+      toast("Save failed: " + e.message, true);
+    }
+  }
+
+  input.addEventListener("change", () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => flush(false), DATE_SAVE_DEBOUNCE_MS);
+  });
+  input.addEventListener("blur", () => flush(true));
+}
+
 function makePersonRow(p) {
   const tr = document.createElement("tr");
 
@@ -221,17 +265,7 @@ function makePersonRow(p) {
   birthInput.className = "edit-input";
   birthInput.value = p.birth_date || "";
   birthInput.title = "YYYY-MM-DD";
-  birthInput.addEventListener("change", async () => {
-    const birth_date = birthInput.value || null;
-    try {
-      await api("PATCH", `/api/persons/${p.id}`, { birth_date });
-      p.birth_date = birth_date;
-      toast(birth_date ? `Birth date set` : `Birth date cleared`);
-    } catch (e) {
-      birthInput.value = p.birth_date || "";
-      toast("Save failed: " + e.message, true);
-    }
-  });
+  wireDateSave(birthInput, p, "birth_date", "Birth date");
   birthTd.appendChild(birthInput);
 
   // ── Not before / Not after ──
@@ -242,17 +276,7 @@ function makePersonRow(p) {
   notBeforeInput.className = "edit-input";
   notBeforeInput.value = p.not_before || "";
   notBeforeInput.title = "No photos of this person before this date (YYYY-MM-DD)";
-  notBeforeInput.addEventListener("change", async () => {
-    const not_before = notBeforeInput.value || null;
-    try {
-      await api("PATCH", `/api/persons/${p.id}`, { not_before });
-      p.not_before = not_before;
-      toast(not_before ? `Not-before date set` : `Not-before date cleared`);
-    } catch (e) {
-      notBeforeInput.value = p.not_before || "";
-      toast("Save failed: " + e.message, true);
-    }
-  });
+  wireDateSave(notBeforeInput, p, "not_before", "Not-before date");
   notBeforeTd.appendChild(notBeforeInput);
 
   const notAfterTd = document.createElement("td");
@@ -262,17 +286,7 @@ function makePersonRow(p) {
   notAfterInput.className = "edit-input";
   notAfterInput.value = p.not_after || "";
   notAfterInput.title = "No photos of this person after this date (YYYY-MM-DD)";
-  notAfterInput.addEventListener("change", async () => {
-    const not_after = notAfterInput.value || null;
-    try {
-      await api("PATCH", `/api/persons/${p.id}`, { not_after });
-      p.not_after = not_after;
-      toast(not_after ? `Not-after date set` : `Not-after date cleared`);
-    } catch (e) {
-      notAfterInput.value = p.not_after || "";
-      toast("Save failed: " + e.message, true);
-    }
-  });
+  wireDateSave(notAfterInput, p, "not_after", "Not-after date");
   notAfterTd.appendChild(notAfterInput);
 
   // ── Family ──

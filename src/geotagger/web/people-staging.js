@@ -211,11 +211,26 @@ function pendingRequest(g, ids) {
   }
 }
 
+// Set while a commit's requests are in flight: a second Commit click (or Ctrl+S)
+// would otherwise re-send the same still-staged entries alongside the first and
+// double-count them in the summary. Same guard as commitPendingGeo (app.js).
+let commitInFlight = false;
+
 async function commitPending(groups, what) {
+  if (commitInFlight) { setStatus("A commit is already in progress…", true); return; }
   const total = groups.reduce((n, g) => n + g.entries.length, 0);
   if (!total) { setStatus("Nothing staged to commit.", true); return; }
   if (!confirm(`Commit ${total} staged change(s)${what ? ` — ${what}` : ""}? ` +
                `This writes them to the database.`)) return;
+  commitInFlight = true;
+  try {
+    await commitGroups(groups, total);
+  } finally {
+    commitInFlight = false;
+  }
+}
+
+async function commitGroups(groups, total) {
   setStatus(`Committing ${total} change(s)…`);
 
   let saved = 0;

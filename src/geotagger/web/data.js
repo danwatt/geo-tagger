@@ -472,6 +472,7 @@ async function runSemanticIndex() {
   try {
     let remaining = Infinity;
     let allowFailures = false;
+    const checkProgress = stallGuard("Indexing");
     while (remaining > 0 && !semanticStopRequested) {
       const t0 = performance.now();
       const res = await fetch("/api/semantic/scan", {
@@ -500,6 +501,7 @@ async function runSemanticIndex() {
       const data = await res.json();
       remaining = data.remaining;
       failed += data.errors.length;
+      checkProgress(remaining);
       const rate = data.processed / ((performance.now() - t0) / 1000);
       btn.textContent = remaining > 0 ? `Indexing… ${remaining.toLocaleString()} left` : "Index photos";
       progress.textContent = remaining > 0

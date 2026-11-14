@@ -462,7 +462,7 @@ error. One generic `pollJob()` would also remove about 200 duplicated lines.
 `web/people.js:719-723,834-839,2814-2818`. In "Review guesses" every reload re-selects everything, so the
 next Assign stages the wrong faces.
 
-**W16 — Low** [traced]
+**W16 — Low** [traced] — ✅ **DONE** (`minMaxOf`/`minOf` replace large spreads; `stallGuard` stops backfill, face scan and semantic loops after 3 stalled batches; Crowds ignore fixed; People commit guard; "Ignore unlabeled" status shown; j/k skip staged photos; Manage dates save only complete values. `?ids=` left: measured limit ~64 KB vs ≤16 KB at the 2000-result cap)
 - `Math.min(...tsList)` throws `RangeError` above roughly 100k photos (`app.js:2471-2472`, `search.js:1244-1245`) [seen].
 - Batch loops spin forever if `remaining` stops decreasing (`home.js:279-330`) [unverified whether the backend guarantees progress].
 - Crowds per-photo ignore mutates a throwaway copy; button stuck on "Ignoring…" (`people.js:2145,2225-2272`).

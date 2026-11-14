@@ -235,7 +235,7 @@ function photoCountLabel(faceList) {
 // guesses event groups and the Unlabeled month→location buckets use.
 function sortFaceGroups(groups) {
   return sortGroups(groups, gridSort, g => ({
-    date: Math.min(...g.faces.map(f => f.photo_datetime || Infinity)),
+    date: minOf(g.faces.map(f => f.photo_datetime || Infinity)),
     count: new Set(g.faces.map(f => f.photo_id)).size,
     place: g.place ?? primaryLocationKey(g.faces),
     dir: g.dir ?? primaryDirKey(g.faces),

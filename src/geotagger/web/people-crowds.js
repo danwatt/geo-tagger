@@ -37,14 +37,15 @@ function renderCrowds() {
   const grid = document.getElementById("grid");
   grid.innerHTML = "";
 
-  let visibleGroups = crowdGroups;
-  if (hideCompletedCrowds) {
-    visibleGroups = crowdGroups
-      .map(g => ({ ...g, photos: g.photos.filter(p => p.unlabeled_faces > 0) }))
-      .filter(g => g.photos.length > 0);
-  }
+  // Each entry pairs the real group with the photos to show. "Hide completed"
+  // used to render a {...g} copy, so a per-photo ignore decremented the copy's
+  // unlabeled count and the next re-render showed the stale original.
+  let visible = crowdGroups.map(g => ({
+    g, photos: hideCompletedCrowds ? g.photos.filter(p => p.unlabeled_faces > 0) : g.photos,
+  }));
+  if (hideCompletedCrowds) visible = visible.filter(v => v.photos.length > 0);
 
-  if (!visibleGroups.length && crowdGroups.length > 0) {
+  if (!visible.length && crowdGroups.length > 0) {
     const msg = document.createElement("div");
     msg.style.cssText = "color:#666;padding:16px;font-size:12px;grid-column:1/-1;";
     msg.textContent = 'All crowd photos are complete. Uncheck "Hide completed" to review them.';
@@ -52,23 +53,25 @@ function renderCrowds() {
     return;
   }
 
-  sortGroups(visibleGroups, gridSort, g => ({
-    date: Math.min(...g.photos.map(p => p.photo_datetime || Infinity)),
-    count: g.photos.length,
-    place: primaryLocationKey(g.photos),
-    dir: primaryDirKey(g.photos),
-  })).forEach(g => grid.appendChild(makeCrowdGroupCard(g)));
+  sortGroups(visible, gridSort, v => ({
+    date: minOf(v.photos.map(p => p.photo_datetime || Infinity)),
+    count: v.photos.length,
+    place: primaryLocationKey(v.photos),
+    dir: primaryDirKey(v.photos),
+  })).forEach(v => grid.appendChild(makeCrowdGroupCard(v.g, v.photos)));
 }
 
-function makeCrowdGroupCard(g) {
+// `g` is the live entry in crowdGroups (mutated by the ignore actions); `photos`
+// is the subset of its photos on screen.
+function makeCrowdGroupCard(g, photos = g.photos) {
   const card = document.createElement("div");
   card.className = "cluster-card crowd-group-card";
 
   let ignoreBtn;   // captured from the header so per-photo actions can update it
-  let meta = `· ${g.photos.length} photo(s) · ${g.total_faces} face(s)`;
+  let meta = `· ${photos.length} photo(s) · ${g.total_faces} face(s)`;
   if (g.unlabeled_faces > 0) meta += ` · ${g.unlabeled_faces} unlabeled`;
   // Place goes last so the "Location, then date" sort is readable here too.
-  const place = locationLabel(g.photos);
+  const place = locationLabel(photos);
   if (place) meta += ` · 📍 ${place}`;
 
   card.appendChild(faceGroupHeader({
@@ -85,7 +88,7 @@ function makeCrowdGroupCard(g) {
 
   const photosWrap = document.createElement("div");
   photosWrap.className = "crowd-photos";
-  g.photos.forEach(ph => photosWrap.appendChild(makeCrowdPhotoThumb(ph, g, ignoreBtn)));
+  photos.forEach(ph => photosWrap.appendChild(makeCrowdPhotoThumb(ph, g, ignoreBtn)));
   card.appendChild(photosWrap);
   return card;
 }
@@ -153,14 +156,14 @@ function makeCrowdPhotoThumb(ph, group, groupIgnoreBtn) {
 }
 
 async function crowdIgnoreGroup(g, btn) {
-  if (!confirm(`Ignore all ${g.unlabeled_faces} unlabeled face(s) across ${g.photos.length} photo(s) in this group?`)) return;
-  const photoIds = g.photos.map(p => p.id);
+  const pending = g.photos.filter(p => p.unlabeled_faces > 0);
+  if (!confirm(`Ignore all ${g.unlabeled_faces} unlabeled face(s) across ${pending.length} photo(s) in this group?`)) return;
+  const photoIds = pending.map(p => p.id);
   try {
     await crowdIgnorePhotos(photoIds, btn);
     g.unlabeled_faces = 0;
     g.photos.forEach(p => { p.unlabeled_faces = 0; });
-    renderCrowds();
-    await loadPersons();
+    renderCrowds();   // crowdIgnorePhotos already refreshed the people list
   } catch (_) { /* error already shown in status bar */ }
 }
 
@@ -176,6 +179,9 @@ async function crowdIgnorePhotos(photoIds, btn) {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    // Callers leave the button disabled (nothing left to ignore) but its label
+    // must come back — the per-photo button was left reading "Ignoring…".
+    btn.textContent = prevText;
     setStatus(`Ignored ${data.ignored} face(s).`);
     await loadPersons();
   } catch (err) {

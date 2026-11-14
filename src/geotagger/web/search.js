@@ -389,6 +389,10 @@ function openInGeocode() {
   if (!photoResultsActionable()) return;
   const ids = (selectedIds.size > 0 ? [...selectedIds] : filteredPhotos.map((p) => p.id));
   if (!ids.length) return;
+  // Ids ride in the query string (and Geocode re-sends them to /api/photos?ids=).
+  // Results are capped at 2000 (search's default limit), i.e. ≤ ~16 KB even with
+  // 7-digit ids; uvicorn (httptools and h11 alike) accepts a ~64 KB request line,
+  // measured. Revisit with a POST/sessionStorage handoff if that cap ever grows.
   window.location.href = `/geocode.html?ids=${ids.join(",")}`;
 }
 
@@ -1316,8 +1320,7 @@ function buildHistogram() {
   }
   document.getElementById("timeline").style.display = "";
 
-  dateRangeMin = Math.min(...tsList);
-  dateRangeMax = Math.max(...tsList);
+  [dateRangeMin, dateRangeMax] = minMaxOf(tsList);  // not Math.min(...): overflows past ~100k
   dateFilterLo = dateRangeMin;
   dateFilterHi = dateRangeMax;
 
