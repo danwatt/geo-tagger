@@ -1,7 +1,27 @@
 /* people-discover.js — People page: the Discover view (clusters of
  * unlabeled faces). */
 
-/* ── Discover view (unsupervised clusters of unlabeled faces) ── */
+/* ── Discover view (unsupervised clusters of unlabeled faces) ──
+ * Clustering is a full pass over the unlabeled queue (up to FACE_CLUSTER_CAP
+ * faces: similarity graph + a suggestion matmul per face), so it only runs on
+ * entering the scope or on "Refresh groups". Every face/group action after that
+ * patches `clusters` in place (U6) — see dropFacesFromClusters. */
+
+// True once a local patch may have left the groups different from what a fresh
+// run would find: a face leaving a group can split it (groups are connected
+// components, and the face may have been the bridge), and any assignment grows
+// the gallery that the "Looks like …" votes are taken against. Shown as a note
+// beside the Refresh button; cleared by the next successful load.
+let clustersStale = false;
+// The signal of the clustering request in flight, if any — a patch landing
+// while it runs would be overwritten by a response computed before the action.
+let clusterLoadSignal = null;
+
+function setClustersStale(stale) {
+  clustersStale = stale;
+  document.getElementById("discover-stale-note").hidden = !stale;
+}
+
 // Called only via loadFaces(), whose latest-only wrapper owns `signal`.
 async function loadClusters(signal) {
   selectedIds.clear();
@@ -9,13 +29,13 @@ async function loadClusters(signal) {
   updateActionButtons();
   updateDetail();
   setStatus("Finding groups… this can take a few seconds on a large library.");
+  clusterLoadSignal = signal;
   try {
-    const res = await fetch("/api/faces/clusters" + (focusActive() ? "?" + focusQuery() : ""),
-                            { signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    const data = await fetchJson(
+      "/api/faces/clusters" + (focusActive() ? "?" + focusQuery() : ""), { signal });
     if (signal.aborted) return;
     clusters = data.clusters || [];
+    setClustersStale(false);
     renderClusters();
     if (!clusters.length) {
       setStatus(`No groups found among ${data.scanned} clear unlabeled faces. ` +
@@ -28,6 +48,8 @@ async function loadClusters(signal) {
   } catch (err) {
     if (signal.aborted) return;
     setStatus("Clustering failed: " + err.message, true);
+  } finally {
+    if (clusterLoadSignal === signal) clusterLoadSignal = null;
   }
 }
 
@@ -110,18 +132,68 @@ function makeClusterCard(cl) {
   return card;
 }
 
+// Re-render after a local patch without jumping the pane back to the top
+// (renderClusters empties #grid first, which clamps the scroll to 0).
+function rerenderClustersInPlace() {
+  const pane = document.getElementById("grid-pane");
+  const top = pane.scrollTop;
+  renderClusters();
+  pane.scrollTop = top;
+}
+
+// The faces in `ids` have left the unlabeled pool (assigned, ignored, moved to
+// Come Back): drop them from their groups in place, as clusterAssign does for a
+// whole group, instead of re-clustering the library (U6). Empty groups go; the
+// rest keep their (now approximate) suggestion and the "+N more" count shrinks —
+// the 24-face sample can't be refilled, we don't hold the faces past it.
+// `assigned` marks the patch stale even when whole groups left (the gallery grew).
+// If the focused face goes, focus moves to its neighbour in the same group so
+// triage can carry on from the detail pane.
+function dropFacesFromClusters(ids, { assigned = false } = {}) {
+  const gone = new Set(ids);
+  if (!gone.size) return;
+  let nextFocus = null;
+  if (gone.has(focusedFaceId)) {
+    const cl = clusters.find(c => c.sample.some(f => f.id === focusedFaceId));
+    if (cl) {
+      const i = cl.sample.findIndex(f => f.id === focusedFaceId);
+      const rest = cl.sample.filter(f => !gone.has(f.id));
+      nextFocus = rest[Math.min(i, rest.length - 1)]?.id ?? null;
+    }
+  }
+  let partial = false;
+  clusters = clusters.filter(cl => {
+    if (!cl.face_ids.some(id => gone.has(id))) return true;
+    cl.face_ids = cl.face_ids.filter(id => !gone.has(id));
+    cl.sample = cl.sample.filter(f => !gone.has(f.id));
+    cl.size = cl.face_ids.length;
+    if (cl.size > 0) partial = true;
+    return cl.size > 0;
+  });
+  ids.forEach(id => selectedIds.delete(id));
+  if (gone.has(focusedFaceId)) focusedFaceId = nextFocus;
+  if (partial || assigned) setClustersStale(true);
+  rerenderClustersInPlace();
+  updateDetail();
+  // A clustering request still in flight was computed before this action and
+  // would put the faces back — restart it so the fresh result wins.
+  if (clusterLoadSignal && !clusterLoadSignal.aborted) loadFaces();
+}
+
+// For the shared face actions (people-actions.js): in Discover, patch the groups
+// after a successful POST and report true; anywhere else report false so the
+// caller reloads its grid as before.
+function patchClustersAfter(ids, opts) {
+  if (scope !== "discover") return false;
+  dropFacesFromClusters(ids, opts);
+  return true;
+}
+
 async function clusterAssign(cl, who, label) {
   try {
-    const res = await fetch("/api/faces/assign", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ face_ids: cl.face_ids, ...who }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await postJson("/api/faces/assign", { face_ids: cl.face_ids, ...who });
     setStatus(`Assigned ${cl.face_ids.length} face(s) to ${label}.`);
-    clusters = clusters.filter(c => c !== cl);
-    if (cl.face_ids.includes(focusedFaceId)) { focusedFaceId = null; updateDetail(); }
-    renderClusters();
+    dropFacesFromClusters(cl.face_ids, { assigned: true });
     await loadPersons();
   } catch (err) {
     setStatus("Assign failed: " + err.message, true);
@@ -131,16 +203,9 @@ async function clusterAssign(cl, who, label) {
 async function clusterIgnore(cl) {
   if (!confirm(`Ignore all ${cl.size} face(s) in this group?`)) return;
   try {
-    const res = await fetch("/api/faces/ignore", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ face_ids: cl.face_ids, ignored: true }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await postJson("/api/faces/ignore", { face_ids: cl.face_ids, ignored: true });
     setStatus(`Ignored ${cl.face_ids.length} face(s).`);
-    clusters = clusters.filter(c => c !== cl);
-    if (cl.face_ids.includes(focusedFaceId)) { focusedFaceId = null; updateDetail(); }
-    renderClusters();
+    dropFacesFromClusters(cl.face_ids);
     await loadPersons();
   } catch (err) {
     setStatus("Ignore failed: " + err.message, true);

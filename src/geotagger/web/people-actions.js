@@ -53,16 +53,13 @@ async function assignFocusedFace({ personId = null, name = null, clear = false }
   }
   const body = clear ? { clear: true } : name ? { name } : { person_id: personId };
   try {
-    const res = await fetch(`/api/faces/${f.id}/assign`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await postJson(`/api/faces/${f.id}/assign`, body);
     const who = clear ? null : (name || persons.find(p => p.id === personId)?.name);
     setStatus(clear ? "Unassigned this face." : `Assigned this face${who ? ` to ${who}` : ""}.`);
     // Only this face changes — drop just it from the selection, keep the rest.
     selectedIds.delete(f.id);
+    // Discover's faces are all unlabeled, so a clear leaves its group as it was.
+    if (patchClustersAfter(clear ? [] : [f.id], { assigned: true })) { await loadPersons(); return; }
     if (focusedFaceId === f.id) focusedFaceId = null;
     await loadPersons();
     await loadFaces();
@@ -86,13 +83,10 @@ async function ignoreSelected_ids(ids, ignored) {
     return;
   }
   try {
-    const res = await fetch("/api/faces/ignore", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ face_ids: ids, ignored }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await postJson("/api/faces/ignore", { face_ids: ids, ignored });
     setStatus(ignored ? `Ignored ${ids.length} face(s).` : `Restored ${ids.length} face(s).`);
+    // Discover (the detail pane's toggle) only ever ignores: its faces are live.
+    if (patchClustersAfter(ignored ? ids : [])) { await loadPersons(); return; }
     selectedIds.clear();
     await loadPersons();
     await loadFaces();
@@ -114,13 +108,9 @@ async function comeBackSelected_ids(ids, comeBack) {
     return;
   }
   try {
-    const res = await fetch("/api/faces/come-back", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ face_ids: ids, come_back: comeBack }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await postJson("/api/faces/come-back", { face_ids: ids, come_back: comeBack });
     setStatus(comeBack ? `Moved ${ids.length} face(s) to Come Back.` : `Restored ${ids.length} face(s).`);
+    if (patchClustersAfter(comeBack ? ids : [])) { await loadPersons(); return; }
     selectedIds.clear();
     await loadPersons();
     await loadFaces();
@@ -219,33 +209,31 @@ function openFaceActions(anchor, face) {
         return;
       }
       try {
-        const res = await fetch(`/api/faces/${face.id}/assign`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name }),
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await postJson(`/api/faces/${face.id}/assign`, { name });
+        if (patchClustersAfter([face.id], { assigned: true })) {
+          setStatus(`Assigned this face to ${name} (new person).`);
+          await loadPersons();
+          return;
+        }
         await Promise.all([loadPersons(), loadFaces()]);
       } catch (err) { setStatus("Assign failed: " + err.message, true); }
     },
     onIgnore: async (ignored) => {
       if (stagingEnabled()) { ignoreSelected_ids([face.id], ignored); return; }
       try {
-        const res = await fetch("/api/faces/ignore", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ face_ids: [face.id], ignored }),
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await postJson("/api/faces/ignore", { face_ids: [face.id], ignored });
+        if (patchClustersAfter(ignored ? [face.id] : [])) { setStatus("Ignored 1 face."); return; }
         await loadFaces();
       } catch (err) { setStatus("Ignore failed: " + err.message, true); }
     },
     onComeBack: async (comeBack) => {
       if (stagingEnabled()) { comeBackSelected_ids([face.id], comeBack); return; }
       try {
-        const res = await fetch("/api/faces/come-back", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ face_ids: [face.id], come_back: comeBack }),
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await postJson("/api/faces/come-back", { face_ids: [face.id], come_back: comeBack });
+        if (patchClustersAfter(comeBack ? [face.id] : [])) {
+          setStatus("Moved 1 face to Come Back.");
+          return;
+        }
         await loadFaces();
       } catch (err) { setStatus("Come back failed: " + err.message, true); }
     },
@@ -263,13 +251,16 @@ async function confirmFace(faceId, personId) {
     return;
   }
   try {
-    const res = await fetch(`/api/faces/${faceId}/assign`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(personId == null ? { clear: true } : { person_id: personId }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await postJson(`/api/faces/${faceId}/assign`,
+                   personId == null ? { clear: true } : { person_id: personId });
     selectedIds.delete(faceId);
+    if (patchClustersAfter(personId == null ? [] : [faceId], { assigned: true })) {
+      const who = persons.find(p => p.id === personId)?.name;
+      setStatus(personId == null ? "Unassigned this face."
+                                 : `Assigned this face${who ? ` to ${who}` : ""}.`);
+      await loadPersons();
+      return;
+    }
     if (focusedFaceId === faceId) focusedFaceId = null;
     await loadPersons();
     await loadFaces();
@@ -287,13 +278,13 @@ const REJECT_LOCAL_THRESHOLD = 10;
 
 async function rejectSuggestion(faceId, personId, personName, negative = true) {
   try {
-    const res = await fetch("/api/faces/negatives", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ face_ids: [faceId], person_id: personId, negative }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await postJson("/api/faces/negatives", { face_ids: [faceId], person_id: personId, negative });
     setStatus(negative ? `Marked as not ${personName}.`
                        : `Undid: ${personName} can be suggested again.`);
+    // Discover's sample faces carry no per-face suggestion, so this isn't offered
+    // there today; if it ever is, a negative moves no face between groups — only
+    // the group's vote, which the stale note covers. Never re-cluster for it.
+    if (scope === "discover") { setClustersStale(true); return; }
     // Big queue + a real rejection: patch in place (surface the next-best guess,
     // drop the face if it only lived here as a guess for the rejected person)
     // rather than round-tripping the whole list. Undo and small lists re-fetch

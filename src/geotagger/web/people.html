@@ -101,6 +101,12 @@
           <input type="checkbox" id="crowd-hide-done" checked/> Hide completed
         </label>
       </div>
+      <!-- Discover (U6): single-face actions patch the groups in place instead of
+           re-clustering, so the note flags when they may differ from a fresh run. -->
+      <div id="grid-nav-discover" style="display:none">
+        <button id="discover-refresh-btn" title="Re-run grouping over the unlabeled faces">↻ Refresh groups</button>
+        <span id="discover-stale-note" hidden>Groups changed since they were found and may be outdated.</span>
+      </div>
       <!-- Selection actions (right-aligned): apply to the faces selected in the
            current grid. Shown in every scope except Discover/Crowds, which use
            cluster/photo cards with their own buttons. -->

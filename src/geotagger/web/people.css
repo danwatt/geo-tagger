@@ -128,12 +128,14 @@
 #grid-nav-crowds,
 #grid-nav-unlabeled,
 #grid-nav-sort,
+#grid-nav-discover,
 #grid-nav-selection {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
+#discover-stale-note { color: var(--warn); font-size: 12px; }
 #grid-nav-unlabeled select { max-width: 240px; }
 /* Push the selection-action bar to the right edge of #grid-nav, after whichever
  * scope sub-bar is showing (or on its own when none is).

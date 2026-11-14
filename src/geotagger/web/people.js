@@ -108,6 +108,11 @@ function bindToolbar() {
   document.getElementById("crowd-reload-btn").addEventListener("click", () => {
     if (scope === "crowds") loadFaces();   // routes to loadCrowds under the grid's latest-only guard
   });
+  // The one place Discover re-clusters besides entering the scope: face actions
+  // patch the groups in place (U6), so a fresh grouping is on request only.
+  document.getElementById("discover-refresh-btn").addEventListener("click", () => {
+    if (scope === "discover") loadFaces();   // routes to loadClusters under the latest-only guard
+  });
   document.getElementById("crowd-hide-done").addEventListener("change", e => {
     hideCompletedCrowds = e.target.checked;
     if (scope === "crowds") renderCrowds();

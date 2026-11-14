@@ -494,7 +494,7 @@ with no indication (`people.js:696-714`, `app.js:1315-1319`). The first-load sta
 more than 5000 faces silently lacks the lowest-scoring ones, with no way to reach them. Add a persistent
 banner with "Load more".
 
-**U6 — Discover: any single-face action re-clusters the whole library** [traced] — `people.js:699,2561-2562`.
+**U6 — Discover: any single-face action re-clusters the whole library** [traced] — ✅ **DONE** (every Discover action patches groups in memory via `patchClustersAfter`; "↻ Refresh groups" button plus an "may be outdated" note; failed POSTs change nothing. Crowds still reloads after each action) — `people.js:699,2561-2562`.
 Patch the cluster locally, as `clusterAssign` already does.
 
 **U7 — Staged tagging work is lost on crash or accidental close** [traced] — persist `pending` to

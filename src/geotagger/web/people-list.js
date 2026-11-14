@@ -189,6 +189,7 @@ async function selectScope(newScope, personId) {
 function updateGridNavVisibility() {
   const showPerson = scope === "person" || scope === "suggested";
   const showCrowds = scope === "crowds";
+  const showDiscover = scope === "discover";
   const showUnlabeled = scope === "unlabeled";
   // The selection-action bar applies to any grid of selectable faces — every scope
   // except Discover/Crowds, which render cluster/photo cards with their own buttons.
@@ -200,6 +201,7 @@ function updateGridNavVisibility() {
     (scope === "unlabeled" && unlabeledHierarchy !== "person");
   document.getElementById("grid-nav-person").style.display = showPerson ? "" : "none";
   document.getElementById("grid-nav-crowds").style.display = showCrowds ? "" : "none";
+  document.getElementById("grid-nav-discover").style.display = showDiscover ? "" : "none";
   document.getElementById("grid-nav-unlabeled").style.display = showUnlabeled ? "" : "none";
   // "Group by" only drives the Unlabeled queue's render — every other scope has
   // its own fixed grouping, so the dropdown would be a dead control there.
@@ -209,7 +211,8 @@ function updateGridNavVisibility() {
   renderPagingBanner();   // hides itself outside the flat face grids
   document.getElementById("grid-nav-sort").style.display = showSort ? "" : "none";
   document.getElementById("grid-nav").style.display =
-    (showPerson || showCrowds || showUnlabeled || showSelection || showSort) ? "" : "none";
+    (showPerson || showCrowds || showDiscover || showUnlabeled || showSelection || showSort)
+      ? "" : "none";
 }
 
 /* ── Person CRUD ── */
