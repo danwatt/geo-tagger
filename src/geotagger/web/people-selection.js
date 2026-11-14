@@ -26,6 +26,12 @@ function resetPreselection() {
   preselectMemory = { key: null, shown: new Set(), deselected: new Set() };
 }
 
+// Forget how many pages the last visit loaded (U5) and drop its banner.
+function resetFacePaging() {
+  facePaging = { key: null, total: 0, loaded: 0, nextOffset: null, busy: false };
+  renderPagingBanner();
+}
+
 // Set selectedIds for `visible` (the faces the grid will draw). `eligible(face)`
 // decides which faces a fresh visit pre-selects.
 function applyPreselection(visible, eligible) {
@@ -154,7 +160,11 @@ function selectAllFaces() {
   selectedIds = new Set(visible.map(f => f.id));
   paintSelection();
   updateDetail();
-  setStatus(`Selected all ${visible.length} face(s).`);
+  // A truncated view (U5) can only select what's loaded — say so, with the gap.
+  const notLoaded = facesTruncated() ? facePaging.total - facePaging.loaded : 0;
+  setStatus(`Selected all ${visible.length} face(s)` + (notLoaded
+    ? ` loaded so far — ${notLoaded.toLocaleString()} more aren't loaded (Load more above the grid).`
+    : "."));
 }
 
 function openShortcutsHelp() {

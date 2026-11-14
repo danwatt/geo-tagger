@@ -334,6 +334,11 @@ function applyRejectionLocally(faceId, personId) {
   if (viewPid != null && personId === viewPid) {
     faces = faces.filter(f => f.id !== faceId);
     if (scope === "unlabeled") unlabeledAll = unlabeledAll.filter(f => f.id !== faceId);
+    // In Review guesses the server drops it from this person's list too, so the
+    // next page starts one row earlier — without this, Load more would skip the
+    // face that slid across the page boundary. (The Unlabeled filter is
+    // client-side; the face is still in the server's queue there.)
+    if (scope === "suggested") shiftFacePagingBack(1);
     selectedIds.delete(faceId);
     if (focusedFaceId === faceId) focusedFaceId = null;
   }

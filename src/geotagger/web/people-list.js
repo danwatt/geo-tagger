@@ -176,6 +176,7 @@ async function selectScope(newScope, personId) {
   scopePersonId = personId;
   selectedIds.clear();
   resetPreselection();            // a new visit pre-selects afresh; reloads within it don't
+  resetFacePaging();              // …and starts from one page, however much the last visit loaded
   lastClickedIndex = -1;
   focusedFaceId = null;
   suggestFilterPersonId = null;   // the queue filter is per-visit to the Unlabeled scope
@@ -205,6 +206,7 @@ function updateGridNavVisibility() {
   document.getElementById("grid-nav-hierarchy").style.display = showUnlabeled ? "" : "none";
   document.getElementById("grid-nav-selection").style.display = showSelection ? "" : "none";
   if (showSelection) paintSelectionCount();
+  renderPagingBanner();   // hides itself outside the flat face grids
   document.getElementById("grid-nav-sort").style.display = showSort ? "" : "none";
   document.getElementById("grid-nav").style.display =
     (showPerson || showCrowds || showUnlabeled || showSelection || showSort) ? "" : "none";

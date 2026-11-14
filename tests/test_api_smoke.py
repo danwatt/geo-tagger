@@ -88,7 +88,8 @@ def test_faces_and_geocode_status(client):
 
     res = client.get("/api/faces")  # scope=unlabeled default
     assert res.status_code == 200
-    assert res.json() == {"faces": [], "total": 0, "returned": 0}
+    assert res.json() == {"faces": [], "total": 0, "returned": 0,
+                          "offset": 0, "next_offset": None}
 
     res = client.get("/api/geocode/status")
     assert res.status_code == 200

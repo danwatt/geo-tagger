@@ -490,7 +490,7 @@ beside "✎" in the People list (`people.js:597-615`). An Undo toast pattern wou
 with no indication (`people.js:696-714`, `app.js:1315-1319`). The first-load status on People is overwritten
 (`people.js:118-120`).
 
-**U5 — `FACE_LIMIT` truncation is nearly invisible** [traced] — `people.js:702,746,783-784`. A person with
+**U5 — `FACE_LIMIT` truncation is nearly invisible** [traced] — ✅ **DONE** (`/api/faces` `offset`/`next_offset` with an id tiebreaker on every ordering; sticky "Showing N of M" banner with Load more / Load all; reloads keep the loaded count; bulk actions say they cover loaded faces only. "Only suggested" total can undercount past `FACE_SUGGEST_SCAN_CAP`) — `people.js:702,746,783-784`. A person with
 more than 5000 faces silently lacks the lowest-scoring ones, with no way to reach them. Add a persistent
 banner with "Load more".
 

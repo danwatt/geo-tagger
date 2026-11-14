@@ -2777,7 +2777,7 @@ def _photo_ids_in_window(start_ts: int | None, end_ts: int | None) -> list[int]:
 def list_faces(scope: str = "unlabeled", person_id: int | None = None,
                limit: int = 500, min_det_score: float | None = None,
                start_ts: int | None = None,
-               end_ts: int | None = None) -> list[sqlite3.Row]:
+               end_ts: int | None = None, offset: int = 0) -> list[sqlite3.Row]:
     """List faces across the whole library for the people UI.
 
     scope: 'unlabeled' (person_id IS NULL), 'person' (a specific person),
@@ -2802,26 +2802,37 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
     below), since a plain ``photo_id IN (...)`` still lets SQLite keep scanning
     det_score order and Bloom-filter-test each row, which still means reading
     every unlabeled row (embedding blob and all) to get its photo_id.
+
+    ``offset`` pages through the same ordering (the People grid's "Load more").
+    Every ORDER BY ends in ``f.id DESC`` so ties (det_score is often identical
+    across a batch; action timestamps are shared by a whole batch) break the same
+    way on every call — without it, page 2 could repeat or skip rows of page 1.
+    The tiebreaker is free on the index-ordered paths: rowid is every index's
+    implicit last column, so idx_faces_queue / idx_faces_assigned_at still
+    deliver (key, rowid) order without a sort. Offset rather than keyset because
+    the ignored/come_back orderings are NULLS LAST composites and the suggested
+    scopes rank in Python (api/faces.py), so one offset contract covers every
+    scope; skipping a few thousand index entries is cheap at People-page sizes.
     """
     clause = ""
     params: list = []
     # 'recent', 'ignored', and 'come_back' are ordered by action time, newest
-    # first; the rest by detection score.
-    order_by = "f.det_score DESC"
+    # first; the rest by detection score. f.id breaks ties (see docstring).
+    order_by = "f.det_score DESC, f.id DESC"
     if scope == "unlabeled":
         clause = "WHERE f.person_id IS NULL AND f.ignored = 0 AND f.come_back = 0"
     elif scope == "ignored":
         clause = "WHERE f.ignored = 1"
-        order_by = "f.ignored_at DESC NULLS LAST, f.det_score DESC"
+        order_by = "f.ignored_at DESC NULLS LAST, f.det_score DESC, f.id DESC"
     elif scope == "come_back":
         clause = "WHERE f.come_back = 1"
-        order_by = "f.come_back_at DESC NULLS LAST, f.det_score DESC"
+        order_by = "f.come_back_at DESC NULLS LAST, f.det_score DESC, f.id DESC"
     elif scope == "person" and person_id is not None:
         clause = "WHERE f.person_id = ?"
         params.append(person_id)
     elif scope == "recent":
         clause = "WHERE f.assigned_at IS NOT NULL AND f.person_id IS NOT NULL"
-        order_by = "f.assigned_at DESC"
+        order_by = "f.assigned_at DESC, f.id DESC"
     if min_det_score is not None:
         clause += (" AND " if clause else "WHERE ") + "f.det_score >= ?"
         params.append(min_det_score)
@@ -2843,7 +2854,7 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
             # real (but cheap, since it's over just the matches) sort after.
             # EXPLAIN QUERY PLAN confirms the switch; measured ~500ms -> <1ms on
             # a sparse window, ~50ms on a window with a full page of matches.
-            order_by = "+f.det_score DESC"
+            order_by = "+f.det_score DESC, f.id DESC"
     # Only the unlabeled scope's caller decodes embeddings (to build/refresh the
     # suggestion matrix) — every other scope just renders face_item dicts. Skip
     # the face_embeddings join there so those scans (some up to LIMIT 200_000,
@@ -2863,8 +2874,8 @@ def list_faces(scope: str = "unlabeled", person_id: int | None = None,
             JOIN photos ph ON ph.id = f.photo_id
             {clause}
             ORDER BY {order_by}
-            LIMIT ?""",
-        params + [limit],
+            LIMIT ? OFFSET ?""",
+        params + [limit, offset],
     ).fetchall()
 
 

@@ -163,6 +163,25 @@
 }
 #grid-nav-selection.empty #selection-count { color: #6b7684; font-weight: 400; }
 #grid-nav-selection button:disabled { opacity: .4; cursor: default; }
+/* Paging banner (U5): its own full-width row at the bottom of the sticky nav, in
+ * the warning tone, so a truncated scope is impossible to miss while scrolling. */
+#grid-paging {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+}
+#grid-paging[hidden],
+#grid-paging button[hidden] { display: none; }
+#grid-paging-text { flex: 1; min-width: 200px; }
+#grid-paging button:disabled { opacity: .6; cursor: default; }
 /* Icon-only selection actions, matching the detail-pane and group-header icon
  * buttons (× unassign · ✓ accept suggestions · 🚫 ignore). */
 #grid-nav-selection button.icon-btn { padding: 2px 8px; font-size: 14px; line-height: 1.2; }

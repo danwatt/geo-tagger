@@ -224,11 +224,17 @@ async def api_list_faces(
     scope: str = Query("unlabeled", pattern="^(unlabeled|person|ignored|come_back|suggested|recent|all)$"),
     person_id: int | None = Query(None),
     limit: int = Query(500, ge=1, le=20000),
+    offset: int = Query(0, ge=0),
     suggested_only: bool = Query(False),
     start_ts: int | None = Query(None),
     end_ts: int | None = Query(None),
 ):
-    """List faces. scope=unlabeled attaches a recognition suggestion to each face;
+    """List faces, one page at a time: ``offset``/``limit`` slice a stable
+    ordering (every scope's sort ends in a face-id tiebreaker), and the response's
+    ``total`` / ``next_offset`` (null on the last page) tell the People grid how
+    much is left to "Load more".
+
+    scope=unlabeled attaches a recognition suggestion to each face;
     scope=suggested returns only unlabeled faces whose *best* guess is `person_id`,
     ranked by confidence — for quickly approving one person's guesses in bulk.
     suggested_only (scope=unlabeled) drops faces with no guess, scanning up to the
@@ -248,16 +254,17 @@ async def api_list_faces(
         names = serializers.person_name_map()
         scored = [(r, m) for r, m in zip(rows, matches)
                   if m and _in_window(r["photo_datetime"], start_ts, end_ts)]
-        scored.sort(key=lambda rm: rm[1][1], reverse=True)  # most confident first
+        # Most confident first; face id breaks ties so pages never overlap.
+        scored.sort(key=lambda rm: (-rm[1][1], rm[0]["id"]))
         total = len(scored)
         out = []
-        for r, (pid, score) in scored[:limit]:
+        for r, (pid, score) in scored[offset:offset + limit]:
             item = serializers.face_item(r)
             item["suggestion"] = {"person_id": pid, "person_name": names.get(pid),
                                   "score": round(score, 4)}
             item["negatives"] = sorted(neg_map.get(r["id"], ()))
             out.append(item)
-        return {"faces": out, "total": total, "returned": len(out)}
+        return _face_page(out, total, offset)
 
     if scope == "suggested":
         if not person_id:
@@ -285,7 +292,7 @@ async def api_list_faces(
             _t3 = time.perf_counter()
         else:
             _t2 = _t3 = time.perf_counter()
-        scored.sort(key=lambda t: t[1], reverse=True)
+        scored.sort(key=lambda t: (-t[1], t[0]["id"]))   # id: stable page boundaries
         logger.info(
             "scope=suggested person_id=%d gallery=%d unlabeled=%d candidates=%d "
             "build_gallery=%.3fs get_matrix=%.3fs suggest=%.3fs total=%.3fs",
@@ -293,7 +300,7 @@ async def api_list_faces(
             _t1 - _t0, _t2 - _t1, _t3 - _t2, _t3 - _t0,
         )
         out = []
-        for r, score, alts in scored[:limit]:
+        for r, score, alts in scored[offset:offset + limit]:
             item = serializers.face_item(r)
             item["suggestion"] = {"person_id": person_id, "person_name": name,
                                   "score": round(score, 4)}
@@ -303,12 +310,12 @@ async def api_list_faces(
             ]
             item["negatives"] = sorted(neg_map.get(r["id"], ()))
             out.append(item)
-        return {"faces": out, "total": len(scored), "returned": len(out)}
+        return _face_page(out, len(scored), offset)
 
     # The Focus applies to the unlabeled queue only; other scopes ignore it.
     w_start, w_end = (start_ts, end_ts) if scope == "unlabeled" else (None, None)
     rows = index.list_faces(scope=scope, person_id=person_id, limit=limit,
-                            start_ts=w_start, end_ts=w_end)
+                            start_ts=w_start, end_ts=w_end, offset=offset)
     gallery = faces.build_gallery() if scope == "unlabeled" else None
     matches = (faces.suggest_persons_batch(rows, gallery)
                if gallery is not None and len(gallery) > 0 else [None] * len(rows))
@@ -322,12 +329,17 @@ async def api_list_faces(
                                   "score": round(score, 4)}
         item["negatives"] = sorted(neg_map.get(r["id"], ()))
         out.append(item)
-    return {
-        "faces": out,
-        "total": index.count_faces(scope=scope, person_id=person_id,
-                                   start_ts=w_start, end_ts=w_end),
-        "returned": len(out),
-    }
+    return _face_page(out, index.count_faces(scope=scope, person_id=person_id,
+                                             start_ts=w_start, end_ts=w_end), offset)
+
+
+def _face_page(out: list[dict], total: int, offset: int) -> dict:
+    """The /api/faces response envelope. ``next_offset`` is where the next page
+    starts, or None once this page reaches ``total`` — the People grid shows its
+    "Load more" banner exactly while it's non-null (U5)."""
+    end = offset + len(out)
+    return {"faces": out, "total": total, "returned": len(out), "offset": offset,
+            "next_offset": end if out and end < total else None}
 
 
 @router.get("/api/faces/{face_id}/crop")

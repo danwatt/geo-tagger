@@ -63,6 +63,8 @@ function bindToolbar() {
   document.getElementById("focus-year-select").addEventListener("change", onFocusChange);
 
   document.getElementById("deselect-all-btn").addEventListener("click", deselectAll);
+  document.getElementById("grid-paging-more-btn").addEventListener("click", loadMoreFaces);
+  document.getElementById("grid-paging-all-btn").addEventListener("click", loadAllFaces);
   document.getElementById("suggested-only-chk").addEventListener("change", (e) => {
     suggestedOnly = e.target.checked;
     if (scope === "unlabeled") loadFaces();

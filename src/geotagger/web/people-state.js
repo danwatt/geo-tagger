@@ -83,7 +83,20 @@ const FOCUS_LS_KEY = "geotagger.people.focusYear";
 // setting (see loadLiveSettings, which pulls both in one /api/settings
 // call); this default is only used if that fetch hasn't resolved yet.
 let FACE_LIMIT = 5000;
+// Re-sized after every load to whatever the grid now holds (at least one page),
+// so "Load more" past FACE_LIMIT keeps every shown crop cached too.
 sizeCropImgCache(FACE_LIMIT);   // the grid reuses crop <img>s; keep them all cached
+// /api/faces caps one request at this many faces (its `limit` le=). "Load all" and
+// a reload that has to restore several pages fetch in chunks of this size.
+const FACE_REQUEST_MAX = 20000;
+// Paging for the flat face grids (U5). A scope arrives FACE_LIMIT faces at a time
+// and the rest are reachable through the "Load more" banner (renderPagingBanner).
+// `key` is the request URL minus offset/limit — the view these counts belong to;
+// `loaded` is how many server rows have been consumed (the next page's offset when
+// `nextOffset` isn't null); `total` the server's count for the whole view; `busy`
+// greys the banner's buttons while any grid load is in flight. Reset on every
+// scope entry (selectScope), like preselectMemory below.
+let facePaging = { key: null, total: 0, loaded: 0, nextOffset: null, busy: false };
 // Auto-select bar for the Unlabeled queue: a suggestion only exists at all above
 // FACE_MATCH_THRESHOLD, so this higher cutoff pre-selects just the confident
 // guesses and leaves weaker ones for manual triage. Loaded from the server's
@@ -114,6 +127,27 @@ function findFace(id) {
     if (s) return s;
   }
   return null;
+}
+
+// Every face loaded for the current flat scope. The Unlabeled queue keeps its
+// master list in `unlabeledAll` (`faces` is the suggested-person filter's view of
+// it); every other scope's `faces` is the whole loaded set.
+function loadedFaces() {
+  return scope === "unlabeled" ? unlabeledAll : faces;
+}
+
+// True while the current view has faces the server didn't send yet.
+function facesTruncated() {
+  return facePaging.nextOffset != null;
+}
+
+// `n` loaded faces left the server's view locally (no refetch): the next page
+// begins `n` rows earlier and the view's total shrinks to match.
+function shiftFacePagingBack(n) {
+  facePaging.loaded = Math.max(0, facePaging.loaded - n);
+  facePaging.total = Math.max(0, facePaging.total - n);
+  if (facePaging.nextOffset != null) facePaging.nextOffset = facePaging.loaded;
+  renderPagingBanner();
 }
 
 // What the main grid should still show: everything without a staged decision.

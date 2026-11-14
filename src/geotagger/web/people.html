@@ -113,6 +113,13 @@
         <button id="come-back-btn" class="icon-btn" title="Move selected faces to the Come Back queue — people you know or suspect but aren't ready to assign yet" aria-label="Come back later">🕒</button>
         <button id="nuke-btn" class="danger icon-btn" title="Nuclear option: permanently delete ALL faces (detected, assigned, and ignored) for the photo(s) behind the selected face(s), and wipe their cached thumbnails/previews so detection starts completely from scratch" aria-label="Nuclear option">🧨</button>
       </div>
+      <!-- Paging banner (U5): shown while the current scope has more faces than
+           were loaded. Spans the nav's full width so it stays pinned with it. -->
+      <div id="grid-paging" hidden>
+        <span id="grid-paging-text"></span>
+        <button id="grid-paging-more-btn" class="primary">Load more</button>
+        <button id="grid-paging-all-btn" hidden>Load all</button>
+      </div>
     </div>
     <div id="grid"></div>
 

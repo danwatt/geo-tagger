@@ -700,3 +700,73 @@ def test_single_assign_requires_exactly_one_intent(client):
     r = client.post(f"/api/faces/{fid}/assign", json={"clear": True})
     assert r.status_code == 200 and r.json() == {"face_id": fid, "person_id": None}
     assert _face_row(db, fid)["person_id"] is None
+
+
+# ── Paging (U5: the People grid's "Load more") ──
+
+def _page_ids(client, url: str, page: int) -> tuple[list[int], int]:
+    """Walk ``url`` page by page via next_offset; returns (ids in order, total)."""
+    ids: list[int] = []
+    offset, total = 0, None
+    while offset is not None:
+        r = client.get(f"{url}&limit={page}&offset={offset}").json()
+        assert r["offset"] == offset and r["returned"] == len(r["faces"])
+        total = r["total"]
+        ids += [f["id"] for f in r["faces"]]
+        offset = r["next_offset"]
+    return ids, total
+
+
+def test_faces_paging_is_stable_across_tied_scores(client):
+    # Every face shares det_score 0.9, so only the id tiebreaker keeps page
+    # boundaries stable — without it pages could overlap or skip rows.
+    db = index.get_db()
+    rng = np.random.default_rng(10)
+    seeded = ff.seed_unlabeled(db, ff.unit_vectors(rng, 7))
+    one_shot = [f["id"] for f in client.get("/api/faces?scope=unlabeled&limit=100").json()["faces"]]
+    paged, total = _page_ids(client, "/api/faces?scope=unlabeled", 3)
+    assert total == 7
+    assert paged == one_shot and sorted(paged) == sorted(seeded)
+
+
+def test_faces_paging_envelope(client):
+    db = index.get_db()
+    rng = np.random.default_rng(11)
+    ff.seed_unlabeled(db, ff.unit_vectors(rng, 5))
+    first = client.get("/api/faces?scope=unlabeled&limit=2").json()
+    assert (first["total"], first["returned"], first["offset"], first["next_offset"]) == (5, 2, 0, 2)
+    last = client.get("/api/faces?scope=unlabeled&limit=2&offset=4").json()
+    assert (last["returned"], last["next_offset"]) == (1, None)
+    past = client.get("/api/faces?scope=unlabeled&limit=2&offset=50").json()
+    assert (past["faces"], past["next_offset"], past["total"]) == ([], None, 5)
+    assert client.get("/api/faces?scope=unlabeled&offset=-1").status_code == 422
+
+
+def test_faces_paging_person_recent_and_ignored(client):
+    db = index.get_db()
+    rng = np.random.default_rng(12)
+    pid, labeled = ff.seed_person(db, "Carol", ff.unit_vectors(rng, 5))
+    paged, total = _page_ids(client, f"/api/faces?scope=person&person_id={pid}", 2)
+    assert total == 5 and sorted(paged) == sorted(labeled) and len(set(paged)) == 5
+    # seed_person stamps one shared assigned_at — a whole tie for "recent".
+    paged, total = _page_ids(client, "/api/faces?scope=recent", 2)
+    assert total == 5 and sorted(paged) == sorted(labeled)
+    # One ignore batch shares ignored_at too.
+    ids = ff.seed_unlabeled(db, ff.unit_vectors(rng, 4))
+    client.post("/api/faces/ignore", json={"face_ids": ids, "ignored": True})
+    paged, total = _page_ids(client, "/api/faces?scope=ignored", 3)
+    assert total == 4 and sorted(paged) == sorted(ids)
+
+
+def test_faces_paging_suggested_scopes(client):
+    db = index.get_db()
+    rng = np.random.default_rng(13)
+    c = ff.unit_vectors(rng, 1)[0]
+    alice_id, _ = ff.seed_person(db, "Alice", ff.cluster_around(rng, c, 3, intra_cos=0.9))
+    ff.seed_unlabeled(db, ff.cluster_around(rng, c, 5, intra_cos=0.9))
+    for url in (f"/api/faces?scope=suggested&person_id={alice_id}",
+                "/api/faces?scope=unlabeled&suggested_only=true"):
+        one_shot = client.get(f"{url}&limit=100").json()
+        paged, total = _page_ids(client, url, 2)
+        assert total == one_shot["total"] >= 2
+        assert paged == [f["id"] for f in one_shot["faces"]]
