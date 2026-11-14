@@ -1072,14 +1072,16 @@ def _after_commit(ctx: _Ctx):
         config.apply_setting_override(key, value)
     if ctx.faces_changed or ctx.counts["persons"]["applied"]:
         index.bump_faces_generation()
-    from geotagger.services import hotspots_service, work_queue_service
+    from geotagger.services import hotspots_service, settings_service, work_queue_service
     if ctx.geotags_changed:
         index.bump_geotag_generation()
         hotspots_service.invalidate()
-    # The work queue is built from untagged/not-ignored photos and grouped by
-    # WORKQUEUE_* settings, so either kind of change makes a cached build wrong.
-    if ctx.geotags_changed or ctx.applied_settings:
+        # The work queue is built from untagged/not-ignored photos.
         work_queue_service.invalidate()
+    # Restored settings make stale whatever caches bake them in (work queue
+    # grouping, face gallery/suggestion scores) — the same map the settings
+    # routes use, applied after the overrides above.
+    settings_service.invalidate_for(ctx.applied_settings)
 
 
 def _report(ctx: _Ctx, b: dict, photo_stats: dict, dry_run: bool, overwrite: bool) -> dict:

@@ -309,6 +309,16 @@ def invalidate() -> None:
         _cache.clear()
 
 
+# Settings baked into a cached build (see settings_service.invalidate_for). Session
+# gap and folder threshold shape the batches but aren't in the cache key; min size
+# is, but clearing on it too keeps entries for an abandoned size from lingering.
+SETTING_INVALIDATORS = {
+    "WORKQUEUE_SESSION_GAP": invalidate,
+    "WORKQUEUE_FOLDER_MIN_FRAC": invalidate,
+    "WORKQUEUE_MIN_SIZE": invalidate,
+}
+
+
 # ── Reads ──
 
 def _public(batch: dict) -> dict:

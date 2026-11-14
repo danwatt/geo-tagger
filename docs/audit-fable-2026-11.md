@@ -206,7 +206,7 @@ with the current generation (`faces.py:605`), so the rebuild never happens until
 *Fix:* re-tag only when `old_gen == faces_generation() - 1`; have `replace_faces` invalidate the unlabeled
 cache when it inserts faces.
 
-**F3 — Medium — Face settings changes do not invalidate face caches** [traced]
+**F3 — Medium — Face settings changes do not invalidate face caches** [traced] — ✅ **DONE** (`SETTING_INVALIDATORS` beside the caches in `faces.py` and `work_queue_service.py`, gathered by `services/settings_service.invalidate_for`; used by PATCH, reset and backup restore; gallery/scores epochs, no generation bump; an open People page keeps frontend-only knobs until reload)
 `api/status.py:52-58`, `faces.py:407-418`. `_invalidate_for` only handles `WORKQUEUE_*`. `FACE_MATCH_THRESHOLD`
 and related knobs are baked into three caches, and with F2 they survive indefinitely.
 

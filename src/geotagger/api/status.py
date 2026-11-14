@@ -96,12 +96,12 @@ async def api_get_settings():
 
 
 def _invalidate_for(keys) -> None:
-    """Drop caches whose *contents* a changed setting invalidates. The work queue's
-    grouping and ranking are computed from these knobs, so a cached build made
-    under the old ones is wrong, not merely stale."""
-    if any(k.startswith("WORKQUEUE_") for k in keys):
-        from geotagger.services import work_queue_service
-        work_queue_service.invalidate()
+    """Drop caches whose *contents* a changed setting invalidates (the work queue's
+    batches, the face gallery/suggestion caches, ...) — a cached build made under
+    the old values is wrong, not merely stale. The setting→cache map lives with
+    the caches; see settings_service."""
+    from geotagger.services import settings_service
+    settings_service.invalidate_for(keys)
 
 
 @router.patch("/api/settings")

@@ -419,7 +419,16 @@ def _embeddings_matrix(rows) -> np.ndarray:
 # the unlabeled scan are cached and keyed on index.faces_generation() — any
 # assign/ignore/birth-date change bumps it and the next call rebuilds. A face
 # scan's new detections only invalidate the unlabeled side (_unlabeled_epoch).
-_gallery_cache: tuple[int, "Gallery"] | None = None
+# Settings the caches bake in have their own epochs (see SETTING_INVALIDATORS).
+#
+# ((gen, _gallery_epoch), gallery). The epoch is bumped by
+# invalidate_gallery_cache when FACE_MIN_GALLERY_BBOX_AREA changes: the cached
+# gallery has already dropped the small-bbox faces, so a new floor needs a
+# rebuild — but the faces table didn't change, so bumping the generation (which
+# also throws away the exhaustive unlabeled read and the negatives map) would
+# be paying for far more than the setting touched.
+_gallery_cache: tuple[tuple[int, int], "Gallery"] | None = None
+_gallery_epoch = 0
 # (gen, epoch, scan_cap, rows, unknowns, times). `gen` is faces_generation();
 # `epoch` is _unlabeled_epoch, bumped by invalidate_unlabeled_cache for changes
 # that add unlabeled faces but must not rebuild the labeled gallery (a face scan
@@ -428,13 +437,18 @@ _gallery_cache: tuple[int, "Gallery"] | None = None
 _unlabeled_cache: tuple[int, int, int, list, np.ndarray, np.ndarray] | None = None
 _unlabeled_epoch = 0
 # Parallel to _unlabeled_cache rows: cached suggest_persons_batch output, as
-# ((gen, epoch, scan_cap) of the rows it was computed for, scores). Pruned in
-# drop_from_unlabeled_cache so the full matmul only runs when the rows actually
-# rebuild, not on every accept in the suggested-only review loop.
-_suggested_scores_cache: tuple[tuple[int, int, int], list] | None = None
-# Serializes read-modify-write of the two caches above (the in-place prune in
-# drop_from_unlabeled_cache, an invalidation, a rebuild's store) between request
-# threads and a face scan's writes. Never held across the DB read or the matmul:
+# ((gen, epoch, scan_cap) of the rows it was computed for + _scores_epoch,
+# scores). Pruned in drop_from_unlabeled_cache so the full matmul only runs when
+# the rows actually rebuild, not on every accept in the suggested-only review
+# loop. The scores are *thresholded and age-adjusted* (a None below
+# FACE_MATCH_THRESHOLD, penalties already subtracted), so _scores_epoch is
+# bumped by invalidate_suggestion_scores when one of those knobs changes — the
+# rows and gallery underneath are still valid and stay cached.
+_suggested_scores_cache: tuple[tuple[int, int, int, int], list] | None = None
+_scores_epoch = 0
+# Serializes read-modify-write of the caches above and their epochs (the
+# in-place prune in drop_from_unlabeled_cache, an invalidation, a rebuild's
+# store) between request threads, a face scan's writes and a settings change. Never held across the DB read or the matmul:
 # readers snapshot the key *before* reading, so a rebuild that raced a write is
 # stored under the older key and simply misses next time.
 _unlabeled_lock = threading.Lock()
@@ -491,9 +505,12 @@ def build_gallery() -> Gallery:
     what feeds the gallery matmul.
     """
     global _gallery_cache
-    gen = index.faces_generation()
-    if _gallery_cache is not None and _gallery_cache[0] == gen:
-        return _gallery_cache[1]
+    # Key snapshotted before reading the DB *and* the bbox floor, so a build
+    # that raced a write or a settings change is filed under the older key.
+    key = (index.faces_generation(), _gallery_epoch)
+    cached = _gallery_cache
+    if cached is not None and cached[0] == key:
+        return cached[1]
 
     labeled = index.get_labeled_faces()
     min_area = config.FACE_MIN_GALLERY_BBOX_AREA
@@ -512,7 +529,8 @@ def build_gallery() -> Gallery:
         not_befores = np.array([_birth_ts(r["not_before"]) for r in labeled], dtype=np.float64)
         not_afters = np.array([_birth_ts(r["not_after"]) for r in labeled], dtype=np.float64)
         gallery = Gallery(embs, pids, ftimes, births, not_befores, not_afters)
-    _gallery_cache = (gen, gallery)
+    with _unlabeled_lock:
+        _gallery_cache = (key, gallery)
     return gallery
 
 
@@ -573,6 +591,53 @@ def invalidate_unlabeled_cache():
         _suggested_scores_cache = None
 
 
+def invalidate_suggestion_scores():
+    """Force the next get_suggested_scores to redo the matmul, keeping the
+    unlabeled rows and the gallery. For settings that only change how scores
+    are adjusted or thresholded. Epoch-bumped for the same race reason as
+    invalidate_unlabeled_cache: a matmul already running under the old knobs
+    files its result under the old epoch."""
+    global _suggested_scores_cache, _scores_epoch
+    with _unlabeled_lock:
+        _scores_epoch += 1
+        _suggested_scores_cache = None
+
+
+def invalidate_gallery_cache():
+    """Force the next build_gallery to re-read the labeled faces, WITHOUT
+    bumping the faces generation. The cached scores were computed against the
+    old gallery, so they go too."""
+    global _gallery_cache, _gallery_epoch
+    with _unlabeled_lock:
+        _gallery_epoch += 1
+        _gallery_cache = None
+    invalidate_suggestion_scores()
+
+
+# ── Settings → cache dependencies ──
+# Which cache bakes in which runtime-tunable setting (config.SETTINGS_SPEC), so a
+# settings change drops exactly what it made wrong — see
+# settings_service.invalidate_for, the one place that dispatches these. Face
+# settings NOT listed are read fresh on every call (suggest_for_person's gate /
+# ambiguity knobs, clustering and crowd params, the People page's frontend
+# knobs) or key their cache already (FACE_SUGGEST_SCAN_CAP is part of the
+# unlabeled key); settings_service.CACHE_FREE_SETTINGS lists them with reasons.
+SETTING_INVALIDATORS = {
+    # build_gallery drops small-bbox labeled faces before caching.
+    "FACE_MIN_GALLERY_BBOX_AREA": invalidate_gallery_cache,
+    # _unlabeled_entry drops low-det-score faces before caching (and the scores
+    # computed over those rows go with them).
+    "FACE_SUGGEST_MIN_DET_SCORE": invalidate_unlabeled_cache,
+    # Baked into the cached suggest_persons_batch output: the threshold decides
+    # which rows got a None, and the birth/age knobs were already applied to the
+    # scores. The gallery stores raw dates, not adjusted scores, so it stays.
+    "FACE_MATCH_THRESHOLD": invalidate_suggestion_scores,
+    "FACE_BIRTH_TOLERANCE_YEARS": invalidate_suggestion_scores,
+    "FACE_AGE_PENALTY_PER_YEAR": invalidate_suggestion_scores,
+    "FACE_AGE_PENALTY_CAP_YEARS": invalidate_suggestion_scores,
+}
+
+
 def get_suggested_scores(scan_cap: int | None = None,
                          ) -> tuple[list, list]:
     """Cached (rows, match_scores) for the suggested-only review endpoint.
@@ -585,8 +650,11 @@ def get_suggested_scores(scan_cap: int | None = None,
     ``config.FACE_SUGGEST_SCAN_CAP`` setting.
     """
     global _suggested_scores_cache
+    # Scores epoch snapshotted before the rows, the gallery and the knobs are
+    # read, so a settings change landing mid-matmul leaves this under the old key.
+    scores_epoch = _scores_epoch
     entry = _unlabeled_entry(_cfg(scan_cap, "FACE_SUGGEST_SCAN_CAP"))
-    key, rows, unknowns, times = entry[:3], entry[3], entry[4], entry[5]
+    key, rows, unknowns, times = entry[:3] + (scores_epoch,), entry[3], entry[4], entry[5]
     cached = _suggested_scores_cache
     if cached is not None and cached[0] == key:
         return rows, cached[1]
@@ -670,12 +738,13 @@ def drop_from_unlabeled_cache(face_ids, gen: int | None = None):
         # Carry the scores cache along (pruned in parallel) so the next
         # suggested-only call doesn't redo the full matmul just because some
         # faces were labeled. Only if it was computed for exactly these rows —
-        # otherwise its indices don't line up with them.
-        if scores_cached is not None and scores_cached[0] == old_key:
+        # otherwise its indices don't line up with them. Its scores epoch is
+        # carried unchanged: pruning doesn't make stale-knob scores current.
+        if scores_cached is not None and scores_cached[0][:3] == old_key:
             scores = scores_cached[1]
             if len(keep) != len(scores):
                 scores = [scores[i] for i in keep]
-            _suggested_scores_cache = ((new_gen, epoch, scan_cap), scores)
+            _suggested_scores_cache = ((new_gen, epoch, scan_cap, scores_cached[0][3]), scores)
         else:
             _suggested_scores_cache = None
         _unlabeled_cache = (new_gen, epoch, scan_cap, rows, unknowns, times)
