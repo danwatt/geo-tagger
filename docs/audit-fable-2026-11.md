@@ -191,7 +191,7 @@ unsigned raw tag.
 ## Faces and semantic search
 
 <a id="f1"></a>
-**F1 — High — A systemic failure marks the whole library as processed** [seen, faces path]
+**F1 — High — A systemic failure marks the whole library as processed** [seen, faces path] — ✅ **DONE** (model loaded once, model/systemic errors = 503 and nothing marked; per-file errors in `photos.faces_scan_error` / null embedding; 10-in-a-row streak aborts; "Retry failed" on Home and Data; old damaged face rows only via opt-in `scan_faces.py --rescan-empty`)
 `services/faces_service.py:27-34`, `services/semantic_service.py:46-49`. Any exception, including the model
 failing to load, runs `index.replace_faces(pid, [])` or stores a null embedding. The client loop then walks
 every photo, and neither queue ever retries those rows.

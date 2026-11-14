@@ -361,6 +361,14 @@ ALLOWED_HOSTS = [h.strip().lower() for h in os.environ.get("GEOTAGGER_ALLOWED_HO
 # needs. Over the cap the route answers 413 instead of filling the disk. 0 = no limit.
 ZIP_MAX_BYTES = int(os.environ.get("GEOTAGGER_ZIP_MAX_BYTES", str(4 * 1024 ** 3)))
 
+# Face-detection / semantic-indexing batches: this many unreadable files IN A ROW abort
+# the batch instead of being marked failed (audit F1). Per-file failures are normally
+# recorded so the queue moves on, but a long unbroken run of them usually means the
+# cause is not the files (an unmounted drive, a broken decoder) and marking them would
+# quietly write off the library. The client can resend with allow_failures to accept
+# them when they really are bad files. 0 = no guard.
+SCAN_FAILURE_STREAK_LIMIT = int(os.environ.get("GEOTAGGER_SCAN_FAILURE_STREAK_LIMIT", "10"))
+
 # ── Face detection / recognition ──
 # InsightFace model pack ("buffalo_l" = SCRFD detector + ArcFace r50 embeddings).
 FACE_MODEL_NAME = os.environ.get("GEOTAGGER_FACE_MODEL", "buffalo_l")

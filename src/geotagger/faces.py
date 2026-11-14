@@ -108,6 +108,13 @@ def model_status() -> dict:
     return {"available": present, "model_dir": str(_model_dir), "name": FACE_MODEL_NAME}
 
 
+def load_model():
+    """Load the detection pipeline now (no-op once loaded). The batch scan calls this
+    before its loop so a missing/corrupt model or a broken onnxruntime fails the
+    whole batch up front, instead of failing once per photo (audit F1)."""
+    return _get_app()
+
+
 def ensure_model_downloaded():
     """Force the lazy model load, triggering InsightFace's one-time download if
     the pack isn't already on disk. Used by the Data Management page's pre-fetch
@@ -154,11 +161,18 @@ def detect_faces(path: Path, mtime: float, size: int,
     (embedded/normal preview) — persisted so low-res RAW scans can be re-run later.
     """
     import cv2
+    from geotagger import scan_failures
 
-    preview, is_full = thumbnails.get_detection_preview(path, mtime, size, orientation)
-    arr = cv2.imdecode(np.frombuffer(preview, np.uint8), cv2.IMREAD_COLOR)  # BGR
+    # Only the read/decode of this one file can raise FileUnreadable (see
+    # scan_failures). The model load and inference below raise as-is, so the batch
+    # loop aborts on them instead of writing the photo off.
+    try:
+        preview, is_full = thumbnails.get_detection_preview(path, mtime, size, orientation)
+        arr = cv2.imdecode(np.frombuffer(preview, np.uint8), cv2.IMREAD_COLOR)  # BGR
+    except Exception as e:
+        scan_failures.raise_classified(e, path)
     if arr is None:
-        raise RuntimeError(f"Could not decode preview for {path}")
+        raise scan_failures.FileUnreadable(f"Could not decode preview for {path}")
     h, w = arr.shape[:2]
     det_dimension = max(h, w) if is_full else None
 

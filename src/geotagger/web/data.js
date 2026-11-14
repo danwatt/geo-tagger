@@ -433,6 +433,9 @@ async function renderSemantic(m) {
     indexBtn.textContent = idx && idx.remaining > 0
       ? `Index ${idx.remaining.toLocaleString()} photos` : "Index photos";
   }
+  // Unreadable photos sit out of the queue until re-queued here.
+  document.getElementById("semantic-retry-btn").style.display =
+    idx && idx.failed && m.available && !semanticIndexing ? "" : "none";
 }
 
 async function pollSemanticModel() {
@@ -490,19 +493,35 @@ async function runSemanticIndex() {
   errorEl.textContent = "";
   btn.disabled = true;
   stopBtn.style.display = "";
+  document.getElementById("semantic-retry-btn").style.display = "none";
   let failed = 0;
   try {
     let remaining = Infinity;
+    let allowFailures = false;
     while (remaining > 0 && !semanticStopRequested) {
       const t0 = performance.now();
       const res = await fetch("/api/semantic/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ limit: 32 }),
+        body: JSON.stringify({ limit: 32, allow_failures: allowFailures }),
       });
+      allowFailures = false;   // the override covers one batch only
       if (!res.ok) {
+        // 409 detail is a string (model not downloaded). 503 detail is {code,
+        // message, errors}: the batch aborted with nothing marked, so stop rather
+        // than walk the library — or, for the consecutive-failure guard, ask.
         const body = await res.json().catch(() => null);
-        throw new Error(body?.detail || `HTTP ${res.status}`);
+        const d = body?.detail;
+        if (d && typeof d === "object") {
+          if (d.code === "too_many_failures" &&
+              confirm(`${d.message}\n\n${(d.errors || []).slice(0, 5).join("\n")}\n\n` +
+                      "If these files really are unreadable, mark them as failed and keep indexing?")) {
+            allowFailures = true;
+            continue;
+          }
+          throw new Error(d.message);
+        }
+        throw new Error(d || `HTTP ${res.status}`);
       }
       const data = await res.json();
       remaining = data.remaining;
@@ -526,6 +545,18 @@ async function runSemanticIndex() {
 document.getElementById("semantic-download-btn").addEventListener("click", startSemanticDownload);
 document.getElementById("semantic-index-btn").addEventListener("click", runSemanticIndex);
 document.getElementById("semantic-stop-btn").addEventListener("click", () => { semanticStopRequested = true; });
+document.getElementById("semantic-retry-btn").addEventListener("click", async () => {
+  const errorEl = document.getElementById("semantic-error");
+  errorEl.textContent = "";
+  try {
+    const res = await fetch("/api/semantic/retry-failed", { method: "POST" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await res.json();
+    await runSemanticIndex();
+  } catch (e) {
+    errorEl.textContent = e.message;
+  }
+});
 // Resume watching a download started before this page was (re)opened.
 fetch("/api/data/semantic-model/download/status")
   .then((r) => (r.ok ? r.json() : null))

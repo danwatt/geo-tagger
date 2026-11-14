@@ -609,6 +609,13 @@ def _init_db_locked(root: Path | None) -> sqlite3.Connection:
     # the set to target for a higher-resolution progressive re-scan of RAWs.
     if "faces_det_dimension" not in cols:
         _db.execute("ALTER TABLE photos ADD COLUMN faces_det_dimension INTEGER")
+    # Why the last face-detection attempt could not read this photo's file (NULL =
+    # no failure). A failed photo keeps faces_scanned_at NULL, so everything keyed
+    # on "scanned" (coverage, crowds, faces-months) leaves it out instead of
+    # counting it as "scanned, no faces"; get_unscanned_photo_ids skips it so the
+    # queue moves on, and clear_face_scan_failures re-queues it (audit F1).
+    if "faces_scan_error" not in cols:
+        _db.execute("ALTER TABLE photos ADD COLUMN faces_scan_error TEXT")
     # Reverse-geocoded place names (from coordinates). geocoded_at NULL = not yet
     # looked up; a non-NULL geocoded_at with NULL names means "looked up, no match".
     if "loc_city" not in cols:
@@ -2296,11 +2303,41 @@ def get_photos_to_export() -> list[sqlite3.Row]:
 # ── Faces & persons ──
 
 def get_unscanned_photo_ids() -> list[int]:
-    """Return ids of image photos that have not yet had a face-detection pass."""
+    """Return ids of image photos that have not yet had a face-detection pass, in id
+    order (stable, so a batch that aborts is retried from the same photo). Photos
+    whose file failed to read are left out until clear_face_scan_failures."""
     rows = get_db().execute(
-        "SELECT id FROM photos WHERE media_type='image' AND faces_scanned_at IS NULL"
+        "SELECT id FROM photos WHERE media_type='image' AND faces_scanned_at IS NULL "
+        "AND faces_scan_error IS NULL ORDER BY id"
     ).fetchall()
     return [r["id"] for r in rows]
+
+
+def mark_face_scan_failures(entries: list[tuple[int, str]]) -> None:
+    """Record (photo_id, error) for photos whose file couldn't be read for face
+    detection. Touches no faces: a manual box on the photo stays, and since
+    faces_scanned_at stays NULL nothing counts the photo as scanned."""
+    if not entries:
+        return
+    with transaction() as db:
+        db.executemany("UPDATE photos SET faces_scan_error=? WHERE id=?",
+                       [((err or "error")[:500], pid) for pid, err in entries])
+
+
+def count_face_scan_failures() -> int:
+    return get_db().execute(
+        "SELECT COUNT(*) FROM photos WHERE media_type='image' AND faces_scan_error IS NOT NULL"
+    ).fetchone()[0]
+
+
+def clear_face_scan_failures() -> int:
+    """Re-queue every photo whose face scan failed; returns how many. Only failure
+    markers are cleared — those photos were never marked scanned and hold no
+    detected faces, so the rescan replace_faces runs has no tags to delete."""
+    with transaction() as db:
+        return db.execute(
+            "UPDATE photos SET faces_scan_error=NULL WHERE faces_scan_error IS NOT NULL"
+        ).rowcount
 
 
 # ── Semantic-search embeddings ──
@@ -2328,6 +2365,17 @@ def store_embeddings(rows: list[tuple[int, bytes | None]], model: str):
             "INSERT OR REPLACE INTO photo_embeddings (photo_id, model, vec, created_at) VALUES (?, ?, ?, ?)",
             [(pid, model, vec, now) for pid, vec in rows],
         )
+
+
+def clear_failed_embeddings(model: str) -> int:
+    """Drop the vec=NULL ("couldn't read this file") rows for ``model`` so
+    get_unembedded_photo_ids queues those photos again; returns how many. Also the
+    repair for libraries hit by audit F1, where a model failure stored NULL for
+    every photo: NULL only ever meant "failed", never a real result."""
+    with transaction() as db:
+        return db.execute(
+            "DELETE FROM photo_embeddings WHERE model = ? AND vec IS NULL", (model,)
+        ).rowcount
 
 
 def embedding_signature(model: str) -> tuple[int, float]:
@@ -2422,8 +2470,8 @@ def replace_faces(photo_id: int, faces: list[dict], det_dimension: int | None = 
                 "INSERT INTO face_embeddings (face_id, embedding) VALUES (?, ?)",
                 [(fid, f["embedding"]) for fid, f in zip(new_ids, faces)],
             )
-        db.execute("UPDATE photos SET faces_scanned_at=?, faces_det_dimension=? WHERE id=?",
-                   (now, det_dimension, photo_id))
+        db.execute("UPDATE photos SET faces_scanned_at=?, faces_det_dimension=?, "
+                   "faces_scan_error=NULL WHERE id=?", (now, det_dimension, photo_id))
     # Prune replaced faces from the cache (re-tags to current generation in place).
     if old_ids:
         from geotagger import faces as _faces
@@ -2453,7 +2501,8 @@ def delete_photo_faces(photo_ids: list[int]) -> int:
             db.execute("DELETE FROM face_embeddings WHERE face_id IN (SELECT value FROM json_each(?))", (fjson,))
             db.execute("DELETE FROM faces WHERE id IN (SELECT value FROM json_each(?))", (fjson,))
         db.executemany(
-            "UPDATE photos SET faces_scanned_at=NULL, faces_det_dimension=NULL WHERE id=?",
+            "UPDATE photos SET faces_scanned_at=NULL, faces_det_dimension=NULL, "
+            "faces_scan_error=NULL WHERE id=?",
             [(pid,) for pid in photo_ids],
         )
     bump_faces_generation()

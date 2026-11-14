@@ -76,6 +76,13 @@ function renderFaces(faces) {
     `${faces.labeled.toLocaleString()} of ${denom.toLocaleString()} faces labeled`;
   document.getElementById("faces-unscanned").textContent =
     `${faces.unscanned_photos.toLocaleString()} photos not yet scanned for faces`;
+  // Photos whose file couldn't be read sit out of the queue until "Retry failed".
+  const failed = faces.failed_photos || 0;
+  const failedEl = document.getElementById("faces-failed");
+  failedEl.style.display = failed ? "" : "none";
+  failedEl.textContent = failed ? `${failed.toLocaleString()} photos couldn't be read for face detection` : "";
+  document.getElementById("faces-retry-failed-btn").style.display =
+    failed && !facesScanRunning ? "" : "none";
 }
 
 function renderPeople(people) {
@@ -302,6 +309,19 @@ async function runBackfill() {
 let facesScanRunning = false;
 let facesScanStopRequested = false;
 
+// A 503 from the scan means the server aborted the batch with nothing marked (the
+// model failed, or a long run of unreadable files): detail is {code, message,
+// errors}. The loop stops on it — or, for the consecutive-failure guard
+// ("too_many_failures"), asks whether those files really are bad.
+async function scanError(res) {
+  const body = await res.json().catch(() => null);
+  const d = body?.detail;
+  if (d && typeof d === "object") {
+    return { code: d.code, message: d.message, sample: (d.errors || []).slice(0, 5).join("\n") };
+  }
+  return { code: null, message: d || `HTTP ${res.status}`, sample: "" };
+}
+
 async function runFacesScan() {
   if (facesScanRunning) return;
   facesScanRunning = true;
@@ -310,21 +330,35 @@ async function runFacesScan() {
   const stopBtn = document.getElementById("detect-faces-stop-btn");
   btn.disabled = true;
   stopBtn.style.display = "";
+  document.getElementById("faces-retry-failed-btn").style.display = "none";
+  clearError("card-faces");
+  let errorMsg = null;
   try {
     let remaining = Infinity;
+    let allowFailures = false;
     while (remaining > 0 && !facesScanStopRequested) {
       const res = await fetch("/api/faces/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ limit: 50 }),
+        body: JSON.stringify({ limit: 50, allow_failures: allowFailures }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      allowFailures = false;   // the override covers one batch, never the rest of the walk
+      if (!res.ok) {
+        const err = await scanError(res);
+        if (err.code === "too_many_failures" &&
+            confirm(`${err.message}\n\n${err.sample}\n\n` +
+                    "If these files really are unreadable, mark them as failed and keep scanning?")) {
+          allowFailures = true;
+          continue;
+        }
+        throw new Error(err.message);
+      }
       const data = await res.json();
       remaining = data.remaining;
       btn.textContent = remaining > 0 ? `Scanning… ${remaining.toLocaleString()} left` : "Detect faces";
     }
   } catch (e) {
-    showError("card-faces", e.message);
+    errorMsg = e.message;
   } finally {
     facesScanRunning = false;
     stopBtn.style.display = "none";
@@ -333,11 +367,29 @@ async function runFacesScan() {
     await loadSummary();
     await loadFaceCoverage();
     await loadFacesMonths();
+    // Shown after loadSummary, which clears the card's error when it succeeds.
+    if (errorMsg) showError("card-faces", errorMsg);
+  }
+}
+
+async function retryFailedFaces() {
+  const btn = document.getElementById("faces-retry-failed-btn");
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/faces/scan/retry-failed", { method: "POST" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await res.json();
+    await runFacesScan();
+  } catch (e) {
+    showError("card-faces", e.message);
+  } finally {
+    btn.disabled = false;
   }
 }
 
 document.getElementById("backfill-btn").addEventListener("click", runBackfill);
 document.getElementById("detect-faces-btn").addEventListener("click", runFacesScan);
+document.getElementById("faces-retry-failed-btn").addEventListener("click", retryFailedFaces);
 
 /* ── Representative-face recompute (one-shot, no batching needed) ── */
 async function runDedupRecompute() {

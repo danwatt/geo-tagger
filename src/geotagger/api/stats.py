@@ -233,6 +233,7 @@ async def api_stats_summary():
             },
             "faces": {
                 "unscanned_photos": len(index.get_unscanned_photo_ids()),
+                "failed_photos": index.count_face_scan_failures(),
                 "total": index.count_faces("all"),
                 "labeled": index.count_faces("recent"),
                 "unlabeled": index.count_faces("unlabeled"),

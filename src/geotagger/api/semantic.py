@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from geotagger import index, serializers
 from geotagger.executor import get_executor
 from geotagger.services import semantic_service
+from geotagger.scan_failures import BatchAborted
 from geotagger.services.semantic_service import SemanticUnavailable
 
 router = APIRouter()
@@ -17,6 +18,8 @@ router = APIRouter()
 
 class SemanticScanRequest(BaseModel):
     limit: int = Field(32, ge=1, le=1000)
+    # Override the consecutive-failure guard for this one batch (see api/faces.py).
+    allow_failures: bool = False
 
 
 class ForceRequest(BaseModel):
@@ -27,12 +30,25 @@ class ForceRequest(BaseModel):
 
 @router.post("/api/semantic/scan")
 async def api_semantic_scan(req: SemanticScanRequest = SemanticScanRequest()):
-    """Embed up to `limit` not-yet-indexed photos. Repeat until `remaining` is 0."""
+    """Embed up to `limit` not-yet-indexed photos. Repeat until `remaining` is 0.
+    409 when the model isn't downloaded; 503 (detail {code, message, errors}) when
+    the batch aborted without marking the failing photos (see api/faces.py)."""
     loop = asyncio.get_running_loop()
     try:
-        return await loop.run_in_executor(get_executor(), semantic_service.scan, req.limit)
+        return await loop.run_in_executor(
+            get_executor(), semantic_service.scan, req.limit, req.allow_failures)
     except SemanticUnavailable as e:
         raise HTTPException(409, str(e))
+    except BatchAborted as e:
+        raise HTTPException(503, e.as_detail())
+
+
+@router.post("/api/semantic/retry-failed")
+async def api_semantic_retry_failed():
+    """Queue the photos whose file couldn't be read (stored as a NULL vector) for
+    indexing again."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(get_executor(), semantic_service.retry_failed)
 
 
 @router.get("/api/semantic/status")

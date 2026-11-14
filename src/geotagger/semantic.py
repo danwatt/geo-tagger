@@ -147,6 +147,12 @@ def _get_visual():
     return _visual
 
 
+def load_visual() -> None:
+    """Load the visual session now (no-op once loaded), so the indexing batch fails
+    up front on a missing/corrupt model instead of once per photo (audit F1)."""
+    _get_visual()
+
+
 def _get_textual():
     global _textual
     if _textual is not None:

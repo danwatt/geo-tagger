@@ -95,6 +95,8 @@ def fake_semantic(tmp_path, monkeypatch):
         Image.new("RGB", (32, 32), rgb).save(buf, "JPEG")
         return buf.getvalue()
 
+    # The placeholder files would not load as real ONNX sessions.
+    monkeypatch.setattr(semantic, "load_visual", lambda: None)
     monkeypatch.setattr(semantic, "encode_image", fake_image)
     monkeypatch.setattr(semantic, "encode_text", fake_text)
     monkeypatch.setattr(thumbnails, "get_preview_oriented", fake_preview)

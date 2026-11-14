@@ -8,6 +8,7 @@ from collections import Counter
 from pathlib import Path
 
 from geotagger import index, faces, serializers, thumbnails, config
+from geotagger.scan_failures import BatchAborted, FailureStreak, FileUnreadable
 
 logger = logging.getLogger(__name__)
 
@@ -15,24 +16,58 @@ logger = logging.getLogger(__name__)
 CLUSTER_DISPLAY_LIMIT = 100
 
 
-def scan_faces_batch(photo_ids: list[int]) -> dict:
-    """Run detection over a list of photo ids (blocking; called in executor)."""
+def load_model_or_abort() -> None:
+    """Load the face model before touching any photo; a failure here (model pack
+    missing or corrupt, onnxruntime unable to build a session, out of memory) is
+    about the pipeline, so the batch aborts with nothing marked (audit F1)."""
+    try:
+        faces.load_model()
+    except Exception as e:
+        logger.exception("Face model failed to load")
+        # Drop any half-built pipeline so the next attempt reloads from scratch.
+        faces.reset_model()
+        raise BatchAborted(f"Face model failed to load: {e}", code="model") from e
+
+
+def scan_faces_batch(photo_ids: list[int], allow_failures: bool = False) -> dict:
+    """Run detection over a list of photo ids (blocking; called in executor).
+
+    Raises BatchAborted — with nothing marked from the failing photo on — when the
+    model won't load or run, on any error not attributable to one photo's file, and
+    when ``config.SCAN_FAILURE_STREAK_LIMIT`` photos in a row are unreadable (unless
+    ``allow_failures``: the user looked at those errors and says the files really
+    are bad). Photos whose own file is unreadable (truncated HEIC, broken JPEG, file
+    deleted since the last scan) are recorded via mark_face_scan_failures so the
+    queue moves on; "Retry failed" re-queues them."""
+    # The model loads once, before the loop; an empty id list (or only unknown ids)
+    # needs no model at all, which keeps the queue's final empty call free.
+    rows = [r for r in (index.get_photo(pid) for pid in photo_ids) if r]
     processed = 0
     total_faces = 0
-    errors = []
-    for pid in photo_ids:
-        row = index.get_photo(pid)
-        if not row:
-            continue
-        try:
-            total_faces += faces.detect_and_store(row)
-        except Exception as e:
-            errors.append(f"{row['filename']}: {e}")
-            # Unreadable/corrupt file (truncated HEIC, broken JPEG, missing file
-            # since last scan, …) — mark it scanned with zero faces so it doesn't
-            # get retried forever and block the batch loop from ever finishing.
-            index.replace_faces(pid, [])
-        processed += 1
+    errors: list[str] = []
+    if not rows:
+        return {"processed": 0, "faces_found": 0, "errors": errors}
+    load_model_or_abort()
+    streak = FailureStreak(config.SCAN_FAILURE_STREAK_LIMIT, allow=allow_failures)
+    try:
+        for row in rows:
+            try:
+                total_faces += faces.detect_and_store(row)
+            except FileUnreadable as e:
+                errors.append(f"{row['filename']}: {e}")
+                streak.fail((row["id"], str(e)), errors[-1])
+            except Exception as e:
+                logger.exception(f"Face detection failed on {row['filename']}")
+                raise BatchAborted(f"Face detection failed on {row['filename']}: {e}") from e
+            else:
+                index.mark_face_scan_failures(streak.ok())
+            processed += 1
+    except BatchAborted as e:
+        # A systemic error after a run of unreadable files says those weren't the
+        # files' fault either — the held-back marks are dropped with the batch.
+        e.errors = e.errors or errors
+        raise
+    index.mark_face_scan_failures(streak.drain())
     return {"processed": processed, "faces_found": total_faces, "errors": errors}
 
 
@@ -122,14 +157,21 @@ def rescan_photo_faces(photo_ids: list[int]) -> dict:
     pass over the same photos in this one executor trip so the caller can render
     the fresh faces straight away.
 
+    The model is loaded before the wipe, so a broken model aborts with the photo's
+    faces (and tags) still intact rather than wiped and then never re-detected.
+
     Orientation is re-read from the file between the two halves: a wrong stored
     orientation is one of the reasons a photo's faces come out wrong in the first
     place, and detection reads photos.orientation. Order matters — the wipe must
     come first so no cached rendition (whose filename carries the *old*
     orientation suffix) survives the change."""
+    if any(index.get_photo(pid) for pid in photo_ids):   # unknown ids need no model
+        load_model_or_abort()
     nuked = nuke_photo_faces(photo_ids)
     reoriented = refresh_orientations(photo_ids)
-    scanned = scan_faces_batch(photo_ids)
+    # allow_failures: this is an explicit per-photo action, not a queue walk —
+    # an unreadable file here is just recorded, never a reason to refuse.
+    scanned = scan_faces_batch(photo_ids, allow_failures=True)
     return {**nuked, **scanned, "orientations_updated": reoriented}
 
 

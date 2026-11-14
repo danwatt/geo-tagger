@@ -8,6 +8,7 @@ photos with no prior face scan.
 Run:  uv run python scripts/scan_faces.py
       uv run python scripts/scan_faces.py --cache-dir D:/path/.geotagger
       uv run python scripts/scan_faces.py --rescan       # redo every photo
+      uv run python scripts/scan_faces.py --rescan-empty # redo photos with no faces (tag-safe)
 """
 import argparse
 import os
@@ -40,6 +41,8 @@ def main():
     parser.add_argument("--cache-dir", help="Cache dir holding index.db (the .geotagger folder)")
     parser.add_argument("--limit", type=int, default=0, help="Max photos to process (0 = all)")
     parser.add_argument("--rescan", action="store_true", help="Re-detect even already-scanned photos")
+    parser.add_argument("--rescan-empty", action="store_true",
+                        help="Re-queue scanned photos that have no faces at all (safe for tags)")
     args = parser.parse_args()
 
     root = resolve_root(args)
@@ -52,7 +55,21 @@ def main():
 
     if args.rescan:
         with index.transaction() as db:
-            db.execute("UPDATE photos SET faces_scanned_at=NULL WHERE media_type='image'")
+            db.execute("UPDATE photos SET faces_scanned_at=NULL, faces_scan_error=NULL "
+                       "WHERE media_type='image'")
+    elif args.rescan_empty:
+        # Repair for audit F1: before the fix, a model that failed to load marked
+        # every photo "scanned, 0 faces", indistinguishable from a real empty scan.
+        # Re-queue only photos with no face rows at all (detected, manual, ignored):
+        # rescanning those can't delete a tag. Legit no-face photos just cost one
+        # more detection each.
+        with index.transaction() as db:
+            n = db.execute(
+                "UPDATE photos SET faces_scanned_at=NULL, faces_det_dimension=NULL "
+                "WHERE media_type='image' AND faces_scanned_at IS NOT NULL "
+                "AND NOT EXISTS (SELECT 1 FROM faces f WHERE f.photo_id = photos.id)"
+            ).rowcount
+        print(f"Re-queued {n} scanned photos that have no faces.")
 
     pending = index.get_unscanned_photo_ids()
     if args.limit:
@@ -63,6 +80,8 @@ def main():
         return
 
     print(f"Loading model and scanning {len(pending)} photos…")
+    # Load up front so a broken model fails once, not once per photo.
+    faces.load_model()
     t0 = time.time()
     total_faces = 0
     errors = 0

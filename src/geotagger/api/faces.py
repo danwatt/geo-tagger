@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from geotagger import index, faces, thumbnails, serializers, config
 from geotagger.executor import get_executor
+from geotagger.scan_failures import BatchAborted
 from geotagger.services import faces_service
 from geotagger.timeutil import has_date
 
@@ -69,6 +70,9 @@ class NegativeFacesRequest(BaseModel):
 
 class ScanFacesRequest(BaseModel):
     limit: int = Field(50, ge=1, le=1000)  # photos processed per call; repeat to continue
+    # Accept a long run of unreadable files as really unreadable (overrides the
+    # consecutive-failure guard for this one batch; see config.SCAN_FAILURE_STREAK_LIMIT).
+    allow_failures: bool = False
 
 class NukePhotoFacesRequest(BaseModel):
     photo_ids: list[int]  # hard-wipe every face + cached rendition for these photos
@@ -463,9 +467,11 @@ async def api_rescan_photo_faces(req: NukePhotoFacesRequest):
     if not req.photo_ids:
         raise HTTPException(400, "photo_ids required")
     loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(
-        get_executor(), faces_service.rescan_photo_faces, req.photo_ids)
-    return result
+    try:
+        return await loop.run_in_executor(
+            get_executor(), faces_service.rescan_photo_faces, req.photo_ids)
+    except BatchAborted as e:
+        raise HTTPException(503, e.as_detail())
 
 
 @router.post("/api/faces/dedup/recompute")
@@ -613,13 +619,29 @@ async def api_assign_face(face_id: int, req: AssignFaceRequest):
 
 @router.post("/api/faces/scan")
 async def api_faces_scan(req: ScanFacesRequest):
-    """Detect faces for up to `limit` not-yet-scanned photos. Repeat to continue."""
+    """Detect faces for up to `limit` not-yet-scanned photos. Repeat until
+    `remaining` is 0. 503 (detail {code, message, errors}) when the batch aborted
+    without marking anything — the model failed, or too many files in a row were
+    unreadable — and the client must stop rather than walk on (audit F1)."""
     pending = index.get_unscanned_photo_ids()
     batch = pending[: max(1, req.limit)]
     loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(get_executor(), faces_service.scan_faces_batch, batch)
+    try:
+        result = await loop.run_in_executor(
+            get_executor(), faces_service.scan_faces_batch, batch, req.allow_failures)
+    except BatchAborted as e:
+        raise HTTPException(503, e.as_detail())
     result["remaining"] = len(pending) - result["processed"]
+    result["failed"] = index.count_face_scan_failures()
     return result
+
+
+@router.post("/api/faces/scan/retry-failed")
+async def api_faces_scan_retry_failed():
+    """Put every photo whose file couldn't be read back in the detection queue.
+    Those photos were never marked scanned and have no detected faces, so the
+    rescan can't touch any tag."""
+    return {"requeued": index.clear_face_scan_failures()}
 
 
 @router.get("/api/faces/scan/status")
@@ -634,6 +656,7 @@ async def api_faces_scan_status(
     remaining = len(index.get_unscanned_photo_ids())
     return {
         "remaining_photos": remaining,
+        "failed_photos": index.count_face_scan_failures(),
         "total_faces": index.count_faces("all"),
         "unlabeled_faces": index.count_faces("unlabeled", start_ts=start_ts,
                                              end_ts=end_ts),

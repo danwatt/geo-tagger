@@ -58,7 +58,7 @@ def test_ignore_moves_faces_out_of_unlabeled(client):
 
 def test_scan_status_empty(client):
     assert client.get("/api/faces/scan/status").json() == {
-        "remaining_photos": 0, "total_faces": 0, "unlabeled_faces": 0,
+        "remaining_photos": 0, "failed_photos": 0, "total_faces": 0, "unlabeled_faces": 0,
         "ignored_faces": 0, "come_back_faces": 0, "tagged_faces": 0,
     }
 
