@@ -25,6 +25,39 @@ jobs:
       - name: Ruff (bug-finding rules only, see [tool.ruff] in pyproject.toml)
         run: uv run ruff check src tests scripts
 
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: API types match the committed schema
+        # openapi.json itself is checked against the routes by pytest
+        # (tests/test_frontend_contract.py); this checks schema.d.ts against it.
+        run: |
+          npx openapi-typescript openapi.json -o src/api/schema.d.ts
+          git diff --exit-code -- src/api/schema.d.ts
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npx vite build
+
   test:
     strategy:
       fail-fast: false

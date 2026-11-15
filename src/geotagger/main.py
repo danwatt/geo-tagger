@@ -4,26 +4,22 @@ routes. Routes live in geotagger.api.*, blocking logic in geotagger.services.*, 
 row->JSON shaping in geotagger.serializers."""
 
 import logging
-from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 from geotagger.lifespan import lifespan
 from geotagger.api import ROUTERS
 from geotagger.middleware import RequestGuard
+from geotagger.static import DIST_DIR, WEB_DIR, LayeredStaticFiles
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
-
-_WEB_DIR = Path(__file__).parent / "web"
-
 
 async def _validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
     """422 without echoing each error's `input`: FastAPI's default handler includes
@@ -41,7 +37,8 @@ def create_app() -> FastAPI:
     for router in ROUTERS:
         app.include_router(router)
     # ── Static files (must be mounted last so it doesn't shadow the API routes) ──
-    app.mount("/", StaticFiles(directory=str(_WEB_DIR), html=True), name="web")
+    # React build first, legacy pages as fallback (see static.py).
+    app.mount("/", LayeredStaticFiles([DIST_DIR, WEB_DIR], html=True), name="web")
     return app
 
 

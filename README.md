@@ -30,6 +30,8 @@ geocoder.
   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
   ```
 - **git**, to clone this repo.
+- **[Node.js](https://nodejs.org/) 24+** (with npm), to build the web frontend once after
+  cloning or pulling (setup step 1). Not needed while the app runs.
 - Windows, for the automatic ExifTool download in setup step 2 (macOS/Linux: install ExifTool
   yourself, see that step).
 
@@ -65,6 +67,17 @@ in this doc.
 ```bash
 uv sync
 ```
+
+Then build the web frontend (re-run after pulling changes under `frontend/`):
+
+```bash
+npm --prefix frontend ci
+npm --prefix frontend run build
+```
+
+The frontend is partway through a move from plain JavaScript to React + TypeScript (see
+[Frontend development](#frontend-development)). Pages not yet moved work without the build;
+moved pages (Settings so far) return 404 until it's done, and startup prints a warning.
 
 ### Where downloaded tools/data end up
 
@@ -564,6 +577,31 @@ live from the Settings page):
 | `GEOTAGGER_THUMB_QUALITY` | `80` webp / `85` jpeg | Encoder quality for cached renditions |
 | `GEOTAGGER_THUMB_QUALITY_HIGH` | `90` | Quality for the (uncached) face-detection rendition |
 | `GEOTAGGER_WEBP_METHOD` | `4` | libwebp effort, 0 (fast) … 6 (slowest, smallest) |
+
+## Frontend development
+
+The web UI is moving from plain JavaScript (`src/geotagger/web/`) to React + TypeScript
+(`frontend/`, built with Vite), one page at a time. A moved page builds to the same URL it had
+(`/settings.html`), so links between old and new pages keep working. FastAPI serves the build
+output (`src/geotagger/web_dist/`, gitignored) ahead of `web/`, so a built page replaces its
+old version.
+
+For live reload, run the backend and the Vite dev server side by side, and open
+`http://localhost:5173`. Vite serves the moved pages and passes everything else (the API,
+pages not yet moved, thumbnails) through to the backend on `GEOTAGGER_PORT` (default 8000):
+
+```bash
+uv run geotagger
+```
+
+```bash
+npm --prefix frontend run dev
+```
+
+Other commands, run from `frontend/`: `npm test` (Vitest), `npm run typecheck`, and
+`npm run gen:api`, which regenerates `openapi.json` and the TypeScript API types
+(`src/api/schema.d.ts`) from the FastAPI routes. Run it after changing an API route; a pytest
+check fails while the committed schema is out of date.
 
 ## Cross-platform notes
 

@@ -1,0 +1,4 @@
+/* theme.css lays out <body> as a full-height flex column of #toolbar, the page
+   body and #status-bar. React renders those inside #root, so let #root drop out
+   of the box tree and its children become the body's flex items. */
+#root { display: contents; }

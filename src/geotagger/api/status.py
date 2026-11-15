@@ -1,5 +1,7 @@
 """Status, live-tunable settings, and debug endpoints."""
 
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -15,6 +17,78 @@ class UpdateSettingsRequest(BaseModel):
 
 class ResetSettingsRequest(BaseModel):
     keys: list[str]
+
+
+# Response models: these describe the JSON in the OpenAPI schema, which the React
+# frontend turns into TypeScript types (frontend/src/api/schema.d.ts). `bool | int |
+# float` order matters: pydantic's smart union keeps an exact type match, so ints
+# stay ints (14400, not 14400.0) and bools stay bools.
+SettingValue = bool | int | float
+
+
+class SettingOut(BaseModel):
+    key: str
+    type: Literal["bool", "int", "float"]
+    group: str
+    label: str
+    help: str
+    min: float | None = None
+    max: float | None = None
+    step: float | None = None
+    value: SettingValue
+    default: SettingValue
+    overridden: bool
+
+
+class SettingsResponse(BaseModel):
+    settings: list[SettingOut]
+
+
+class UpdateSettingsResponse(BaseModel):
+    updated: dict[str, SettingValue]
+
+
+class ResetSettingsResponse(BaseModel):
+    reset: list[str]
+
+
+class ScanStatusResponse(BaseModel):
+    """scanning._blank_state()'s keys. Keep in step with it."""
+    running: bool
+    root: str | None
+    phase: Literal["counting", "indexing", "geocoding", "pruning"] | None
+    processed: int
+    total: int
+    indexed: int
+    skipped: int
+    known_failed: int
+    warnings: int
+    errors: int
+    error: str | None
+    summary: str | None
+    started_at: float | None
+    finished_at: float | None
+
+
+class ScanErrorOut(BaseModel):
+    path: str
+    dir: str
+    filename: str
+    stage: Literal["stat", "read", "write"]
+    error: str
+    first_seen: float
+    last_seen: float
+    attempts: int
+
+
+class ScanErrorsResponse(BaseModel):
+    count: int
+    errors: list[ScanErrorOut]
+    warnings: list[str]
+
+
+class ClearScanErrorsResponse(BaseModel):
+    cleared: int
 
 
 @router.get("/api/status")
@@ -36,7 +110,7 @@ async def api_status():
     }
 
 
-@router.get("/api/scan/status")
+@router.get("/api/scan/status", response_model=ScanStatusResponse)
 async def api_scan_status():
     """Background startup-scan progress. A separate route (not a field on
     /api/status) because the nav banner polls it every ~2s and /api/status runs a
@@ -45,7 +119,7 @@ async def api_scan_status():
     return scanning.get_scan_status()
 
 
-@router.get("/api/scan/errors")
+@router.get("/api/scan/errors", response_model=ScanErrorsResponse)
 async def api_scan_errors(limit: int = 500, offset: int = 0):
     """Files the scan could not index (persisted across runs, newest failure
     first) plus every warning of the most recent run (in memory only — the
@@ -64,7 +138,7 @@ async def api_scan_errors(limit: int = 500, offset: int = 0):
         raise HTTPException(500, str(e))
 
 
-@router.delete("/api/scan/errors")
+@router.delete("/api/scan/errors", response_model=ClearScanErrorsResponse)
 async def api_clear_scan_errors():
     """Forget recorded failures so the next scan retries every one of them,
     including unchanged files it would otherwise skip. Refused during a scan,
@@ -82,7 +156,7 @@ async def api_clear_scan_errors():
         raise HTTPException(500, str(e))
 
 
-@router.get("/api/settings")
+@router.get("/api/settings", response_model=SettingsResponse)
 async def api_get_settings():
     """The safe-to-tune-live subset of config.py knobs (face matching/clustering
     thresholds, caps), with each one's current effective value and whether it's
@@ -113,7 +187,7 @@ def _invalidate_for(keys) -> None:
     settings_service.invalidate_for(keys)
 
 
-@router.patch("/api/settings")
+@router.patch("/api/settings", response_model=UpdateSettingsResponse)
 async def api_update_settings(req: UpdateSettingsRequest):
     """Validate + persist one or more settings, applying them live (no restart)."""
     valid_keys = {spec["key"] for spec in config.SETTINGS_SPEC}
@@ -135,7 +209,7 @@ async def api_update_settings(req: UpdateSettingsRequest):
         raise HTTPException(500, str(e))
 
 
-@router.post("/api/settings/reset")
+@router.post("/api/settings/reset", response_model=ResetSettingsResponse)
 async def api_reset_settings(req: ResetSettingsRequest):
     """Clear the DB override for one or more settings, reverting to the env default."""
     valid_keys = {spec["key"] for spec in config.SETTINGS_SPEC}
