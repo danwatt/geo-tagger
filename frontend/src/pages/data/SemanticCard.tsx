@@ -1,8 +1,8 @@
 import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { acceptStarted, api, unwrap, type Schemas } from "../../api/client";
-import { ApiError } from "../../api/errors";
 import { fmtBytes } from "../../lib/format";
+import { ScanAbortPrompt, tooManyFailures, type ScanAborted } from "../../lib/scanAbort";
 import { useBatchLoop } from "../../lib/useBatchLoop";
 import { useJob } from "../../lib/useJob";
 import { DATA_STATUS_KEY } from "./cards";
@@ -16,14 +16,6 @@ const SEMANTIC_STATUS_KEY = ["semantic-status"] as const;
 const BATCH = 32;
 
 type ScanResult = Schemas["SemanticScanResponse"];
-type Aborted = { message: string; errors: string[] };
-
-/** The 503 detail of a batch that stopped on consecutive unreadable files. */
-function tooManyFailures(e: unknown): Aborted | null {
-  if (!(e instanceof ApiError) || e.status !== 503) return null;
-  const d = (e.body as { detail?: { code?: string; message?: string; errors?: string[] } } | null)?.detail;
-  return d?.code === "too_many_failures" ? { message: d.message ?? e.message, errors: d.errors ?? [] } : null;
-}
 
 export function SemanticCard({ status: m }: { status: Schemas["ModelStatus"] | undefined }) {
   const queryClient = useQueryClient();
@@ -38,7 +30,7 @@ export function SemanticCard({ status: m }: { status: Schemas["ModelStatus"] | u
   const job = useJob("/api/data/semantic-model/download/status", { intervalMs: 1000, onFinished: refreshAll });
   const loop = useBatchLoop<ScanResult>("Indexing");
   const [progress, setProgress] = useState("");
-  const [aborted, setAborted] = useState<Aborted | null>(null);
+  const [aborted, setAborted] = useState<ScanAborted | null>(null);
   const [retryError, setRetryError] = useState<string | null>(null);
   const failedThisRun = useRef(0);
 
@@ -122,15 +114,10 @@ export function SemanticCard({ status: m }: { status: Schemas["ModelStatus"] | u
         </>}
       />
       {aborted && !loop.running && (
-        <div className="data-confirm" role="alertdialog" aria-labelledby="semantic-abort-text">
-          <p id="semantic-abort-text">{aborted.message}</p>
-          {aborted.errors.length > 0 && (
-            <ul className="data-confirm-list">{aborted.errors.slice(0, 5).map((e, i) => <li key={i}>{e}</li>)}</ul>
-          )}
-          <p>If these files really are unreadable, mark them as failed and keep indexing?</p>
-          <button type="button" onClick={() => void runIndex(true)} autoFocus>Mark unreadable and continue</button>
-          <button type="button" onClick={() => setAborted(null)}>Cancel</button>
-        </div>
+        <ScanAbortPrompt
+          id="semantic" aborted={aborted} verb="indexing"
+          onContinue={() => void runIndex(true)} onCancel={() => setAborted(null)}
+        />
       )}
       <JobLines message={progressText} error={aborted ? null : (loop.error ?? retryError)} />
     </DataCard>

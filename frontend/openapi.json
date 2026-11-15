@@ -104,6 +104,115 @@
         "title": "AssignFaceRequest",
         "type": "object"
       },
+      "BackfillResponse": {
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "matched": {
+            "title": "Matched",
+            "type": "integer"
+          },
+          "processed": {
+            "title": "Processed",
+            "type": "integer"
+          },
+          "remaining": {
+            "title": "Remaining",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "processed",
+          "matched",
+          "available",
+          "remaining"
+        ],
+        "title": "BackfillResponse",
+        "type": "object"
+      },
+      "Batch": {
+        "additionalProperties": true,
+        "properties": {
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "end_ts": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Ts"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "session",
+              "folder"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "proposal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Proposal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sample_photo_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Sample Photo Ids",
+            "type": "array"
+          },
+          "start_ts": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Ts"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "count",
+          "start_ts",
+          "end_ts",
+          "sample_photo_ids",
+          "confidence",
+          "proposal"
+        ],
+        "title": "Batch",
+        "type": "object"
+      },
       "Bbox": {
         "properties": {
           "max_lat": {
@@ -535,6 +644,22 @@
         "title": "DateSnapshot",
         "type": "object"
       },
+      "DedupRecomputeResponse": {
+        "properties": {
+          "persons": {
+            "items": {
+              "$ref": "#/components/schemas/RepresentativeCounts"
+            },
+            "title": "Persons",
+            "type": "array"
+          }
+        },
+        "required": [
+          "persons"
+        ],
+        "title": "DedupRecomputeResponse",
+        "type": "object"
+      },
       "ExportSidecarsRequest": {
         "properties": {
           "after_id": {
@@ -552,6 +677,76 @@
           }
         },
         "title": "ExportSidecarsRequest",
+        "type": "object"
+      },
+      "ExportSidecarsResponse": {
+        "properties": {
+          "cursor": {
+            "title": "Cursor",
+            "type": "integer"
+          },
+          "errors_sample": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Errors Sample",
+            "type": "array"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "processed": {
+            "title": "Processed",
+            "type": "integer"
+          },
+          "remaining": {
+            "title": "Remaining",
+            "type": "integer"
+          },
+          "written": {
+            "title": "Written",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "processed",
+          "written",
+          "failed",
+          "errors_sample",
+          "cursor",
+          "remaining"
+        ],
+        "title": "ExportSidecarsResponse",
+        "type": "object"
+      },
+      "FaceBuckets": {
+        "description": "Scanned image photos by labeling coverage (see index.get_face_coverage).",
+        "properties": {
+          "full": {
+            "title": "Full",
+            "type": "integer"
+          },
+          "no_faces": {
+            "title": "No Faces",
+            "type": "integer"
+          },
+          "none": {
+            "title": "None",
+            "type": "integer"
+          },
+          "partial": {
+            "title": "Partial",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "full",
+          "partial",
+          "none",
+          "no_faces"
+        ],
+        "title": "FaceBuckets",
         "type": "object"
       },
       "FaceExpect": {
@@ -742,6 +937,63 @@
           "face_ids"
         ],
         "title": "FacesByIdsRequest",
+        "type": "object"
+      },
+      "FacesMonthsResponse": {
+        "properties": {
+          "months": {
+            "items": {
+              "$ref": "#/components/schemas/MonthFaces"
+            },
+            "title": "Months",
+            "type": "array"
+          },
+          "undated": {
+            "$ref": "#/components/schemas/FaceBuckets"
+          }
+        },
+        "required": [
+          "months",
+          "undated"
+        ],
+        "title": "FacesMonthsResponse",
+        "type": "object"
+      },
+      "FacesScanResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "faces_found": {
+            "title": "Faces Found",
+            "type": "integer"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "processed": {
+            "title": "Processed",
+            "type": "integer"
+          },
+          "remaining": {
+            "title": "Remaining",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "processed",
+          "faces_found",
+          "errors",
+          "remaining",
+          "failed"
+        ],
+        "title": "FacesScanResponse",
         "type": "object"
       },
       "FamilyRequest": {
@@ -1099,6 +1351,97 @@
         "title": "ModelStatus",
         "type": "object"
       },
+      "MonthFaces": {
+        "properties": {
+          "full": {
+            "title": "Full",
+            "type": "integer"
+          },
+          "month": {
+            "title": "Month",
+            "type": "integer"
+          },
+          "no_faces": {
+            "title": "No Faces",
+            "type": "integer"
+          },
+          "none": {
+            "title": "None",
+            "type": "integer"
+          },
+          "partial": {
+            "title": "Partial",
+            "type": "integer"
+          },
+          "year": {
+            "title": "Year",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "full",
+          "partial",
+          "none",
+          "no_faces",
+          "year",
+          "month"
+        ],
+        "title": "MonthFaces",
+        "type": "object"
+      },
+      "MonthGeo": {
+        "properties": {
+          "geotagged": {
+            "title": "Geotagged",
+            "type": "integer"
+          },
+          "month": {
+            "title": "Month",
+            "type": "integer"
+          },
+          "not_geotagged": {
+            "title": "Not Geotagged",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "year": {
+            "title": "Year",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "year",
+          "month",
+          "total",
+          "geotagged",
+          "not_geotagged"
+        ],
+        "title": "MonthGeo",
+        "type": "object"
+      },
+      "MonthsResponse": {
+        "properties": {
+          "months": {
+            "items": {
+              "$ref": "#/components/schemas/MonthGeo"
+            },
+            "title": "Months",
+            "type": "array"
+          },
+          "undated": {
+            "$ref": "#/components/schemas/UndatedGeo"
+          }
+        },
+        "required": [
+          "months",
+          "undated"
+        ],
+        "title": "MonthsResponse",
+        "type": "object"
+      },
       "NegativeFacesRequest": {
         "properties": {
           "face_ids": {
@@ -1368,6 +1711,30 @@
         "title": "PhotosByIdsRequest",
         "type": "object"
       },
+      "Proposal": {
+        "additionalProperties": true,
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "lat": {
+            "title": "Lat",
+            "type": "number"
+          },
+          "lng": {
+            "title": "Lng",
+            "type": "number"
+          }
+        },
+        "required": [
+          "lat",
+          "lng",
+          "label"
+        ],
+        "title": "Proposal",
+        "type": "object"
+      },
       "ProposeRequest": {
         "properties": {
           "ids": {
@@ -1410,6 +1777,42 @@
           "ids"
         ],
         "title": "RemoveGeotagRequest",
+        "type": "object"
+      },
+      "RepresentativeCounts": {
+        "properties": {
+          "person_id": {
+            "title": "Person Id",
+            "type": "integer"
+          },
+          "representative": {
+            "title": "Representative",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "person_id",
+          "total",
+          "representative"
+        ],
+        "title": "RepresentativeCounts",
+        "type": "object"
+      },
+      "RequeuedResponse": {
+        "properties": {
+          "requeued": {
+            "title": "Requeued",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requeued"
+        ],
+        "title": "RequeuedResponse",
         "type": "object"
       },
       "ResetSettingsRequest": {
@@ -2152,6 +2555,187 @@
         "title": "StreetsStatus",
         "type": "object"
       },
+      "SummaryFaces": {
+        "properties": {
+          "failed_photos": {
+            "title": "Failed Photos",
+            "type": "integer"
+          },
+          "ignored": {
+            "title": "Ignored",
+            "type": "integer"
+          },
+          "labeled": {
+            "title": "Labeled",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "unlabeled": {
+            "title": "Unlabeled",
+            "type": "integer"
+          },
+          "unscanned_photos": {
+            "title": "Unscanned Photos",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "unscanned_photos",
+          "failed_photos",
+          "total",
+          "labeled",
+          "unlabeled",
+          "ignored"
+        ],
+        "title": "SummaryFaces",
+        "type": "object"
+      },
+      "SummaryGeocode": {
+        "additionalProperties": true,
+        "properties": {
+          "any_available": {
+            "title": "Any Available",
+            "type": "boolean"
+          },
+          "export_pending": {
+            "title": "Export Pending",
+            "type": "integer"
+          },
+          "geocoded": {
+            "title": "Geocoded",
+            "type": "integer"
+          },
+          "pending": {
+            "title": "Pending",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "any_available",
+          "geocoded",
+          "pending",
+          "export_pending"
+        ],
+        "title": "SummaryGeocode",
+        "type": "object"
+      },
+      "SummaryGeotag": {
+        "properties": {
+          "ignored": {
+            "title": "Ignored",
+            "type": "integer"
+          },
+          "tagged": {
+            "title": "Tagged",
+            "type": "integer"
+          },
+          "untagged": {
+            "title": "Untagged",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tagged",
+          "ignored",
+          "untagged"
+        ],
+        "title": "SummaryGeotag",
+        "type": "object"
+      },
+      "SummaryGuessable": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "window_sec": {
+            "title": "Window Sec",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "window_sec"
+        ],
+        "title": "SummaryGuessable",
+        "type": "object"
+      },
+      "SummaryPeople": {
+        "properties": {
+          "families": {
+            "title": "Families",
+            "type": "integer"
+          },
+          "persons": {
+            "title": "Persons",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "persons",
+          "families"
+        ],
+        "title": "SummaryPeople",
+        "type": "object"
+      },
+      "SummaryPhotos": {
+        "properties": {
+          "images": {
+            "title": "Images",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "videos": {
+            "title": "Videos",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "images",
+          "videos"
+        ],
+        "title": "SummaryPhotos",
+        "type": "object"
+      },
+      "SummaryResponse": {
+        "properties": {
+          "faces": {
+            "$ref": "#/components/schemas/SummaryFaces"
+          },
+          "geocode": {
+            "$ref": "#/components/schemas/SummaryGeocode"
+          },
+          "geotag": {
+            "$ref": "#/components/schemas/SummaryGeotag"
+          },
+          "guessable": {
+            "$ref": "#/components/schemas/SummaryGuessable"
+          },
+          "people": {
+            "$ref": "#/components/schemas/SummaryPeople"
+          },
+          "photos": {
+            "$ref": "#/components/schemas/SummaryPhotos"
+          }
+        },
+        "required": [
+          "photos",
+          "geotag",
+          "guessable",
+          "geocode",
+          "faces",
+          "people"
+        ],
+        "title": "SummaryResponse",
+        "type": "object"
+      },
       "TimeUpdate": {
         "properties": {
           "expected": {
@@ -2173,6 +2757,29 @@
           "target"
         ],
         "title": "TimeUpdate",
+        "type": "object"
+      },
+      "UndatedGeo": {
+        "properties": {
+          "geotagged": {
+            "title": "Geotagged",
+            "type": "integer"
+          },
+          "not_geotagged": {
+            "title": "Not Geotagged",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "geotagged",
+          "not_geotagged"
+        ],
+        "title": "UndatedGeo",
         "type": "object"
       },
       "UndoDateCommitRequest": {
@@ -2436,6 +3043,43 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "WorkQueueResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "batched_photos": {
+            "title": "Batched Photos",
+            "type": "integer"
+          },
+          "batches": {
+            "items": {
+              "$ref": "#/components/schemas/Batch"
+            },
+            "title": "Batches",
+            "type": "array"
+          },
+          "tail_photos": {
+            "title": "Tail Photos",
+            "type": "integer"
+          },
+          "total_batches": {
+            "title": "Total Batches",
+            "type": "integer"
+          },
+          "total_photos": {
+            "title": "Total Photos",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "batches",
+          "total_batches",
+          "batched_photos",
+          "total_photos",
+          "tail_photos"
+        ],
+        "title": "WorkQueueResponse",
         "type": "object"
       }
     }
@@ -3526,7 +4170,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DedupRecomputeResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -3701,7 +4347,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FacesScanResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -3728,7 +4376,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RequeuedResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4109,7 +4759,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/BackfillResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4203,7 +4855,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ExportSidecarsResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7396,7 +8050,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FaceBuckets"
+                }
               }
             },
             "description": "Successful Response"
@@ -7413,7 +8069,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FacesMonthsResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7430,7 +8088,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MonthsResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7447,7 +8107,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SummaryResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7588,7 +8250,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/WorkQueueResponse"
+                }
               }
             },
             "description": "Successful Response"

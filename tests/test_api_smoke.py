@@ -23,8 +23,9 @@ def test_stats_summary_shape(client):
     body = res.json()
     assert set(body) >= {"photos", "geotag", "guessable", "geocode", "faces",
                          "people"}
-    # SQLite SUM() over zero rows is NULL, so image/video breakdowns come back None.
-    assert body["photos"] == {"total": 0, "images": None, "videos": None}
+    # SQLite SUM() over zero rows is NULL; the route reports 0, not None.
+    assert body["photos"] == {"total": 0, "images": 0, "videos": 0}
+    assert body["geotag"] == {"tagged": 0, "ignored": 0, "untagged": 0}
     assert body["people"] == {"persons": 0, "families": 0}
 
 

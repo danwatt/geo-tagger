@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import type { useJob } from "../../lib/useJob";
+import "../../ui/ui.css";
 
 /* Building blocks shared by the Data page's cards. */
 
@@ -98,7 +99,7 @@ export function JobControls({ id, job, startLabel, start, validate, forceWarning
         Force re-download (ignore local cache)
       </label>
       {confirming ? (
-        <div className="data-confirm" role="alertdialog" aria-labelledby={`${id}-confirm-text`}>
+        <div className="inline-confirm" role="alertdialog" aria-labelledby={`${id}-confirm-text`}>
           <p id={`${id}-confirm-text`}>{confirming}</p>
           <button type="button" onClick={() => void doStart()} autoFocus>Re-download</button>
           <button type="button" onClick={() => setConfirming(null)}>Cancel</button>

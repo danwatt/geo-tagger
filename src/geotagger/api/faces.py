@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from geotagger import index, faces, thumbnails, serializers, config
 from geotagger.api import _media
@@ -74,6 +74,31 @@ class ScanFacesRequest(BaseModel):
     # Accept a long run of unreadable files as really unreadable (overrides the
     # consecutive-failure guard for this one batch; see config.SCAN_FAILURE_STREAK_LIMIT).
     allow_failures: bool = False
+
+
+# Response models for Home's face cards (generated TypeScript types).
+class FacesScanResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    processed: int
+    faces_found: int
+    errors: list[str]   # "<file>: <reason>"
+    remaining: int
+    failed: int
+
+
+class RequeuedResponse(BaseModel):
+    requeued: int
+
+
+class RepresentativeCounts(BaseModel):
+    person_id: int
+    total: int
+    representative: int
+
+
+class DedupRecomputeResponse(BaseModel):
+    persons: list[RepresentativeCounts]
+
 
 class FacesByIdsRequest(BaseModel):
     # Same cap as one /api/faces page: a restored staging area (U7) is at most a
@@ -633,7 +658,7 @@ async def api_rescan_photo_faces(req: NukePhotoFacesRequest):
         raise HTTPException(503, e.as_detail())
 
 
-@router.post("/api/faces/dedup/recompute")
+@router.post("/api/faces/dedup/recompute", response_model=DedupRecomputeResponse)
 async def api_dedup_recompute():
     """Recompute representative-face flags for every person with enough
     labeled faces (see the Representative faces settings group). Safe to
@@ -774,7 +799,7 @@ async def api_assign_face(face_id: int, req: AssignFaceRequest):
     return {"face_id": face_id, "person_id": out["person_id"], "undo": undo}
 
 
-@router.post("/api/faces/scan")
+@router.post("/api/faces/scan", response_model=FacesScanResponse)
 async def api_faces_scan(req: ScanFacesRequest):
     """Detect faces for up to `limit` not-yet-scanned photos. Repeat until
     `remaining` is 0. 503 (detail {code, message, errors}) when the batch aborted
@@ -793,7 +818,7 @@ async def api_faces_scan(req: ScanFacesRequest):
     return result
 
 
-@router.post("/api/faces/scan/retry-failed")
+@router.post("/api/faces/scan/retry-failed", response_model=RequeuedResponse)
 async def api_faces_scan_retry_failed():
     """Put every photo whose file couldn't be read back in the detection queue.
     Those photos were never marked scanned and have no detected faces, so the

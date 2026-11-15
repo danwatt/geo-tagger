@@ -2375,6 +2375,42 @@ export interface components {
             /** Person Id */
             person_id?: number | null;
         };
+        /** BackfillResponse */
+        BackfillResponse: {
+            /** Available */
+            available: boolean;
+            /** Matched */
+            matched: number;
+            /** Processed */
+            processed: number;
+            /** Remaining */
+            remaining: number;
+        };
+        /** Batch */
+        Batch: {
+            /** Confidence */
+            confidence: number;
+            /** Count */
+            count: number;
+            /** End Ts */
+            end_ts: number | null;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "session" | "folder";
+            proposal: components["schemas"]["Proposal"] | null;
+            /** Sample Photo Ids */
+            sample_photo_ids: number[];
+            /** Start Ts */
+            start_ts: number | null;
+            /** Title */
+            title: string;
+        } & {
+            [key: string]: unknown;
+        };
         /** Bbox */
         Bbox: {
             /** Max Lat */
@@ -2523,6 +2559,11 @@ export interface components {
             /** Raw Datetime */
             raw_datetime?: string | null;
         };
+        /** DedupRecomputeResponse */
+        DedupRecomputeResponse: {
+            /** Persons */
+            persons: components["schemas"]["RepresentativeCounts"][];
+        };
         /** ExportSidecarsRequest */
         ExportSidecarsRequest: {
             /**
@@ -2535,6 +2576,35 @@ export interface components {
              * @default 200
              */
             limit: number;
+        };
+        /** ExportSidecarsResponse */
+        ExportSidecarsResponse: {
+            /** Cursor */
+            cursor: number;
+            /** Errors Sample */
+            errors_sample: string[];
+            /** Failed */
+            failed: number;
+            /** Processed */
+            processed: number;
+            /** Remaining */
+            remaining: number;
+            /** Written */
+            written: number;
+        };
+        /**
+         * FaceBuckets
+         * @description Scanned image photos by labeling coverage (see index.get_face_coverage).
+         */
+        FaceBuckets: {
+            /** Full */
+            full: number;
+            /** No Faces */
+            no_faces: number;
+            /** None */
+            none: number;
+            /** Partial */
+            partial: number;
         };
         /** FaceExpect */
         FaceExpect: {
@@ -2609,6 +2679,27 @@ export interface components {
         FacesByIdsRequest: {
             /** Face Ids */
             face_ids: number[];
+        };
+        /** FacesMonthsResponse */
+        FacesMonthsResponse: {
+            /** Months */
+            months: components["schemas"]["MonthFaces"][];
+            undated: components["schemas"]["FaceBuckets"];
+        };
+        /** FacesScanResponse */
+        FacesScanResponse: {
+            /** Errors */
+            errors: string[];
+            /** Faces Found */
+            faces_found: number;
+            /** Failed */
+            failed: number;
+            /** Processed */
+            processed: number;
+            /** Remaining */
+            remaining: number;
+        } & {
+            [key: string]: unknown;
         };
         /** FamilyRequest */
         FamilyRequest: {
@@ -2760,6 +2851,40 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** MonthFaces */
+        MonthFaces: {
+            /** Full */
+            full: number;
+            /** Month */
+            month: number;
+            /** No Faces */
+            no_faces: number;
+            /** None */
+            none: number;
+            /** Partial */
+            partial: number;
+            /** Year */
+            year: number;
+        };
+        /** MonthGeo */
+        MonthGeo: {
+            /** Geotagged */
+            geotagged: number;
+            /** Month */
+            month: number;
+            /** Not Geotagged */
+            not_geotagged: number;
+            /** Total */
+            total: number;
+            /** Year */
+            year: number;
+        };
+        /** MonthsResponse */
+        MonthsResponse: {
+            /** Months */
+            months: components["schemas"]["MonthGeo"][];
+            undated: components["schemas"]["UndatedGeo"];
+        };
         /** NegativeFacesRequest */
         NegativeFacesRequest: {
             /** Face Ids */
@@ -2858,6 +2983,17 @@ export interface components {
             /** Ids */
             ids: number[];
         };
+        /** Proposal */
+        Proposal: {
+            /** Label */
+            label: string;
+            /** Lat */
+            lat: number;
+            /** Lng */
+            lng: number;
+        } & {
+            [key: string]: unknown;
+        };
         /** ProposeRequest */
         ProposeRequest: {
             /** Ids */
@@ -2877,6 +3013,20 @@ export interface components {
         RemoveGeotagRequest: {
             /** Ids */
             ids: number[];
+        };
+        /** RepresentativeCounts */
+        RepresentativeCounts: {
+            /** Person Id */
+            person_id: number;
+            /** Representative */
+            representative: number;
+            /** Total */
+            total: number;
+        };
+        /** RequeuedResponse */
+        RequeuedResponse: {
+            /** Requeued */
+            requeued: number;
         };
         /** ResetSettingsRequest */
         ResetSettingsRequest: {
@@ -3143,6 +3293,75 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** SummaryFaces */
+        SummaryFaces: {
+            /** Failed Photos */
+            failed_photos: number;
+            /** Ignored */
+            ignored: number;
+            /** Labeled */
+            labeled: number;
+            /** Total */
+            total: number;
+            /** Unlabeled */
+            unlabeled: number;
+            /** Unscanned Photos */
+            unscanned_photos: number;
+        };
+        /** SummaryGeocode */
+        SummaryGeocode: {
+            /** Any Available */
+            any_available: boolean;
+            /** Export Pending */
+            export_pending: number;
+            /** Geocoded */
+            geocoded: number;
+            /** Pending */
+            pending: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** SummaryGeotag */
+        SummaryGeotag: {
+            /** Ignored */
+            ignored: number;
+            /** Tagged */
+            tagged: number;
+            /** Untagged */
+            untagged: number;
+        };
+        /** SummaryGuessable */
+        SummaryGuessable: {
+            /** Count */
+            count: number;
+            /** Window Sec */
+            window_sec: number;
+        };
+        /** SummaryPeople */
+        SummaryPeople: {
+            /** Families */
+            families: number;
+            /** Persons */
+            persons: number;
+        };
+        /** SummaryPhotos */
+        SummaryPhotos: {
+            /** Images */
+            images: number;
+            /** Total */
+            total: number;
+            /** Videos */
+            videos: number;
+        };
+        /** SummaryResponse */
+        SummaryResponse: {
+            faces: components["schemas"]["SummaryFaces"];
+            geocode: components["schemas"]["SummaryGeocode"];
+            geotag: components["schemas"]["SummaryGeotag"];
+            guessable: components["schemas"]["SummaryGuessable"];
+            people: components["schemas"]["SummaryPeople"];
+            photos: components["schemas"]["SummaryPhotos"];
+        };
         /** TimeUpdate */
         TimeUpdate: {
             /** Expected */
@@ -3151,6 +3370,15 @@ export interface components {
             id: number;
             /** Target */
             target: number;
+        };
+        /** UndatedGeo */
+        UndatedGeo: {
+            /** Geotagged */
+            geotagged: number;
+            /** Not Geotagged */
+            not_geotagged: number;
+            /** Total */
+            total: number;
         };
         /** UndoDateCommitRequest */
         UndoDateCommitRequest: {
@@ -3228,6 +3456,21 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /** WorkQueueResponse */
+        WorkQueueResponse: {
+            /** Batched Photos */
+            batched_photos: number;
+            /** Batches */
+            batches: components["schemas"]["Batch"][];
+            /** Tail Photos */
+            tail_photos: number;
+            /** Total Batches */
+            total_batches: number;
+            /** Total Photos */
+            total_photos: number;
+        } & {
+            [key: string]: unknown;
         };
     };
     responses: never;
@@ -4025,7 +4268,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DedupRecomputeResponse"];
                 };
             };
         };
@@ -4181,7 +4424,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["FacesScanResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4210,7 +4453,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["RequeuedResponse"];
                 };
             };
         };
@@ -4515,7 +4758,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["BackfillResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4580,7 +4823,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ExportSidecarsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6502,7 +6745,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["FaceBuckets"];
                 };
             };
         };
@@ -6522,7 +6765,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["FacesMonthsResponse"];
                 };
             };
         };
@@ -6542,7 +6785,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["MonthsResponse"];
                 };
             };
         };
@@ -6562,7 +6805,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SummaryResponse"];
                 };
             };
         };
@@ -6658,7 +6901,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["WorkQueueResponse"];
                 };
             };
             /** @description Validation Error */

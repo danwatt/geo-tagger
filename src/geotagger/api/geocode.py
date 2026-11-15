@@ -21,6 +21,13 @@ class GeocodeBackfillRequest(BaseModel):
     limit: int = Field(1000, ge=1, le=100_000)  # photos geocoded per call; repeat until remaining == 0
 
 
+class BackfillResponse(BaseModel):
+    processed: int
+    matched: int
+    available: bool
+    remaining: int
+
+
 def _parse_bbox(bbox: str) -> tuple[float, float, float, float]:
     """-> (min_lat, max_lat, min_lng, max_lng), with longitude unwrapped back into
     [-180, 180]. map.getBounds() (Leaflet) returns raw longitudes outside that
@@ -181,7 +188,7 @@ async def api_geocode_lookup(lat: float = Query(...), lng: float = Query(...)):
     return {"lat": lat, "lng": lng, **probe}
 
 
-@router.post("/api/geocode/backfill")
+@router.post("/api/geocode/backfill", response_model=BackfillResponse)
 async def api_geocode_backfill(req: GeocodeBackfillRequest):
     """Reverse-geocode up to `limit` photos that have coordinates but no location.
     Repeat until `remaining` is 0. Returns 503 if no geocoding dataset (OSM, Census
@@ -193,6 +200,15 @@ async def api_geocode_backfill(req: GeocodeBackfillRequest):
     return result
 
 
+class ExportSidecarsResponse(BaseModel):
+    processed: int
+    written: int
+    failed: int
+    errors_sample: list[str]
+    cursor: int      # pass back as after_id
+    remaining: int
+
+
 class ExportSidecarsRequest(BaseModel):
     # Photos written per call (each is one ExifTool write); repeat until remaining == 0.
     limit: int = Field(200, ge=1, le=2000)
@@ -200,7 +216,7 @@ class ExportSidecarsRequest(BaseModel):
     after_id: int = Field(0, ge=0)
 
 
-@router.post("/api/geocode/export-sidecars")
+@router.post("/api/geocode/export-sidecars", response_model=ExportSidecarsResponse)
 async def api_geocode_export_sidecars(req: ExportSidecarsRequest | None = None):
     """Write up to `limit` geotagged photos' GPS coordinates (plus resolved place
     names, where available) into their XMP sidecars — only photos whose sidecar

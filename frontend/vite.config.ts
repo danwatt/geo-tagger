@@ -7,14 +7,19 @@ import react from "@vitejs/plugin-react";
 // One HTML entry per ported page. Each builds to the same URL the legacy page
 // had (/settings.html), so nav links and bookmarks keep working while pages move
 // over one at a time. Unported pages are still served from src/geotagger/web/.
-const PAGES = ["settings", "data"];
+const PAGES = ["index", "settings", "data"];
 
 const BACKEND = `http://127.0.0.1:${process.env.GEOTAGGER_PORT ?? "8000"}`;
 
 // In dev, Vite serves the ported pages and its own modules; everything else
 // (the API, legacy pages, their scripts and CSS, thumbnails) goes to the FastAPI
 // server. A regex key with a negative lookahead does that routing.
-const VITE_OWNED = ["@", "src/", "node_modules/", ...PAGES.map((p) => `${p}\\.html(?:[?#]|$)`)];
+const VITE_OWNED = [
+  "@", "src/", "node_modules/",
+  ...PAGES.map((p) => `${p}\\.html(?:[?#]|$)`),
+  // Bare "/" (with or without a query) is the home page, index.html.
+  ...(PAGES.includes("index") ? ["(?:[?#]|$)"] : []),
+];
 const PROXY_ALL_ELSE = `^/(?!${VITE_OWNED.join("|")}).*`;
 
 export default defineConfig({

@@ -7,7 +7,10 @@ client URL-encodes it.
 
 import asyncio
 
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, ConfigDict
 
 from geotagger.executor import get_executor
 from geotagger.services import work_queue_service
@@ -15,7 +18,39 @@ from geotagger.services import work_queue_service
 router = APIRouter()
 
 
-@router.get("/api/work-queue")
+# ── Response models (Home's generated types; Geocode reads more of each batch,
+# so extra fields pass through) ──
+
+class Proposal(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    lat: float
+    lng: float
+    label: str
+
+
+class Batch(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    id: str
+    kind: Literal["session", "folder"]
+    title: str
+    count: int
+    start_ts: int | None
+    end_ts: int | None
+    sample_photo_ids: list[int]
+    confidence: float        # share of members with a time-neighbour vote, 0..1
+    proposal: Proposal | None
+
+
+class WorkQueueResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    batches: list[Batch]
+    total_batches: int
+    batched_photos: int      # photos the listed batches cover (a union)
+    total_photos: int
+    tail_photos: int         # untagged photos in batches too small to list
+
+
+@router.get("/api/work-queue", response_model=WorkQueueResponse)
 async def api_work_queue(
     limit: int = Query(20, ge=1, le=200),
     offset: int = Query(0, ge=0),

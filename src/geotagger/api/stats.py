@@ -1,13 +1,102 @@
 """Library statistics endpoints (monthly/daily counts, summary snapshot, bounds)."""
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, ConfigDict
 
 from geotagger import index, geocode
 
 router = APIRouter()
 
 
-@router.get("/api/stats/months")
+# ── Response models (Home's generated types) ──
+
+class MonthGeo(BaseModel):
+    year: int
+    month: int
+    total: int
+    geotagged: int       # tagged or ignored: no longer needs a location
+    not_geotagged: int
+
+
+class UndatedGeo(BaseModel):
+    total: int
+    geotagged: int
+    not_geotagged: int
+
+
+class MonthsResponse(BaseModel):
+    months: list[MonthGeo]   # newest first
+    undated: UndatedGeo
+
+
+class FaceBuckets(BaseModel):
+    """Scanned image photos by labeling coverage (see index.get_face_coverage)."""
+    full: int
+    partial: int
+    none: int
+    no_faces: int
+
+
+class MonthFaces(FaceBuckets):
+    year: int
+    month: int
+
+
+class FacesMonthsResponse(BaseModel):
+    months: list[MonthFaces]   # newest first
+    undated: FaceBuckets
+
+
+class SummaryPhotos(BaseModel):
+    total: int
+    images: int
+    videos: int
+
+
+class SummaryGeotag(BaseModel):
+    tagged: int
+    ignored: int
+    untagged: int
+
+
+class SummaryGuessable(BaseModel):
+    count: int
+    window_sec: int
+
+
+class SummaryGeocode(BaseModel):
+    # geocode.status() adds per-dataset diagnostics; pass them through.
+    model_config = ConfigDict(extra="allow")
+    any_available: bool
+    geocoded: int
+    pending: int
+    export_pending: int
+
+
+class SummaryFaces(BaseModel):
+    unscanned_photos: int
+    failed_photos: int
+    total: int
+    labeled: int
+    unlabeled: int
+    ignored: int
+
+
+class SummaryPeople(BaseModel):
+    persons: int
+    families: int
+
+
+class SummaryResponse(BaseModel):
+    photos: SummaryPhotos
+    geotag: SummaryGeotag
+    guessable: SummaryGuessable
+    geocode: SummaryGeocode
+    faces: SummaryFaces
+    people: SummaryPeople
+
+
+@router.get("/api/stats/months", response_model=MonthsResponse)
 async def api_stats_months():
     """Get photo counts grouped by year/month with geotagged breakdown, plus a
     separate `undated` total (photos with no timestamp — excluded from `months`
@@ -101,7 +190,7 @@ async def api_stats_years():
         raise HTTPException(500, str(e))
 
 
-@router.get("/api/stats/faces-months")
+@router.get("/api/stats/faces-months", response_model=FacesMonthsResponse)
 async def api_stats_faces_months():
     """Get scanned-image-photo counts grouped by year/month, bucketed the same way
     as get_face_coverage (full / partial / none / no_faces). Unscanned photos are
@@ -180,7 +269,7 @@ async def api_stats_faces_months():
         raise HTTPException(500, str(e))
 
 
-@router.get("/api/stats/summary")
+@router.get("/api/stats/summary", response_model=SummaryResponse)
 async def api_stats_summary():
     """One-shot health snapshot for the home dashboard: library size, geotagging /
     reverse-geocoding / face-labeling progress, and people counts."""
@@ -223,8 +312,10 @@ async def api_stats_summary():
                 guessable_count += 1
 
         return {
-            "photos": {"total": row["total"], "images": row["images"], "videos": row["videos"]},
-            "geotag": {"tagged": row["tagged"], "ignored": row["ignored"], "untagged": row["untagged"]},
+            # SUM() over an empty library is NULL, hence the `or 0`s.
+            "photos": {"total": row["total"], "images": row["images"] or 0, "videos": row["videos"] or 0},
+            "geotag": {"tagged": row["tagged"] or 0, "ignored": row["ignored"] or 0,
+                       "untagged": row["untagged"] or 0},
             "guessable": {"count": guessable_count, "window_sec": window_sec},
             "geocode": {
                 **geocode.status(),
@@ -253,7 +344,7 @@ async def api_stats_summary():
         raise HTTPException(500, str(e))
 
 
-@router.get("/api/stats/face-coverage")
+@router.get("/api/stats/face-coverage", response_model=FaceBuckets)
 async def api_stats_face_coverage():
     """Per-photo face-labeling coverage across scanned image photos, bucketed into
     full / partial / none / no-detected-faces for the home dashboard."""

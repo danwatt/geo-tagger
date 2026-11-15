@@ -10,6 +10,9 @@ export function fmtBytes(n: number | null | undefined): string {
   return `${n.toFixed(1)} ${units[i]}`;
 }
 
+export const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"];
+
 /** "1 segment" / "3 segments". */
 export function plural(n: number, word: string): string {
   return `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
