@@ -228,7 +228,7 @@ async def api_update_person(person_id: int, req: UpdatePersonRequest):
             "message": f'A person named "{name}" already exists',
             "existing_person_id": existing["id"] if existing else None,
         })
-    return {"id": person_id}
+    return {"ok": True, "id": person_id}
 
 
 class MergePersonRequest(BaseModel):
@@ -268,7 +268,7 @@ async def api_create_family(req: FamilyRequest):
         family_id = index.create_family(name)
     except sqlite3.IntegrityError:
         raise HTTPException(409, f'A family named "{name}" already exists')
-    return {"id": family_id, "name": name, "person_count": 0}
+    return {"ok": True, "id": family_id, "name": name, "person_count": 0}
 
 
 @router.patch("/api/families/{family_id}")
@@ -282,14 +282,15 @@ async def api_rename_family(family_id: int, req: FamilyRequest):
         raise HTTPException(409, f'A family named "{name}" already exists')
     if not found:
         raise HTTPException(404, "Family not found")
-    return {"id": family_id, "name": name}
+    return {"ok": True, "id": family_id, "name": name}
 
 
 @router.delete("/api/families/{family_id}")
 async def api_delete_family(family_id: int):
     if not index.delete_family(family_id):
         raise HTTPException(404, "Family not found")
-    return {"success": True}
+    # "success": legacy alias of "ok" (the A12 mutation convention), kept for scripts.
+    return {"ok": True, "id": family_id, "success": True}
 
 
 @router.post("/api/persons")
@@ -301,7 +302,7 @@ async def api_create_person(req: CreatePersonRequest):
         person_id = index.create_person(name)
     except sqlite3.IntegrityError:
         raise HTTPException(409, f'A person named "{name}" already exists')
-    return {"id": person_id, "name": name}
+    return {"ok": True, "id": person_id, "name": name}
 
 
 @router.delete("/api/persons/{person_id}")
@@ -311,7 +312,7 @@ async def api_delete_person(person_id: int):
     undo = face_undo_service.delete_person(person_id)
     if undo is None:
         raise HTTPException(404, "Person not found")
-    return {"success": True, "undo": undo}
+    return {"ok": True, "id": person_id, "success": True, "undo": undo}
 
 
 @router.get("/api/faces")
@@ -589,7 +590,7 @@ async def api_delete_manual_face(face_id: int):
     if not index.delete_manual_face(face_id):
         raise HTTPException(400, "Only manually added faces can be deleted; "
                                  "use ignore for detected faces")
-    return {"success": True, "face_id": face_id}
+    return {"ok": True, "id": face_id, "success": True, "face_id": face_id}
 
 
 @router.post("/api/faces/undo")

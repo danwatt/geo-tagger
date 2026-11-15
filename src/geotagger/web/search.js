@@ -1248,7 +1248,7 @@ function showPlaceholder() {
 const showDetail = latestOnly(async (signal, id) => {
   focusedPhotoId = id;
   try {
-    const data = await fetchJson(`/api/photo/${id}`, { signal });
+    const data = await fetchJson(`/api/photos/${id}`, { signal });
     if (signal.aborted) return;
 
     document.getElementById("detail-placeholder").style.display = "none";

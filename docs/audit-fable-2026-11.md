@@ -49,9 +49,6 @@ The module also imports `services.data_service`, inverting the layering.
 `api/geocode.py:199-203`. Unreachable `return` after the route's `return`, using undefined `groups`.
 A linter would catch it (see T3).
 
-**A12 — Low — Inconsistent response shapes** [traced]
-Mutations return `{"success"}`, `{"id"}`, `{"updated"}`, or bare lists. `/api/status` and `/api/debug` return
-200 with `"error"` strings, which defeats `res.ok`. `/api/photo/{id}` and `/api/photos/{id}/…` mix singular and plural.
 
 ## Security
 

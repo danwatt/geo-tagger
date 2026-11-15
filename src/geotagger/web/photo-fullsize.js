@@ -2,7 +2,7 @@
  *
  * The served preview (/api/preview/{id}) is the fast *embedded* JPEG for RAW
  * files, so it looks soft. The full LibRaw demosaic (with face boxes drawn) is a
- * separate, heavier render at /api/photo/{id}/fullsize. We surface a button for it
+ * separate, heavier render at /api/photos/{id}/fullsize. We surface a button for it
  * only on RAW photos, matching that tradeoff — for non-RAW the served preview is
  * already the real image.
  *
@@ -18,7 +18,7 @@
   };
 
   window.openFullSize = function (photoId) {
-    window.open(`/api/photo/${photoId}/fullsize`, "_blank");
+    window.open(`/api/photos/${photoId}/fullsize`, "_blank");
   };
 
   /* Show `btn` only for RAW photos and wire its click to the full-size render.

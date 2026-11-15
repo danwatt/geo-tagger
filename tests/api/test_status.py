@@ -3,7 +3,9 @@
 
 def test_status_and_debug(client):
     s = client.get("/api/status").json()
-    assert "ok" in s and s["db_total"] == 0 and "geocoder" in s
+    assert set(s["exiftool"]) == {"available", "reason"}
+    assert s["db_total"] == 0 and "geocoder" in s
+    assert "ok" not in s and "error" not in s
 
     d = client.get("/api/debug").json()
     assert d == {"total": 0, "sample": []}
@@ -66,3 +68,26 @@ def test_settings_patch_out_of_range_400(client):
 def test_settings_reset_unknown_key_400(client):
     r = client.post("/api/settings/reset", json={"keys": ["NOPE"]})
     assert r.status_code == 400
+
+
+# ── Errors are real statuses, components report availability (audit A12) ──
+
+def test_status_reports_missing_exiftool_as_component(client, monkeypatch):
+    from geotagger.api import status
+    monkeypatch.setattr(status, "exiftool_status",
+                        lambda: {"ok": False, "error": "not started"})
+    r = client.get("/api/status")
+    assert r.status_code == 200
+    assert r.json()["exiftool"] == {"available": False, "reason": "not started"}
+
+
+def test_status_and_debug_db_failure_is_503(client, monkeypatch):
+    from geotagger.api import status
+
+    def broken():
+        raise RuntimeError("disk on fire")
+    monkeypatch.setattr(status.index, "get_db", broken)
+    for path in ("/api/status", "/api/debug"):
+        r = client.get(path)
+        assert r.status_code == 503, path
+        assert "disk on fire" in r.json()["detail"]

@@ -188,8 +188,8 @@ async function checkStatus() {
     const res = await fetch("/api/status");
     if (!res.ok) return;   // a server error isn't "ExifTool missing"
     const data = await res.json();
-    if (!data.ok) {
-      setStatus("⚠ ExifTool not found — run: uv run python scripts/get_exiftool.py  |  " + data.error, true);
+    if (!data.exiftool.available) {
+      setStatus("⚠ ExifTool not found — run: uv run python scripts/get_exiftool.py  |  " + data.exiftool.reason, true);
     }
   } catch (e) {
     // server not yet ready
@@ -2344,7 +2344,7 @@ const showDetail = latestOnly(async (signal, id) => {
   resetGuessButton();
   dismissGuess();
   try {
-    const res = await fetch(`/api/photo/${id}`, { signal });
+    const res = await fetch(`/api/photos/${id}`, { signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (signal.aborted) return;

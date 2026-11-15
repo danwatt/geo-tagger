@@ -28,7 +28,7 @@ def test_families_crud(client):
     assert r.json()["person_count"] == 0
     assert any(f["id"] == fid for f in client.get("/api/families").json())
     assert client.patch(f"/api/families/{fid}", json={"name": "Jones"}).json()["name"] == "Jones"
-    assert client.delete(f"/api/families/{fid}").json() == {"success": True}
+    assert client.delete(f"/api/families/{fid}").json() == {"ok": True, "id": fid, "success": True}
 
 
 def test_list_assign_and_scopes(client):
@@ -522,7 +522,7 @@ def test_delete_family_detaches_members(client):
     pid = client.post("/api/persons", json={"name": "Alice"}).json()["id"]
     client.patch(f"/api/persons/{pid}", json={"family_id": fid})
 
-    assert client.delete(f"/api/families/{fid}").json() == {"success": True}
+    assert client.delete(f"/api/families/{fid}").json() == {"ok": True, "id": fid, "success": True}
 
     assert index.get_person(pid)["family_id"] is None
     alice = next(p for p in client.get("/api/persons").json() if p["id"] == pid)

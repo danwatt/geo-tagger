@@ -12,8 +12,7 @@ def test_status_ok(client):
     assert res.status_code == 200
     body = res.json()
     # exiftool_status() keys are merged in at the top level, plus these:
-    assert "ok" in body
-
+    assert set(body["exiftool"]) == {"available", "reason"}
     assert body["db_total"] == 0
     assert "geocoder" in body
 
@@ -60,7 +59,7 @@ def test_places_crud(client):
 
     res = client.delete(f"/api/places/{place_id}")
     assert res.status_code == 200
-    assert res.json() == {"success": True}
+    assert res.json() == {"ok": True, "id": place_id, "success": True}
 
 
 def test_persons_and_families(client):

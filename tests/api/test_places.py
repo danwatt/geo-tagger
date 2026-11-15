@@ -13,7 +13,7 @@ def test_places_crud(client):
     r = client.post("/api/places", json={"name": "Home", "type": "circle", "bounds": _CIRCLE})
     assert r.status_code == 200
     pid = r.json()["id"]
-    assert r.json() == {"id": pid, "name": "Home", "type": "circle", "bounds": _CIRCLE}
+    assert r.json() == {"ok": True, "id": pid, "name": "Home", "type": "circle", "bounds": _CIRCLE}
 
     place = next(p for p in client.get("/api/places").json() if p["id"] == pid)
     assert place["name"] == "Home" and place["type"] == "circle"
@@ -22,7 +22,7 @@ def test_places_crud(client):
 
     moved = '{"lat": 5.0, "lng": 6.0, "radius": 75.0}'
     assert client.patch(f"/api/places/{pid}", json={"bounds": moved}).json() == {
-        "success": True, "bounds": moved}
+        "ok": True, "id": pid, "success": True, "bounds": moved}
     updated = next(p for p in client.get("/api/places").json() if p["id"] == pid)
     assert updated["bounds"] == moved
 
@@ -31,7 +31,7 @@ def test_places_crud(client):
     renamed = next(p for p in client.get("/api/places").json() if p["id"] == pid)
     assert renamed["name"] == "Cabin" and renamed["bounds"] == moved
 
-    assert client.delete(f"/api/places/{pid}").json() == {"success": True}
+    assert client.delete(f"/api/places/{pid}").json() == {"ok": True, "id": pid, "success": True}
     assert all(p["id"] != pid for p in client.get("/api/places").json())
 
 

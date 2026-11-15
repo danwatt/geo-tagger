@@ -720,3 +720,61 @@ def test_preview_etag_tracks_raw_full_decode(tmp_path, monkeypatch):
     on = thumbnails.rendition_etag(path, 1.0, 3, 1, "preview")
     assert off != on
     assert thumbnails.rendition_etag(path, 1.0, 3, 6, "preview") != on
+
+
+# ── Plural single-photo paths + deprecated singular aliases (audit A12) ──
+
+def test_plural_and_singular_photo_detail_are_identical(client):
+    pid = _add("alias.jpg", lat=1, lng=2, dt=1000)
+    plural = client.get(f"/api/photos/{pid}")
+    singular = client.get(f"/api/photo/{pid}")
+    assert plural.status_code == singular.status_code == 200
+    assert plural.json() == singular.json()
+    assert plural.json()["id"] == pid
+
+
+def test_plural_photo_routes_404_for_unknown_id(client):
+    assert client.get("/api/photos/999").status_code == 404
+    assert client.get("/api/photos/999/fullsize").status_code == 404
+
+
+def test_plural_fullsize_matches_singular(client, tmp_path):
+    pid = _add_jpeg(tmp_path, "full.jpg")
+    plural = client.get(f"/api/photos/{pid}/fullsize")
+    singular = client.get(f"/api/photo/{pid}/fullsize")
+    assert plural.status_code == singular.status_code == 200
+    assert plural.headers["content-type"] == "image/jpeg"
+    assert plural.content == singular.content
+
+
+def test_plural_photo_route_shadows_no_specific_photos_route(client):
+    """/api/photos/{photo_id:int} must not capture the literal /api/photos/* routes
+    (a plain {photo_id} would turn GET /api/photos/dirs into a 422)."""
+    pid = _add("s.jpg", lat=10, lng=20, dt=1000)
+    gets = {
+        "/api/photos/dirs": None,
+        "/api/photos/by-area": {"lat": 10, "lng": 20, "radius": 100},
+        "/api/photos/by-bounds": {"min_lat": 9, "max_lat": 11, "min_lng": 19, "max_lng": 21},
+        "/api/photos/by-location": {"location_fields": '{"loc_city":"Nowhere"}'},
+    }
+    for path, params in gets.items():
+        r = client.get(path, params=params)
+        assert r.status_code == 200, (path, r.text)
+        assert isinstance(r.json(), list), path
+    assert client.post("/api/photos/by-ids", json={"ids": [pid]}).json()[0]["id"] == pid
+    assert client.post("/api/photos/update-times", json={"updates": []}).status_code == 200
+    assert client.post("/api/photos/assign-date",
+                       json={"photo_ids": [], "year": 2000}).status_code == 400
+    assert client.post("/api/photos/guess-dates",
+                       json={"photo_ids": [pid]}).status_code == 200
+    assert client.post("/api/photos/commit-guessed-dates",
+                       json={"entries": []}).status_code == 400
+    assert client.post("/api/photos/undo-date-commit",
+                       json={"previous": []}).status_code == 400
+    assert client.post("/api/photos/download-zip?check=1",
+                       json={"photo_ids": []}).status_code == 400
+    # The other routers' /api/photos/{id}/… routes still resolve.
+    assert client.get(f"/api/photos/{pid}/faces").json() == []
+    assert client.get(f"/api/photos/{pid}/tagged-people").json() == []
+    # A non-integer id matches no route at all (rather than a 422 from the detail route).
+    assert client.get("/api/photos/not-a-number").status_code == 404

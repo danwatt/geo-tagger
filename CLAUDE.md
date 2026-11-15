@@ -93,6 +93,14 @@ internet, rest don't.
 - **Error handling in routes**: wrap in `try/except`; re-raise `HTTPException` before catching
   generic `Exception` (so deliberate 4xx not swallowed into 500); surface `ValueError` as
   `HTTPException(400, …)`.
+- **Response shapes**: failure always non-2xx with `detail` — never 200 + `"error"` (status
+  reports: per-component `{"available": false, "reason": …}`; background-job polls may carry
+  the job's `error`). Single-resource mutation returns `{"ok": true, "id": …}` + changed
+  fields (`success` = legacy alias, don't drop); bulk ops return named counts
+  (`updated`/`assigned`/…) + `undo` where reversible; per-photo batch writes use
+  `{results, written, failed, not_found}` via `geotag._batch_response`. Paths plural:
+  `/api/photos/{id:int}/…` (`:int` so it can't shadow `/api/photos/dirs` etc.);
+  `/api/photo/{id}` is a deprecated alias.
 - **Comments explain _why_**, many exist — performance rationale, edge cases, Windows
   quirks. Match density on non-obvious code. Use `# ── Section label ──` separators to group
   routes/functions, as existing files do.

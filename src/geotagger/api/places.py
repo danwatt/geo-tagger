@@ -78,7 +78,7 @@ async def api_create_place(req: CreatePlaceRequest):
     """Create a new place. 400 when the bounds don't describe a valid shape."""
     bounds = _checked_bounds(req.type, req.bounds)
     place_id = index.create_place(req.name, req.type, bounds)
-    return {"id": place_id, "name": req.name, "type": req.type, "bounds": bounds}
+    return {"ok": True, "id": place_id, "name": req.name, "type": req.type, "bounds": bounds}
 
 
 @router.delete("/api/places/{place_id}")
@@ -86,7 +86,8 @@ async def api_delete_place(place_id: int):
     """Delete a place."""
     if not index.delete_place(place_id):
         raise HTTPException(404, "Place not found")
-    return {"success": True}
+    # "success": legacy alias of "ok" (the A12 mutation convention), kept for scripts.
+    return {"ok": True, "id": place_id, "success": True}
 
 
 class UpdatePlaceRequest(BaseModel):
@@ -106,7 +107,8 @@ async def api_update_place(place_id: int, req: UpdatePlaceRequest):
     bounds = _checked_bounds(place["type"], req.bounds) if req.bounds is not None else None
     if not index.update_place(place_id, bounds=bounds, name=req.name):
         raise HTTPException(404, "Place not found")   # deleted in between
-    return {"success": True, "bounds": bounds if bounds is not None else place["bounds"]}
+    return {"ok": True, "id": place_id, "success": True,
+            "bounds": bounds if bounds is not None else place["bounds"]}
 
 
 class SetRepresentativeRequest(BaseModel):
@@ -120,5 +122,6 @@ async def api_set_place_representative(place_id: int, req: SetRepresentativeRequ
         raise HTTPException(404, "Photo not found")
     if not index.set_place_representative(place_id, req.photo_id):
         raise HTTPException(404, "Place not found")
-    return {"success": True, "representative_photo_id": req.photo_id}
+    return {"ok": True, "id": place_id, "success": True,
+            "representative_photo_id": req.photo_id}
 

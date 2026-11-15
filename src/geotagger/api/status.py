@@ -19,12 +19,21 @@ class ResetSettingsRequest(BaseModel):
 
 @router.get("/api/status")
 async def api_status():
+    """Component health. A component being unavailable (ExifTool missing, no
+    GeoNames data) is a normal, reportable state: 200 with that component's
+    ``available: false`` + ``reason``. The DB is not optional — without it
+    nothing works — so a failing COUNT is a 503, never a 200 whose ``db_total``
+    is an error string (audit A12: that made `res.ok` lie)."""
     try:
-        db = index.get_db()
-        total = db.execute("SELECT COUNT(*) FROM photos").fetchone()[0]
+        total = index.get_db().execute("SELECT COUNT(*) FROM photos").fetchone()[0]
     except Exception as e:
-        total = f"error: {e}"
-    return {**exiftool_status(), "db_total": total, "geocoder": geocode.status()}
+        raise HTTPException(503, f"Database unavailable: {e}")
+    et = exiftool_status()
+    return {
+        "exiftool": {"available": et["ok"], "reason": et.get("error")},
+        "db_total": total,
+        "geocoder": geocode.status(),
+    }
 
 
 @router.get("/api/scan/status")
@@ -152,4 +161,5 @@ async def api_debug():
         sample = db.execute("SELECT id, filename, camera FROM photos LIMIT 5").fetchall()
         return {"total": total, "sample": [dict(r) for r in sample]}
     except Exception as e:
-        return {"error": str(e)}
+        # A real failure, so a real status (audit A12) — not 200 + {"error"}.
+        raise HTTPException(503, f"Database unavailable: {e}")

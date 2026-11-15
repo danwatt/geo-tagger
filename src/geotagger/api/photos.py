@@ -273,7 +273,14 @@ async def api_preview(photo_id: int, request: Request):
                                   thumbnails.get_preview_oriented, "preview")
 
 
-@router.get("/api/photo/{photo_id}/fullsize")
+# ── Single photo: /api/photos/{id}… is canonical (plural, like every other
+# /api/photos/{id}/… route). The singular /api/photo/{id}… paths are deprecated
+# aliases kept so bookmarks and scripts keep working (audit A12). The ``:int``
+# convertor keeps the plural form from shadowing /api/photos/dirs, /by-area, …
+# whatever the registration order.
+
+@router.get("/api/photos/{photo_id:int}/fullsize")
+@router.get("/api/photo/{photo_id}/fullsize", deprecated=True)
 async def api_fullsize(photo_id: int):
     """On-the-fly full-resolution render with detected face boxes drawn on, as JPEG.
 
@@ -294,11 +301,12 @@ async def api_fullsize(photo_id: int):
                     headers={"Cache-Control": "no-store"})
 
 
-@router.get("/api/photo/{photo_id}")
+@router.get("/api/photos/{photo_id:int}")
+@router.get("/api/photo/{photo_id}", deprecated=True)
 async def api_photo(photo_id: int):
     row = index.get_photo(photo_id)
     if not row:
-        raise HTTPException(404)
+        raise HTTPException(404, "Photo not found")
     # Fetch extra metadata from exiftool in thread pool
     loop = asyncio.get_event_loop()
     extra = await loop.run_in_executor(get_executor(), photos_service.get_photo_metadata, index.photo_path(row))

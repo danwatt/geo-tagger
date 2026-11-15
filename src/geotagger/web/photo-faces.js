@@ -153,10 +153,10 @@ async function loadCrowdPhotos() {
   crowdPhotos = data.groups.flatMap(g => g.photos);
 }
 
-/* Single-photo mode: build a one-entry playlist from /api/photo. unlabeled_faces
+/* Single-photo mode: build a one-entry playlist from /api/photos/{id}. unlabeled_faces
  * is a placeholder — renderFaces() recomputes it from the real face list. */
 async function loadSinglePhoto(photoId) {
-  const res = await fetch(`/api/photo/${photoId}`);
+  const res = await fetch(`/api/photos/${photoId}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const d = await res.json();
   crowdPhotos = [{ id: photoId, filename: d.filename, unlabeled_faces: 0 }];
@@ -240,7 +240,7 @@ async function reloadFacesFor(photoId) {
 // never paint one photo's faces or metadata beside another photo.
 const loadPhotoMeta = latestOnly(async (signal, photoId) => {
   try {
-    const res = await fetch(`/api/photo/${photoId}`, { signal });
+    const res = await fetch(`/api/photos/${photoId}`, { signal });
     if (!res.ok) return;
     const d = await res.json();
     if (signal.aborted || photoId !== currentPhotoId()) return;
