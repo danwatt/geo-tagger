@@ -41,6 +41,16 @@ class Batch(BaseModel):
     proposal: Proposal | None
 
 
+class BatchDetail(Batch):
+    """get_batch / get_next: one batch plus its live untagged members and where it
+    sits in the queue (what Geocode's batch banner and Next/Skip work from)."""
+    camera: str | None = None
+    dir: str | None = None
+    photo_ids: list[int]
+    position: int            # 0-based index in the ranked queue
+    total_batches: int
+
+
 class WorkQueueResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
     batches: list[Batch]
@@ -63,7 +73,7 @@ async def api_work_queue(
         get_executor(), work_queue_service.get_queue, limit, offset, kind, min_size)
 
 
-@router.get("/api/work-queue/next")
+@router.get("/api/work-queue/next", response_model=BatchDetail)
 async def api_work_queue_next(
     skip: str = Query("", description="comma-separated batch ids to pass over"),
     kind: str = Query("all", pattern="^(all|session|folder)$"),
@@ -81,7 +91,7 @@ async def api_work_queue_next(
 
 # Registered after /next so the literal path wins — {id:path} would otherwise
 # swallow it.
-@router.get("/api/work-queue/batch/{batch_id:path}")
+@router.get("/api/work-queue/batch/{batch_id:path}", response_model=BatchDetail)
 async def api_work_queue_batch(batch_id: str, min_size: int | None = Query(None, ge=1)):
     """One batch plus the ids of its still-untagged members. 404 once it's done."""
     loop = asyncio.get_running_loop()

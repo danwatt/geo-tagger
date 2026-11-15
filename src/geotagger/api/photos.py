@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.get("/api/photos")
+@router.get("/api/photos", response_model=list[SearchPhoto], response_model_exclude_unset=True)
 async def api_photos(
     geotagged: str = Query("all", pattern="^(all|yes|no)$"),
     bbox: str | None = Query(None),
@@ -62,7 +62,7 @@ class PhotosByIdsRequest(BaseModel):
     ids: list[int] = Field(max_length=500_000)
 
 
-@router.post("/api/photos/by-ids")
+@router.post("/api/photos/by-ids", response_model=list[SearchPhoto], response_model_exclude_unset=True)
 async def api_photos_by_ids(req: PhotosByIdsRequest):
     """Same as ``GET /api/photos?ids=…`` but with the ids in the body: Search's
     "Open in Geocode" can hand over more photos than fit in a request line (A3 —
@@ -131,7 +131,7 @@ def _augment_and_filter(photos_in_area: list, geotagged: str, window: int) -> li
     return photos_in_area
 
 
-@router.get("/api/photos/by-area")
+@router.get("/api/photos/by-area", response_model=list[SearchPhoto], response_model_exclude_unset=True)
 async def api_photos_by_area(
     lat: float = Query(...),
     lng: float = Query(...),
@@ -186,7 +186,7 @@ async def api_photos_by_area(
     return result
 
 
-@router.get("/api/photos/by-location")
+@router.get("/api/photos/by-location", response_model=list[SearchPhoto], response_model_exclude_unset=True)
 async def api_photos_by_location(
     location_fields: str = Query(...),
     geotagged: str = Query("all", pattern="^(all|yes|no)$"),

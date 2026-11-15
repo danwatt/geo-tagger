@@ -7,31 +7,51 @@ import "./FaceActionsMenu.css";
  * the first item, Up/Down cycle the items, Escape or a click outside closes it
  * and focus goes back to the anchor. The caller supplies the items. */
 
-export type FaceMenuItem = { label: string; onSelect: () => void; danger?: boolean; primary?: boolean; title?: string };
+export type FaceMenuItem = {
+  label: string;
+  onSelect: () => void;
+  danger?: boolean;
+  primary?: boolean;
+  title?: string;
+  /** Shown but inert: the action exists, this target just can't take it. */
+  disabled?: boolean;
+};
 
-export function FaceActionsMenu({ anchor, label, items, onClose }: {
+export function FaceActionsMenu({ anchor, label, items, onClose, point, heading }: {
   anchor: HTMLElement;
   label: string;
   items: FaceMenuItem[];
   onClose: () => void;
+  /** Open at this viewport point (a right-click) instead of under the anchor;
+   *  the anchor still gets focus back on close. */
+  point?: { x: number; y: number };
+  /** A non-interactive first line naming the target (Geocode's photo menu). */
+  heading?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
-  // Below the anchor, flipped up / pulled left when it would leave the viewport.
+  // Below the anchor (or at the point), flipped up / pulled left when it would
+  // leave the viewport.
+  const px = point?.x, py = point?.y;
   useLayoutEffect(() => {
-    const a = anchor.getBoundingClientRect();
     const m = ref.current?.getBoundingClientRect();
     const w = m?.width ?? 200, h = m?.height ?? 200;
-    let left = Math.min(a.left, window.innerWidth - w - 8);
-    let top = a.bottom + 4;
-    if (top + h > window.innerHeight - 8) top = Math.max(8, a.top - h - 4);
-    left = Math.max(8, left);
+    let left: number, top: number;
+    if (px !== undefined && py !== undefined) {
+      left = Math.max(4, Math.min(px, window.innerWidth - w - 8));
+      top = Math.max(4, Math.min(py, window.innerHeight - h - 8));
+    } else {
+      const a = anchor.getBoundingClientRect();
+      left = Math.max(8, Math.min(a.left, window.innerWidth - w - 8));
+      top = a.bottom + 4;
+      if (top + h > window.innerHeight - 8) top = Math.max(8, a.top - h - 4);
+    }
     setPos({ left, top });
-    ref.current?.querySelector<HTMLElement>("[role=menuitem]")?.focus();
-  }, [anchor]);
+    ref.current?.querySelector<HTMLElement>("[role=menuitem]:not([disabled])")?.focus();
+  }, [anchor, px, py]);
 
   useEffect(() => {
     const onDown = (e: PointerEvent) => {
@@ -47,7 +67,7 @@ export function FaceActionsMenu({ anchor, label, items, onClose }: {
   }
 
   function onKeyDown(e: React.KeyboardEvent) {
-    const els = [...(ref.current?.querySelectorAll<HTMLElement>("[role=menuitem]") ?? [])];
+    const els = [...(ref.current?.querySelectorAll<HTMLElement>("[role=menuitem]:not([disabled])") ?? [])];
     const i = els.indexOf(document.activeElement as HTMLElement);
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
     else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -59,8 +79,9 @@ export function FaceActionsMenu({ anchor, label, items, onClose }: {
   return (
     <div ref={ref} className="face-expand" role="menu" aria-label={label} onKeyDown={onKeyDown}
       style={pos ? { left: pos.left, top: pos.top } : { visibility: "hidden" }}>
+      {heading && <div className="face-expand-heading" title={heading}>{heading}</div>}
       {items.map((it) => (
-        <button key={it.label} type="button" role="menuitem" title={it.title}
+        <button key={it.label} type="button" role="menuitem" title={it.title} disabled={it.disabled}
           className={`expand-btn${it.danger ? " danger" : ""}${it.primary ? " primary" : ""}`}
           onClick={() => { onClose(); it.onSelect(); }}>
           {it.label}

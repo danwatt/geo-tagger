@@ -3,7 +3,7 @@
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from geotagger import index, geocode, config
 from geotagger.exiftool_session import exiftool_status
@@ -91,7 +91,27 @@ class ClearScanErrorsResponse(BaseModel):
     cleared: int
 
 
-@router.get("/api/status")
+class ExifToolStatus(BaseModel):
+    available: bool
+    reason: str | None = None
+
+
+class GeocoderStatus(BaseModel):
+    """geocode.status(); extra="allow" so a diagnostic added there passes through."""
+    model_config = ConfigDict(extra="allow")
+    available: bool
+    state: str | None = None
+    error: str | None = None
+    cities: int = 0
+
+
+class StatusResponse(BaseModel):
+    exiftool: ExifToolStatus
+    db_total: int
+    geocoder: GeocoderStatus
+
+
+@router.get("/api/status", response_model=StatusResponse)
 async def api_status():
     """Component health. A component being unavailable (ExifTool missing, no
     GeoNames data) is a normal, reportable state: 200 with that component's

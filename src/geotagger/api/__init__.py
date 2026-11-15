@@ -5,7 +5,7 @@ from geotagger.api import (status, stats, photos, geotag, geocode, places,
                            faces, search, data, work_queue, semantic)
 
 # Road Trip mode is disabled for now: geotagger/api/roadtrip.py and its service
-# still exist, but the router isn't mounted (and geocode.html doesn't load
+# still exist, but the router isn't mounted (and the Geocode page doesn't load
 # roadtrip.js/.css). Re-enable by importing roadtrip and adding roadtrip.router.
 ROUTERS = [status.router, stats.router, photos.router, geotag.router,
            geocode.router, places.router, faces.router,

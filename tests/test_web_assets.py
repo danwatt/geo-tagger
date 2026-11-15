@@ -25,7 +25,7 @@ def test_every_page_loads_common_js_before_its_own_scripts():
     assert PAGES, "no pages found"
     for page in PAGES:
         html = page.read_text(encoding="utf-8")
-        # Ignore commented-out tags (geocode.html parks roadtrip.js in a comment).
+        # Ignore commented-out tags (a page may park a disabled script in a comment).
         html = re.sub(r"<!--.*?-->", "", html, flags=re.S)
         scripts = re.findall(r'<script src="([^"]+)"', html)
         local = [s for s in scripts if not s.startswith("http")]

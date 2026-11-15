@@ -43,3 +43,9 @@ export function unwrap<T>(result: { data?: T; error?: unknown; response: Respons
   }
   return result.data;
 }
+
+/** POST a JSON body to a runtime path — getJson's twin, for latest-only callers
+ *  that need to pass an AbortSignal (openapi-fetch's Request would carry it). */
+export function postJson<T>(path: string, body: unknown, init?: RequestInit): Promise<T> {
+  return getJson<T>(path, { ...init, method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+}

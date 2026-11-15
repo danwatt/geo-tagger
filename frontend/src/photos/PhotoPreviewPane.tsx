@@ -35,10 +35,18 @@ export function detailRows(d: PhotoDetail): [string, string][] {
   ];
 }
 
-export function PhotoPreviewPane({ photoId, actions, hidden, id = "detail-pane" }: {
+export function PhotoPreviewPane({ photoId, actions, buttons, extraRows, footer, hidden, id = "detail-pane" }: {
   photoId: number | null;
   /** Page-specific actions under the image (Search: "More like this"). */
   actions?: (detail: PhotoDetail) => ReactNode;
+  /** Buttons that share the image's action row, before "View full size"
+   *  (Geocode: "Faces"). */
+  buttons?: (detail: PhotoDetail) => ReactNode;
+  /** Rows appended to the metadata table (Geocode: accuracy, source, sidecar,
+   *  the ignore checkbox). */
+  extraRows?: (detail: PhotoDetail) => [string, ReactNode][];
+  /** Rendered under the table (Geocode: the Guess location bar). */
+  footer?: (detail: PhotoDetail) => ReactNode;
   hidden?: boolean;
   id?: string;
 }) {
@@ -60,18 +68,22 @@ export function PhotoPreviewPane({ photoId, actions, hidden, id = "detail-pane" 
     body = (
       <div className="detail-content">
         <img className="detail-img" src={`/api/preview/${d.id}`} alt={`Preview of ${d.filename}`} />
-        {isRawName(d.filename) && (
+        {(buttons || isRawName(d.filename)) && (
           <div className="detail-actions">
-            <button type="button" title="Decode the RAW at full resolution and open it (with face boxes) in a new tab"
-              onClick={() => nav.open(fullSizeUrl(d.id))}>🔍 View full size (RAW)</button>
+            {buttons?.(d)}
+            {isRawName(d.filename) && (
+              <button type="button" title="Decode the RAW at full resolution and open it (with face boxes) in a new tab"
+                onClick={() => nav.open(fullSizeUrl(d.id))}>🔍 View full size (RAW)</button>
+            )}
           </div>
         )}
         {actions?.(d)}
         <table className="detail-meta">
           <tbody>
-            {detailRows(d).map(([k, v]) => <tr key={k}><th scope="row">{k}</th><td>{v}</td></tr>)}
+            {[...detailRows(d), ...(extraRows?.(d) ?? [])].map(([k, v]) => <tr key={k}><th scope="row">{k}</th><td>{v}</td></tr>)}
           </tbody>
         </table>
+        {footer?.(d)}
       </div>
     );
   }

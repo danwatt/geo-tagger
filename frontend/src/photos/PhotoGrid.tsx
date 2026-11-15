@@ -50,13 +50,22 @@ export function groupTitle(g: { year: number | null; month: number | null }): st
 
 export const photoCount = (n: number) => `${n} photo${n !== 1 ? "s" : ""}`;
 
-const ThumbCell = memo(function ThumbCell({ photo, idx, selected, focused, onActivate, onKey }: {
+/** One grid cell. Exported for grids that lay their cells out themselves
+ *  (Geocode's day / time-band sections); those can add a camera-colour stripe,
+ *  HTML drag (photos dragged onto a map) and a context menu. Callbacks should be
+ *  stable — the cell is memoised. */
+export const ThumbCell = memo(function ThumbCell({ photo, idx, selected, focused, onActivate, onKey, stripColor, onDragStart, onContextMenu }: {
   photo: GridPhoto;
   idx: number;
   selected: boolean;
   focused: boolean;
   onActivate: (idx: number, mod: ClickModifiers) => void;
   onKey: (e: React.KeyboardEvent<HTMLButtonElement>, idx: number) => void;
+  /** A thin bar across the top in this colour (Geocode's per-camera stripe). */
+  stripColor?: string;
+  /** Makes the cell draggable. */
+  onDragStart?: (e: React.DragEvent<HTMLButtonElement>, idx: number) => void;
+  onContextMenu?: (e: React.MouseEvent<HTMLButtonElement>, idx: number) => void;
 }) {
   const cls = "thumb-cell" + (selected ? " selected" : "") + (focused ? " focused" : "") +
     (photo.lat != null ? " tagged" : "") + (photo.geocode_ignored ? " geo-ignored" : "");
@@ -65,11 +74,16 @@ const ThumbCell = memo(function ThumbCell({ photo, idx, selected, focused, onAct
       type="button"
       className={cls}
       data-idx={idx}
+      data-id={photo.id}
       aria-pressed={selected}
       aria-label={photo.filename + (photo.score != null ? `, match score ${photo.score.toFixed(3)}` : "")}
       onClick={(e) => onActivate(idx, { shift: e.shiftKey, toggle: e.ctrlKey || e.metaKey })}
       onKeyDown={(e) => onKey(e, idx)}
+      draggable={onDragStart ? true : undefined}
+      onDragStart={onDragStart ? (e) => onDragStart(e, idx) : undefined}
+      onContextMenu={onContextMenu ? (e) => onContextMenu(e, idx) : undefined}
     >
+      {stripColor && <span className="cam-strip" style={{ background: stripColor }} aria-hidden="true" />}
       <img src={`/api/thumbnail/${photo.id}`} loading="lazy" alt="" />
       <span className="thumb-name" aria-hidden="true">{photo.filename}</span>
       {photo.score != null && (

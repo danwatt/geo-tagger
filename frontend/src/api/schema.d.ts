@@ -1120,7 +1120,7 @@ export interface paths {
          *     four or none.
          *
          *     Feeds the geocode page's location picker (the "Hotspots" section of
-         *     openLocationPicker in web/app.js) and the Custom Places page's hotspot
+         *     Tag as… dialog in frontend/src/pages/geocode/) and the Custom Places page's hotspot
          *     list — the places you tag at repeatedly but never bothered to save a name
          *     for. See services/hotspots_service.py.
          */
@@ -2428,6 +2428,54 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /**
+         * BatchDetail
+         * @description get_batch / get_next: one batch plus its live untagged members and where it
+         *     sits in the queue (what Geocode's batch banner and Next/Skip work from).
+         */
+        BatchDetail: {
+            /** Camera */
+            camera?: string | null;
+            /** Confidence */
+            confidence: number;
+            /** Count */
+            count: number;
+            /** Dir */
+            dir?: string | null;
+            /** End Ts */
+            end_ts: number | null;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "session" | "folder";
+            /** Photo Ids */
+            photo_ids: number[];
+            /** Position */
+            position: number;
+            proposal: components["schemas"]["Proposal"] | null;
+            /** Sample Photo Ids */
+            sample_photo_ids: number[];
+            /** Start Ts */
+            start_ts: number | null;
+            /** Title */
+            title: string;
+            /** Total Batches */
+            total_batches: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** BatchFailure */
+        BatchFailure: {
+            /** Conflict */
+            conflict?: boolean | null;
+            /** Error */
+            error: string;
+            /** Id */
+            id: number;
+        };
         /** Bbox */
         Bbox: {
             /** Max Lat */
@@ -2563,6 +2611,17 @@ export interface components {
             /** Lng */
             lng?: number | null;
         };
+        /** CommittedStateOut */
+        CommittedStateOut: {
+            /** Geocode Ignored */
+            geocode_ignored?: boolean | null;
+            /** Lat */
+            lat?: number | null;
+            /** Lng */
+            lng?: number | null;
+        } & {
+            [key: string]: unknown;
+        };
         /** CreatePersonRequest */
         CreatePersonRequest: {
             /** Name */
@@ -2677,6 +2736,13 @@ export interface components {
             total: number;
             /** Untagged */
             untagged: number;
+        };
+        /** ExifToolStatus */
+        ExifToolStatus: {
+            /** Available */
+            available: boolean;
+            /** Reason */
+            reason?: string | null;
         };
         /** ExportSidecarsRequest */
         ExportSidecarsRequest: {
@@ -2906,6 +2972,25 @@ export interface components {
              */
             limit: number;
         };
+        /**
+         * GeocoderStatus
+         * @description geocode.status(); extra="allow" so a diagnostic added there passes through.
+         */
+        GeocoderStatus: {
+            /** Available */
+            available: boolean;
+            /**
+             * Cities
+             * @default 0
+             */
+            cities: number;
+            /** Error */
+            error?: string | null;
+            /** State */
+            state?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
         /** GeonamesFile */
         GeonamesFile: {
             /** Name */
@@ -2926,6 +3011,17 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** GeotagBatchResponse */
+        GeotagBatchResponse: {
+            /** Failed */
+            failed: components["schemas"]["BatchFailure"][];
+            /** Not Found */
+            not_found: number[];
+            /** Results */
+            results: components["schemas"]["GeotagResult"][];
+            /** Written */
+            written: number[];
+        };
         /** GeotagRequest */
         GeotagRequest: {
             /** Gps Accuracy */
@@ -2936,6 +3032,32 @@ export interface components {
             lat: number;
             /** Lng */
             lng: number;
+        };
+        /**
+         * GeotagResult
+         * @description One written photo. /api/geotag fills the coordinates and place names,
+         *     /remove only `geotag_source`, /undo the restored state (and `location` only
+         *     when it restored a geotag).
+         */
+        GeotagResult: {
+            /** Geocode Ignored */
+            geocode_ignored?: boolean | null;
+            /** Geotag Source */
+            geotag_source?: string | null;
+            /** Gps Accuracy */
+            gps_accuracy?: number | null;
+            /** Id */
+            id: number;
+            /** Lat */
+            lat?: number | null;
+            /** Lng */
+            lng?: number | null;
+            location?: components["schemas"]["ResolvedLocation"] | null;
+            previous?: components["schemas"]["GeotagSnapshotOut"] | null;
+            /** Sidecar Path */
+            sidecar_path?: string | null;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * GeotagSnapshot
@@ -2952,6 +3074,21 @@ export interface components {
             geotag?: components["schemas"]["GeotagState"] | null;
             /** Id */
             id: number;
+        };
+        /**
+         * GeotagSnapshotOut
+         * @description Opaque to the client: stored, then handed back to /api/geotag/undo.
+         */
+        GeotagSnapshotOut: {
+            /** @default {} */
+            expect: components["schemas"]["CommittedStateOut"];
+            /** Geocode Ignored */
+            geocode_ignored?: boolean | null;
+            geotag?: components["schemas"]["GeotagStateOut"] | null;
+            /** Id */
+            id: number;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * GeotagState
@@ -2975,6 +3112,28 @@ export interface components {
             /** Lng */
             lng?: number | null;
         };
+        /**
+         * GeotagStateOut
+         * @description The geotag half of an undo snapshot, as the server hands it out. Looser
+         *     than GeotagState (the request side validates it on the way back in).
+         */
+        GeotagStateOut: {
+            /**
+             * Geotag Removed
+             * @default false
+             */
+            geotag_removed: boolean;
+            /** Geotag Source */
+            geotag_source?: string | null;
+            /** Gps Accuracy */
+            gps_accuracy?: number | null;
+            /** Lat */
+            lat?: number | null;
+            /** Lng */
+            lng?: number | null;
+        } & {
+            [key: string]: unknown;
+        };
         /** GuessDatesRequest */
         GuessDatesRequest: {
             /** Photo Ids */
@@ -2984,6 +3143,36 @@ export interface components {
         GuessDatesResponse: {
             /** Guesses */
             guesses: components["schemas"]["PhotoDateGuess"][];
+        };
+        /** GuessResponse */
+        GuessResponse: {
+            /** Lat */
+            lat: number;
+            /** Lng */
+            lng: number;
+            /** Source */
+            source: string;
+            /** Source Count */
+            source_count: number;
+            /** Sources */
+            sources: components["schemas"]["GuessSource"][];
+            /** Window Sec */
+            window_sec: number;
+        };
+        /** GuessSource */
+        GuessSource: {
+            /** Delta Sec */
+            delta_sec: number;
+            /** Filename */
+            filename: string;
+            /** Id */
+            id: number;
+            /** Is Before */
+            is_before: boolean;
+            /** Lat */
+            lat: number;
+            /** Lng */
+            lng: number;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -3043,6 +3232,21 @@ export interface components {
             } | null;
             /** Updated */
             updated: number;
+        };
+        /** IgnoreResponse */
+        IgnoreResponse: {
+            /** Geocode Ignored */
+            geocode_ignored: boolean;
+            /** Ids */
+            ids: number[];
+            /** Results */
+            results: components["schemas"]["IgnoreResult"][];
+        };
+        /** IgnoreResult */
+        IgnoreResult: {
+            /** Id */
+            id: number;
+            previous: components["schemas"]["GeotagSnapshotOut"];
         };
         /**
          * JobStatus
@@ -3471,6 +3675,25 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /**
+         * ProposeCandidate
+         * @description geotag_service.cluster_votes: one ranked location for the selection.
+         */
+        ProposeCandidate: {
+            /** Label */
+            label: string;
+            /** Lat */
+            lat: number;
+            /** Lng */
+            lng: number;
+            location?: components["schemas"]["ResolvedLocation"] | null;
+            /** Sample Photo Id */
+            sample_photo_id?: number | null;
+            /** Votes */
+            votes: number;
+        } & {
+            [key: string]: unknown;
+        };
         /** ProposeRequest */
         ProposeRequest: {
             /** Ids */
@@ -3485,6 +3708,17 @@ export interface components {
              * @default 3600
              */
             window: number;
+        };
+        /** ProposeResponse */
+        ProposeResponse: {
+            /** Candidates */
+            candidates: components["schemas"]["ProposeCandidate"][];
+            /** Selected */
+            selected: number;
+            /** Voted */
+            voted: number;
+            /** Window Sec */
+            window_sec: number;
         };
         /** ProposedFace */
         ProposedFace: {
@@ -3818,6 +4052,13 @@ export interface components {
         StartedResponse: {
             /** Started */
             started: boolean;
+        };
+        /** StatusResponse */
+        StatusResponse: {
+            /** Db Total */
+            db_total: number;
+            exiftool: components["schemas"]["ExifToolStatus"];
+            geocoder: components["schemas"]["GeocoderStatus"];
         };
         /** StreetSearchJob */
         StreetSearchJob: {
@@ -5758,7 +5999,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GeotagBatchResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5841,7 +6082,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["IgnoreResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5874,7 +6115,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ProposeResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5907,7 +6148,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GeotagBatchResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5940,7 +6181,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GeotagBatchResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5973,7 +6214,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GuessResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6241,7 +6482,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SearchPhoto"][];
                 };
             };
             /** @description Validation Error */
@@ -6309,7 +6550,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SearchPhoto"][];
                 };
             };
             /** @description Validation Error */
@@ -6378,7 +6619,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SearchPhoto"][];
                 };
             };
             /** @description Validation Error */
@@ -6413,7 +6654,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SearchPhoto"][];
                 };
             };
             /** @description Validation Error */
@@ -7572,7 +7813,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["StatusResponse"];
                 };
             };
         };
@@ -7661,7 +7902,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["BatchDetail"];
                 };
             };
             /** @description Validation Error */
@@ -7695,7 +7936,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["BatchDetail"];
                 };
             };
             /** @description Validation Error */

@@ -18,3 +18,8 @@
 .face-group-meta { color: var(--text-faint); font-weight: 400; }
 .face-group-btns { display: flex; align-items: center; gap: 6px; flex-shrink: 0; flex-wrap: wrap; }
 .face-group-header button { padding: 3px 10px; font-size: 11px; flex-shrink: 0; }
+.face-group-header button.icon-btn { padding: 2px 7px; font-size: 14px; line-height: 1.2; }
+.face-group-header button.icon-btn.active { background: var(--accent-bg); border-color: var(--accent); }
+/* Staged, not-yet-saved groups (face-grid.css .amber, via the warn family). */
+.face-group-header.amber { background: var(--warn-bg); border-bottom-color: var(--warn); }
+.face-group-header.amber .face-group-label { color: var(--warn); }

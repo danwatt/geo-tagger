@@ -262,6 +262,157 @@
         "title": "Batch",
         "type": "object"
       },
+      "BatchDetail": {
+        "additionalProperties": true,
+        "description": "get_batch / get_next: one batch plus its live untagged members and where it\nsits in the queue (what Geocode's batch banner and Next/Skip work from).",
+        "properties": {
+          "camera": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Camera"
+          },
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dir"
+          },
+          "end_ts": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Ts"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "session",
+              "folder"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "photo_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Photo Ids",
+            "type": "array"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          },
+          "proposal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Proposal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sample_photo_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Sample Photo Ids",
+            "type": "array"
+          },
+          "start_ts": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Ts"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "total_batches": {
+            "title": "Total Batches",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "count",
+          "start_ts",
+          "end_ts",
+          "sample_photo_ids",
+          "confidence",
+          "proposal",
+          "photo_ids",
+          "position",
+          "total_batches"
+        ],
+        "title": "BatchDetail",
+        "type": "object"
+      },
+      "BatchFailure": {
+        "properties": {
+          "conflict": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conflict"
+          },
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "error"
+        ],
+        "title": "BatchFailure",
+        "type": "object"
+      },
       "Bbox": {
         "properties": {
           "max_lat": {
@@ -655,6 +806,46 @@
         "title": "CommittedState",
         "type": "object"
       },
+      "CommittedStateOut": {
+        "additionalProperties": true,
+        "properties": {
+          "geocode_ignored": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Geocode Ignored"
+          },
+          "lat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lat"
+          },
+          "lng": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lng"
+          }
+        },
+        "title": "CommittedStateOut",
+        "type": "object"
+      },
       "CreatePersonRequest": {
         "properties": {
           "name": {
@@ -1001,6 +1192,30 @@
           "untagged"
         ],
         "title": "DirCount",
+        "type": "object"
+      },
+      "ExifToolStatus": {
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "available"
+        ],
+        "title": "ExifToolStatus",
         "type": "object"
       },
       "ExportSidecarsRequest": {
@@ -1578,6 +1793,48 @@
         "title": "GeocodeBackfillRequest",
         "type": "object"
       },
+      "GeocoderStatus": {
+        "additionalProperties": true,
+        "description": "geocode.status(); extra=\"allow\" so a diagnostic added there passes through.",
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "cities": {
+            "default": 0,
+            "title": "Cities",
+            "type": "integer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          }
+        },
+        "required": [
+          "available"
+        ],
+        "title": "GeocoderStatus",
+        "type": "object"
+      },
       "GeonamesFile": {
         "additionalProperties": true,
         "properties": {
@@ -1624,6 +1881,46 @@
         "title": "GeonamesStatus",
         "type": "object"
       },
+      "GeotagBatchResponse": {
+        "properties": {
+          "failed": {
+            "items": {
+              "$ref": "#/components/schemas/BatchFailure"
+            },
+            "title": "Failed",
+            "type": "array"
+          },
+          "not_found": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Not Found",
+            "type": "array"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/GeotagResult"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "written": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Written",
+            "type": "array"
+          }
+        },
+        "required": [
+          "results",
+          "written",
+          "failed",
+          "not_found"
+        ],
+        "title": "GeotagBatchResponse",
+        "type": "object"
+      },
       "GeotagRequest": {
         "properties": {
           "gps_accuracy": {
@@ -1666,6 +1963,107 @@
         "title": "GeotagRequest",
         "type": "object"
       },
+      "GeotagResult": {
+        "additionalProperties": true,
+        "description": "One written photo. /api/geotag fills the coordinates and place names,\n/remove only `geotag_source`, /undo the restored state (and `location` only\nwhen it restored a geotag).",
+        "properties": {
+          "geocode_ignored": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Geocode Ignored"
+          },
+          "geotag_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Geotag Source"
+          },
+          "gps_accuracy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gps Accuracy"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "lat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lat"
+          },
+          "lng": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lng"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResolvedLocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "previous": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GeotagSnapshotOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sidecar_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sidecar Path"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "GeotagResult",
+        "type": "object"
+      },
       "GeotagSnapshot": {
         "description": "One `previous` entry from a /api/geotag, /remove or /ignore reply. The\nclient only stores and returns these, but they are client input on the way\nback, so they are validated like any other write (coordinates in range, a\nknown source).",
         "properties": {
@@ -1703,6 +2101,46 @@
           "id"
         ],
         "title": "GeotagSnapshot",
+        "type": "object"
+      },
+      "GeotagSnapshotOut": {
+        "additionalProperties": true,
+        "description": "Opaque to the client: stored, then handed back to /api/geotag/undo.",
+        "properties": {
+          "expect": {
+            "$ref": "#/components/schemas/CommittedStateOut",
+            "default": {}
+          },
+          "geocode_ignored": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Geocode Ignored"
+          },
+          "geotag": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GeotagStateOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "GeotagSnapshotOut",
         "type": "object"
       },
       "GeotagState": {
@@ -1767,6 +2205,63 @@
         "title": "GeotagState",
         "type": "object"
       },
+      "GeotagStateOut": {
+        "additionalProperties": true,
+        "description": "The geotag half of an undo snapshot, as the server hands it out. Looser\nthan GeotagState (the request side validates it on the way back in).",
+        "properties": {
+          "geotag_removed": {
+            "default": false,
+            "title": "Geotag Removed",
+            "type": "boolean"
+          },
+          "geotag_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Geotag Source"
+          },
+          "gps_accuracy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gps Accuracy"
+          },
+          "lat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lat"
+          },
+          "lng": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lng"
+          }
+        },
+        "title": "GeotagStateOut",
+        "type": "object"
+      },
       "GuessDatesRequest": {
         "properties": {
           "photo_ids": {
@@ -1797,6 +2292,85 @@
           "guesses"
         ],
         "title": "GuessDatesResponse",
+        "type": "object"
+      },
+      "GuessResponse": {
+        "properties": {
+          "lat": {
+            "title": "Lat",
+            "type": "number"
+          },
+          "lng": {
+            "title": "Lng",
+            "type": "number"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "source_count": {
+            "title": "Source Count",
+            "type": "integer"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/GuessSource"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "window_sec": {
+            "title": "Window Sec",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lat",
+          "lng",
+          "source",
+          "source_count",
+          "window_sec",
+          "sources"
+        ],
+        "title": "GuessResponse",
+        "type": "object"
+      },
+      "GuessSource": {
+        "properties": {
+          "delta_sec": {
+            "title": "Delta Sec",
+            "type": "integer"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "is_before": {
+            "title": "Is Before",
+            "type": "boolean"
+          },
+          "lat": {
+            "title": "Lat",
+            "type": "number"
+          },
+          "lng": {
+            "title": "Lng",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "filename",
+          "lat",
+          "lng",
+          "delta_sec",
+          "is_before"
+        ],
+        "title": "GuessSource",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -1954,6 +2528,52 @@
           "ignored"
         ],
         "title": "IgnoreFacesResponse",
+        "type": "object"
+      },
+      "IgnoreResponse": {
+        "properties": {
+          "geocode_ignored": {
+            "title": "Geocode Ignored",
+            "type": "boolean"
+          },
+          "ids": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Ids",
+            "type": "array"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/IgnoreResult"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids",
+          "geocode_ignored",
+          "results"
+        ],
+        "title": "IgnoreResponse",
+        "type": "object"
+      },
+      "IgnoreResult": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "previous": {
+            "$ref": "#/components/schemas/GeotagSnapshotOut"
+          }
+        },
+        "required": [
+          "id",
+          "previous"
+        ],
+        "title": "IgnoreResult",
         "type": "object"
       },
       "JobStatus": {
@@ -3298,6 +3918,57 @@
         "title": "Proposal",
         "type": "object"
       },
+      "ProposeCandidate": {
+        "additionalProperties": true,
+        "description": "geotag_service.cluster_votes: one ranked location for the selection.",
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "lat": {
+            "title": "Lat",
+            "type": "number"
+          },
+          "lng": {
+            "title": "Lng",
+            "type": "number"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResolvedLocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sample_photo_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Photo Id"
+          },
+          "votes": {
+            "title": "Votes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lat",
+          "lng",
+          "votes",
+          "label"
+        ],
+        "title": "ProposeCandidate",
+        "type": "object"
+      },
       "ProposeRequest": {
         "properties": {
           "ids": {
@@ -3324,6 +3995,37 @@
           "ids"
         ],
         "title": "ProposeRequest",
+        "type": "object"
+      },
+      "ProposeResponse": {
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/ProposeCandidate"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "selected": {
+            "title": "Selected",
+            "type": "integer"
+          },
+          "voted": {
+            "title": "Voted",
+            "type": "integer"
+          },
+          "window_sec": {
+            "title": "Window Sec",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "candidates",
+          "selected",
+          "voted",
+          "window_sec"
+        ],
+        "title": "ProposeResponse",
         "type": "object"
       },
       "ProposedFace": {
@@ -4348,6 +5050,27 @@
           "started"
         ],
         "title": "StartedResponse",
+        "type": "object"
+      },
+      "StatusResponse": {
+        "properties": {
+          "db_total": {
+            "title": "Db Total",
+            "type": "integer"
+          },
+          "exiftool": {
+            "$ref": "#/components/schemas/ExifToolStatus"
+          },
+          "geocoder": {
+            "$ref": "#/components/schemas/GeocoderStatus"
+          }
+        },
+        "required": [
+          "exiftool",
+          "db_total",
+          "geocoder"
+        ],
+        "title": "StatusResponse",
         "type": "object"
       },
       "StreetSearchJob": {
@@ -7552,7 +8275,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/GeotagBatchResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7573,7 +8298,7 @@
     },
     "/api/geotag/hotspots": {
       "get": {
-        "description": "Recurring drop points mined from the coordinates already on the photos.\nClustered so drops a few hundred feet apart at the same real place count as\none entry, and (by default) with the ones a saved place already covers left\nout.\n\nThe four bounds narrow the answer to a patch of the world \u2014 what the Custom\nPlaces page sends to ask \"what's in view here that I never named?\". Give all\nfour or none.\n\nFeeds the geocode page's location picker (the \"Hotspots\" section of\nopenLocationPicker in web/app.js) and the Custom Places page's hotspot\nlist \u2014 the places you tag at repeatedly but never bothered to save a name\nfor. See services/hotspots_service.py.",
+        "description": "Recurring drop points mined from the coordinates already on the photos.\nClustered so drops a few hundred feet apart at the same real place count as\none entry, and (by default) with the ones a saved place already covers left\nout.\n\nThe four bounds narrow the answer to a patch of the world \u2014 what the Custom\nPlaces page sends to ask \"what's in view here that I never named?\". Give all\nfour or none.\n\nFeeds the geocode page's location picker (the \"Hotspots\" section of\nTag as\u2026 dialog in frontend/src/pages/geocode/) and the Custom Places page's hotspot\nlist \u2014 the places you tag at repeatedly but never bothered to save a name\nfor. See services/hotspots_service.py.",
         "operationId": "api_geotag_hotspots_api_geotag_hotspots_get",
         "parameters": [
           {
@@ -7818,7 +8543,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/IgnoreResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7855,7 +8582,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ProposeResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7891,7 +8620,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/GeotagBatchResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7928,7 +8659,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/GeotagBatchResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7976,7 +8709,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/GuessResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -8432,7 +9167,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SearchPhoto"
+                  },
+                  "title": "Response Api Photos Api Photos Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -8549,7 +9290,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SearchPhoto"
+                  },
+                  "title": "Response Api Photos By Area Api Photos By Area Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -8679,7 +9426,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SearchPhoto"
+                  },
+                  "title": "Response Api Photos By Ids Api Photos By Ids Post",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -8753,7 +9506,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SearchPhoto"
+                  },
+                  "title": "Response Api Photos By Location Api Photos By Location Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -10617,7 +11376,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -10781,7 +11542,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/BatchDetail"
+                }
               }
             },
             "description": "Successful Response"
@@ -10850,7 +11613,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/BatchDetail"
+                }
               }
             },
             "description": "Successful Response"

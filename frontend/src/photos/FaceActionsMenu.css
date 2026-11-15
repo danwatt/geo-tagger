@@ -17,3 +17,16 @@
 }
 .expand-btn { font-size: 11px; padding: 3px 8px; white-space: nowrap; text-align: left; }
 .expand-btn:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
+/* The target the menu acts on — usually a filename, so long ones ellipsize
+   rather than stretching the menu across the grid. */
+.face-expand-heading {
+  max-width: 240px;
+  padding: 0 2px 5px;
+  border-bottom: 1px solid var(--border-2);
+  color: var(--text-faint);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.expand-btn:disabled { color: var(--text-dim); cursor: default; }

@@ -26,7 +26,12 @@ export function BasemapButtons({ value, onChange }: { value: BasemapKey; onChang
   );
 }
 
-export function BasemapSwitcher({ initial = "street" }: { initial?: BasemapKey }) {
+/** `attributions` overrides a basemap's attribution line (Geocode credits the
+ *  satellite imagery in full, as its legacy page did). */
+export function BasemapSwitcher({ initial = "street", attributions }: {
+  initial?: BasemapKey;
+  attributions?: Partial<Record<BasemapKey, string>>;
+}) {
   const [active, setActive] = useState<BasemapKey>(initial);
   return (
     <>
@@ -34,7 +39,8 @@ export function BasemapSwitcher({ initial = "street" }: { initial?: BasemapKey }
         // Keyed by basemap so a switch removes the old layers and adds the new
         // ones; the reference overlay gets a higher zIndex so it can't land
         // under the imagery whatever order Leaflet loads them in.
-        <TileLayer key={`${active}-${i}`} url={layer.url} zIndex={i + 1} {...layer.options} />
+        <TileLayer key={`${active}-${i}`} url={layer.url} zIndex={i + 1} {...layer.options}
+          {...(i === 0 && attributions?.[active] ? { attribution: attributions[active] } : {})} />
       ))}
       <MapControl position="bottomright" className="basemap-control">
         <BasemapButtons value={active} onChange={setActive} />

@@ -4,6 +4,7 @@ import type { Map as LeafletMap, LatLngExpression } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./map.css";
 import { BasemapSwitcher } from "./BasemapSwitcher";
+import type { BasemapKey } from "./basemaps";
 import { WorldWrap } from "./WorldWrap";
 
 /* The shared Leaflet map: owns the container and the base tile layer; layers
@@ -19,15 +20,17 @@ type Props = {
   zoom?: number;
   mapRef?: Ref<LeafletMap>;
   basemaps?: boolean;
+  /** With `basemaps`: per-basemap attribution overrides (see BasemapSwitcher). */
+  basemapAttributions?: Partial<Record<BasemapKey, string>>;
   children?: ReactNode;
 };
 
-export function MapView({ id, className, center = [39, -96], zoom = 4, mapRef, basemaps, children }: Props) {
+export function MapView({ id, className, center = [39, -96], zoom = 4, mapRef, basemaps, basemapAttributions, children }: Props) {
   return (
     <MapContainer id={id} className={`map-view ${className ?? ""}`} center={center} zoom={zoom} ref={mapRef}>
       {basemaps ? (
         <>
-          <BasemapSwitcher />
+          <BasemapSwitcher attributions={basemapAttributions} />
           <WorldWrap />
         </>
       ) : (

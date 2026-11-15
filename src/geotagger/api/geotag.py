@@ -64,6 +64,72 @@ class ProposeRequest(BaseModel):
     limit: int = Field(3, ge=1, le=50)
 
 
+# ── Response models ──
+# The write routes answer with the {results, written, failed, not_found}
+# breakdown (_batch_response). response_model_exclude_unset keeps each reply the
+# exact shape the service built: /remove's results carry no coordinates, and an
+# ignore-only undo says nothing about `location` (the client reads its presence).
+
+class GeotagStateOut(BaseModel):
+    """The geotag half of an undo snapshot, as the server hands it out. Looser
+    than GeotagState (the request side validates it on the way back in)."""
+    model_config = ConfigDict(extra="allow")
+    lat: float | None = None
+    lng: float | None = None
+    gps_accuracy: float | None = None
+    geotag_source: str | None = None
+    geotag_removed: bool = False
+
+class CommittedStateOut(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    lat: float | None = None
+    lng: float | None = None
+    geocode_ignored: bool | None = None
+
+class GeotagSnapshotOut(BaseModel):
+    """Opaque to the client: stored, then handed back to /api/geotag/undo."""
+    model_config = ConfigDict(extra="allow")
+    id: int
+    geotag: GeotagStateOut | None = None
+    geocode_ignored: bool | None = None
+    expect: CommittedStateOut = CommittedStateOut()
+
+class GeotagResult(BaseModel):
+    """One written photo. /api/geotag fills the coordinates and place names,
+    /remove only `geotag_source`, /undo the restored state (and `location` only
+    when it restored a geotag)."""
+    model_config = ConfigDict(extra="allow")
+    id: int
+    lat: float | None = None
+    lng: float | None = None
+    geotag_source: str | None = None
+    sidecar_path: str | None = None
+    gps_accuracy: float | None = None
+    geocode_ignored: bool | None = None
+    location: ResolvedLocation | None = None
+    previous: GeotagSnapshotOut | None = None
+
+class BatchFailure(BaseModel):
+    id: int
+    error: str
+    conflict: bool | None = None   # undo only: changed since the commit
+
+class GeotagBatchResponse(BaseModel):
+    results: list[GeotagResult]
+    written: list[int]
+    failed: list[BatchFailure]
+    not_found: list[int]
+
+class IgnoreResult(BaseModel):
+    id: int
+    previous: GeotagSnapshotOut
+
+class IgnoreResponse(BaseModel):
+    ids: list[int]
+    geocode_ignored: bool
+    results: list[IgnoreResult]
+
+
 def _batch_response(ids: list[int], out: dict):
     """200 with the {results, written, failed, not_found} breakdown when anything
     was written (or nothing was asked). When every requested photo was refused the
@@ -75,7 +141,7 @@ def _batch_response(ids: list[int], out: dict):
     return out
 
 
-@router.post("/api/geotag")
+@router.post("/api/geotag", response_model=GeotagBatchResponse, response_model_exclude_unset=True)
 async def api_geotag(req: GeotagRequest):
     # The whole batch runs in the executor: a commit is one ExifTool round-trip per
     # photo (plus the geocoder's one-time KD-tree load), which would otherwise stall
@@ -91,7 +157,7 @@ async def api_geotag(req: GeotagRequest):
     return _batch_response(req.ids, out)
 
 
-@router.post("/api/geotag/ignore")
+@router.post("/api/geotag/ignore", response_model=IgnoreResponse, response_model_exclude_unset=True)
 async def api_geotag_ignore(req: SetGeocodeIgnoredRequest):
     """Mark (or unmark) photos as not needing geocoding, e.g. screenshots.
     DB-only — no EXIF/sidecar write. Ignored photos still appear in the grid
@@ -149,7 +215,7 @@ async def api_geotag_hotspots(
     four or none.
 
     Feeds the geocode page's location picker (the "Hotspots" section of
-    openLocationPicker in web/app.js) and the Custom Places page's hotspot
+    Tag as… dialog in frontend/src/pages/geocode/) and the Custom Places page's hotspot
     list — the places you tag at repeatedly but never bothered to save a name
     for. See services/hotspots_service.py."""
     bounds = (min_lat, max_lat, min_lng, max_lng)
@@ -168,7 +234,25 @@ async def api_geotag_hotspots(
         raise HTTPException(400, str(e))
 
 
-@router.post("/api/geotag/propose")
+class ProposeCandidate(BaseModel):
+    """geotag_service.cluster_votes: one ranked location for the selection."""
+    model_config = ConfigDict(extra="allow")
+    lat: float
+    lng: float
+    votes: int
+    sample_photo_id: int | None = None
+    location: ResolvedLocation | None = None    # None when no geocode data is installed
+    label: str
+
+
+class ProposeResponse(BaseModel):
+    candidates: list[ProposeCandidate]
+    selected: int      # selected photos that could vote (dated, untagged)
+    voted: int         # of those, how many found a time-neighbour
+    window_sec: int
+
+
+@router.post("/api/geotag/propose", response_model=ProposeResponse)
 async def api_geotag_propose(req: ProposeRequest):
     """Rank likely locations for a selection from its photos' nearest-in-time
     geotagged neighbors. POST because a selection can be hundreds of ids."""
@@ -179,7 +263,25 @@ async def api_geotag_propose(req: ProposeRequest):
     )
 
 
-@router.get("/api/guess/{photo_id}")
+class GuessSource(BaseModel):
+    id: int
+    filename: str
+    lat: float
+    lng: float
+    delta_sec: int
+    is_before: bool
+
+
+class GuessResponse(BaseModel):
+    lat: float
+    lng: float
+    source: str
+    source_count: int
+    window_sec: int
+    sources: list[GuessSource]
+
+
+@router.get("/api/guess/{photo_id}", response_model=GuessResponse)
 async def api_guess(photo_id: int, window: int = 900):
     """Return a guessed lat/lng from nearby-in-time geotagged photos (±window seconds)."""
     row = index.get_photo(photo_id)
@@ -222,7 +324,7 @@ async def api_guess(photo_id: int, window: int = 900):
     raise HTTPException(404, detail="No geotagged photos found within the time window")
 
 
-@router.post("/api/geotag/remove")
+@router.post("/api/geotag/remove", response_model=GeotagBatchResponse, response_model_exclude_unset=True)
 async def api_geotag_remove(req: RemoveGeotagRequest):
     loop = asyncio.get_running_loop()
     out = await loop.run_in_executor(
@@ -231,7 +333,7 @@ async def api_geotag_remove(req: RemoveGeotagRequest):
     return _batch_response(req.ids, out)
 
 
-@router.post("/api/geotag/undo")
+@router.post("/api/geotag/undo", response_model=GeotagBatchResponse, response_model_exclude_unset=True)
 async def api_geotag_undo(req: UndoGeotagRequest):
     """Revert a commit: hand back the `previous` snapshots from the /api/geotag,
     /api/geotag/remove and /api/geotag/ignore replies it was made of. Each photo

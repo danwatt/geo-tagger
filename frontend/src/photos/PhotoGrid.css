@@ -89,3 +89,12 @@
 @media (prefers-reduced-motion: reduce) {
   .thumb-cell, .thumb-cell .thumb-name { transition: none; }
 }
+/* Per-camera stripe (Geocode), across the top of the cell. */
+.thumb-cell .cam-strip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  z-index: 1;
+}

@@ -86,7 +86,7 @@ function formatWallClockTime(ts, opts = {}) {
 }
 
 /** localStorage key for the work-queue batches skipped on the Geocode page
- *  (written by app.js, counted/cleared by home.js). */
+ *  (written by the Geocode page, counted/cleared by Home). */
 const SKIPPED_BATCHES_KEY = "geotagger.workqueue.skipped";
 
 /* ── Search → Geocode hand-off (A3) ──
