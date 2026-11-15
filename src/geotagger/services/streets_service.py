@@ -4,7 +4,7 @@ job here and polls it, per CLAUDE.md's routes-stay-thin convention.
 
 Same module-singleton job shape as data_service's downloads (`_job` dict + lock,
 `start_*` populates, `*_job_status` reads): a search streams a whole extract, so
-it's seconds-to-a-minute of executor work rather than something a request should
+it's seconds-to-a-minute of jobs-executor work rather than something a request should
 hold open. See osm_streets.py for the scan itself and why streets aren't
 ingested into a database at all."""
 
@@ -12,11 +12,12 @@ import logging
 import threading
 
 from geotagger import osm_streets
+from geotagger.services import _jobs
 
 logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
-_job: dict = {"running": False, "done": False, "error": None, "message": "",
+_job: dict = {"running": False, "queued": False, "done": False, "error": None, "message": "",
               "query": "", "result": None}
 
 
@@ -67,7 +68,7 @@ def _run_search(min_lat: float, max_lat: float, min_lng: float, max_lng: float,
 
 def start_search(executor, min_lat: float, max_lat: float, min_lng: float, max_lng: float,
                  query: str, limit: int | None = None, include_paths: bool = False) -> bool:
-    """Kick off a search on the shared executor. Returns False if one is already
+    """Kick off a search on the jobs executor. Returns False if one is already
     running (the caller turns that into a 409). Raises ValueError for a query too
     short to be worth a full extract scan, or when the pbf cache is empty."""
     query = (query or "").strip()
@@ -79,11 +80,8 @@ def start_search(executor, min_lat: float, max_lat: float, min_lng: float, max_l
             ".osm.pbf files directly, and they are no longer on disk. Re-download a "
             "region above (with 'force') to restore them."
         )
-    with _lock:
-        if _job["running"]:
-            return False
-        _job.update(running=True, done=False, error=None, query=query,
-                    message="Starting search…", result=None)
-    executor.submit(_run_search, min_lat, max_lat, min_lng, max_lng,
-                    query, limit, include_paths)
+    if not _jobs.accept(_lock, _job, query=query, result=None):
+        return False
+    _jobs.submit(executor, _lock, _job, _run_search, min_lat, max_lat, min_lng, max_lng,
+                 query, limit, include_paths, start_message="Starting search…")
     return True

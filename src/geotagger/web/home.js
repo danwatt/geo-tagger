@@ -26,6 +26,7 @@ async function loadSummary() {
     renderLibrary(data.photos);
     renderGeotag(data.geotag, data.guessable, data.photos.total);
     renderReverseGeocode(data.geocode);
+    renderExportSidecars(data.geocode);
     renderFaces(data.faces);
     renderPeople(data.people);
   } catch (e) {
@@ -71,6 +72,14 @@ function renderReverseGeocode(geocode) {
     hint.style.display = "none";
     btn.disabled = false;
   }
+}
+
+function renderExportSidecars(geocode) {
+  const pending = geocode.export_pending || 0;
+  document.getElementById("export-sidecars-stats").textContent = pending
+    ? `${pending.toLocaleString()} geotagged photos not yet written to XMP sidecars`
+    : "Every geotagged photo's sidecar is up to date";
+  if (!exportRunning) document.getElementById("export-sidecars-btn").disabled = pending === 0;
 }
 
 function renderFaces(faces) {
@@ -315,6 +324,56 @@ async function runBackfill() {
   }
 }
 
+/* ── DB-to-sidecar export loop ──
+ * Same client-loop shape as runBackfill, plus a cursor: each batch returns the
+ * last photo id it looked at, and the next one starts after it, so photos that
+ * fail to write are stepped past (and counted) instead of picked forever. */
+let exportRunning = false;
+
+async function runExportSidecars() {
+  if (exportRunning) return;
+  exportRunning = true;
+  const btn = document.getElementById("export-sidecars-btn");
+  const result = document.getElementById("export-sidecars-result");
+  btn.disabled = true;
+  result.style.display = "none";
+  let errorMsg = null;
+  let written = 0, failed = 0;
+  const samples = [];
+  try {
+    let remaining = Infinity, cursor = 0;
+    const checkProgress = stallGuard("Sidecar export");
+    while (remaining > 0) {
+      const res = await fetch("/api/geocode/export-sidecars", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 200, after_id: cursor }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      written += data.written;
+      failed += data.failed;
+      for (const s of data.errors_sample) if (samples.length < 5) samples.push(s);
+      cursor = data.cursor;
+      remaining = data.processed > 0 ? data.remaining : 0;
+      checkProgress(remaining);
+      btn.textContent = remaining > 0 ? `Exporting… ${remaining.toLocaleString()} left` : "Export to sidecars";
+    }
+  } catch (e) {
+    errorMsg = e.message;
+  } finally {
+    exportRunning = false;
+    btn.textContent = "Export to sidecars";
+    await loadSummary();
+    if (written || failed) {
+      result.style.display = "";
+      result.textContent = `Wrote ${written.toLocaleString()} sidecar${written === 1 ? "" : "s"}` +
+        (failed ? ` · ${failed.toLocaleString()} failed (${samples.join("; ")})` : "");
+    }
+    if (errorMsg) showError("card-reverse-geocode", errorMsg);
+  }
+}
+
 /* ── Face-detection loop ── */
 let facesScanRunning = false;
 let facesScanStopRequested = false;
@@ -400,6 +459,7 @@ async function retryFailedFaces() {
 }
 
 document.getElementById("backfill-btn").addEventListener("click", runBackfill);
+document.getElementById("export-sidecars-btn").addEventListener("click", runExportSidecars);
 document.getElementById("detect-faces-btn").addEventListener("click", runFacesScan);
 document.getElementById("faces-retry-failed-btn").addEventListener("click", retryFailedFaces);
 

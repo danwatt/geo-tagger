@@ -39,12 +39,6 @@ The module also imports `services.data_service`, inverting the layering.
 `api/geocode.py:54`. Each stalls every other request, including thumbnails, against the project's own
 "never block event loop" rule. *Fix:* move bodies into `services/` and `run_in_executor` them (after C1).
 
-**A7 — Medium — Dataset downloads run on the shared 4-worker request executor** [traced]
-`services/data_service.py:215,326,416,481`, `services/semantic_service.py:134`. Starting four jobs from the
-Data page occupies every worker and freezes the UI. `/api/geocode/export-sidecars` pins a worker for the whole
-library instead of using the `limit`/`remaining` client-loop convention.
-*Fix:* a dedicated one- or two-thread jobs executor.
-
 **A8 — Low — Settings PATCH and reset apply partially** [traced] — `api/status.py:61-98`.
 
 **A9 — Low — `add_manual_face` creates the person before validating** [traced] — `api/faces.py:358-380`.
@@ -87,4 +81,4 @@ A shared modal helper and a `<button>` sweep would address most of this.
 ## Suggested order of work
 
 1. **Small fixes:** A11, T1.
-2. **Request handling:** A1, A7.
+2. **Request handling:** A1.

@@ -1,4 +1,4 @@
-"""App lifespan: initialize the request executor and ExifTool session, then set up
+"""App lifespan: initialize the request + jobs executors and ExifTool session, then set up
 the index/thumbnails/faces caches and (unless --no-scan) scan the configured
 directories in a background thread so the server accepts requests immediately."""
 
@@ -11,7 +11,8 @@ from pathlib import Path
 
 from geotagger import index, thumbnails, faces, semantic, config, scanning
 from geotagger.exiftool_session import lifespan as _et_lifespan
-from geotagger.executor import init_executor, shutdown_executor
+from geotagger.executor import (init_executor, init_jobs_executor, shutdown_executor,
+                                shutdown_jobs_executor)
 
 
 def _auto_vacuum():
@@ -62,8 +63,10 @@ def _primary_root() -> Path | None:
 
 @asynccontextmanager
 async def lifespan(app):
-    # Initialize thread pool
+    # Thread pools: short request work, and the background jobs (downloads,
+    # builds) kept off it so they can't starve requests (audit A7).
     init_executor(config.WORKERS)
+    init_jobs_executor(config.JOB_WORKERS)
 
     # Archives a killed previous run left in the temp dir (download-zip cleans up
     # after itself on every normal path; this only catches hard kills).
@@ -79,8 +82,8 @@ async def lifespan(app):
     scan_cancel = threading.Event()
     scan_thread: threading.Thread | None = None
 
-    # Set by the teardown below: False if an executor job outlived the shutdown
-    # grace period and may still be using the DB.
+    # Set by the teardown below: False if executor work (request or background
+    # job) outlived the shutdown grace period and may still be using the DB.
     workers_done = True
 
     async with _et_lifespan(app):
@@ -132,11 +135,16 @@ async def lifespan(app):
                 # Off the event loop: the join can take as long as the slowest
                 # in-flight file task.
                 await asyncio.to_thread(scan_thread.join)
-            # Then the request executor, still inside the ExifTool context: its
-            # jobs use the shared session too, so they must be finished (or given
-            # up on) before stop_et runs on the way out of this block. Off the
-            # event loop because it waits up to the grace period.
-            workers_done = await asyncio.to_thread(shutdown_executor)
+            # Then both executors, still inside the ExifTool context: their work
+            # uses the shared session too, so it must be finished (or given up
+            # on) before stop_et runs on the way out of this block. Off the event
+            # loop because each waits up to the grace period — concurrently, so
+            # Ctrl-C waits for one grace period, not two. Queued jobs are
+            # cancelled; a running download gets the bounded wait.
+            req_done, jobs_done = await asyncio.gather(
+                asyncio.to_thread(shutdown_executor),
+                asyncio.to_thread(shutdown_jobs_executor))
+            workers_done = req_done and jobs_done
 
     # Last, once the scan thread and the workers — everything that touches the
     # DB — are done and ExifTool has stopped: checkpoint and close the DB. If a

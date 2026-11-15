@@ -50,17 +50,27 @@ def geocode_pending(limit: int | None = None) -> dict:
             "remaining": index.count_photos_needing_geocode()}
 
 
-def export_to_sidecars() -> dict:
-    """Write every geotagged photo's GPS coordinates (plus resolved place names,
-    where available) into its XMP sidecar — the on-demand catch-up for photos
-    geotagged/geocoded DB-only (see config.WRITE_XMP_ON_GEOTAG). Blocking; runs
-    in the executor. Acquires the ExifTool lock per file so it doesn't starve
-    thumbnail/preview requests for the whole run."""
-    rows = index.get_photos_to_export()
+def export_to_sidecars(limit: int | None = None, after_id: int = 0) -> dict:
+    """Write up to `limit` geotagged photos' GPS coordinates (plus resolved place
+    names, where available) into their XMP sidecars — the on-demand catch-up for
+    photos geotagged/geocoded DB-only (see config.WRITE_XMP_ON_GEOTAG). One batch
+    of the client-loop convention (A7): only photos not yet exported with their
+    current values are picked (index.get_photos_to_export), so re-running after a
+    finished export, or after a restart mid-run, only does what's left.
+
+    `after_id` is the run's cursor: the batch takes photos with id > after_id and
+    returns `cursor` (the last id it looked at) for the next call. Failed photos
+    stay "to export" but fall behind the cursor, so a run always finishes — the
+    next run (cursor 0) retries them. `remaining` counts what is left ahead of
+    the cursor. Blocking; runs in the executor. Acquires the ExifTool lock per
+    file so it doesn't starve thumbnail/preview requests."""
+    rows = index.get_photos_to_export(after_id, limit)
     lock = get_et_lock()
-    written = errors = 0
+    written = failed = 0
     err_samples: list[str] = []
+    cursor = after_id
     for r in rows:
+        cursor = r["id"]
         loc = {"city": r["loc_city"], "state": r["loc_state"],
                "country": r["loc_country"], "country_code": r["loc_country_code"]}
         # Any resolved field is worth exporting: an OSM-only install yields a city
@@ -75,16 +85,14 @@ def export_to_sidecars() -> dict:
             with lock:
                 sidecar.write_gps(p, r["lat"], r["lng"], location=loc, gps_accuracy=r["gps_accuracy"])
             sc_name, sc_mtime = sidecar.sidecar_tracking(p)
-            # Keep sidecar tracking (exactly as the scan computes it) + source current
-            # so the next scan doesn't re-index this row.
             # Per file and after the ExifTool write, so the DB write lock is never
             # held across ExifTool.
-            with index.transaction() as db:
-                db.execute("UPDATE photos SET sidecar_path=?, sidecar_mtime=?, geotag_source='sidecar' WHERE id=?",
-                           (sc_name, sc_mtime, r["id"]))
+            index.mark_photo_exported(r["id"], sc_name, sc_mtime, r["values_sig"])
             written += 1
         except Exception as e:
-            errors += 1
+            failed += 1
             if len(err_samples) < 5:
                 err_samples.append(f"{r['filename']}: {e}")
-    return {"written": written, "errors": errors, "error_samples": err_samples}
+    return {"processed": len(rows), "written": written, "failed": failed,
+            "errors_sample": err_samples, "cursor": cursor,
+            "remaining": index.count_photos_to_export(cursor)}

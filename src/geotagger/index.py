@@ -667,6 +667,11 @@ def _init_db_locked(root: Path | None) -> sqlite3.Connection:
     # geotag_source, which stays 'none' so every "not geotagged" view sees it.
     if "geotag_removed" not in cols:
         _db.execute("ALTER TABLE photos ADD COLUMN geotag_removed INTEGER NOT NULL DEFAULT 0")
+    # What the last on-demand DB-to-sidecar export wrote for this row (see
+    # _EXPORT_SIG_SQL): NULL = never exported. A row whose current signature
+    # differs is still to export, so a re-run only rewrites what changed (A7).
+    if "xmp_export_sig" not in cols:
+        _db.execute("ALTER TABLE photos ADD COLUMN xmp_export_sig TEXT")
 
     # One-time cleanup: sidecar_path used to store the sidecar's full path;
     # it's now just the filename (the sidecar always sits next to the image,
@@ -2383,15 +2388,70 @@ def count_geocoded_photos() -> int:
     ).fetchone()[0]
 
 
-def get_photos_to_export() -> list[sqlite3.Row]:
-    """All geotagged photos — used by the on-demand DB-to-sidecar export. Location
-    columns are included but may be NULL (not yet reverse-geocoded); the exporter
-    only writes place-name tags when they're populated."""
+# ── DB-to-sidecar export (geocode_service.export_to_sidecars) ──
+#
+# A photo is "to export" while xmp_export_sig differs from its current export
+# signature: the values the export writes (GPS, accuracy, place names) plus the
+# sidecar tracking (name + mtime) the export leaves behind. The value half means
+# a re-geotag or a fresh geocode re-queues the photo; the tracking half means
+# anything else touching the sidecar afterwards (a removed geotag's GPS_VOID, an
+# external editor picked up by a scan) re-queues it too, so a stored signature
+# can never vouch for a sidecar that has since changed. char(31) (unit
+# separator) keeps fields from running into each other.
+_EXPORT_VALUES_SQL = (
+    "printf('%.7f', lat) || char(31) || printf('%.7f', lng) || char(31) || "
+    "IFNULL(gps_accuracy, '') || char(31) || IFNULL(loc_city, '') || char(31) || "
+    "IFNULL(loc_state, '') || char(31) || IFNULL(loc_country, '') || char(31) || "
+    "IFNULL(loc_country_code, '')"
+)
+_EXPORT_SIG_SQL = (
+    f"{_EXPORT_VALUES_SQL} || char(31) || IFNULL(sidecar_path, '') || char(31) || "
+    "IFNULL(sidecar_mtime, '')"
+)
+_EXPORT_PENDING_SQL = (
+    f"lat IS NOT NULL AND lng IS NOT NULL AND xmp_export_sig IS NOT ({_EXPORT_SIG_SQL})"
+)
+
+
+def get_photos_to_export(after_id: int = 0, limit: int | None = None) -> list[sqlite3.Row]:
+    """Geotagged photos still to export (see _EXPORT_SIG_SQL) with id > after_id,
+    in id order — the cursor lets one export run step past rows that failed
+    instead of picking them again every batch. Location columns may be NULL (not
+    yet reverse-geocoded); the exporter only writes place-name tags when they're
+    populated. `values_sig` is the value half of the signature as read, for
+    mark_photo_exported."""
+    sql = (f"SELECT id, dir, filename, lat, lng, gps_accuracy, "
+           f"loc_city, loc_state, loc_country, loc_country_code, "
+           f"{_EXPORT_VALUES_SQL} AS values_sig "
+           f"FROM photos WHERE id > ? AND {_EXPORT_PENDING_SQL} ORDER BY id")
+    params: list = [after_id]
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    return get_db().execute(sql, params).fetchall()
+
+
+def count_photos_to_export(after_id: int = 0) -> int:
     return get_db().execute(
-        "SELECT id, dir, filename, lat, lng, gps_accuracy, "
-        "loc_city, loc_state, loc_country, loc_country_code "
-        "FROM photos WHERE lat IS NOT NULL AND lng IS NOT NULL"
-    ).fetchall()
+        f"SELECT COUNT(*) FROM photos WHERE id > ? AND {_EXPORT_PENDING_SQL}", (after_id,)
+    ).fetchone()[0]
+
+
+def mark_photo_exported(photo_id: int, sidecar_name: str | None, sidecar_mtime: float | None,
+                        values_sig: str) -> None:
+    """Record a successful export: sidecar tracking (exactly as the scan computes
+    it) + source, so the next scan doesn't re-index the row, and the export
+    signature — but only if the exported values are still the row's values. A
+    geotag or geocode that landed while ExifTool was writing leaves the signature
+    stale, so the photo stays queued for the next run."""
+    with transaction() as db:
+        db.execute("UPDATE photos SET sidecar_path=?, sidecar_mtime=?, geotag_source='sidecar' "
+                   "WHERE id=?", (sidecar_name, sidecar_mtime, photo_id))
+        # A second statement: SET expressions see the row's *old* columns, and the
+        # signature must cover the tracking just written.
+        db.execute(f"UPDATE photos SET xmp_export_sig = ({_EXPORT_SIG_SQL}) "
+                   f"WHERE id=? AND lat IS NOT NULL AND ({_EXPORT_VALUES_SQL}) = ?",
+                   (photo_id, values_sig))
 
 
 # ── Faces & persons ──

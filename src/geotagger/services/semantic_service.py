@@ -8,6 +8,7 @@ from pathlib import Path
 
 from geotagger import config, index, scan_failures, semantic, thumbnails
 from geotagger.scan_failures import BatchAborted, FailureStreak, FileUnreadable
+from geotagger.services import _jobs
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +136,7 @@ def similar_to(photo_id: int, candidate_ids: list[int] | None) -> list[tuple[int
 
 # ── Model download job ──
 _dl_lock = threading.Lock()
-_dl_job: dict = {"running": False, "done": False, "error": None, "message": ""}
+_dl_job: dict = {"running": False, "queued": False, "done": False, "error": None, "message": ""}
 
 
 def model_status() -> dict:
@@ -174,11 +175,9 @@ def _run_model_download(force: bool):
 
 
 def start_model_download(executor, force: bool = False) -> bool:
-    """Start the download on the executor; False if one is already running.
+    """Start the download on the jobs executor; False if one is already running.
     Idempotent: files already on disk are skipped unless ``force``."""
-    with _dl_lock:
-        if _dl_job["running"]:
-            return False
-        _dl_job.update(running=True, done=False, error=None, message="Starting…")
-    executor.submit(_run_model_download, force)
+    if not _jobs.accept(_dl_lock, _dl_job):
+        return False
+    _jobs.submit(executor, _dl_lock, _dl_job, _run_model_download, force)
     return True

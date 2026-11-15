@@ -78,13 +78,17 @@ class TestLifespanTeardown:
             with TestClient(main.app, base_url="http://127.0.0.1") as c:
                 assert c.get("/api/status").status_code == 200
                 pool = executor.get_executor()
+                jobs = executor.get_jobs_executor()
 
             with pytest.raises(RuntimeError, match="not initialized"):
                 index.get_db()
             with pytest.raises(RuntimeError, match="not initialized"):
                 executor.get_executor()
-            with pytest.raises(RuntimeError):
-                pool.submit(lambda: None)
+            with pytest.raises(RuntimeError, match="not initialized"):
+                executor.get_jobs_executor()
+            for p in (pool, jobs):
+                with pytest.raises(RuntimeError):
+                    p.submit(lambda: None)
         finally:
             index.close_db()
             if et_was_running:  # the lifespan stopped a session-scoped ExifTool
@@ -123,6 +127,68 @@ class TestLifespanTeardown:
                 exiftool_session.start_et()
         assert len({id(p) for p in pools}) == 8  # a fresh pool every start
         assert_no_new_threads(before)
+
+
+    def test_shutdown_joins_running_jobs_and_cancels_queued_ones(self, tmp_path, monkeypatch):
+        """Audit A7 + T5: the jobs executor is shut down with the app — a job
+        that finishes within the grace period is waited for (its worker thread
+        is gone afterwards), and jobs still queued behind it never start."""
+        from fastapi.testclient import TestClient
+        from geotagger import config, main
+        from conftest import assert_no_new_threads, live_threads
+
+        monkeypatch.setenv("GEOTAGGER_NO_SCAN", "1")
+        monkeypatch.setenv("GEOTAGGER_CACHE_DIR", str(tmp_path))
+        monkeypatch.delenv("GEOTAGGER_SCAN_DIRS", raising=False)
+        monkeypatch.setattr(config, "JOB_WORKERS", 1)
+        et_was_running = exiftool_session._et is not None
+        before = live_threads()
+        started, finished = threading.Event(), []
+        try:
+            index.init_db(tmp_path)
+            with TestClient(main.app, base_url="http://127.0.0.1"):
+                jobs = executor.get_jobs_executor()
+
+                def job():
+                    started.set()
+                    threading.Event().wait(0.3)   # still running when shutdown starts
+                    finished.append(threading.current_thread().name)
+
+                running = jobs.submit(job)
+                queued = jobs.submit(lambda: pytest.fail("queued job ran after shutdown"))
+                assert started.wait(5)
+            assert running.done() and queued.cancelled()
+            assert finished and finished[0].startswith("geotagger-job")
+        finally:
+            index.close_db()
+            if et_was_running:
+                exiftool_session.start_et()
+        assert_no_new_threads(before)
+
+
+class TestJobsExecutor:
+    def test_init_get_shutdown(self):
+        pool = executor.init_jobs_executor(1)
+        try:
+            assert executor.get_jobs_executor() is pool
+            name = pool.submit(lambda: threading.current_thread().name).result(5)
+            assert name.startswith("geotagger-job")
+        finally:
+            assert executor.shutdown_jobs_executor(grace_seconds=5) is True
+        with pytest.raises(RuntimeError, match="not initialized"):
+            executor.get_jobs_executor()
+        assert executor.shutdown_jobs_executor(grace_seconds=5) is True   # idempotent
+
+    def test_job_workers_knob_validates(self, monkeypatch):
+        from geotagger import config
+        monkeypatch.setenv("GEOTAGGER_JOB_WORKERS", "3")
+        assert config.get_job_workers() == 3
+        monkeypatch.delenv("GEOTAGGER_JOB_WORKERS")
+        assert config.get_job_workers() == 2
+        for bad in ("0", "two"):
+            monkeypatch.setenv("GEOTAGGER_JOB_WORKERS", bad)
+            with pytest.raises(ValueError, match="GEOTAGGER_JOB_WORKERS"):
+                config.get_job_workers()
 
 
 class TestStartEtFailure:

@@ -122,7 +122,7 @@ class TestExportToSidecars:
 
         res = geocode_service.export_to_sidecars()
         assert res["written"] == 1
-        assert res["errors"] == 0
+        assert res["failed"] == 0
         assert (tmp_path / "e.xmp").exists()
         row = index.get_photo(pid)
         # Sidecar tracking + source are kept current so the next scan won't re-index the row.
@@ -169,7 +169,8 @@ class TestExportToSidecars:
     def test_noop_when_nothing_geotagged(self, db, et_session):
         _add_photo(db)  # no lat/lng
         assert geocode_service.export_to_sidecars() == {
-            "written": 0, "errors": 0, "error_samples": []}
+            "processed": 0, "written": 0, "failed": 0, "errors_sample": [],
+            "cursor": 0, "remaining": 0}
 
 
 class TestGetPhotoMetadata:

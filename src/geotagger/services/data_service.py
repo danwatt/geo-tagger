@@ -1,7 +1,7 @@
 """Data Management page: downloading the offline reference datasets (GeoNames,
 GeoFabrik/OSM, US Census place boundaries, InsightFace model pack) the app depends
 on. Framework-free (no FastAPI imports) — the api/data.py router calls in here and
-pushes the actual work to the shared executor, per CLAUDE.md's routes-stay-thin
+pushes the actual work to the background-jobs executor, per CLAUDE.md's routes-stay-thin
 convention.
 
 All of these downloads are one-shot, potentially multi-minute admin actions kicked
@@ -29,6 +29,7 @@ from pathlib import Path
 
 from geotagger import config, downloads, geocode, index
 from geotagger.osm_builder import build_or_append
+from geotagger.services import _jobs
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +173,7 @@ def _geocoding_dataset_job():
 
 # ── GeoNames download job ──
 _geonames_lock = threading.Lock()
-_geonames_job: dict = {"running": False, "done": False, "error": None, "message": ""}
+_geonames_job: dict = {"running": False, "queued": False, "done": False, "error": None, "message": ""}
 
 
 def geonames_status() -> dict:
@@ -248,21 +249,19 @@ def _geonames_download(force: bool):
 
 
 def start_geonames_download(executor, force: bool = False) -> bool:
-    """Kick off the download on the shared executor. Returns False if already
+    """Kick off the download on the jobs executor. Returns False if already
     running. force=True re-downloads even files already on disk (otherwise a
     per-file no-op, matching scripts/get_geonames.py's existing skip-if-present
     behavior)."""
-    with _geonames_lock:
-        if _geonames_job["running"]:
-            return False
-        _geonames_job.update(running=True, done=False, error=None, message="Starting…")
-    executor.submit(_run_geonames_download, force)
+    if not _jobs.accept(_geonames_lock, _geonames_job):
+        return False
+    _jobs.submit(executor, _geonames_lock, _geonames_job, _run_geonames_download, force)
     return True
 
 
 # ── GeoFabrik/OSM download + merge job ──
 _osm_lock = threading.Lock()
-_osm_job: dict = {"running": False, "done": False, "error": None, "message": "", "result": None}
+_osm_job: dict = {"running": False, "queued": False, "done": False, "error": None, "message": "", "result": None}
 
 
 def _ingested_region_keys() -> list[str]:
@@ -426,7 +425,7 @@ def _osm_download_and_merge(keys: list[str], force: bool):
 
 def start_osm_download(executor, keys: list[str], force: bool = False) -> bool:
     """Kick off download+merge of the given GeoFabrik region keys (e.g. "us_texas",
-    "europe_germany") on the shared executor. Returns False if a job is already
+    "europe_germany") on the jobs executor. Returns False if a job is already
     running. Raises ValueError for an unknown key or empty selection. force=True
     discards any cached .osm.pbf for the selected regions first, so a fresh copy
     is pulled from GeoFabrik instead of reusing what's on disk — the merge step
@@ -438,17 +437,15 @@ def start_osm_download(executor, keys: list[str], force: bool = False) -> bool:
     unknown = [k for k in keys if k not in _GEOFABRIK_REGIONS]
     if unknown:
         raise ValueError(f"Unknown region(s): {', '.join(unknown)}")
-    with _osm_lock:
-        if _osm_job["running"]:
-            return False
-        _osm_job.update(running=True, done=False, error=None, message="Starting…", result=None)
-    executor.submit(_run_osm_download_and_merge, keys, force)
+    if not _jobs.accept(_osm_lock, _osm_job, result=None):
+        return False
+    _jobs.submit(executor, _osm_lock, _osm_job, _run_osm_download_and_merge, keys, force)
     return True
 
 
 # ── US Census places download + build job ──
 _census_lock = threading.Lock()
-_census_job: dict = {"running": False, "done": False, "error": None, "message": "", "result": None}
+_census_job: dict = {"running": False, "queued": False, "done": False, "error": None, "message": "", "result": None}
 
 
 def census_status() -> dict:
@@ -539,20 +536,18 @@ def _census_download(force: bool):
 
 def start_census_download(executor, force: bool = False) -> bool:
     """Kick off the Census download + build (place boundaries, ZCTA boundaries, and
-    the GeoNames ZIP -> city crosswalk) on the shared executor. Returns False if
+    the GeoNames ZIP -> city crosswalk) on the jobs executor. Returns False if
     already running. force=True discards the cached archives first so a fresh vintage
     is pulled (a plain re-run reuses them and just rebuilds)."""
-    with _census_lock:
-        if _census_job["running"]:
-            return False
-        _census_job.update(running=True, done=False, error=None, message="Starting…", result=None)
-    executor.submit(_run_census_download, force)
+    if not _jobs.accept(_census_lock, _census_job, result=None):
+        return False
+    _jobs.submit(executor, _census_lock, _census_job, _run_census_download, force)
     return True
 
 
 # ── Face matcher model download job ──
 _face_model_lock = threading.Lock()
-_face_model_job: dict = {"running": False, "done": False, "error": None, "message": ""}
+_face_model_job: dict = {"running": False, "queued": False, "done": False, "error": None, "message": ""}
 
 
 def face_model_status() -> dict:
@@ -609,12 +604,10 @@ def _run_face_model_download(force: bool = False):
 
 
 def start_face_model_download(executor, force: bool = False) -> bool:
-    """Kick off the InsightFace model pack download on the shared executor
+    """Kick off the InsightFace model pack download on the jobs executor
     (idempotent — a no-op if it's already on disk, unless force=True deletes it
     first). Returns False if already running."""
-    with _face_model_lock:
-        if _face_model_job["running"]:
-            return False
-        _face_model_job.update(running=True, done=False, error=None, message="Starting…")
-    executor.submit(_run_face_model_download, force)
+    if not _jobs.accept(_face_model_lock, _face_model_job):
+        return False
+    _jobs.submit(executor, _face_model_lock, _face_model_job, _run_face_model_download, force)
     return True

@@ -193,9 +193,22 @@ async def api_geocode_backfill(req: GeocodeBackfillRequest):
     return result
 
 
+class ExportSidecarsRequest(BaseModel):
+    # Photos written per call (each is one ExifTool write); repeat until remaining == 0.
+    limit: int = Field(200, ge=1, le=2000)
+    # The run's cursor: 0 to start, then the previous response's `cursor`.
+    after_id: int = Field(0, ge=0)
+
+
 @router.post("/api/geocode/export-sidecars")
-async def api_geocode_export_sidecars():
-    """Write every geotagged photo's GPS coordinates (plus resolved place names,
-    where available) into its XMP sidecar."""
+async def api_geocode_export_sidecars(req: ExportSidecarsRequest | None = None):
+    """Write up to `limit` geotagged photos' GPS coordinates (plus resolved place
+    names, where available) into their XMP sidecars — only photos whose sidecar
+    doesn't already hold their current values. Client loop: pass `after_id` =
+    the previous response's `cursor` and repeat until `remaining` is 0. Returns
+    {processed, written, failed, errors_sample, cursor, remaining}. A bodyless
+    POST runs one default-sized batch from the start."""
+    req = req or ExportSidecarsRequest()
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(get_executor(), geocode_service.export_to_sidecars)
+    return await loop.run_in_executor(
+        get_executor(), geocode_service.export_to_sidecars, req.limit, req.after_id)

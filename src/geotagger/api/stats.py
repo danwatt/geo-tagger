@@ -232,6 +232,9 @@ async def api_stats_summary():
                 "any_available": geocode.any_available(),
                 "geocoded": index.count_geocoded_photos(),
                 "pending": index.count_photos_needing_geocode(),
+                # Geotagged photos whose sidecar doesn't hold their current
+                # values yet (Export to sidecars on the same card).
+                "export_pending": index.count_photos_to_export(),
             },
             "faces": {
                 "unscanned_photos": len(index.get_unscanned_photo_ids()),

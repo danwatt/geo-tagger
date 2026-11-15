@@ -366,6 +366,26 @@ def get_workers() -> int:
 
 
 WORKERS: int = get_workers()
+
+
+# Worker threads for the background-jobs executor (executor.get_jobs_executor):
+# dataset/model downloads and builds, the street search. Separate from WORKERS so
+# long jobs never occupy request workers (audit A7). Small on purpose — these
+# jobs are network- or disk-bound and each already saturates one; extra jobs
+# queue (their status says so) instead of competing. Default 2: one long
+# download can't hold a street search up behind it.
+def get_job_workers() -> int:
+    raw = os.environ.get("GEOTAGGER_JOB_WORKERS", "").strip() or "2"
+    try:
+        workers = int(raw)
+    except ValueError:
+        raise ValueError(f"GEOTAGGER_JOB_WORKERS must be an integer >= 1, got {raw!r}") from None
+    if workers < 1:
+        raise ValueError(f"GEOTAGGER_JOB_WORKERS must be an integer >= 1, got {raw!r}")
+    return workers
+
+
+JOB_WORKERS: int = get_job_workers()
 # After a complete scan, rows for files that vanished from a scanned root are
 # relinked (moved: same checksum) or deleted (gone). Deleting drops DB-only data —
 # face tags, a database-only geotag — so a run that would delete more than this

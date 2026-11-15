@@ -1,6 +1,7 @@
 """Data Management page: status + start/poll endpoints for the GeoNames,
-GeoFabrik/OSM and US Census offline dataset downloads. Actual work runs on the shared
-executor via services/data_service.py's background jobs; routes just start a
+GeoFabrik/OSM and US Census offline dataset downloads. Actual work runs on the
+background-jobs executor (executor.get_jobs_executor, not the request executor —
+audit A7) via services/data_service.py's jobs; routes just start a
 job and report its polled state (no request stays open for the download)."""
 
 import asyncio
@@ -13,7 +14,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from geotagger import config, index
-from geotagger.executor import get_executor
+from geotagger.executor import get_executor, get_jobs_executor
 from geotagger.geometry import normalize_lng_bbox
 from geotagger.services import backup_service, data_service, semantic_service, streets_service
 
@@ -56,7 +57,7 @@ async def api_data_downloads(dataset: str | None = None):
 
 @router.post("/api/data/geonames/download")
 async def api_data_geonames_download(req: ForceRequest = ForceRequest()):
-    started = data_service.start_geonames_download(get_executor(), req.force)
+    started = data_service.start_geonames_download(get_jobs_executor(), req.force)
     if not started:
         raise HTTPException(409, "GeoNames download already in progress")
     return {"started": True}
@@ -70,7 +71,7 @@ async def api_data_geonames_download_status():
 @router.post("/api/data/osm/download")
 async def api_data_osm_download(req: OsmDownloadRequest):
     try:
-        started = data_service.start_osm_download(get_executor(), req.regions, req.force)
+        started = data_service.start_osm_download(get_jobs_executor(), req.regions, req.force)
     except ValueError as e:
         raise HTTPException(400, str(e))
     if not started:
@@ -85,7 +86,7 @@ async def api_data_osm_download_status():
 
 @router.post("/api/data/census/download")
 async def api_data_census_download(req: ForceRequest = ForceRequest()):
-    started = data_service.start_census_download(get_executor(), req.force)
+    started = data_service.start_census_download(get_jobs_executor(), req.force)
     if not started:
         raise HTTPException(409, "Census places download already in progress")
     return {"started": True}
@@ -116,7 +117,7 @@ async def api_data_streets_search(req: StreetSearchRequest):
     min_lng, max_lng = normalize_lng_bbox(min_lng, max_lng)
     try:
         started = streets_service.start_search(
-            get_executor(), min_lat, max_lat, min_lng, max_lng,
+            get_jobs_executor(), min_lat, max_lat, min_lng, max_lng,
             req.query, req.limit, req.include_paths,
         )
     except ValueError as e:
@@ -133,7 +134,7 @@ async def api_data_streets_search_status():
 
 @router.post("/api/data/face-model/download")
 async def api_data_face_model_download(req: ForceRequest = ForceRequest()):
-    started = data_service.start_face_model_download(get_executor(), req.force)
+    started = data_service.start_face_model_download(get_jobs_executor(), req.force)
     if not started:
         raise HTTPException(409, "Face model download already in progress")
     return {"started": True}

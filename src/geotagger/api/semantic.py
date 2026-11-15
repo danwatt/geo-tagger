@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from geotagger import index, serializers
-from geotagger.executor import get_executor
+from geotagger.executor import get_executor, get_jobs_executor
 from geotagger.services import semantic_service
 from geotagger.scan_failures import BatchAborted
 from geotagger.services.semantic_service import SemanticUnavailable
@@ -66,7 +66,7 @@ async def api_data_semantic_model():
 
 @router.post("/api/data/semantic-model/download")
 async def api_data_semantic_model_download(req: ForceRequest = ForceRequest()):
-    if not semantic_service.start_model_download(get_executor(), req.force):
+    if not semantic_service.start_model_download(get_jobs_executor(), req.force):
         raise HTTPException(409, "Text search model download already in progress")
     return {"started": True}
 
