@@ -265,7 +265,7 @@ def _restore_geotag(row, state: dict) -> tuple[dict | None, str]:
     with lock:
         if src == "sidecar":
             sidecar.write_gps(p, lat, lng, location=loc,
-                              gps_accuracy=acc if acc is not None and acc > 0 else None)
+                              gps_accuracy=sidecar.known_accuracy(acc))
         elif removed:
             sidecar.remove_gps(p, create=config.WRITE_XMP_ON_GEOTAG)
         else:
@@ -313,7 +313,7 @@ def undo_geotags(snapshots: list[dict]) -> dict:
             out = {
                 "id": pid, "lat": now["lat"], "lng": now["lng"],
                 "geotag_source": now["geotag_source"],
-                "gps_accuracy": acc if acc is not None and acc > 0 else None,
+                "gps_accuracy": sidecar.known_accuracy(acc),
                 "geocode_ignored": bool(now["geocode_ignored"]),
             }
             # Only a restored geotag changes the place names; an ignore-only undo

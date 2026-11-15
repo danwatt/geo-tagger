@@ -83,7 +83,8 @@ def export_to_sidecars(limit: int | None = None, after_id: int = 0) -> dict:
         try:
             p = Path(index.photo_path(r))
             with lock:
-                sidecar.write_gps(p, r["lat"], r["lng"], location=loc, gps_accuracy=r["gps_accuracy"])
+                sidecar.write_gps(p, r["lat"], r["lng"], location=loc,
+                                  gps_accuracy=sidecar.known_accuracy(r["gps_accuracy"]))
             sc_name, sc_mtime = sidecar.sidecar_tracking(p)
             # Per file and after the ExifTool write, so the DB write lock is never
             # held across ExifTool.
