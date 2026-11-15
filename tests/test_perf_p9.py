@@ -182,7 +182,7 @@ def test_search_photos_ids_only_matches_full_rows(db):
     full = index.search_photos(geotagged="yes", limit=10_000_000)
     slim = index.search_photos(geotagged="yes", limit=10_000_000, ids_only=True)
     assert [r["id"] for r in slim] == [r["id"] for r in full] and slim
-    assert slim[0].keys() == ["id"]
+    assert slim[0].keys() == ["id", "photo_datetime"]   # A3: ranked search needs the date too
 
 
 # ── f. get_photos selects only the columns its callers read ──

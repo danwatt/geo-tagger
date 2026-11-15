@@ -140,7 +140,7 @@
       </div>
       <div class="toolbar-spacer"></div>
       <div class="toolbar-group" id="handoff-group" style="display:none">
-        <button id="select-all-btn" title="Select every photo in the current results">☑ Select all</button>
+        <button id="select-all-btn" title="Select every loaded photo in the current results">☑ Select all</button>
         <button id="open-geocode-btn" title="Open these results in Geocode for location tagging">📍 Open in Geocode</button>
         <button id="open-people-btn" title="Open this person in People" style="display:none">🙂 Open in People</button>
       </div>
@@ -154,6 +154,14 @@
       <div class="toolbar-group" id="date-undo-group" style="display:none">
         <span id="date-undo-count"></span>
         <button id="date-undo-btn">↩ Undo</button>
+      </div>
+      <!-- Paging banner (A3, mirrors People's U5 banner): shown while the search
+           matched more photos than are loaded. Full width so it stays with the nav. -->
+      <div id="search-paging" hidden>
+        <span id="search-paging-text"></span>
+        <button id="search-paging-more-btn" class="primary">Load more</button>
+        <button id="search-paging-all-btn" hidden>Load all</button>
+        <button id="search-paging-select-btn" hidden>Select all matches</button>
       </div>
     </div>
     <div id="grid"></div>

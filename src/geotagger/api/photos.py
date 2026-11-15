@@ -10,7 +10,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from geotagger import index, thumbnails, serializers
 from geotagger.api import _media
@@ -54,6 +54,21 @@ async def api_photos(
     except ValueError as e:
         raise HTTPException(400, str(e))
     return [serializers.photo_to_dict(r) for r in rows]
+
+
+class PhotosByIdsRequest(BaseModel):
+    # A whole library's worth of ids is ~1 MB of JSON; anything past this is a bug.
+    ids: list[int] = Field(max_length=500_000)
+
+
+@router.post("/api/photos/by-ids")
+async def api_photos_by_ids(req: PhotosByIdsRequest):
+    """Same as ``GET /api/photos?ids=…`` but with the ids in the body: Search's
+    "Open in Geocode" can hand over more photos than fit in a request line (A3 —
+    uvicorn rejects one past ~64 KB, i.e. roughly 8–10k ids)."""
+    def run():
+        return [serializers.photo_to_dict(r) for r in index.get_photos(ids=req.ids)]
+    return await asyncio.get_running_loop().run_in_executor(get_executor(), run)
 
 
 @router.get("/api/photos/dirs")

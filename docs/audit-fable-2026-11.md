@@ -39,11 +39,6 @@ The module also imports `services.data_service`, inverting the layering.
 `api/geocode.py:54`. Each stalls every other request, including thumbnails, against the project's own
 "never block event loop" rule. *Fix:* move bodies into `services/` and `run_in_executor` them (after C1).
 
-**A3 — Medium — Search results silently capped at 2000** [seen]
-`api/search.py:71,127`, `web/search.js:271,285`. `total` is `len(photos)`, so the page reads
-"2,000 photos found" and "Select all" acts on a partial set.
-*Fix:* return the true total and a `truncated` flag; show "first 2,000 of N".
-
 **A7 — Medium — Dataset downloads run on the shared 4-worker request executor** [traced]
 `services/data_service.py:215,326,416,481`, `services/semantic_service.py:134`. Starting four jobs from the
 Data page occupies every worker and freezes the UI. `/api/geocode/export-sidecars` pins a worker for the whole

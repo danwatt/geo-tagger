@@ -189,3 +189,46 @@ class TestTogether:
 
         data = _search([alice, bob])
         assert all(c["photo"]["id"] != photo for c in data["candidates"])
+
+
+class TestPaging:
+    """A3: every candidate is counted, and offset/limit walk them best-first with
+    photo id breaking ties — no repeats, nothing skipped."""
+
+    def _seed(self, db, n):
+        rng = np.random.default_rng(11)
+        centroid = ff.unit_vectors(rng, 1)[0]
+        alice, _ = ff.seed_person(db, "Alice", ff.cluster_around(rng, centroid, 6))
+        # The same embedding in every photo: identical scores, so only the
+        # tiebreaker decides page boundaries.
+        face = ff.cluster_around(rng, centroid, 1)[0]
+        photos = []
+        for i in range(n):
+            photo = _new_photo(ff.epoch(2020, 1 + i % 12))
+            _add_face(db, photo, face)
+            photos.append(photo)
+        ff.reset_faces_caches()
+        return alice, photos
+
+    def test_single_person_pages(self, db):
+        alice, photos = self._seed(db, 5)
+        seen, offset, pages = [], 0, []
+        while offset is not None:
+            data = _search([alice], limit=2, offset=offset)
+            pages.append(data)
+            seen += [c["photo"]["id"] for c in data["candidates"]]
+            offset = data["next_offset"]
+        assert sorted(seen) == sorted(photos) and len(seen) == len(set(seen))
+        assert seen == sorted(seen)   # equal scores -> photo id order
+        assert [p["total"] for p in pages] == [5, 5, 5]
+        assert [p["truncated"] for p in pages] == [True, True, True]
+        assert pages[0]["limit"] == 2 and pages[0]["offset"] == 0
+        whole = _search([alice])
+        assert whole["truncated"] is False and whole["next_offset"] is None
+
+    def test_route_validates_offset(self, client):
+        bob = index.create_person("Bob")
+        assert client.get("/api/search/untagged-faces",
+                          params={"person_ids": bob, "offset": -1}).status_code == 422
+        r = client.get("/api/search/untagged-faces", params={"person_ids": bob}).json()
+        assert r["total"] == 0 and r["truncated"] is False and r["next_offset"] is None

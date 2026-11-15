@@ -148,10 +148,25 @@ document.addEventListener("DOMContentLoaded", async () => {
     return;
   }
   // "?ids=1,2,3" (from the Search page's "Open in Geocode") loads exactly that
-  // photo set, in place of a month/folder/batch scope.
+  // photo set, in place of a month/folder/batch scope. A set too big for a URL
+  // arrives as "?handoff=<token>" instead (A3): Search parks the ids in this
+  // tab's sessionStorage under that token (searchHandoffKey, common.js). The entry
+  // is left in place so a reload of this page still finds it.
   const idsArg = params.get("ids");
-  if (idsArg) {
-    const ids = idsArg.split(",").map(Number).filter(Number.isFinite);
+  const handoffArg = params.get("handoff");
+  let handoffIds = null;
+  if (handoffArg) {
+    try {
+      const stored = JSON.parse(sessionStorage.getItem(searchHandoffKey(handoffArg)) || "null");
+      if (Array.isArray(stored)) handoffIds = stored;
+    } catch { /* unreadable storage → same as missing */ }
+    if (!handoffIds) {
+      setStatus("That Search selection is no longer available in this tab — open it from Search again.", true);
+      return;
+    }
+  }
+  if (idsArg || handoffIds) {
+    const ids = (handoffIds || idsArg.split(",")).map(Number).filter(Number.isFinite);
     if (ids.length) {
       await loadPhotosByIds(ids, `${ids.length.toLocaleString()} photo(s) from Search`);
       return;
@@ -285,7 +300,8 @@ function bindToolbar() {
   function reloadCurrentView() {
     // enterScope leaves exactly one of these set, so the order is only a tiebreak.
     if (batchScope) {
-      loadPhotoScope(batchScope.url, batchScope.label, { timeline: batchScope.timeline });
+      loadPhotoScope(batchScope.url, batchScope.label,
+                     { timeline: batchScope.timeline, init: batchScope.init });
     } else if (selectedYear || undatedMode) {
       loadPhotos();
     } else if (areaSelectParams) {
@@ -1170,10 +1186,10 @@ async function loadPhotosByArea(lat, lng, radius) {
 // fetch. The caller renders in the microtask right after release, so there is
 // no window where the stale grid is live again. A superseded fetch's release is
 // a no-op (setBusy hold tokens); .cancel() aborts and so releases too.
-const fetchPhotoScope = latestOnly(async (signal, url) => {
+const fetchPhotoScope = latestOnly(async (signal, url, init = {}) => {
   const release = setBusy(document.getElementById("grid"), true, "Loading photos…");
   try {
-    const res = await fetch(url, { signal });
+    const res = await fetch(url, { ...init, signal });
     if (!res.ok) throw new Error(await httpErrorMessage(res));
     return await res.json();
   } finally {
@@ -1212,9 +1228,9 @@ async function loadPhotos(fitMap = false) {
  * the month/year/undated views and by batch mode, which loads a date range or a
  * single directory instead. `label` (when given) replaces the scope label in the
  * toolbar; `timeline` false means the scope has no usable dates. */
-async function loadPhotoScope(url, label = null, { timeline = true, fitMap = false } = {}) {
+async function loadPhotoScope(url, label = null, { timeline = true, fitMap = false, init } = {}) {
   try {
-    const data = await fetchPhotoScope(url);
+    const data = await fetchPhotoScope(url, init);
     if (data === LATEST_ONLY_STALE) return;
     if (label !== null) {
       document.getElementById("selected-month-label").textContent = label;
@@ -1387,8 +1403,12 @@ async function loadPhotosByDateRange(from, to, label) {
 async function loadPhotosByIds(ids, label) {
   enterScope("ids", label);
   setTimelineAvailable(true);
-  batchScope = { url: `/api/photos?ids=${ids.join(",")}`, label, timeline: true };
-  await loadPhotoScope(batchScope.url, label, { timeline: true });
+  // POSTed, not ?ids=: a Search hand-off can be tens of thousands of ids, past
+  // what fits in a request line (A3). `init` rides along so reloads re-POST.
+  const init = { method: "POST", headers: { "Content-Type": "application/json" },
+                 body: JSON.stringify({ ids }) };
+  batchScope = { url: "/api/photos/by-ids", init, label, timeline: true };
+  await loadPhotoScope(batchScope.url, label, { timeline: true, init });
 }
 
 async function loadPhotosByDir(dir, label) {

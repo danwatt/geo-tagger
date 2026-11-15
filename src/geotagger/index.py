@@ -1479,12 +1479,15 @@ def get_photo(photo_id: int) -> sqlite3.Row | None:
 # Undated photos sort last in both date orders — all of them: `photo_datetime IS
 # NULL` alone sent NULL-undated last but left 0-undated in among the dates (first
 # ascending before pre-1970 dates existed, mid-list after).
+# Every ordering ends in ``id`` (A3): /api/search pages with LIMIT/OFFSET, and
+# ties (same timestamp, same filename in two folders, a whole camera roll) must
+# break the same way on every request or page 2 could repeat or skip page-1 rows.
 SEARCH_SORTS = {
-    "date_asc": f"{UNDATED_SQL}, photo_datetime, filename",
-    "date_desc": f"{UNDATED_SQL}, photo_datetime DESC, filename",
-    "filename": "filename",
+    "date_asc": f"{UNDATED_SQL}, photo_datetime, filename, id",
+    "date_desc": f"{UNDATED_SQL}, photo_datetime DESC, filename, id",
+    "filename": "filename, id",
     # '' = read, no Make/Model (see sidecar.read_metadata); sorts last with NULL.
-    "camera": "camera IS NULL OR camera = '', camera, photo_datetime",
+    "camera": "camera IS NULL OR camera = '', camera, photo_datetime, id",
 }
 
 
@@ -1501,12 +1504,13 @@ def search_photos(date_from: str | None = None, date_to: str | None = None,
                   undated: bool = False,
                   bbox: str | None = None, location: str | None = None,
                   person_ids: list[int] | None = None, person_mode: str = "all",
-                  geotagged: str = "all", limit: int = 2000,
+                  geotagged: str = "all", limit: int | None = 2000,
                   place_id: int | None = None, nearby_m: float = 0,
                   location_fields: str | None = None,
                   camera: str | None = None, dir: str | None = None,
                   has_faces: str = "all", gps_accuracy: str = "all",
-                  sort: str = "date_asc", ids_only: bool = False) -> list[sqlite3.Row]:
+                  sort: str = "date_asc", ids_only: bool = False,
+                  offset: int = 0) -> list[sqlite3.Row]:
     """Flexible multi-criteria photo search: date range, location (bbox and/or a
     free-text match against the reverse-geocoded place columns), people, camera,
     folder, GPS accuracy, and whether any face was detected.
@@ -1519,11 +1523,50 @@ def search_photos(date_from: str | None = None, date_to: str | None = None,
     timestamp at all) is mutually exclusive with date_from/date_to, which are
     meaningless without a photo_datetime — same convention as get_photos.
 
-    ``ids_only`` returns rows carrying just ``id`` (same filters, order and
-    limit) for callers that only need the matching set — it spares SQLite and
-    Python from materializing every column of up to a whole library of rows.
+    ``limit``/``offset`` page a stable ordering (every SEARCH_SORTS entry ends in
+    id); ``limit=None`` returns every match. ``ids_only`` returns rows carrying
+    just ``id`` and ``photo_datetime`` (same filters, order and paging) for callers
+    that only need the matching set — it spares SQLite and Python from
+    materializing every column of up to a whole library of rows.
     """
-    db = get_db()
+    where, params = _search_where(
+        date_from=date_from, date_to=date_to, undated=undated, bbox=bbox,
+        location=location, person_ids=person_ids, person_mode=person_mode,
+        geotagged=geotagged, place_id=place_id, nearby_m=nearby_m,
+        location_fields=location_fields, camera=camera, dir=dir,
+        has_faces=has_faces, gps_accuracy=gps_accuracy)
+    order = SEARCH_SORTS.get(sort, SEARCH_SORTS["date_asc"])
+    select = "id, photo_datetime" if ids_only else "*"
+    sql = f"SELECT {select} FROM photos {where} ORDER BY {order}"
+    if limit is not None or offset:
+        # SQLite only takes an OFFSET after a LIMIT; -1 means "no limit".
+        sql += " LIMIT ? OFFSET ?"
+        params += [-1 if limit is None else limit, offset]
+    return get_db().execute(sql, params).fetchall()
+
+
+def search_photo_datetimes(**filters) -> list[int | None]:
+    """``photo_datetime`` of every photo matching search_photos' filter keywords
+    (not limit/offset/sort/ids_only), in no particular order. Its length is the
+    true match count and its values feed the result timeline, so /api/search
+    reports both for the whole set rather than for the one page it returns (A3).
+    One unordered single-column scan — no sort, no row materialization."""
+    where, params = _search_where(**filters)
+    return [r[0] for r in get_db().execute(
+        f"SELECT photo_datetime FROM photos {where}", params)]
+
+
+def _search_where(date_from: str | None = None, date_to: str | None = None,
+                  undated: bool = False,
+                  bbox: str | None = None, location: str | None = None,
+                  person_ids: list[int] | None = None, person_mode: str = "all",
+                  geotagged: str = "all",
+                  place_id: int | None = None, nearby_m: float = 0,
+                  location_fields: str | None = None,
+                  camera: str | None = None, dir: str | None = None,
+                  has_faces: str = "all", gps_accuracy: str = "all") -> tuple[str, list]:
+    """``WHERE …`` clause and parameters for search_photos' filters — shared with
+    search_photo_datetimes so a page and its count can never disagree."""
     clauses: list[str] = []
     params: list = []
 
@@ -1606,11 +1649,7 @@ def search_photos(date_from: str | None = None, date_to: str | None = None,
         clauses.append("gps_accuracy IS NOT NULL AND gps_accuracy > 0")
 
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-    order = SEARCH_SORTS.get(sort, SEARCH_SORTS["date_asc"])
-    select = "id" if ids_only else "*"
-    sql = f"SELECT {select} FROM photos {where} ORDER BY {order} LIMIT ?"
-    params.append(limit)
-    return db.execute(sql, params).fetchall()
+    return where, params
 
 
 # ── Checksums ──

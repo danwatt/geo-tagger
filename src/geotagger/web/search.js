@@ -252,15 +252,48 @@ function buildQuery() {
 
 // The plain and untagged-face searches both fill the one results grid, so they
 // share one latest-only guard (common.js): a second search started before the
-// first returns supersedes it, whichever kind either is.
-const runResultsLoad = latestOnly((signal, body) => body(signal));
+// first returns supersedes it, whichever kind either is. "Load more" pages (A3)
+// go through the same guard, so a new search discards a page still in flight,
+// and a Load more can't land on top of a newer search.
+const runResultsLoad = latestOnly((signal, body, ...args) => body(signal, ...args));
 function runSearch() { return runResultsLoad(searchPhotos); }
 function runUntaggedSearch() { return runResultsLoad(searchUntaggedFaces); }
 
 // True from the moment a results load starts until the latest one settles.
 // Bulk actions (Select all, Open in Geocode, the selection toolbar) refuse to
-// run meanwhile: there is no result set on screen for them to act on.
+// run meanwhile: there is no result set on screen for them to act on. (A Load
+// more append doesn't set it — the loaded results stay on screen and actionable.)
 let resultsLoading = false;
+
+// Bumped by every resetResults. A request that isn't part of the results
+// loader (Select all matches, Open in Geocode's id fetch) captures it first and
+// drops its answer if a newer search or Clear has replaced the results since.
+let resultsGeneration = 0;
+
+/* ── Paging (A3) ──
+ * /api/search returns one page (config SEARCH_PAGE_SIZE, 2000 by default) plus
+ * the true `total`; the rest is reachable through the "Load more" banner, same
+ * UX as People's (U5). `key` is the query string the results came from (minus
+ * paging) — Load more / Select all matches continue *that* search even if the
+ * form has been edited since; `loaded` counts server rows consumed (the next
+ * page's offset); `pageSize` is the server's default page, learned from the
+ * first response. */
+const SEARCH_REQUEST_MAX = 20000;     // /api/search caps `limit` here
+const UNTAGGED_REQUEST_MAX = 5000;    // /api/search/untagged-faces' cap
+let resultPaging = emptyPaging();
+
+function emptyPaging() {
+  return { key: null, total: 0, loaded: 0, nextOffset: null, pageSize: null,
+           busy: false, what: "" };
+}
+
+function resultsTruncated() {
+  return resultPaging.nextOffset != null;
+}
+
+// The whole-result-set timeline from the server ({min, max, bucket_secs,
+// counts} or null) — every match, not just the loaded page.
+let searchHistogram = null;
 
 // Drop every piece of result state at once — both modes' results, the
 // timeline's narrowing, the selection and the focused photo — and enter `mode`.
@@ -276,6 +309,7 @@ let releaseResultsBusy = () => {};
 function resetResults(mode, loading) {
   resultsMode = mode;
   resultsLoading = loading;
+  resultsGeneration++;
   const grid = document.getElementById("grid");
   if (loading) releaseResultsBusy = setBusy(grid, true, mode === "untagged" ? "Scanning faces…" : "Searching…");
   else setBusy(grid, false);
@@ -283,12 +317,15 @@ function resetResults(mode, loading) {
   filteredPhotos = [];
   untaggedCandidates = [];
   histBuckets = [];
+  searchHistogram = null;
+  resultPaging = emptyPaging();
   rankedResults = rankedBySort = false;
   selectedIds.clear();
   lastClickedIndex = -1;
   document.getElementById("timeline").style.display = "none";
   document.getElementById("grid").innerHTML = "";
   document.getElementById("search-summary").textContent = "";
+  renderResultsPaging();
   refreshSelectionUI();
   refreshHandoffUI();
   showPlaceholder();
@@ -303,29 +340,65 @@ function finishResultsLoad(signal) {
   releaseResultsBusy();
   refreshSelectionUI();
   refreshHandoffUI();
+  renderResultsPaging();
 }
 
-async function searchPhotos(signal) {
+// Fetch `want` results of `base` (an endpoint URL with its query) starting at
+// `offset`, in requests of at most `max` (the endpoint's cap). `want` null means
+// one request at the server's default page size. Returns the items (`field` of
+// each response), the server's total, where the following page starts (null
+// once exhausted), and the first response (for its histogram/limit/warnings).
+async function fetchResultPages(base, field, offset, want, max, signal) {
+  const items = [];
+  let first = null, total = 0, next = offset;
+  do {
+    const n = want == null ? null : Math.max(1, Math.min(want - items.length, max));
+    const data = await fetchJson(`${base}&offset=${next}` + (n ? `&limit=${n}` : ""), { signal });
+    first ||= data;
+    items.push(...(Array.isArray(data[field]) ? data[field] : []));
+    total = data.total;
+    next = data.next_offset ?? null;
+  } while (want != null && next != null && items.length < want && !signal.aborted);
+  return { items, total, nextOffset: next, first };
+}
+
+// How many results a (re)load should fetch: a reload of the search already on
+// screen (after Assign date, Guess dates, Undo, or Search pressed again with
+// the same filters) keeps as many loaded as before, otherwise every action
+// after a "Load more" would snap the grid back to the first page.
+function reloadWant(key, prev) {
+  return prev.key === key && prev.loaded > (prev.pageSize || 0) ? prev.loaded : null;
+}
+
+async function searchPhotos(signal, more = null) {
+  if (more) return appendSearchPage(signal, more);
+  const prev = resultPaging;
   resetResults("photos", true);
-  const summary = document.getElementById("search-summary");
   setStatus("Searching…");
   try {
     const params = buildQuery();
-    const res = await fetch(`/api/search?${params.toString()}`, { signal });
+    const key = params.toString();
+    const want = reloadWant(key, prev);
     // 409/400 carry a human-readable reason (model not downloaded, photo not
-    // indexed yet) — show it instead of a bare status code. httpErrorMessage
-    // also flattens a 422's detail list, which `body.detail` would print as
+    // indexed yet) — fetchJson shows it instead of a bare status code, and
+    // flattens a 422's detail list, which `body.detail` would print as
     // "[object Object]".
-    if (!res.ok) throw new Error(await httpErrorMessage(res));
-    const data = await res.json();
+    const page = await fetchResultPages(`/api/search?${key}`, "photos", 0, want,
+                                        SEARCH_REQUEST_MAX, signal);
     if (signal.aborted) return;
-    resultPhotos = data.photos;
+    resultPhotos = page.items;
     rankedResults = params.has("text") || params.has("similar_to");
     rankedBySort = rankedResults && (params.get("sort") || "relevance") === "relevance";
+    searchHistogram = page.first.histogram || null;
+    resultPaging = {
+      ...emptyPaging(), key, total: page.total, loaded: page.items.length,
+      nextOffset: page.nextOffset,
+      pageSize: want == null ? page.first.limit : prev.pageSize,
+      what: params.has("similar_to") ? ` similar to ${similarTo.filename}` : "",
+    };
     buildHistogram();
     renderGrid();
-    const what = params.has("similar_to") ? ` similar to ${similarTo.filename}` : "";
-    summary.textContent = `${data.total.toLocaleString()} photo${data.total === 1 ? "" : "s"} found${what}`;
+    updateResultsSummary();
     setStatus("");
     finishResultsLoad(signal);
     if (rankedResults) await noteIndexCoverage(signal);
@@ -334,6 +407,154 @@ async function searchPhotos(signal) {
     setStatus(`Search failed: ${e.message}`, true);
   } finally {
     finishResultsLoad(signal);
+  }
+}
+
+// Load more / Load all for the plain results: append the next page(s) of the
+// search on screen, keeping selection, focus, the timeline range and the scroll
+// position. Runs inside runResultsLoad, so a new search started meanwhile
+// aborts it (and a stale page never lands).
+async function appendSearchPage(signal, more) {
+  const p = resultPaging;
+  if (resultsMode !== "photos" || !resultsTruncated()) return;
+  const offset = p.nextOffset;
+  const want = more === "all" ? p.total - offset : p.pageSize;
+  p.busy = true;
+  renderResultsPaging();
+  try {
+    const page = await fetchResultPages(`/api/search?${p.key}`, "photos", offset, want,
+                                        SEARCH_REQUEST_MAX, signal);
+    if (signal.aborted) return;
+    // Offsets are positional, so a photo that moved between requests (a date
+    // edit in another tab, a scan) could come back twice — drop repeats rather
+    // than draw (and count) the same cell twice.
+    const seen = new Set(resultPhotos.map((ph) => ph.id));
+    const added = page.items.filter((ph) => !seen.has(ph.id));
+    resultPhotos = resultPhotos.concat(added);
+    Object.assign(p, { total: page.total, loaded: offset + page.items.length,
+                       nextOffset: page.nextOffset });
+    // Same timeline narrowing as before; the selection stays as it was.
+    filteredPhotos = photosInTimelineRange(resultPhotos);
+    const pane = document.getElementById("grid-pane");
+    const scrollTop = pane.scrollTop;
+    renderGrid();
+    pane.scrollTop = scrollTop;   // the grid is rebuilt; new cells only go below
+    refreshSelectionUI();
+    refreshHandoffUI();
+    updateResultsSummary();
+    setStatus(`Loaded ${added.length.toLocaleString()} more — ` +
+              `${resultPhotos.length.toLocaleString()} of ${p.total.toLocaleString()} now shown.`);
+  } catch (e) {
+    if (signal.aborted) return;
+    setStatus(`Failed to load more results: ${e.message}`, true);
+  } finally {
+    if (!signal.aborted) { p.busy = false; renderResultsPaging(); }
+  }
+}
+
+// "Showing first 2,000 of 12,345 photos found" while truncated — never a bare
+// page count passed off as the total (A3).
+function updateResultsSummary() {
+  const p = resultPaging;
+  const n = resultsMode === "untagged" ? untaggedCandidates.length : resultPhotos.length;
+  const noun = p.total === 1 ? "photo" : "photos";
+  document.getElementById("search-summary").textContent = resultsTruncated()
+    ? `Showing ${rankedBySort ? "top" : "first"} ${n.toLocaleString()} of ` +
+      `${p.total.toLocaleString()} ${noun} found${p.what}`
+    : `${p.total.toLocaleString()} ${noun} found${p.what}`;
+}
+
+// The "Showing N of M" strip under the results nav, shown only while the
+// results on screen are truncated. Spells out that Select all and the
+// selection actions see the loaded photos only, and offers "Select all M".
+function renderResultsPaging() {
+  const bar = document.getElementById("search-paging");
+  const p = resultPaging;
+  const show = resultsTruncated() && !resultsLoading;
+  bar.hidden = !show;
+  if (!show) return;
+  const untagged = resultsMode === "untagged";
+  const loadedN = untagged ? untaggedCandidates.length : resultPhotos.length;
+  const remaining = Math.max(0, p.total - p.loaded);
+  const nextN = Math.min(p.pageSize || remaining, remaining);
+  document.getElementById("search-paging-text").textContent =
+    `Showing ${loadedN.toLocaleString()} of ${p.total.toLocaleString()} ` +
+    (untagged
+      ? "photos. Group buttons only cover the loaded photos."
+      : `${rankedBySort ? "best matches" : "photos"}. Select all and the timeline range ` +
+        "only cover the loaded photos; the timeline's bars count every match.");
+  const moreBtn = document.getElementById("search-paging-more-btn");
+  if (p.busy) moreBtn.innerHTML = `<span class="spinner" aria-hidden="true"></span> Loading…`;
+  else moreBtn.textContent = `Load ${nextN.toLocaleString()} more`;
+  moreBtn.disabled = p.busy;
+  const allBtn = document.getElementById("search-paging-all-btn");
+  allBtn.hidden = remaining <= nextN;   // one more page is all there is
+  allBtn.textContent = `Load all (${remaining.toLocaleString()})`;
+  allBtn.disabled = p.busy;
+  const selBtn = document.getElementById("search-paging-select-btn");
+  selBtn.hidden = untagged;
+  selBtn.textContent = `Select all ${p.total.toLocaleString()}`;
+  selBtn.title = "Select every match, loaded or not (within the timeline range) — " +
+                 "Open in Geocode, Download ZIP and the date tools then act on all of them";
+  selBtn.disabled = p.busy;
+}
+
+function loadMoreResults() {
+  if (resultPaging.busy || !resultsTruncated() || resultsLoading) return;
+  runResultsLoad(resultsMode === "untagged" ? searchUntaggedFaces : searchPhotos, "page");
+}
+
+// confirm() before a load-all that would put a very large grid on screen
+// (every cell is a live <img>), like People's Load all.
+function loadAllResults() {
+  if (resultPaging.busy || !resultsTruncated() || resultsLoading) return;
+  const remaining = resultPaging.total - resultPaging.loaded;
+  if (resultPaging.total > SEARCH_REQUEST_MAX &&
+      !confirm(`Load all ${remaining.toLocaleString()} remaining photo(s)? ` +
+               `${resultPaging.total.toLocaleString()} photos in one grid can make ` +
+               `the page slow to scroll and select.`)) return;
+  runResultsLoad(resultsMode === "untagged" ? searchUntaggedFaces : searchPhotos, "all");
+}
+
+// Every match of the search on screen (loaded or not), narrowed by the timeline
+// range the same way the grid is (undated photos always pass). One ids-only
+// request: ids plus timestamps, no photo rows.
+async function fetchAllMatchIds() {
+  const data = await fetchJson(`/api/search?${resultPaging.key}&ids_only=true`);
+  if (!timelineNarrowed()) return data.ids;
+  return data.ids.filter((_, i) => {
+    const ts = data.datetimes[i];
+    return !ts || (ts >= dateFilterLo && ts <= dateFilterHi);
+  });
+}
+
+// "Select all 12,345": the whole result set, not just the loaded pages. The
+// selection actions all take id lists in a POST body (Download ZIP keeps its
+// own size cap and says so), and Open in Geocode hands large sets over through
+// sessionStorage — so nothing downstream needs the photos to be loaded.
+async function selectAllMatches() {
+  // Not photoResultsActionable(): a timeline range can hold matches even when
+  // none of the *loaded* photos fall in it, and this is how to reach them.
+  if (resultsMode !== "photos" || resultsLoading || !resultsTruncated() || resultPaging.busy) return;
+  const gen = resultsGeneration;
+  const btn = document.getElementById("search-paging-select-btn");
+  btn.disabled = true;
+  setStatus(`Selecting all ${resultPaging.total.toLocaleString()} matches…`);
+  try {
+    const ids = await fetchAllMatchIds();
+    if (gen !== resultsGeneration) return;
+    selectedIds = new Set(ids);
+    lastClickedIndex = -1;
+    refreshSelectionUI();
+    const unloaded = ids.length - resultPhotos.filter((p) => selectedIds.has(p.id)).length;
+    setStatus(`Selected all ${ids.length.toLocaleString()} matches` +
+              (timelineNarrowed() ? " in the timeline range" : "") +
+              (unloaded ? ` — ${unloaded.toLocaleString()} of them aren't loaded in the grid, ` +
+                          "but the selection actions include them." : "."));
+  } catch (e) {
+    if (gen === resultsGeneration) setStatus(`Select all failed: ${e.message}`, true);
+  } finally {
+    if (gen === resultsGeneration) renderResultsPaging();
   }
 }
 
@@ -394,15 +615,43 @@ function refreshHandoffUI() {
   peopleBtn.style.display = selectedPersons.length === 1 ? "" : "none";
 }
 
-function openInGeocode() {
+// The selection, or — with nothing selected — every result in the timeline
+// range: the loaded ones when that's all there is, else every match (fetched as
+// ids only, A3). Up to SEARCH_HANDOFF_URL_MAX ids ride in the URL as before
+// (?ids=, and the Geocode page POSTs them on to /api/photos/by-ids); a bigger
+// set goes through a sessionStorage hand-off (common.js stashSearchHandoff),
+// since tens of thousands of ids don't fit in a request line.
+async function openInGeocode() {
   if (!photoResultsActionable()) return;
-  const ids = (selectedIds.size > 0 ? [...selectedIds] : filteredPhotos.map((p) => p.id));
+  let ids;
+  if (selectedIds.size > 0) {
+    ids = [...selectedIds];
+  } else if (resultsTruncated()) {
+    const gen = resultsGeneration;
+    setStatus(`Collecting all ${resultPaging.total.toLocaleString()} matches for Geocode…`);
+    try {
+      ids = await fetchAllMatchIds();
+    } catch (e) {
+      if (gen === resultsGeneration) setStatus(`Open in Geocode failed: ${e.message}`, true);
+      return;
+    }
+    if (gen !== resultsGeneration) return;
+  } else {
+    ids = filteredPhotos.map((p) => p.id);
+  }
   if (!ids.length) return;
-  // Ids ride in the query string (and Geocode re-sends them to /api/photos?ids=).
-  // Results are capped at 2000 (search's default limit), i.e. ≤ ~16 KB even with
-  // 7-digit ids; uvicorn (httptools and h11 alike) accepts a ~64 KB request line,
-  // measured. Revisit with a POST/sessionStorage handoff if that cap ever grows.
-  window.location.href = `/geocode.html?ids=${ids.join(",")}`;
+  if (ids.length <= SEARCH_HANDOFF_URL_MAX) {
+    window.location.href = `/geocode.html?ids=${ids.join(",")}`;
+    return;
+  }
+  const token = stashSearchHandoff(ids);
+  if (!token) {
+    setStatus(`Can't hand ${ids.length.toLocaleString()} photos to Geocode: this browser's ` +
+              `session storage is unavailable or full. Select ${SEARCH_HANDOFF_URL_MAX.toLocaleString()} ` +
+              "or fewer and try again.", true);
+    return;
+  }
+  window.location.href = `/geocode.html?handoff=${token}`;
 }
 
 function openInPeople() {
@@ -413,25 +662,71 @@ function openInPeople() {
 /* ── Untagged-face search: candidates where the searched people appear via an
  * untagged near-match face, not yet a plain-search hit. ── */
 
-async function searchUntaggedFaces(signal) {
+async function searchUntaggedFaces(signal, more = null) {
+  if (more) return appendUntaggedPage(signal, more);
+  const prev = resultPaging;
   resetResults("untagged", true);
-  const summary = document.getElementById("search-summary");
   setStatus("Scanning for untagged faces…");
   try {
-    const params = buildQuery();
-    const res = await fetch(`/api/search/untagged-faces?${params.toString()}`, { signal });
-    if (!res.ok) throw new Error(await httpErrorMessage(res));
-    const data = await res.json();
+    const key = buildQuery().toString();
+    const want = reloadWant(key, prev);
+    const page = await fetchResultPages(`/api/search/untagged-faces?${key}`, "candidates", 0,
+                                        want, UNTAGGED_REQUEST_MAX, signal);
     if (signal.aborted) return;
-    untaggedCandidates = data.candidates;
+    untaggedCandidates = page.items;
+    resultPaging = {
+      ...emptyPaging(), key, total: page.total, loaded: page.items.length,
+      nextOffset: page.nextOffset,
+      pageSize: want == null ? page.first.limit : prev.pageSize,
+    };
     renderUntaggedGrid();
-    summary.textContent = `${data.total.toLocaleString()} photo${data.total === 1 ? "" : "s"} found`;
-    setStatus(data.warnings && data.warnings.length ? data.warnings.join(" ") : "", !!(data.warnings && data.warnings.length));
+    updateResultsSummary();
+    const warnings = page.first.warnings || [];
+    setStatus(warnings.join(" "), warnings.length > 0);
   } catch (e) {
     if (signal.aborted) return;
     setStatus(`Search failed: ${e.message}`, true);
   } finally {
     finishResultsLoad(signal);
+  }
+}
+
+// Load more for the untagged-face candidates. Tagging here edits the loaded
+// candidates locally (no refetch), and a candidate whose last proposed face was
+// confirmed/ignored/rejected no longer qualifies server-side — so the server's
+// list is that many rows shorter and the next page starts that much earlier.
+// `loaded`/`total` stay in local-list terms (emptied candidates included), so
+// the server offset is always `loaded` minus the candidates emptied so far.
+// Repeats that slip through anyway are dropped by photo id.
+async function appendUntaggedPage(signal, more) {
+  const p = resultPaging;
+  if (resultsMode !== "untagged" || !resultsTruncated()) return;
+  const dropped = untaggedCandidates.filter((c) => c.proposed.length === 0).length;
+  const offset = Math.max(0, p.loaded - dropped);
+  const want = more === "all" ? Math.max(1, p.total - p.loaded) : p.pageSize;
+  p.busy = true;
+  renderResultsPaging();
+  try {
+    const page = await fetchResultPages(`/api/search/untagged-faces?${p.key}`, "candidates",
+                                        offset, want, UNTAGGED_REQUEST_MAX, signal);
+    if (signal.aborted) return;
+    const seen = new Set(untaggedCandidates.map((c) => c.photo.id));
+    const added = page.items.filter((c) => !seen.has(c.photo.id));
+    untaggedCandidates = untaggedCandidates.concat(added);
+    Object.assign(p, { total: page.total + dropped, loaded: offset + page.items.length + dropped,
+                       nextOffset: page.nextOffset });
+    const pane = document.getElementById("grid-pane");
+    const scrollTop = pane.scrollTop;
+    renderUntaggedGrid();
+    pane.scrollTop = scrollTop;
+    updateResultsSummary();
+    setStatus(`Loaded ${added.length.toLocaleString()} more — ` +
+              `${untaggedCandidates.length.toLocaleString()} of ${p.total.toLocaleString()} now shown.`);
+  } catch (e) {
+    if (signal.aborted) return;
+    setStatus(`Failed to load more results: ${e.message}`, true);
+  } finally {
+    if (!signal.aborted) { p.busy = false; renderResultsPaging(); }
   }
 }
 
@@ -827,7 +1122,12 @@ function renderGrid() {
 
   const photos = filteredPhotos;
   if (photos.length === 0) {
-    grid.innerHTML = `<div class="person-suggest-empty" style="grid-column:1/-1;padding:24px;text-align:center">No photos match these filters.</div>`;
+    // Truncated + an empty timeline range: matches may exist in the range, just
+    // not among the loaded pages (the timeline's bars count every match).
+    const msg = resultsTruncated() && resultPhotos.length
+      ? "None of the loaded photos fall in this timeline range. Load more, or search with this date range."
+      : "No photos match these filters.";
+    grid.innerHTML = `<div class="person-suggest-empty" style="grid-column:1/-1;padding:24px;text-align:center">${msg}</div>`;
     return;
   }
 
@@ -909,10 +1209,23 @@ function refreshSelectionUI() {
   const count = document.getElementById("selection-count");
   if (selectionActionable()) {
     group.style.display = "";
-    count.textContent = `${selectedIds.size} selected`;
+    count.textContent = selectionCountText();
   } else {
     group.style.display = "none";
   }
+}
+
+// While the results are truncated (A3) the count says which part of the result
+// set the selection covers: all of it (Select all N), some photos that aren't
+// loaded, or loaded photos only.
+function selectionCountText() {
+  const n = selectedIds.size;
+  if (!resultsTruncated()) return `${n.toLocaleString()} selected`;
+  if (n === resultPaging.total) return `All ${n.toLocaleString()} matches selected`;
+  const loadedSel = resultPhotos.reduce((k, p) => k + (selectedIds.has(p.id) ? 1 : 0), 0);
+  return loadedSel < n
+    ? `${n.toLocaleString()} selected (${(n - loadedSel).toLocaleString()} not loaded)`
+    : `${n.toLocaleString()} selected (of ${resultPhotos.length.toLocaleString()} loaded)`;
 }
 
 function clearSelection() {
@@ -979,11 +1292,18 @@ const showDetail = latestOnly(async (signal, id) => {
 
 // The visible photos only: filteredPhotos is what renderGrid draws. (It used to
 // fall back to resultPhotos when the timeline narrowed to nothing, selecting
-// photos that weren't on screen.)
+// photos that weren't on screen.) With a truncated result (A3) that is the
+// loaded pages only — say so, and point at the banner's "Select all N".
 function selectAllResults() {
   if (!photoResultsActionable()) return;
   selectedIds = new Set(filteredPhotos.map((p) => p.id));
   refreshSelectionUI();
+  if (resultsTruncated()) {
+    const notLoaded = resultPaging.total - resultPaging.loaded;
+    setStatus(`Selected the ${filteredPhotos.length.toLocaleString()} loaded photo(s) — ` +
+              `${notLoaded.toLocaleString()} more matches aren't loaded. Use ` +
+              `"Select all ${resultPaging.total.toLocaleString()}" above the grid to include them.`);
+  }
 }
 
 // The selection toolbar's actions act on selectedIds; refuse while a load is
@@ -1310,10 +1630,15 @@ function bindTimeline() {
   });
 }
 
+// The timeline describes the whole result set (A3): /api/search buckets every
+// match's date server-side (search_service.timeline_histogram — a day per bucket
+// up to 90 days, a week up to a year, else 30 days), so a truncated search's
+// bars don't stop at the last loaded photo. The range still narrows the loaded
+// photos client-side (applyTimelineFilter).
 function buildHistogram() {
-  const tsList = resultPhotos.map((p) => p.photo_datetime).filter(Boolean);  // keeps pre-1970 (negative)
   filteredPhotos = resultPhotos;
-  if (tsList.length < 2) {
+  const h = searchHistogram;
+  if (!h) {
     document.getElementById("timeline").style.display = "none";
     dateRangeMin = dateRangeMax = 0;
     dateFilterLo = dateFilterHi = 0;
@@ -1321,35 +1646,21 @@ function buildHistogram() {
     return;
   }
   document.getElementById("timeline").style.display = "";
-
-  [dateRangeMin, dateRangeMax] = minMaxOf(tsList);  // not Math.min(...): overflows past ~100k
+  dateRangeMin = h.min;
+  dateRangeMax = h.max;
   dateFilterLo = dateRangeMin;
   dateFilterHi = dateRangeMax;
-
   document.getElementById("range-lo").value = 0;
   document.getElementById("range-hi").value = 1000;
-
-  const spanDays = (dateRangeMax - dateRangeMin) / 86400;
-  let bucketSecs;
-  if (spanDays <= 90) bucketSecs = 86400;
-  else if (spanDays <= 365) bucketSecs = 86400 * 7;
-  else bucketSecs = 86400 * 30;
-  histBucketSecs = bucketSecs;
-
-  const bucketCount = Math.ceil((dateRangeMax - dateRangeMin) / bucketSecs) + 1;
-  const counts = new Array(bucketCount).fill(0);
-  tsList.forEach((ts) => {
-    const idx = Math.floor((ts - dateRangeMin) / bucketSecs);
-    if (idx >= 0 && idx < bucketCount) counts[idx]++;
-  });
-
-  histBuckets = counts.map((count, i) => ({
-    ts: dateRangeMin + i * bucketSecs,
-    count,
-  }));
-
+  histBucketSecs = h.bucket_secs;
+  histBuckets = h.counts.map((count, i) => ({ ts: h.min + i * h.bucket_secs, count }));
   updateDateLabels();
   drawHistogram();
+}
+
+// True while the timeline's range excludes part of the result span.
+function timelineNarrowed() {
+  return histBuckets.length > 0 && (dateFilterLo > dateRangeMin || dateFilterHi < dateRangeMax);
 }
 
 function updateDateFilter() {
@@ -1371,11 +1682,16 @@ function fmtDate(ts) {
   return formatWallClockDate(ts, { year: "numeric", month: "short", day: "numeric" });
 }
 
-function applyTimelineFilter() {
-  filteredPhotos = resultPhotos.filter((p) => {
+function photosInTimelineRange(photos) {
+  if (!timelineNarrowed()) return photos;
+  return photos.filter((p) => {
     if (!p.photo_datetime) return true; // keep undated photos visible regardless of range
     return p.photo_datetime >= dateFilterLo && p.photo_datetime <= dateFilterHi;
   });
+}
+
+function applyTimelineFilter() {
+  filteredPhotos = photosInTimelineRange(resultPhotos);
   selectedIds.clear();
   lastClickedIndex = -1;
   refreshSelectionUI();
@@ -1436,6 +1752,9 @@ document.getElementById("clear-selection-btn").addEventListener("click", clearSe
 document.getElementById("open-geocode-btn").addEventListener("click", openInGeocode);
 document.getElementById("open-people-btn").addEventListener("click", openInPeople);
 document.getElementById("select-all-btn").addEventListener("click", selectAllResults);
+document.getElementById("search-paging-more-btn").addEventListener("click", loadMoreResults);
+document.getElementById("search-paging-all-btn").addEventListener("click", loadAllResults);
+document.getElementById("search-paging-select-btn").addEventListener("click", selectAllMatches);
 document.getElementById("assign-date-btn").addEventListener("click", openAssignDateModal);
 document.getElementById("assign-date-close").addEventListener("click", closeAssignDateModal);
 document.getElementById("assign-date-cancel-btn").addEventListener("click", closeAssignDateModal);

@@ -250,11 +250,16 @@ def find_untagged_face_photos(pids: list[int], date_from: str | None, date_to: s
                               bbox: str | None, location: str | None, geotagged: str,
                               threshold: float | None, limit: int,
                               place_id: int | None = None, nearby_m: float = 0,
-                              location_fields: str | None = None) -> dict:
+                              location_fields: str | None = None,
+                              offset: int = 0) -> dict:
     """Photos where the searched people appear but at least one is only an
     untagged near-match, not yet confirmed. Single person -> exhaustive
     "suggested for them" scan; two+ -> "together, some/none tagged" bipartite
-    cover. See FACE_SEARCH_PLAN.md for the full algorithm writeup."""
+    cover. See FACE_SEARCH_PLAN.md for the full algorithm writeup.
+
+    Every candidate is scored (the scan is exhaustive either way); ``offset`` /
+    ``limit`` then slice them best-first with photo id breaking ties, and the
+    result carries ``total`` / ``offset`` / ``next_offset`` / ``truncated`` (A3)."""
     t0 = time.perf_counter()
     threshold = config.FACE_MATCH_THRESHOLD if threshold is None else threshold
     warnings: list[str] = []
@@ -278,10 +283,16 @@ def find_untagged_face_photos(pids: list[int], date_from: str | None, date_to: s
 
     if len(pids) == 1:
         result = _find_single(pids[0], allowed_ids, gallery, names,
-                              rows, unknowns, times, threshold, limit)
+                              rows, unknowns, times, threshold)
     else:
         result = _find_together(pids, allowed_ids, gallery, names,
-                                rows, unknowns, times, neg_map, threshold, limit)
+                                rows, unknowns, times, neg_map, threshold)
+    ranked = result.pop("candidates")
+    result["candidates"] = ranked[offset:offset + limit]
+    end = offset + len(result["candidates"])
+    result.update(offset=offset, limit=limit,
+                  next_offset=end if result["candidates"] and end < len(ranked) else None,
+                  truncated=len(result["candidates"]) < len(ranked))
     _attach_photos(result["candidates"])
     result["warnings"] = warnings
     logger.info("find_untagged_face_photos pids=%s mode=%s candidates=%d total=%d %.2fms",
@@ -302,7 +313,8 @@ def _attach_photos(candidates: list[dict]) -> None:
 
 def _find_single(pid: int, allowed_ids: set[int],
                  gallery, names: dict, rows, unknowns, times,
-                 threshold: float, limit: int) -> dict:
+                 threshold: float) -> dict:
+    """Every candidate photo for one person, best first (the caller pages them)."""
     if pid not in gallery._pid_to_group:
         return {"mode": "single", "threshold": threshold, "total": 0, "candidates": []}
 
@@ -327,17 +339,18 @@ def _find_single(pid: int, allowed_ids: set[int],
         })
         entry["_best"] = max(entry["_best"], score)
 
-    candidates = sorted(by_photo.values(), key=lambda c: -c["_best"])
-    total = len(candidates)
+    # Photo id breaks score ties so offset pages never overlap or skip.
+    candidates = sorted(by_photo.values(), key=lambda c: (-c["_best"], c["_photo_id"]))
     for c in candidates:
         del c["_best"]
-    return {"mode": "single", "threshold": threshold, "total": total,
-            "candidates": candidates[:limit]}
+    return {"mode": "single", "threshold": threshold, "total": len(candidates),
+            "candidates": candidates}
 
 
 def _find_together(pids: list[int], allowed_ids: set[int],
                    gallery, names: dict, rows, unknowns, times, neg_map,
-                   threshold: float, limit: int) -> dict:
+                   threshold: float) -> dict:
+    """Every "together" candidate photo, best first (the caller pages them)."""
     u_rows, u_embs, u_times = faces.window_rows(rows, unknowns, times, None, None, allowed_ids)
     # Pass the rows' date uncertainty so approximate-dated photos score the
     # same here as in every other suggestion path (audit F6).
@@ -419,9 +432,10 @@ def _find_together(pids: list[int], allowed_ids: set[int],
             "tagged": tagged_out, "proposed": proposed_out, "_best": best,
         })
 
-    candidates.sort(key=lambda c: -c["_best"])
-    total = len(candidates)
+    # candidate_photos is a set, so without the id tiebreaker equal scores would
+    # come back in hash order and pages could overlap.
+    candidates.sort(key=lambda c: (-c["_best"], c["_photo_id"]))
     for c in candidates:
         del c["_best"]
-    return {"mode": "together", "threshold": threshold, "total": total,
-            "candidates": candidates[:limit]}
+    return {"mode": "together", "threshold": threshold, "total": len(candidates),
+            "candidates": candidates}

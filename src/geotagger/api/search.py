@@ -2,13 +2,14 @@
 (including "photos with two+ people together")."""
 
 import asyncio
+import functools
 
 from fastapi import APIRouter, HTTPException, Query
 
-from geotagger import index, serializers
+from geotagger import config, index
 from geotagger.search_locations import parse_fields, suggestions
 from geotagger.executor import get_executor
-from geotagger.services import faces_service, semantic_service
+from geotagger.services import faces_service, search_service
 from geotagger.services.semantic_service import SemanticUnavailable
 
 router = APIRouter()
@@ -68,7 +69,11 @@ async def api_search(
     text: str | None = Query(None, max_length=300,
                              description="Describe the photo; ranks results by visual similarity"),
     similar_to: int | None = Query(None, ge=1, description="Photo id; ranks by similarity to it"),
-    limit: int = Query(2000, ge=1, le=20000),
+    limit: int | None = Query(None, ge=1, le=20000,
+                              description="page size; default config.SEARCH_PAGE_SIZE"),
+    offset: int = Query(0, ge=0, le=10_000_000, description="first match to return"),
+    ids_only: bool = Query(False, description="every match's id + photo_datetime, "
+                           "unpaged, instead of a page of photos"),
 ):
     """Search photos by any combination of date range, location, people, camera,
     folder, GPS accuracy, and whether a face was detected. All supplied criteria
@@ -77,7 +82,13 @@ async def api_search(
 
     With `text` (or `similar_to`), the other filters pick the candidate set and the
     semantic model ranks it: results below the score threshold are dropped and each
-    photo carries a `score`."""
+    photo carries a `score`.
+
+    Paged: `offset`/`limit` slice a stable ordering. `total` is the true match
+    count, `truncated` says this page holds fewer than all of them, `next_offset`
+    (null on the last page) is where "Load more" continues, and `histogram` buckets
+    the whole result set for the timeline. `ids_only=true` returns
+    {ids, datetimes, total} for every match instead (Select all across pages)."""
     _validate_location(place_id, location_fields, nearby_m)
     pids: list[int] | None = _parse_person_ids(person_ids) if person_ids else None
     text = (text or "").strip() or None
@@ -87,44 +98,21 @@ async def api_search(
     if sort == "relevance" and not ranked:
         raise HTTPException(400, "Relevance sort needs a text description")
     sort = sort or ("relevance" if ranked else "date_asc")
-
-    def run():
-        rows = index.search_photos(
-            date_from=date_from, date_to=date_to, undated=undated, bbox=bbox, location=location,
-            person_ids=pids, person_mode=person_mode, geotagged=geotagged,
-            # Ranking needs the whole filtered set: the caller's limit applies after
-            # scoring, otherwise a date-ordered cut would drop the best matches.
-            limit=20000 if ranked else limit,
-            place_id=place_id, nearby_m=nearby_m, location_fields=location_fields,
-            camera=camera, dir=dir, has_faces=has_faces, gps_accuracy=gps_accuracy,
-            sort="date_asc" if sort == "relevance" else sort,
-        )
-        if not ranked:
-            return [serializers.photo_to_dict(r) for r in rows]
-        by_id = {r["id"]: r for r in rows}
-        hits = (semantic_service.search_text(text, list(by_id)) if text
-                else semantic_service.similar_to(similar_to, list(by_id)))
-        if sort != "relevance":
-            # Keep the score filter but honour the requested ordering.
-            keep = {pid: s for pid, s in hits}
-            ordered = [(r["id"], keep[r["id"]]) for r in rows if r["id"] in keep]
-        else:
-            ordered = hits
-        out = []
-        for pid, score in ordered[:limit]:
-            d = serializers.photo_to_dict(by_id[pid])
-            d["score"] = round(score, 3)
-            out.append(d)
-        return out
-
+    filters = dict(
+        date_from=date_from, date_to=date_to, undated=undated, bbox=bbox, location=location,
+        person_ids=pids, person_mode=person_mode, geotagged=geotagged,
+        place_id=place_id, nearby_m=nearby_m, location_fields=location_fields,
+        camera=camera, dir=dir, has_faces=has_faces, gps_accuracy=gps_accuracy,
+    )
     loop = asyncio.get_running_loop()
     try:
-        photos = await loop.run_in_executor(get_executor(), run)
+        return await loop.run_in_executor(get_executor(), functools.partial(
+            search_service.run_search, filters, sort=sort, text=text, similar_to=similar_to,
+            limit=limit or config.SEARCH_PAGE_SIZE, offset=offset, ids_only=ids_only))
     except SemanticUnavailable as e:
         raise HTTPException(409, str(e))
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return {"photos": photos, "total": len(photos)}
 
 
 @router.get("/api/search/untagged-faces")
@@ -138,9 +126,12 @@ async def api_search_untagged_faces(
     nearby_m: float = Query(0, ge=0, le=100000),
     location_fields: str | None = Query(None),
     limit: int = Query(500, ge=1, le=5000),
+    offset: int = Query(0, ge=0, le=10_000_000),
 ):
     """Photos where the searched people appear via an untagged near-match face —
-    the inverse of /api/search, which only ever finds already-tagged people."""
+    the inverse of /api/search, which only ever finds already-tagged people.
+    Paged like /api/search: `total` counts every candidate, `offset`/`next_offset`
+    walk them best-first, `truncated` flags a partial response."""
     _validate_location(place_id, location_fields, nearby_m)
     pids = _parse_person_ids(person_ids)
     if not pids:
@@ -151,7 +142,7 @@ async def api_search_untagged_faces(
             get_executor(),
             faces_service.find_untagged_face_photos,
             pids, date_from, date_to, bbox, location, geotagged, threshold, limit,
-            place_id, nearby_m, location_fields,
+            place_id, nearby_m, location_fields, offset,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))

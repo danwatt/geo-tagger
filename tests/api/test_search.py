@@ -237,3 +237,127 @@ def test_invalid_location_selection(client):
     assert client.get("/api/search?nearby_m=-1").status_code == 422
     for value in ('{}', '[]', 'null', '{"id": "1"}', 'bad'):
         assert client.get("/api/search", params={"location_fields": value}).status_code == 400
+
+
+# ── Paging, true totals and the whole-set timeline (A3) ──
+
+def _all_pages(client, params, limit):
+    """Walk /api/search page by page; returns (ids in order, every response)."""
+    ids, pages, offset = [], [], 0
+    while offset is not None:
+        r = client.get("/api/search", params={**params, "limit": limit, "offset": offset})
+        assert r.status_code == 200
+        page = r.json()
+        pages.append(page)
+        ids += [p["id"] for p in page["photos"]]
+        offset = page["next_offset"]
+        assert len(pages) < 50
+    return ids, pages
+
+
+def test_search_reports_true_total_and_truncated(client):
+    for i in range(5):
+        _add(f"p{i}.jpg", dt=1000 + i)
+    r = client.get("/api/search", params={"limit": 2}).json()
+    assert len(r["photos"]) == 2
+    assert r["total"] == 5 and r["truncated"] is True
+    assert r["offset"] == 0 and r["next_offset"] == 2 and r["limit"] == 2
+    full = client.get("/api/search").json()
+    assert full["total"] == 5 and full["truncated"] is False and full["next_offset"] is None
+
+
+def test_search_default_page_size_comes_from_config(client, monkeypatch):
+    from geotagger import config
+    for i in range(3):
+        _add(f"p{i}.jpg", dt=1000 + i)
+    monkeypatch.setattr(config, "SEARCH_PAGE_SIZE", 2)
+    r = client.get("/api/search").json()
+    assert r["limit"] == 2 and len(r["photos"]) == 2 and r["total"] == 3 and r["truncated"]
+
+
+def test_search_pages_are_disjoint_and_complete_with_ties(client):
+    # Same timestamp everywhere, and the same filename in two folders: without
+    # an id tiebreaker LIMIT/OFFSET pages could repeat or skip rows.
+    for i in range(7):
+        _add("same.jpg" if i < 4 else f"x{i}.jpg", dt=5000, dir_=f"d{i}", camera="cam")
+    expected = {r[0] for r in index.get_db().execute("SELECT id FROM photos")}
+    assert len(expected) == 7
+    for sort in ("date_asc", "date_desc", "filename", "camera"):
+        ids, pages = _all_pages(client, {"sort": sort}, limit=2)
+        assert len(ids) == 7 and set(ids) == expected, sort
+        assert all(p["total"] == 7 for p in pages)
+        assert [p["truncated"] for p in pages] == [True, True, True, True]
+        one = [p["id"] for p in client.get("/api/search", params={"sort": sort}).json()["photos"]]
+        assert ids == one, sort   # paging walks exactly the unpaged order
+
+
+def test_search_paging_with_place_filter(client):
+    place = index.create_place("Ranch", "circle", json.dumps({"lat": 30, "lng": -96, "radius": 1000}))
+    inside = {_add(f"in{i}.jpg", lat=30, lng=-96, dt=1000 + i) for i in range(3)}
+    _add("far.jpg", lat=40, lng=-96, dt=1000)
+    ids, pages = _all_pages(client, {"place_id": place}, limit=2)
+    assert set(ids) == inside and len(ids) == 3
+    assert pages[0]["total"] == 3 and pages[0]["truncated"]
+
+
+def test_search_histogram_covers_every_match(client):
+    day = 86400
+    for i in range(4):
+        _add(f"p{i}.jpg", dt=946684800 + i * day)
+    _add("undated.jpg", dt=None)
+    r = client.get("/api/search", params={"limit": 1}).json()
+    h = r["histogram"]
+    # Only one photo is in the page, but the bars describe all four dated ones.
+    assert h["min"] == 946684800 and h["max"] == 946684800 + 3 * day
+    assert h["bucket_secs"] == day and h["counts"] == [1, 1, 1, 1]
+    # Fewer than two dated matches: nothing to draw.
+    assert client.get("/api/search", params={"undated": "true"}).json()["histogram"] is None
+
+
+def test_timeline_histogram_bucket_widths():
+    from geotagger.services.search_service import timeline_histogram
+    day = 86400
+    assert timeline_histogram([0, None, 5]) is None
+    assert timeline_histogram([day, 101 * day])["bucket_secs"] == 7 * day
+    assert timeline_histogram([day, 91 * day])["counts"] == [1] + [0] * 89 + [1]
+    h = timeline_histogram([-400 * day, 0, None, 0])  # pre-1970 kept, 0/None undated
+    assert h is None
+    h = timeline_histogram([-400 * day, day])
+    assert h["bucket_secs"] == 30 * day and sum(h["counts"]) == 2
+
+
+def test_search_ids_only_returns_every_match_in_order(client):
+    for i in range(5):
+        _add(f"p{i}.jpg", dt=1000 + (4 - i))
+    r = client.get("/api/search", params={"ids_only": "true", "limit": 2, "sort": "date_asc"}).json()
+    assert "photos" not in r
+    assert r["total"] == 5 and len(r["ids"]) == 5
+    page_ids, _ = _all_pages(client, {"sort": "date_asc"}, limit=2)
+    assert r["ids"] == page_ids
+    assert r["datetimes"] == sorted(r["datetimes"])
+
+
+def test_search_offset_past_the_end(client):
+    _add("a.jpg")
+    r = client.get("/api/search", params={"offset": 5}).json()
+    assert r["photos"] == [] and r["total"] == 1 and r["next_offset"] is None
+
+
+def test_search_limit_offset_validation(client):
+    for params in ({"limit": 0}, {"limit": 20001}, {"offset": -1}, {"offset": 10_000_001},
+                   {"limit": "x"}):
+        assert client.get("/api/search", params=params).status_code == 422, params
+    assert client.get("/api/search", params={"limit": 20000, "offset": 0}).status_code == 200
+
+
+def test_photos_by_ids_post(client):
+    a, b = _add("a.jpg", dt=2000), _add("b.jpg", dt=1000)
+    _add("c.jpg", dt=1500)
+    r = client.post("/api/photos/by-ids", json={"ids": [a, b, 999999]})
+    assert r.status_code == 200
+    assert [p["id"] for p in r.json()] == [b, a]   # chronological, unknown ids skipped
+    assert client.post("/api/photos/by-ids", json={"ids": []}).json() == []
+    assert client.post("/api/photos/by-ids", json={"ids": ["x"]}).status_code == 422
+    # Far more ids than fit in a GET request line still work in the body.
+    many = list(range(1, 60001))
+    assert {p["id"] for p in client.post("/api/photos/by-ids", json={"ids": many}).json()} == {a, b, 3}

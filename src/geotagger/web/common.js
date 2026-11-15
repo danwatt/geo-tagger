@@ -89,6 +89,43 @@ function formatWallClockTime(ts, opts = {}) {
  *  (written by app.js, counted/cleared by home.js). */
 const SKIPPED_BATCHES_KEY = "geotagger.workqueue.skipped";
 
+/* ── Search → Geocode hand-off (A3) ──
+ * "Open in Geocode" puts up to SEARCH_HANDOFF_URL_MAX ids in the URL (?ids=,
+ * shareable, and well inside uvicorn's ~64 KB request line). A bigger set is
+ * parked in this tab's sessionStorage under a one-off token and the URL carries
+ * only ?handoff=<token>; same-tab navigation keeps sessionStorage, and the
+ * Geocode page leaves the entry so a reload still works. Only the newest few
+ * hand-offs are kept, so repeated opens can't fill the quota. */
+const SEARCH_HANDOFF_URL_MAX = 2000;
+const SEARCH_HANDOFF_PREFIX = "geotagger.searchHandoff.";
+const SEARCH_HANDOFF_KEEP = 3;
+
+function searchHandoffKey(token) {
+  return SEARCH_HANDOFF_PREFIX + token;
+}
+
+/** Park `ids` for the Geocode page; returns the token, or null when storage is
+ *  unavailable or full (the caller then can't hand the set over). */
+function stashSearchHandoff(ids) {
+  try {
+    const token = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const old = [];
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const k = sessionStorage.key(i);
+      if (k && k.startsWith(SEARCH_HANDOFF_PREFIX)) old.push(k);
+    }
+    // Tokens start with a base-36 timestamp, so a string sort is oldest-first
+    // (until the timestamp gains a digit, in the year 2059).
+    old.sort();
+    old.slice(0, Math.max(0, old.length - (SEARCH_HANDOFF_KEEP - 1)))
+       .forEach(k => sessionStorage.removeItem(k));
+    sessionStorage.setItem(searchHandoffKey(token), JSON.stringify(ids));
+    return token;
+  } catch (_) {
+    return null;
+  }
+}
+
 /* ── JSON fetch helpers ──
  * FastAPI reports errors as {"detail": …}: a string for our own HTTPExceptions,
  * a list for 422 validation errors, and occasionally {message, …} (e.g. the

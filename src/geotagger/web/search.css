@@ -163,6 +163,35 @@
   color: #ccc;
 }
 
+/* Results nav: sticky over the scrolling grid so the paging banner (below) can't
+ * scroll out of sight; wraps so the banner gets its own full-width row. */
+#grid-nav {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+/* Paging banner (A3) — same look as People's #grid-paging (U5): warning-toned
+ * full-width row, so a truncated result is impossible to miss. */
+#search-paging {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+}
+#search-paging[hidden],
+#search-paging button[hidden] { display: none; }
+#search-paging-text { flex: 1; min-width: 200px; }
+#search-paging button:disabled { opacity: .6; cursor: default; }
+
 /* ── Untagged-face search: one row per photo, grouped into .face-group-section
  * (year/month, from style.css) exactly like the plain grid. Each row is the
  * photo thumbnail (click -> the shared detail pane, like every other face

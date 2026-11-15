@@ -121,3 +121,40 @@ def test_data_status_reports_semantic_model(client, fake_semantic):
     m = client.get("/api/data/status").json()["semantic_model"]
     assert m["available"] is True and m["name"]
     assert client.get("/api/data/semantic-model/download/status").json()["running"] is False
+
+
+def test_ranked_search_pages_top_matches_with_true_total(client, fake_semantic, monkeypatch):
+    from geotagger import config
+    monkeypatch.setattr(config, "SEMANTIC_MIN_SCORE", -1.0)   # keep every candidate
+    for n in ("red_1.jpg", "red_2.jpg", "red_3.jpg", "blue_1.jpg", "green_1.jpg"):
+        _add(n)
+    _index_all(client)
+    full = client.get("/api/search", params={"text": "red"}).json()
+    assert full["total"] == 5 and full["truncated"] is False
+    ids, offset = [], 0
+    while offset is not None:
+        page = client.get("/api/search", params={"text": "red", "limit": 2, "offset": offset}).json()
+        assert page["total"] == 5
+        ids += [p["id"] for p in page["photos"]]
+        offset = page["next_offset"]
+    assert ids == [p["id"] for p in full["photos"]]   # pages walk the relevance order
+    first = client.get("/api/search", params={"text": "red", "limit": 2}).json()
+    assert first["truncated"] is True and len(first["photos"]) == 2
+    # The timeline counts all five hits, not the two on this page.
+    assert first["histogram"]["counts"] == [5]
+    only = client.get("/api/search", params={"text": "red", "ids_only": "true"}).json()
+    assert only["ids"] == ids and only["total"] == 5
+
+
+def test_ranked_search_date_sort_pages(client, fake_semantic, monkeypatch):
+    from geotagger import config
+    monkeypatch.setattr(config, "SEMANTIC_MIN_SCORE", 0.9)
+    late, early = _add("red_late.jpg", dt=2000), _add("red_early.jpg", dt=1000)
+    _add("blue_1.jpg", dt=1500)
+    _index_all(client)
+    r = client.get("/api/search", params={"text": "red", "sort": "date_asc", "limit": 1}).json()
+    assert [p["id"] for p in r["photos"]] == [early] and r["total"] == 2 and r["next_offset"] == 1
+    r = client.get("/api/search", params={"text": "red", "sort": "date_asc", "limit": 1,
+                                          "offset": 1}).json()
+    assert [p["id"] for p in r["photos"]] == [late] and r["next_offset"] is None
+    assert r["histogram"]["min"] == 1000 and r["histogram"]["max"] == 2000

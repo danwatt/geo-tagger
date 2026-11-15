@@ -436,6 +436,11 @@ FACE_PRESELECT_MIN_SCORE = float(os.environ.get("GEOTAGGER_FACE_PRESELECT_MIN_SC
 # slower to render; the server independently caps one request at 20000 (see
 # api_list_faces) regardless of what's set here.
 FACE_QUERY_LIMIT = int(os.environ.get("GEOTAGGER_FACE_QUERY_LIMIT", "5000"))
+# Page size of the Search page's results (/api/search's default `limit`): photos
+# returned per request, the rest reachable via its "Load more" banner (A3). The
+# response always carries the true match count, so a smaller page only changes
+# how much arrives at once; the server caps one request at 20000 regardless.
+SEARCH_PAGE_SIZE = max(1, min(20000, int(os.environ.get("GEOTAGGER_SEARCH_PAGE_SIZE", "2000"))))
 
 # ── Representative-face picking (prolific people accumulate many near-duplicate
 # labels; cluster them and keep one medoid per look instead of every example) ──
