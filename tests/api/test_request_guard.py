@@ -128,7 +128,9 @@ def test_token_cookie_flow(client, token):
     assert f"geotagger_token={TOKEN}" in set_cookie and "HttpOnly" in set_cookie
     # TestClient keeps the cookie, like a browser would.
     assert client.get(GET).status_code == 200
-    assert client.get("/").status_code == 200
+    # A static file too. Not "/": the pages are a Vite build (web_dist/) the
+    # Python test job doesn't run, while theme.css is always in web/.
+    assert client.get("/theme.css").status_code == 200
 
 
 def test_token_wrong_query_rejected(client, token):
