@@ -202,7 +202,7 @@ function initMap() {
   addBasemapControl();
   map.on("moveend", correctWorldWrap);
 
-  // Saved-location pins are clustered (same library and version as map.js), so a
+  // Saved-location pins are clustered (same library and version as the Geo Data page), so a
   // month of photos isn't thousands of live DOM markers. Only these: staged,
   // guess and accuracy layers go straight on the map and are never hidden in a
   // cluster. The radius is kept small — about a pin's width — so only pins that

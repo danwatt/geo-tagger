@@ -354,7 +354,17 @@ async def api_stats_face_coverage():
         raise HTTPException(500, str(e))
 
 
-@router.get("/api/stats/bounds")
+class LibraryBounds(BaseModel):
+    """The four bounds are only present with has_data (exclude_unset keeps an
+    empty library's answer the bare {"has_data": false} it always was)."""
+    has_data: bool
+    min_lat: float | None = None
+    max_lat: float | None = None
+    min_lng: float | None = None
+    max_lng: float | None = None
+
+
+@router.get("/api/stats/bounds", response_model=LibraryBounds, response_model_exclude_unset=True)
 async def api_stats_bounds():
     """Get the bounding box of all geotagged photos."""
     try:

@@ -7,9 +7,10 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from geotagger import index
+from geotagger.api.geocode import ResolvedLocation
 from geotagger.executor import get_executor
 from geotagger.services import geotag_service, hotspots_service
 from geotagger.timeutil import has_date
@@ -102,7 +103,27 @@ async def api_geotag_ignore(req: SetGeocodeIgnoredRequest):
 
 # ── Hotspots & proposals ──
 
-@router.get("/api/geotag/hotspots")
+class Hotspot(BaseModel):
+    """extra="allow": sort=near adds `meters` and sort=time `window_count`, which
+    the legacy Geocode page reads; left unmodelled so other sorts don't grow nulls."""
+    model_config = ConfigDict(extra="allow")
+    lat: float
+    lng: float
+    count: int
+    last_ts: int | None = None
+    sample_photo_id: int | None = None
+    location: ResolvedLocation | None = None    # None when no geocode data is installed
+    label: str
+
+
+class HotspotsResponse(BaseModel):
+    hotspots: list[Hotspot]
+    total: int            # matches before the limit/offset slice
+    offset: int
+    merge_meters: float   # cluster radius — the circle a named hotspot saves as
+
+
+@router.get("/api/geotag/hotspots", response_model=HotspotsResponse)
 async def api_geotag_hotspots(
     limit: int = Query(40, ge=1, le=200),
     offset: int = Query(0, ge=0, description="skip this many ranked hotspots — paging"),

@@ -425,6 +425,46 @@
         "title": "CamerasResponse",
         "type": "object"
       },
+      "CensusSource": {
+        "additionalProperties": true,
+        "properties": {
+          "city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          }
+        },
+        "title": "CensusSource",
+        "type": "object"
+      },
       "CensusStatus": {
         "additionalProperties": true,
         "properties": {
@@ -653,6 +693,39 @@
           "bounds"
         ],
         "title": "CreatePlaceRequest",
+        "type": "object"
+      },
+      "CreatePlaceResponse": {
+        "properties": {
+          "bounds": {
+            "title": "Bounds",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "name",
+          "type",
+          "bounds"
+        ],
+        "title": "CreatePlaceResponse",
         "type": "object"
       },
       "CrowdIgnoreRequest": {
@@ -1302,6 +1375,38 @@
         "title": "FamilyRequest",
         "type": "object"
       },
+      "FeatureCollection": {
+        "description": "A GeoJSON FeatureCollection plus total/truncated alongside the standard keys.",
+        "properties": {
+          "features": {
+            "items": {
+              "$ref": "#/components/schemas/GeoJsonFeature"
+            },
+            "title": "Features",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "features",
+          "total",
+          "truncated"
+        ],
+        "title": "FeatureCollection",
+        "type": "object"
+      },
       "ForceRequest": {
         "properties": {
           "force": {
@@ -1311,6 +1416,153 @@
           }
         },
         "title": "ForceRequest",
+        "type": "object"
+      },
+      "GeoJsonFeature": {
+        "properties": {
+          "geometry": {
+            "$ref": "#/components/schemas/GeoJsonGeometry"
+          },
+          "properties": {
+            "additionalProperties": true,
+            "title": "Properties",
+            "type": "object"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "properties",
+          "geometry"
+        ],
+        "title": "GeoJsonFeature",
+        "type": "object"
+      },
+      "GeoJsonGeometry": {
+        "properties": {
+          "coordinates": {
+            "items": {},
+            "title": "Coordinates",
+            "type": "array"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "coordinates"
+        ],
+        "title": "GeoJsonGeometry",
+        "type": "object"
+      },
+      "GeoNamesPlace": {
+        "additionalProperties": true,
+        "properties": {
+          "city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country"
+          },
+          "country_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Code"
+          },
+          "county": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "County"
+          },
+          "lat": {
+            "title": "Lat",
+            "type": "number"
+          },
+          "lng": {
+            "title": "Lng",
+            "type": "number"
+          },
+          "population": {
+            "title": "Population",
+            "type": "integer"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          }
+        },
+        "required": [
+          "lat",
+          "lng",
+          "population"
+        ],
+        "title": "GeoNamesPlace",
+        "type": "object"
+      },
+      "GeoNamesPlacesResponse": {
+        "properties": {
+          "places": {
+            "items": {
+              "$ref": "#/components/schemas/GeoNamesPlace"
+            },
+            "title": "Places",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "places",
+          "total",
+          "truncated"
+        ],
+        "title": "GeoNamesPlacesResponse",
         "type": "object"
       },
       "GeocodeBackfillRequest": {
@@ -1560,6 +1812,99 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "Hotspot": {
+        "additionalProperties": true,
+        "description": "extra=\"allow\": sort=near adds `meters` and sort=time `window_count`, which\nthe legacy Geocode page reads; left unmodelled so other sorts don't grow nulls.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "last_ts": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Ts"
+          },
+          "lat": {
+            "title": "Lat",
+            "type": "number"
+          },
+          "lng": {
+            "title": "Lng",
+            "type": "number"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResolvedLocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sample_photo_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Photo Id"
+          }
+        },
+        "required": [
+          "lat",
+          "lng",
+          "count",
+          "label"
+        ],
+        "title": "Hotspot",
+        "type": "object"
+      },
+      "HotspotsResponse": {
+        "properties": {
+          "hotspots": {
+            "items": {
+              "$ref": "#/components/schemas/Hotspot"
+            },
+            "title": "Hotspots",
+            "type": "array"
+          },
+          "merge_meters": {
+            "title": "Merge Meters",
+            "type": "number"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hotspots",
+          "total",
+          "offset",
+          "merge_meters"
+        ],
+        "title": "HotspotsResponse",
+        "type": "object"
+      },
       "IgnoreFacesRequest": {
         "properties": {
           "face_ids": {
@@ -1651,6 +1996,64 @@
           "message"
         ],
         "title": "JobStatus",
+        "type": "object"
+      },
+      "LibraryBounds": {
+        "description": "The four bounds are only present with has_data (exclude_unset keeps an\nempty library's answer the bare {\"has_data\": false} it always was).",
+        "properties": {
+          "has_data": {
+            "title": "Has Data",
+            "type": "boolean"
+          },
+          "max_lat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Lat"
+          },
+          "max_lng": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Lng"
+          },
+          "min_lat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Lat"
+          },
+          "min_lng": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Lng"
+          }
+        },
+        "required": [
+          "has_data"
+        ],
+        "title": "LibraryBounds",
         "type": "object"
       },
       "LocationSuggestion": {
@@ -1989,6 +2392,57 @@
           "items"
         ],
         "title": "OsmRegionGroup",
+        "type": "object"
+      },
+      "OsmSource": {
+        "additionalProperties": true,
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "place_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Place Id"
+          },
+          "sublocation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sublocation"
+          }
+        },
+        "title": "OsmSource",
         "type": "object"
       },
       "OsmStatus": {
@@ -2583,7 +3037,7 @@
       },
       "PlaceItem": {
         "additionalProperties": true,
-        "description": "extra=\"allow\": ``stats=true`` adds per-place photo_count / last_ts, which\nthe legacy Custom Places page reads.",
+        "description": "The three stats fields are only present with ``stats=true`` (see\nindex.get_place_stats), hence response_model_exclude_unset on the route: a\nplain listing keeps its old shape instead of growing three nulls.\nextra=\"allow\" so a field added to the dict reaches the pages that read it.",
         "properties": {
           "bounds": {
             "title": "Bounds",
@@ -2608,9 +3062,31 @@
             "title": "Id",
             "type": "integer"
           },
+          "last_ts": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Ts"
+          },
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "photo_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Photo Count"
           },
           "representative_photo_id": {
             "anyOf": [
@@ -2626,6 +3102,17 @@
           "type": {
             "title": "Type",
             "type": "string"
+          },
+          "untagged_nearby_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Untagged Nearby Count"
           }
         },
         "required": [
@@ -2636,6 +3123,29 @@
           "bounds_valid"
         ],
         "title": "PlaceItem",
+        "type": "object"
+      },
+      "PlaceMutationResponse": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "success"
+        ],
+        "title": "PlaceMutationResponse",
         "type": "object"
       },
       "PreviousDate": {
@@ -2683,6 +3193,85 @@
           "photo_id"
         ],
         "title": "PreviousDate",
+        "type": "object"
+      },
+      "ProbeResponse": {
+        "properties": {
+          "lat": {
+            "title": "Lat",
+            "type": "number"
+          },
+          "lng": {
+            "title": "Lng",
+            "type": "number"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResolvedLocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sources": {
+            "$ref": "#/components/schemas/ProbeSources"
+          }
+        },
+        "required": [
+          "lat",
+          "lng",
+          "sources"
+        ],
+        "title": "ProbeResponse",
+        "type": "object"
+      },
+      "ProbeSources": {
+        "description": "Each source's own answer for the probed point (None where it has none).",
+        "properties": {
+          "census": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CensusSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "geonames": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResolvedLocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "osm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OsmSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "zcta": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ZctaSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "ProbeSources",
         "type": "object"
       },
       "Proposal": {
@@ -2867,6 +3456,91 @@
           "reset"
         ],
         "title": "ResetSettingsResponse",
+        "type": "object"
+      },
+      "ResolvedLocation": {
+        "additionalProperties": true,
+        "description": "geocode.lookup()'s answer \u2014 what a photo at that coordinate would store.",
+        "properties": {
+          "city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country"
+          },
+          "country_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Code"
+          },
+          "county": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "County"
+          },
+          "postal_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Postal Code"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "sublocation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sublocation"
+          }
+        },
+        "title": "ResolvedLocation",
         "type": "object"
       },
       "RetryFailedResponse": {
@@ -3504,6 +4178,41 @@
           }
         },
         "title": "SetRepresentativeRequest",
+        "type": "object"
+      },
+      "SetRepresentativeResponse": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "representative_photo_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Representative Photo Id"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "success",
+          "representative_photo_id"
+        ],
+        "title": "SetRepresentativeResponse",
         "type": "object"
       },
       "SettingOut": {
@@ -4372,6 +5081,34 @@
         "title": "UpdatePlaceRequest",
         "type": "object"
       },
+      "UpdatePlaceResponse": {
+        "properties": {
+          "bounds": {
+            "title": "Bounds",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "success",
+          "bounds"
+        ],
+        "title": "UpdatePlaceResponse",
+        "type": "object"
+      },
       "UpdateSettingsRequest": {
         "properties": {
           "values": {
@@ -4477,6 +5214,136 @@
         "title": "ValidationError",
         "type": "object"
       },
+      "VoronoiCell": {
+        "additionalProperties": true,
+        "properties": {
+          "city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country"
+          },
+          "country_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Code"
+          },
+          "county": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "County"
+          },
+          "lat": {
+            "title": "Lat",
+            "type": "number"
+          },
+          "lng": {
+            "title": "Lng",
+            "type": "number"
+          },
+          "polygon": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "title": "Polygon",
+            "type": "array"
+          },
+          "polygons": {
+            "items": {
+              "items": {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "title": "Polygons",
+            "type": "array"
+          },
+          "population": {
+            "title": "Population",
+            "type": "integer"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          }
+        },
+        "required": [
+          "lat",
+          "lng",
+          "population",
+          "polygon",
+          "polygons"
+        ],
+        "title": "VoronoiCell",
+        "type": "object"
+      },
+      "VoronoiResponse": {
+        "properties": {
+          "cells": {
+            "items": {
+              "$ref": "#/components/schemas/VoronoiCell"
+            },
+            "title": "Cells",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cells",
+          "total",
+          "truncated"
+        ],
+        "title": "VoronoiResponse",
+        "type": "object"
+      },
       "WorkQueueResponse": {
         "additionalProperties": true,
         "properties": {
@@ -4512,6 +5379,46 @@
           "tail_photos"
         ],
         "title": "WorkQueueResponse",
+        "type": "object"
+      },
+      "ZctaSource": {
+        "additionalProperties": true,
+        "properties": {
+          "postal_city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Postal City"
+          },
+          "postal_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Postal Code"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          }
+        },
+        "title": "ZctaSource",
         "type": "object"
       },
       "ZipCheckResponse": {
@@ -6277,7 +7184,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FeatureCollection"
+                }
               }
             },
             "description": "Successful Response"
@@ -6370,7 +7279,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6430,7 +7341,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FeatureCollection"
+                }
               }
             },
             "description": "Successful Response"
@@ -6480,7 +7393,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/GeoNamesPlacesResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6547,7 +7462,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/VoronoiResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6597,7 +7514,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FeatureCollection"
+                }
               }
             },
             "description": "Successful Response"
@@ -6860,7 +7779,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/HotspotsResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7715,7 +8636,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SearchPhoto"
+                  },
+                  "title": "Response Api Photos By Bounds Api Photos By Bounds Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -8420,7 +9347,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePlaceResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -8458,7 +9387,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/PlaceMutationResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -8504,7 +9435,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatePlaceResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -8552,7 +9485,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SetRepresentativeResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -9507,7 +10442,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryBounds"
+                }
               }
             },
             "description": "Successful Response"

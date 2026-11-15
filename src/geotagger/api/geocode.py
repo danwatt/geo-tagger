@@ -3,7 +3,9 @@
 import asyncio
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from geotagger import census_places, index, geocode, osm_places
 from geotagger.geometry import normalize_lng_bbox
@@ -26,6 +28,110 @@ class BackfillResponse(BaseModel):
     matched: int
     available: bool
     remaining: int
+
+
+# ── Response models (the Geo Data page's generated types) ──
+# extra="allow" throughout: these dicts come straight from the dataset modules,
+# and a field one of them grows should reach the pages without a model change.
+
+class ResolvedLocation(BaseModel):
+    """geocode.lookup()'s answer — what a photo at that coordinate would store."""
+    model_config = ConfigDict(extra="allow")
+    city: str | None = None
+    sublocation: str | None = None
+    postal_code: str | None = None
+    state: str | None = None
+    county: str | None = None
+    country: str | None = None
+    country_code: str | None = None
+
+
+class GeoNamesPlace(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    city: str | None = None
+    state: str | None = None
+    county: str | None = None
+    country: str | None = None
+    country_code: str | None = None
+    lat: float
+    lng: float
+    population: int
+
+
+class GeoNamesPlacesResponse(BaseModel):
+    places: list[GeoNamesPlace]
+    total: int
+    truncated: bool
+
+
+class VoronoiCell(GeoNamesPlace):
+    # Rings of [lat, lng]. A population-weighted cell is grid-traced and can come
+    # back as several disjoint rings; `polygon` is the largest of them.
+    polygon: list[list[float]]
+    polygons: list[list[list[float]]]
+
+
+class VoronoiResponse(BaseModel):
+    cells: list[VoronoiCell]
+    total: int
+    truncated: bool
+
+
+class GeoJsonGeometry(BaseModel):
+    type: str
+    coordinates: list[Any]   # MultiPolygon nesting; handed to Leaflet as-is
+
+
+class GeoJsonFeature(BaseModel):
+    type: str
+    # Per-dataset fields (OSM: name/category/…, Census: name/kind/…, ZCTA: zip/city/…).
+    properties: dict[str, Any]
+    geometry: GeoJsonGeometry
+
+
+class FeatureCollection(BaseModel):
+    """A GeoJSON FeatureCollection plus total/truncated alongside the standard keys."""
+    type: str
+    features: list[GeoJsonFeature]
+    total: int
+    truncated: bool
+
+
+class OsmSource(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    city: str | None = None
+    sublocation: str | None = None
+    category: str | None = None
+    place_id: int | None = None
+
+
+class CensusSource(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    city: str | None = None
+    kind: str | None = None
+    state: str | None = None
+
+
+class ZctaSource(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    postal_code: str | None = None
+    postal_city: str | None = None
+    state: str | None = None
+
+
+class ProbeSources(BaseModel):
+    """Each source's own answer for the probed point (None where it has none)."""
+    osm: OsmSource | None = None
+    census: CensusSource | None = None
+    zcta: ZctaSource | None = None
+    geonames: ResolvedLocation | None = None
+
+
+class ProbeResponse(BaseModel):
+    lat: float
+    lng: float
+    location: ResolvedLocation | None = None
+    sources: ProbeSources
 
 
 def _parse_bbox(bbox: str) -> tuple[float, float, float, float]:
@@ -56,7 +162,7 @@ async def api_geocode_status():
     }
 
 
-@router.get("/api/geocode/places")
+@router.get("/api/geocode/places", response_model=GeoNamesPlacesResponse)
 async def api_geocode_places(bbox: str = Query(...), limit: int = Query(3000, ge=1, le=10000)):
     """GeoNames places within a viewport bbox — backs the Places DB map, which
     plots the raw reverse-geocode reference data (not photos) so the user can
@@ -68,7 +174,7 @@ async def api_geocode_places(bbox: str = Query(...), limit: int = Query(3000, ge
     return {"places": places, "total": total, "truncated": total > len(places)}
 
 
-@router.get("/api/geocode/voronoi")
+@router.get("/api/geocode/voronoi", response_model=VoronoiResponse)
 async def api_geocode_voronoi(bbox: str = Query(...), limit: int = Query(4000, ge=1, le=8000)):
     """Boundary cells for GeoNames places in a viewport bbox — for each place, the
     area a coordinate must fall in to reverse-geocode to it. Exact Voronoi cells
@@ -86,7 +192,7 @@ async def api_geocode_voronoi(bbox: str = Query(...), limit: int = Query(4000, g
     return {"cells": cells, "total": total, "truncated": total > len(cells)}
 
 
-@router.get("/api/geocode/osm-places")
+@router.get("/api/geocode/osm-places", response_model=FeatureCollection)
 async def api_geocode_osm_places(bbox: str = Query(...), limit: int = Query(4000, ge=1, le=8000),
                                   buildings: bool = Query(True)):
     """OSM place polygons overlapping a viewport bbox, as a GeoJSON FeatureCollection
@@ -112,7 +218,7 @@ async def api_geocode_osm_places(bbox: str = Query(...), limit: int = Query(4000
     }
 
 
-@router.get("/api/geocode/census-places")
+@router.get("/api/geocode/census-places", response_model=FeatureCollection)
 async def api_geocode_census_places(bbox: str = Query(...), limit: int = Query(4000, ge=1, le=8000)):
     """US Census place polygons overlapping a viewport bbox, as a GeoJSON
     FeatureCollection — backs the Places DB map's census overlay. These are the
@@ -134,7 +240,7 @@ async def api_geocode_census_places(bbox: str = Query(...), limit: int = Query(4
     }
 
 
-@router.get("/api/geocode/zctas")
+@router.get("/api/geocode/zctas", response_model=FeatureCollection)
 async def api_geocode_zctas(bbox: str = Query(...), limit: int = Query(4000, ge=1, le=8000)):
     """ZIP code areas overlapping a viewport bbox, as a GeoJSON FeatureCollection —
     backs the Places DB map's ZIP overlay. Each feature carries the ZIP plus its
@@ -172,7 +278,7 @@ def _probe(lat: float, lng: float) -> dict:
     }
 
 
-@router.get("/api/geocode/lookup")
+@router.get("/api/geocode/lookup", response_model=ProbeResponse)
 async def api_geocode_lookup(lat: float = Query(...), lng: float = Query(...)):
     """Reverse-geocode a single coordinate exactly as a photo taken there would be —
     returns the {city, sublocation, postal_code, state, county, country, country_code}

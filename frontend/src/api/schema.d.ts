@@ -2483,6 +2483,17 @@ export interface components {
             /** Cameras */
             cameras: string[];
         };
+        /** CensusSource */
+        CensusSource: {
+            /** City */
+            city?: string | null;
+            /** Kind */
+            kind?: string | null;
+            /** State */
+            state?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
         /** CensusStatus */
         CensusStatus: {
             /** Available */
@@ -2568,6 +2579,19 @@ export interface components {
              * @enum {string}
              */
             type: "rectangle" | "circle";
+        };
+        /** CreatePlaceResponse */
+        CreatePlaceResponse: {
+            /** Bounds */
+            bounds: string;
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Ok */
+            ok: boolean;
+            /** Type */
+            type: string;
         };
         /** CrowdIgnoreRequest */
         CrowdIgnoreRequest: {
@@ -2805,6 +2829,20 @@ export interface components {
             /** Name */
             name: string;
         };
+        /**
+         * FeatureCollection
+         * @description A GeoJSON FeatureCollection plus total/truncated alongside the standard keys.
+         */
+        FeatureCollection: {
+            /** Features */
+            features: components["schemas"]["GeoJsonFeature"][];
+            /** Total */
+            total: number;
+            /** Truncated */
+            truncated: boolean;
+            /** Type */
+            type: string;
+        };
         /** ForceRequest */
         ForceRequest: {
             /**
@@ -2812,6 +2850,53 @@ export interface components {
              * @default false
              */
             force: boolean;
+        };
+        /** GeoJsonFeature */
+        GeoJsonFeature: {
+            geometry: components["schemas"]["GeoJsonGeometry"];
+            /** Properties */
+            properties: {
+                [key: string]: unknown;
+            };
+            /** Type */
+            type: string;
+        };
+        /** GeoJsonGeometry */
+        GeoJsonGeometry: {
+            /** Coordinates */
+            coordinates: unknown[];
+            /** Type */
+            type: string;
+        };
+        /** GeoNamesPlace */
+        GeoNamesPlace: {
+            /** City */
+            city?: string | null;
+            /** Country */
+            country?: string | null;
+            /** Country Code */
+            country_code?: string | null;
+            /** County */
+            county?: string | null;
+            /** Lat */
+            lat: number;
+            /** Lng */
+            lng: number;
+            /** Population */
+            population: number;
+            /** State */
+            state?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** GeoNamesPlacesResponse */
+        GeoNamesPlacesResponse: {
+            /** Places */
+            places: components["schemas"]["GeoNamesPlace"][];
+            /** Total */
+            total: number;
+            /** Truncated */
+            truncated: boolean;
         };
         /** GeocodeBackfillRequest */
         GeocodeBackfillRequest: {
@@ -2905,6 +2990,39 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /**
+         * Hotspot
+         * @description extra="allow": sort=near adds `meters` and sort=time `window_count`, which
+         *     the legacy Geocode page reads; left unmodelled so other sorts don't grow nulls.
+         */
+        Hotspot: {
+            /** Count */
+            count: number;
+            /** Label */
+            label: string;
+            /** Last Ts */
+            last_ts?: number | null;
+            /** Lat */
+            lat: number;
+            /** Lng */
+            lng: number;
+            location?: components["schemas"]["ResolvedLocation"] | null;
+            /** Sample Photo Id */
+            sample_photo_id?: number | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** HotspotsResponse */
+        HotspotsResponse: {
+            /** Hotspots */
+            hotspots: components["schemas"]["Hotspot"][];
+            /** Merge Meters */
+            merge_meters: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
         /** IgnoreFacesRequest */
         IgnoreFacesRequest: {
             /** Face Ids */
@@ -2946,6 +3064,23 @@ export interface components {
             running: boolean;
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * LibraryBounds
+         * @description The four bounds are only present with has_data (exclude_unset keeps an
+         *     empty library's answer the bare {"has_data": false} it always was).
+         */
+        LibraryBounds: {
+            /** Has Data */
+            has_data: boolean;
+            /** Max Lat */
+            max_lat?: number | null;
+            /** Max Lng */
+            max_lng?: number | null;
+            /** Min Lat */
+            min_lat?: number | null;
+            /** Min Lng */
+            min_lng?: number | null;
         };
         /**
          * LocationSuggestion
@@ -3077,6 +3212,19 @@ export interface components {
             items: components["schemas"]["OsmRegion"][];
             /** Label */
             label: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** OsmSource */
+        OsmSource: {
+            /** Category */
+            category?: string | null;
+            /** City */
+            city?: string | null;
+            /** Place Id */
+            place_id?: number | null;
+            /** Sublocation */
+            sublocation?: string | null;
         } & {
             [key: string]: unknown;
         };
@@ -3240,8 +3388,10 @@ export interface components {
         };
         /**
          * PlaceItem
-         * @description extra="allow": ``stats=true`` adds per-place photo_count / last_ts, which
-         *     the legacy Custom Places page reads.
+         * @description The three stats fields are only present with ``stats=true`` (see
+         *     index.get_place_stats), hence response_model_exclude_unset on the route: a
+         *     plain listing keeps its old shape instead of growing three nulls.
+         *     extra="allow" so a field added to the dict reaches the pages that read it.
          */
         PlaceItem: {
             /** Bounds */
@@ -3252,14 +3402,29 @@ export interface components {
             created_at?: number | null;
             /** Id */
             id: number;
+            /** Last Ts */
+            last_ts?: number | null;
             /** Name */
             name: string;
+            /** Photo Count */
+            photo_count?: number | null;
             /** Representative Photo Id */
             representative_photo_id?: number | null;
             /** Type */
             type: string;
+            /** Untagged Nearby Count */
+            untagged_nearby_count?: number | null;
         } & {
             [key: string]: unknown;
+        };
+        /** PlaceMutationResponse */
+        PlaceMutationResponse: {
+            /** Id */
+            id: number;
+            /** Ok */
+            ok: boolean;
+            /** Success */
+            success: boolean;
         };
         /**
          * PreviousDate
@@ -3275,6 +3440,25 @@ export interface components {
             photo_id: number;
             /** Raw Datetime */
             raw_datetime?: string | null;
+        };
+        /** ProbeResponse */
+        ProbeResponse: {
+            /** Lat */
+            lat: number;
+            /** Lng */
+            lng: number;
+            location?: components["schemas"]["ResolvedLocation"] | null;
+            sources: components["schemas"]["ProbeSources"];
+        };
+        /**
+         * ProbeSources
+         * @description Each source's own answer for the probed point (None where it has none).
+         */
+        ProbeSources: {
+            census?: components["schemas"]["CensusSource"] | null;
+            geonames?: components["schemas"]["ResolvedLocation"] | null;
+            osm?: components["schemas"]["OsmSource"] | null;
+            zcta?: components["schemas"]["ZctaSource"] | null;
         };
         /** Proposal */
         Proposal: {
@@ -3343,6 +3527,28 @@ export interface components {
         ResetSettingsResponse: {
             /** Reset */
             reset: string[];
+        };
+        /**
+         * ResolvedLocation
+         * @description geocode.lookup()'s answer — what a photo at that coordinate would store.
+         */
+        ResolvedLocation: {
+            /** City */
+            city?: string | null;
+            /** Country */
+            country?: string | null;
+            /** Country Code */
+            country_code?: string | null;
+            /** County */
+            county?: string | null;
+            /** Postal Code */
+            postal_code?: string | null;
+            /** State */
+            state?: string | null;
+            /** Sublocation */
+            sublocation?: string | null;
+        } & {
+            [key: string]: unknown;
         };
         /** RetryFailedResponse */
         RetryFailedResponse: {
@@ -3563,6 +3769,17 @@ export interface components {
         SetRepresentativeRequest: {
             /** Photo Id */
             photo_id?: number | null;
+        };
+        /** SetRepresentativeResponse */
+        SetRepresentativeResponse: {
+            /** Id */
+            id: number;
+            /** Ok */
+            ok: boolean;
+            /** Representative Photo Id */
+            representative_photo_id: number | null;
+            /** Success */
+            success: boolean;
         };
         /** SettingOut */
         SettingOut: {
@@ -3861,6 +4078,17 @@ export interface components {
             /** Name */
             name?: string | null;
         };
+        /** UpdatePlaceResponse */
+        UpdatePlaceResponse: {
+            /** Bounds */
+            bounds: string;
+            /** Id */
+            id: number;
+            /** Ok */
+            ok: boolean;
+            /** Success */
+            success: boolean;
+        };
         /** UpdateSettingsRequest */
         UpdateSettingsRequest: {
             /** Values */
@@ -3893,6 +4121,40 @@ export interface components {
             /** Error Type */
             type: string;
         };
+        /** VoronoiCell */
+        VoronoiCell: {
+            /** City */
+            city?: string | null;
+            /** Country */
+            country?: string | null;
+            /** Country Code */
+            country_code?: string | null;
+            /** County */
+            county?: string | null;
+            /** Lat */
+            lat: number;
+            /** Lng */
+            lng: number;
+            /** Polygon */
+            polygon: number[][];
+            /** Polygons */
+            polygons: number[][][];
+            /** Population */
+            population: number;
+            /** State */
+            state?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** VoronoiResponse */
+        VoronoiResponse: {
+            /** Cells */
+            cells: components["schemas"]["VoronoiCell"][];
+            /** Total */
+            total: number;
+            /** Truncated */
+            truncated: boolean;
+        };
         /** WorkQueueResponse */
         WorkQueueResponse: {
             /** Batched Photos */
@@ -3905,6 +4167,17 @@ export interface components {
             total_batches: number;
             /** Total Photos */
             total_photos: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** ZctaSource */
+        ZctaSource: {
+            /** Postal City */
+            postal_city?: string | null;
+            /** Postal Code */
+            postal_code?: string | null;
+            /** State */
+            state?: string | null;
         } & {
             [key: string]: unknown;
         };
@@ -5238,7 +5511,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["FeatureCollection"];
                 };
             };
             /** @description Validation Error */
@@ -5303,7 +5576,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ProbeResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5336,7 +5609,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["FeatureCollection"];
                 };
             };
             /** @description Validation Error */
@@ -5368,7 +5641,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GeoNamesPlacesResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5420,7 +5693,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["VoronoiResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5452,7 +5725,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["FeatureCollection"];
                 };
             };
             /** @description Validation Error */
@@ -5535,7 +5808,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["HotspotsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6072,7 +6345,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SearchPhoto"][];
                 };
             };
             /** @description Validation Error */
@@ -6597,7 +6870,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CreatePlaceResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6628,7 +6901,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["PlaceMutationResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6663,7 +6936,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["UpdatePlaceResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6698,7 +6971,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SetRepresentativeResponse"];
                 };
             };
             /** @description Validation Error */
@@ -7147,7 +7420,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["LibraryBounds"];
                 };
             };
         };

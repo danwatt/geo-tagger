@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from geotagger import index, thumbnails, serializers
 from geotagger.api import _media
+from geotagger.api.search import SearchPhoto
 from geotagger.executor import get_executor
 from geotagger.services import photos_service, zip_service
 from geotagger.timeutil import has_date
@@ -220,7 +221,7 @@ async def api_photos_by_location(
             for r in _augment_and_filter(located, geotagged, window)]
 
 
-@router.get("/api/photos/by-bounds")
+@router.get("/api/photos/by-bounds", response_model=list[SearchPhoto], response_model_exclude_unset=True)
 async def api_photos_by_bounds(
     min_lat: float = Query(...),
     max_lat: float = Query(...),

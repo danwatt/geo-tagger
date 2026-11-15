@@ -65,6 +65,29 @@
 
   /* ── Face grid ── */
   --face-size: 120px;
+
+  /* ── Map overlays (React map pages; Leaflet paths read these via cssVar) ── */
+  --map-panel:       rgba(30, 30, 30, 0.92);  /* basemap / layers control backing */
+  --map-label-bg:    rgba(20, 28, 38, 0.85);  /* place-name labels over tiles */
+  --selected-bg:     #1e2f42;  /* selected list row (accent family) */
+  --warn-bg:         #3a2f1c;  /* selected hotspot row (warn family) */
+  --danger-border:   #883333;
+  --danger-bg:       #551111;
+  --draw-active:     #ee7744;  /* armed draw tool button */
+  /* OSM place categories — keep in sync with build_osm_places.classify. */
+  --osm-city:          #4f8cff;
+  --osm-neighbourhood: #00b3a4;
+  --osm-park:          #3fbf5f;
+  --osm-venue:         #ff8c42;
+  --osm-campus:        #a06bff;
+  --osm-attraction:    #ff5fa2;
+  --osm-building:      #9aa0a6;
+  --osm-other:         #888888;
+  --census-place:      #f4a259;
+  --census-cdp:        #ffd166;
+  /* Magenta: every other hue on the Geo Data map is taken or camouflaged. */
+  --zcta:              #ff3ecb;
+  --zcta-label:        #ff7ade;  /* lighter tint: text needs more lift than a line */
 }
 
 /* ── Reset ── */
