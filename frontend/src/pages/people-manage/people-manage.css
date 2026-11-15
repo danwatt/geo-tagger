@@ -1,0 +1,136 @@
+/* People Manager page. Port of web/people-manage.css with raw hex swapped for
+   theme.css tokens. Reset, form controls, #toast and .undo-toast come from
+   theme.css. The legacy page scrolled the whole document; here theme.css's
+   fixed-viewport body stays and #manage-page is the scroller. */
+
+#manage-page { flex: 1; min-height: 0; overflow: auto; }
+
+/* ── Header bar ── */
+#manage-bar {
+  display: flex; align-items: center; gap: 14px;
+  padding: 8px 14px;
+  background: var(--surface-3); border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 10;
+}
+#back-link { color: var(--accent-text); text-decoration: none; font-size: 14px; white-space: nowrap; }
+#back-link:hover { text-decoration: underline; }
+#manage-title { font-weight: 700; font-size: 15px; flex: 1; margin: 0; }
+#manage-counts { color: var(--text-muted); font-size: 12px; }
+
+/* ── Main layout ── */
+#manage-main {
+  max-width: 1040px; margin: 0 auto; /* room for the Merge into… + Delete actions */
+  padding: 18px 16px 60px;
+  display: flex; flex-direction: column; gap: 24px;
+}
+
+/* ── Families section ── */
+#families-section,
+#persons-section {
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  padding: 14px 16px;
+}
+#families-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.section-label { font-weight: 700; font-size: 13px; color: var(--text-muted); flex: 1; margin: 0; }
+#family-chips { display: flex; flex-wrap: wrap; gap: 8px; min-height: 28px; align-items: center; }
+.no-families-hint { color: var(--text-faint); font-size: 12px; font-style: italic; }
+
+.family-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--chip-bg); border: 1px solid var(--chip-border);
+  border-radius: var(--radius-pill); padding: 4px 10px 4px 12px;
+  font-size: 12px;
+}
+.family-chip .family-name {
+  background: none; border: none; padding: 0; font-size: 12px;
+  cursor: pointer; color: var(--accent-text);
+  max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.family-chip .family-name:hover { color: var(--on-accent); text-decoration: underline; background: none; }
+.family-count {
+  background: var(--chip-border); color: var(--on-accent); border-radius: 10px;
+  padding: 1px 6px; font-size: 11px;
+}
+.family-chip .family-del {
+  background: none; border: none; color: var(--text-faint); cursor: pointer;
+  padding: 0 2px; font-size: 13px; line-height: 1;
+}
+.family-chip .family-del:hover { color: var(--danger-text); background: none; }
+.family-rename-input {
+  background: var(--accent-bg-2); border: 1px solid var(--accent); border-radius: var(--radius);
+  color: var(--text-strong); padding: 2px 6px; font-size: 12px; width: 120px; outline: none;
+}
+
+/* ── Persons section ── */
+#persons-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+#person-search {
+  padding: 5px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius);
+  background: var(--surface-input); color: var(--text-strong); font-size: 12px; width: 200px; outline: none;
+}
+#person-search:focus { border-color: var(--accent); }
+#family-filter-sel {
+  padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: var(--radius);
+  background: var(--surface-input); color: var(--text-strong); font-size: 12px;
+}
+#persons-count { color: var(--text-muted); font-size: 12px; flex: 1; }
+
+/* ── Person table ── */
+#persons-table-wrap { overflow-x: auto; }
+#persons-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+#persons-table thead th {
+  text-align: left; padding: 6px 8px;
+  border-bottom: 1px solid var(--border); color: var(--text-muted); font-weight: 600;
+  white-space: nowrap;
+}
+#persons-table tbody tr { border-bottom: 1px solid var(--border-2); }
+#persons-table tbody tr:hover { background: var(--surface-3); }
+#persons-table tbody td { padding: 4px 8px; vertical-align: middle; }
+
+/* Column widths */
+.col-name  { width: 30%; min-width: 150px; }
+.col-birth, .col-not-before, .col-not-after { width: 140px; }
+.col-family { width: 26%; min-width: 140px; }
+.col-faces  { width: 60px; text-align: right; color: var(--text-muted); }
+.col-actions { width: 1%; text-align: right; white-space: nowrap; }
+
+/* Inline editable fields — look like text until focused */
+.edit-input {
+  width: 100%; background: transparent; border: 1px solid transparent;
+  border-radius: var(--radius); color: var(--text); font-size: 12px;
+  padding: 3px 5px; outline: none; transition: border-color 0.1s;
+}
+.edit-input:hover { border-color: var(--border-strong); }
+.edit-input:focus { border-color: var(--accent); background: var(--bg); }
+input[type="date"].edit-input {
+  color-scheme: dark; /* dark calendar picker in Chrome/Edge */
+  width: 130px;
+}
+
+.family-sel {
+  width: 100%; background: var(--surface-3); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); color: var(--text); font-size: 12px; padding: 3px 4px;
+}
+.family-sel:focus { outline: none; border-color: var(--accent); }
+
+/* Delete button inside table */
+.del-btn {
+  background: none; border: 1px solid transparent; color: var(--text-faint);
+  border-radius: var(--radius); padding: 2px 6px; font-size: 11px; cursor: pointer;
+}
+.del-btn:hover { border-color: var(--danger-border); color: var(--danger-text); background: var(--danger-bg); }
+
+/* Merge into… — same quiet look as Delete, accent (not danger) on hover. */
+.merge-btn {
+  background: none; border: 1px solid transparent; color: var(--text-muted);
+  border-radius: var(--radius-sm); padding: 2px 6px; font-size: 11px; cursor: pointer;
+  margin-right: 4px;
+}
+.merge-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--text); background: none; }
+.merge-btn:disabled { opacity: .4; cursor: default; }
+
+#no-persons, .persons-loading { color: var(--text-faint); font-style: italic; padding: 20px 8px; font-size: 12px; }
+
+#manage-page .visually-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}

@@ -34,10 +34,20 @@ export function pickerRows(persons: readonly { id: number; name: string }[], que
   return rows;
 }
 
-export function PersonPickerDialog({ persons, title = "Assign to…", allowCreate = true, onPick, onClose }: {
+export function PersonPickerDialog({
+  persons, title = "Assign to…", allowCreate = true, onPick, onClose,
+  label = "Person", listLabel = "People", placeholder = "Search people, or type a new name…",
+  emptyText = "No people yet — type a name to create one.", createLabel = (q: string) => `➕ Create "${q}"`,
+}: {
   persons: readonly { id: number; name: string }[];
   title?: string;
   allowCreate?: boolean;
+  /** The rest re-word the picker for other entities (People Manager's families). */
+  label?: string;
+  listLabel?: string;
+  placeholder?: string;
+  emptyText?: string;
+  createLabel?: (query: string) => string;
   onPick: (who: PickedPerson) => void;
   onClose: () => void;
 }) {
@@ -55,14 +65,14 @@ export function PersonPickerDialog({ persons, title = "Assign to…", allowCreat
   return (
     <Dialog title={title} onClose={onClose} initialFocus={inputRef}>
       <div className="pp-body">
-        <label htmlFor={`${uid}-q`} className="pp-label">Person</label>
+        <label htmlFor={`${uid}-q`} className="pp-label">{label}</label>
         <input
           ref={inputRef}
           id={`${uid}-q`}
           type="text"
           className="pp-search"
           autoComplete="off"
-          placeholder="Search people, or type a new name…"
+          placeholder={placeholder}
           role="combobox"
           aria-expanded="true"
           aria-controls={`${uid}-list`}
@@ -80,7 +90,7 @@ export function PersonPickerDialog({ persons, title = "Assign to…", allowCreat
             }
           }}
         />
-        <div id={`${uid}-list`} className="pp-list" role="listbox" aria-label="People">
+        <div id={`${uid}-list`} className="pp-list" role="listbox" aria-label={listLabel}>
           {rows.map((row, i) => (
             <div
               key={row.kind === "person" ? row.id : "create"}
@@ -91,11 +101,11 @@ export function PersonPickerDialog({ persons, title = "Assign to…", allowCreat
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => pick(row)}
             >
-              {row.kind === "create" ? `➕ Create "${row.name}"` : row.name}
+              {row.kind === "create" ? createLabel(row.name) : row.name}
             </div>
           ))}
           {!rows.length && (
-            <div className="pp-empty">{query.trim() ? "No matches." : "No people yet — type a name to create one."}</div>
+            <div className="pp-empty">{query.trim() ? "No matches." : emptyText}</div>
           )}
         </div>
       </div>

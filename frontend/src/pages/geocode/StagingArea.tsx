@@ -1,6 +1,6 @@
 import { memo, useId } from "react";
 import { GroupHeader } from "../../photos/GroupHeader";
-import type { CameraColors } from "./cameraColors";
+import type { CameraColors } from "../../photos/cameraColors";
 import { groupPointCount, stagedChip, type LastCommit, type StagedEntry, type StagedGroup } from "./staging";
 
 /* The staging area under the grid: photos dropped on the map (or marked, or

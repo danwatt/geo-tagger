@@ -398,7 +398,28 @@ class UpdateTimesRequest(BaseModel):
     updates: list[TimeUpdate]
 
 
-@router.post("/api/photos/update-times")
+class TimeResult(BaseModel):
+    id: int
+    photo_datetime: int
+    unchanged: bool                # already at target: nothing was written
+    sidecar_path: str | None = None
+
+
+class TimeFailure(BaseModel):
+    id: int
+    error: str
+    conflict: bool | None = None   # the photo's date moved since it was loaded
+
+
+class UpdateTimesResponse(BaseModel):
+    results: list[TimeResult]
+    written: list[int]
+    failed: list[TimeFailure]
+    not_found: list[int]
+
+
+@router.post("/api/photos/update-times", response_model=UpdateTimesResponse,
+             response_model_exclude_unset=True)
 async def api_update_times(req: UpdateTimesRequest):
     """Set photo timestamps to absolute targets (the Time Sync save). Idempotent:
     re-sending the same body after a partial failure only applies what's left.

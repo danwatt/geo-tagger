@@ -4,7 +4,7 @@ import { circle as leafletCircle, marker as leafletMarker, type Marker } from "l
 import { cssVar } from "../../lib/cssVar";
 import { MarkerClusterLayer } from "../../map/MarkerClusterLayer";
 import { parseShape } from "../../map/shapes";
-import type { CameraColors } from "./cameraColors";
+import type { CameraColors } from "../../photos/cameraColors";
 import { formatDelta } from "./guess";
 import { guessPinIcon, photoPinIcon, sourcePinIcon, stagedPinIcon } from "./pinIcons";
 import { placeBboxWithBuffer, type Place, type ScopeDef } from "./scope";

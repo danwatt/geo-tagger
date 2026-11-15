@@ -859,6 +859,29 @@
         "title": "CreatePersonRequest",
         "type": "object"
       },
+      "CreatePersonResponse": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "name"
+        ],
+        "title": "CreatePersonResponse",
+        "type": "object"
+      },
       "CreatePlaceRequest": {
         "properties": {
           "bounds": {
@@ -1155,6 +1178,133 @@
         "title": "DayCount",
         "type": "object"
       },
+      "DedupFace": {
+        "additionalProperties": true,
+        "description": "serializers.face_item; extra=\"allow\" carries the fields this model\ndoesn't name (bbox, location, \u2026) through unchanged.",
+        "properties": {
+          "filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filename"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          },
+          "person_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Name"
+          },
+          "photo_id": {
+            "title": "Photo Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "photo_id"
+        ],
+        "title": "DedupFace",
+        "type": "object"
+      },
+      "DedupGroup": {
+        "properties": {
+          "others": {
+            "items": {
+              "$ref": "#/components/schemas/DedupFace"
+            },
+            "title": "Others",
+            "type": "array"
+          },
+          "representative": {
+            "$ref": "#/components/schemas/DedupFace"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "representative",
+          "others",
+          "size"
+        ],
+        "title": "DedupGroup",
+        "type": "object"
+      },
+      "DedupGroupsResponse": {
+        "properties": {
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/DedupGroup"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "groups",
+          "total"
+        ],
+        "title": "DedupGroupsResponse",
+        "type": "object"
+      },
+      "DedupPerson": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "person_id": {
+            "title": "Person Id",
+            "type": "integer"
+          },
+          "representative": {
+            "title": "Representative",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "person_id",
+          "name",
+          "total",
+          "representative"
+        ],
+        "title": "DedupPerson",
+        "type": "object"
+      },
       "DedupRecomputeResponse": {
         "properties": {
           "persons": {
@@ -1169,6 +1319,58 @@
           "persons"
         ],
         "title": "DedupRecomputeResponse",
+        "type": "object"
+      },
+      "DeletePersonResponse": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          },
+          "undo": {
+            "additionalProperties": true,
+            "title": "Undo",
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "success",
+          "undo"
+        ],
+        "title": "DeletePersonResponse",
+        "type": "object"
+      },
+      "DeletedResponse": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "success"
+        ],
+        "title": "DeletedResponse",
         "type": "object"
       },
       "DirCount": {
@@ -1575,6 +1777,63 @@
           "failed"
         ],
         "title": "FacesScanResponse",
+        "type": "object"
+      },
+      "FamilyItem": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "person_count": {
+            "title": "Person Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "person_count"
+        ],
+        "title": "FamilyItem",
+        "type": "object"
+      },
+      "FamilyMutationResponse": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "person_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Count"
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "name"
+        ],
+        "title": "FamilyMutationResponse",
         "type": "object"
       },
       "FamilyRequest": {
@@ -2777,6 +3036,44 @@
         "title": "LocationsResponse",
         "type": "object"
       },
+      "MergeConflict": {
+        "description": "A person attribute both sides had, with different values: the target's\nis kept (see index.merge_persons). family_id is an int, the dates ISO text.",
+        "properties": {
+          "discarded": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Discarded"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "kept": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Kept"
+          }
+        },
+        "required": [
+          "field",
+          "kept",
+          "discarded"
+        ],
+        "title": "MergeConflict",
+        "type": "object"
+      },
       "MergePersonRequest": {
         "properties": {
           "into": {
@@ -2788,6 +3085,95 @@
           "into"
         ],
         "title": "MergePersonRequest",
+        "type": "object"
+      },
+      "MergePersonResponse": {
+        "properties": {
+          "conflicts": {
+            "items": {
+              "$ref": "#/components/schemas/MergeConflict"
+            },
+            "title": "Conflicts",
+            "type": "array"
+          },
+          "dropped_negatives": {
+            "title": "Dropped Negatives",
+            "type": "integer"
+          },
+          "duplicate_negatives": {
+            "title": "Duplicate Negatives",
+            "type": "integer"
+          },
+          "filled": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Filled",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "merged_from": {
+            "$ref": "#/components/schemas/MergedFrom"
+          },
+          "merged_negatives": {
+            "title": "Merged Negatives",
+            "type": "integer"
+          },
+          "moved_faces": {
+            "title": "Moved Faces",
+            "type": "integer"
+          },
+          "moved_representatives": {
+            "title": "Moved Representatives",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "widened": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Widened",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "merged_from",
+          "moved_faces",
+          "moved_representatives",
+          "merged_negatives",
+          "duplicate_negatives",
+          "dropped_negatives",
+          "filled",
+          "widened",
+          "conflicts"
+        ],
+        "title": "MergePersonResponse",
+        "type": "object"
+      },
+      "MergedFrom": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "MergedFrom",
         "type": "object"
       },
       "ModelStatus": {
@@ -3203,6 +3589,24 @@
           "name"
         ],
         "title": "PersonListItem",
+        "type": "object"
+      },
+      "PersonMutationResponse": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "id"
+        ],
+        "title": "PersonMutationResponse",
         "type": "object"
       },
       "PersonNegativeSnapshot": {
@@ -5490,6 +5894,69 @@
         "title": "TaggedFace",
         "type": "object"
       },
+      "TimeFailure": {
+        "properties": {
+          "conflict": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conflict"
+          },
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "error"
+        ],
+        "title": "TimeFailure",
+        "type": "object"
+      },
+      "TimeResult": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "photo_datetime": {
+            "title": "Photo Datetime",
+            "type": "integer"
+          },
+          "sidecar_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sidecar Path"
+          },
+          "unchanged": {
+            "title": "Unchanged",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "photo_datetime",
+          "unchanged"
+        ],
+        "title": "TimeResult",
+        "type": "object"
+      },
       "TimeUpdate": {
         "properties": {
           "expected": {
@@ -5600,6 +6067,70 @@
           }
         },
         "title": "UndoFacesRequest",
+        "type": "object"
+      },
+      "UndoFacesResponse": {
+        "properties": {
+          "conflicts": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Conflicts",
+            "type": "array"
+          },
+          "family_dropped": {
+            "title": "Family Dropped",
+            "type": "boolean"
+          },
+          "not_found": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Not Found",
+            "type": "array"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          },
+          "person_id_changed": {
+            "title": "Person Id Changed",
+            "type": "boolean"
+          },
+          "removed_person_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Removed Person Id"
+          },
+          "restored": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Restored",
+            "type": "array"
+          }
+        },
+        "required": [
+          "restored",
+          "conflicts",
+          "not_found",
+          "person_id_changed",
+          "family_dropped"
+        ],
+        "title": "UndoFacesResponse",
         "type": "object"
       },
       "UndoGeotagRequest": {
@@ -5895,6 +6426,46 @@
           "updates"
         ],
         "title": "UpdateTimesRequest",
+        "type": "object"
+      },
+      "UpdateTimesResponse": {
+        "properties": {
+          "failed": {
+            "items": {
+              "$ref": "#/components/schemas/TimeFailure"
+            },
+            "title": "Failed",
+            "type": "array"
+          },
+          "not_found": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Not Found",
+            "type": "array"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/TimeResult"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "written": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Written",
+            "type": "array"
+          }
+        },
+        "required": [
+          "results",
+          "written",
+          "failed",
+          "not_found"
+        ],
+        "title": "UpdateTimesResponse",
         "type": "object"
       },
       "ValidationError": {
@@ -7216,7 +7787,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DedupGroupsResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7243,7 +7816,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DedupPerson"
+                  },
+                  "title": "Response Api Dedup Persons Api Faces Dedup Persons Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -7560,7 +8139,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/UndoFacesResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7712,7 +8293,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/FamilyItem"
+                  },
+                  "title": "Response Api Get Families Api Families Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -7736,7 +8323,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FamilyMutationResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7773,7 +8362,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7818,7 +8409,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FamilyMutationResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -8822,7 +9415,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePersonResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -8860,7 +9455,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DeletePersonResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -8906,7 +9503,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/PersonMutationResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -8954,7 +9553,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MergePersonResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -9775,7 +10376,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateTimesResponse"
+                }
               }
             },
             "description": "Successful Response"

@@ -23,3 +23,19 @@ export function wallClockParts(ts: number | null | undefined): WallClockParts | 
 export function formatWallClockDate(ts: number, opts: Intl.DateTimeFormatOptions = {}): string {
   return new Date(ts * 1000).toLocaleDateString(undefined, { ...opts, timeZone: "UTC" });
 }
+
+/** Locale date + time of a wall-clock epoch; timeZone is forced to UTC. */
+export function formatWallClock(ts: number, opts: Intl.DateTimeFormatOptions = {}): string {
+  return new Date(ts * 1000).toLocaleString(undefined, { ...opts, timeZone: "UTC" });
+}
+
+/** Wall-clock epoch (seconds) for a calendar date/time; month is 1-based. */
+export function wallClockTs(year: number, month: number, day = 1, hour = 0, minute = 0, second = 0): number {
+  return Date.UTC(year, month - 1, day, hour, minute, second) / 1000;
+}
+
+/** Wall-clock epoch of a "YYYY-MM-DD" day's midnight. Parsed with an explicit
+ *  Z: a date-only string parses as UTC but "YYYY-MM-DDT00:00" as *local*. */
+export function parseWallClockDay(s: string): number {
+  return Date.parse(`${s}T00:00:00Z`) / 1000;
+}

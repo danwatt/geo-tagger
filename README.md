@@ -2,11 +2,10 @@
 
 Local web app for organizing a photo/video library: geotag photos on a map, reverse-geocode
 them offline, detect and tag faces, sync camera clocks, and search across it all. Backend +
-all data (SQLite DB, thumbnails, models) stay fully local; the only runtime network
-dependencies are the Leaflet, leaflet.markercluster and vis-timeline libraries (loaded from
-`unpkg.com` at pinned versions with Subresource Integrity hashes) and the map tiles —
-OpenStreetMap for the street basemap, Esri World Imagery for satellite/hybrid. The map UI and
-the Time Sync timeline need internet; nothing else does. Place search ("jump to location")
+all data (SQLite DB, thumbnails, models) stay fully local; the map and timeline libraries
+(Leaflet, leaflet.markercluster, vis-timeline) are bundled into the frontend build, so the only
+runtime network dependency is the map tiles — OpenStreetMap for the street basemap, Esri World
+Imagery for satellite/hybrid. The map UI needs internet; nothing else does. Place search ("jump to location")
 is offline: it matches saved places and locations already in your library, not an online
 geocoder.
 
@@ -77,7 +76,7 @@ npm --prefix frontend run build
 
 The frontend is partway through a move from plain JavaScript to React + TypeScript (see
 [Frontend development](#frontend-development)). Pages not yet moved work without the build;
-moved pages (Home, Search, Settings, Data, Named Places, Geo Data and Geocode so far) return 404 until it's done, and startup prints a warning.
+moved pages (Home, Search, Settings, Data, Named Places, Geo Data, Geocode, Time Sync, People Manager and Representatives so far) return 404 until it's done, and startup prints a warning.
 
 ### Where downloaded tools/data end up
 

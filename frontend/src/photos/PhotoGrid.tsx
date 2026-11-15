@@ -99,7 +99,7 @@ export const ThumbCell = memo(function ThumbCell({ photo, idx, selected, focused
 
 /** The cell visually below/above `from` (same column, next/previous row), by
  *  layout rather than index: rows wrap differently in every month group. */
-function verticalNeighbour(container: HTMLElement, from: HTMLElement, down: boolean): HTMLElement | null {
+export function verticalNeighbour(container: HTMLElement, from: HTMLElement, down: boolean): HTMLElement | null {
   const r = from.getBoundingClientRect();
   const cx = r.left + r.width / 2;
   let best: HTMLElement | null = null;

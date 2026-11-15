@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api, unwrap, type Schemas } from "../../api/client";
-import { MONTH_NAMES } from "../../lib/format";
-import { Dialog } from "../../ui/Dialog";
+import { api, unwrap, type Schemas } from "../api/client";
+import { MONTH_NAMES } from "../lib/format";
+import { Dialog } from "./Dialog";
 import "./MonthPickerDialog.css";
 
 /* Select Month. Two levels: a year grid first (one card per year, with a
  * 12-cell strip that shows each month's volume + geotag coverage at a glance),
  * then drill into a year for its month grid. A flat year-headed list meant
  * scrolling past ~12 rows per year to reach anything older. Port of app.js's
- * month picker; every card and cell is a real button. */
+ * month picker; every card and cell is a real button. Shared by Geocode and
+ * Time Sync: Time Sync loads one month at a time, so it passes neither onYear
+ * nor onUndated and the "All year" / "Undated" buttons don't show. */
 
 type Month = Schemas["MonthGeo"];
 const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -33,8 +35,8 @@ function Counts({ total, geotagged, notGeotagged, short }: { total?: number; geo
 
 export function MonthPickerDialog({ onMonth, onYear, onUndated, onClose, onError }: {
   onMonth: (year: number, month: number) => void;
-  onYear: (year: number) => void;
-  onUndated: () => void;
+  onYear?: (year: number) => void;
+  onUndated?: () => void;
   onClose: () => void;
   onError: (msg: string) => void;
 }) {
@@ -62,7 +64,7 @@ export function MonthPickerDialog({ onMonth, onYear, onUndated, onClose, onError
       <Dialog title={`Select Month — ${year}`} onClose={onClose} id="month-picker-modal">
         <div className="yp-crumb">
           <button type="button" className="yp-back" onClick={() => setYear(null)}>← All years</button>
-          <button type="button" className="yp-all-btn" onClick={() => onYear(year)}>Browse all {year}</button>
+          {onYear && <button type="button" className="yp-all-btn" onClick={() => onYear(year)}>Browse all {year}</button>}
         </div>
         <div className="yp-month-grid">
           {MONTH_ABBR.map((abbr, i) => {
@@ -99,13 +101,13 @@ export function MonthPickerDialog({ onMonth, onYear, onUndated, onClose, onError
     <Dialog title="Select Year" onClose={onClose} id="month-picker-modal">
       <div id="month-picker-list">
         {!stats.data && !stats.isError && <p>Loading months…</p>}
-        {undated && undated.total > 0 && (
+        {onUndated && undated && undated.total > 0 && (
           <button type="button" className="yp-undated" onClick={onUndated}>
             <span className="yp-undated-name">📁 Undated</span>
             <Counts total={undated.total} geotagged={undated.geotagged} notGeotagged={undated.not_geotagged} />
           </button>
         )}
-        {stats.data && !months.length && !(undated && undated.total > 0) && <p>No photos found with timestamps.</p>}
+        {stats.data && !months.length && !(onUndated && undated && undated.total > 0) && <p>No photos found with timestamps.</p>}
         {years.length > 0 && (
           <div className="yp-year-grid">
             {years.map((y) => {
@@ -116,7 +118,7 @@ export function MonthPickerDialog({ onMonth, onYear, onUndated, onClose, onError
                 <div key={y} className="yp-year-card">
                   <div className="yp-year-top">
                     <button type="button" className="yp-year-num" onClick={() => setYear(y)} title={`Show the months of ${y}`}>{y}</button>
-                    <button type="button" className="yp-all-btn" title={`Load every photo from ${y}`} onClick={() => onYear(y)}>All year</button>
+                    {onYear && <button type="button" className="yp-all-btn" title={`Load every photo from ${y}`} onClick={() => onYear(y)}>All year</button>}
                   </div>
                   <CoverageBar geotagged={geo} total={tot} />
                   <Counts total={tot} geotagged={geo} notGeotagged={nogeo} short />

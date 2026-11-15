@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
-import { api, getJson, unwrap } from "../../api/client";
+import { api, unwrap } from "../../api/client";
+import { fetchPhotosByIds } from "../../photos/fetchPhotosByIds";
 import { parseScopeUrl, type ScopeDef } from "./scope";
-import type { Photo } from "./staging";
 import type { BatchFlow } from "./useBatchFlow";
 import type { MapHandle } from "./useMapHandle";
 import type { Staging } from "./useStaging";
@@ -12,15 +12,7 @@ import type { Staging } from "./useStaging";
  * in the staging area whatever scope is picked, and a batch or ?ids= scope
  * then leaves them out of its selection — and last the URL's scope. */
 
-/** GET /api/photos?ids=… in URL-sized chunks (a restored staging area can hold
- *  thousands of ids). Ids that no longer exist are simply absent. */
-export async function fetchPhotosByIds(ids: number[], chunk = 400): Promise<Photo[]> {
-  const out: Photo[] = [];
-  for (let i = 0; i < ids.length; i += chunk) {
-    out.push(...await getJson<Photo[]>(`/api/photos?ids=${ids.slice(i, i + chunk).join(",")}`));
-  }
-  return out;
-}
+export { fetchPhotosByIds };
 
 export type Restored = { ids: number[]; detail: string };
 

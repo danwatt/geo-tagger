@@ -1,33 +1,11 @@
 import { Dialog } from "../../ui/Dialog";
-import type { CameraColors } from "./cameraColors";
 import type { Proposal } from "./useProposal";
 import type { BatchDetail } from "./useBatchFlow";
-import type { Photo } from "./staging";
 
-/* The small bars around the grid: the camera legend, the work-queue batch
- * banner, the proposal banner, the staged-restore banner (U7) and the keyboard
- * shortcuts sheet. */
-
-/** One chip per camera in the loaded scope; a click hides / shows its photos. */
-export function CameraLegend({ photos, colors, hidden, onToggle }: {
-  photos: readonly Photo[];
-  colors: CameraColors;
-  hidden: ReadonlySet<string>;
-  onToggle: (camera: string) => void;
-}) {
-  const cams = colors.legend(photos);
-  return (
-    <div id="cam-legend" role="group" aria-label="Cameras">
-      {cams.map(({ camera, color }) => (
-        <button key={camera} type="button" className={`cam-legend-item${hidden.has(camera) ? " dimmed" : ""}`}
-          aria-pressed={!hidden.has(camera)} title={`Click to hide/show ${camera}`} onClick={() => onToggle(camera)}>
-          <span className="cam-legend-dot" style={{ background: color }} aria-hidden="true" />
-          <span>{camera}</span>
-        </button>
-      ))}
-    </div>
-  );
-}
+/* The small bars around the grid: the work-queue batch banner, the proposal
+ * banner and the keyboard shortcuts sheet. The camera legend and the
+ * staged-restore banner (U7) are shared with Time Sync: photos/CameraLegend.tsx
+ * and ui/RestoreBanner.tsx. */
 
 /** What the work queue loaded, and the two keys that drive it. Three spans, not
  *  one string: the grid pane is narrow, and the position and the live count are
@@ -75,32 +53,6 @@ export function ProposeBar({ proposal, selected, onStage, onDismiss }: {
         ))}
       </div>
       <button type="button" id="propose-dismiss" aria-label="Hide this suggestion" title="Hide this suggestion" onClick={onDismiss}>✕</button>
-    </div>
-  );
-}
-
-/** "Uncommitted changes from your last visit": a fixed card (theme.css), so it
- *  doesn't reflow the panes; non-modal. */
-export function RestoreBanner({ remaining, detail, onReview, onCommit, onDiscard, onClose }: {
-  remaining: number;
-  detail: string;
-  onReview: () => void;
-  onCommit: () => void;
-  onDiscard: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <div id="staged-restore-banner" className="staged-restore-banner" role="status">
-      <div className="srb-text">
-        <b className="srb-count">You have {remaining.toLocaleString()} uncommitted change{remaining !== 1 ? "s" : ""} from your last visit.</b>
-        {detail && <span className="srb-detail">{detail}</span>}
-      </div>
-      <div className="srb-btns">
-        <button type="button" title="Show the restored changes. Nothing is saved until you commit" onClick={onReview}>Review</button>
-        <button type="button" className="primary" title="Write the restored changes now (asks to confirm)" onClick={onCommit}>Commit</button>
-        <button type="button" className="danger" title="Throw the restored changes away" onClick={onDiscard}>Discard</button>
-        <button type="button" className="srb-close" aria-label="Hide this banner" title="Hide this banner. The changes stay staged" onClick={onClose}>✕</button>
-      </div>
     </div>
   );
 }

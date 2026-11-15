@@ -2627,6 +2627,15 @@ export interface components {
             /** Name */
             name: string;
         };
+        /** CreatePersonResponse */
+        CreatePersonResponse: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Ok */
+            ok: boolean;
+        };
         /** CreatePlaceRequest */
         CreatePlaceRequest: {
             /** Bounds */
@@ -2723,10 +2732,77 @@ export interface components {
             /** Date */
             date: string;
         };
+        /**
+         * DedupFace
+         * @description serializers.face_item; extra="allow" carries the fields this model
+         *     doesn't name (bbox, location, …) through unchanged.
+         */
+        DedupFace: {
+            /** Filename */
+            filename?: string | null;
+            /** Id */
+            id: number;
+            /** Person Id */
+            person_id?: number | null;
+            /** Person Name */
+            person_name?: string | null;
+            /** Photo Id */
+            photo_id: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** DedupGroup */
+        DedupGroup: {
+            /** Others */
+            others: components["schemas"]["DedupFace"][];
+            representative: components["schemas"]["DedupFace"];
+            /** Size */
+            size: number;
+        };
+        /** DedupGroupsResponse */
+        DedupGroupsResponse: {
+            /** Groups */
+            groups: components["schemas"]["DedupGroup"][];
+            /** Total */
+            total: number;
+        };
+        /** DedupPerson */
+        DedupPerson: {
+            /** Name */
+            name: string;
+            /** Person Id */
+            person_id: number;
+            /** Representative */
+            representative: number;
+            /** Total */
+            total: number;
+        };
         /** DedupRecomputeResponse */
         DedupRecomputeResponse: {
             /** Persons */
             persons: components["schemas"]["RepresentativeCounts"][];
+        };
+        /** DeletePersonResponse */
+        DeletePersonResponse: {
+            /** Id */
+            id: number;
+            /** Ok */
+            ok: boolean;
+            /** Success */
+            success: boolean;
+            /** Undo */
+            undo: {
+                [key: string]: unknown;
+            };
+        };
+        /** DeletedResponse */
+        DeletedResponse: {
+            /** Id */
+            id: number;
+            /** Ok */
+            ok: boolean;
+            /** Success */
+            success: boolean;
         };
         /** DirCount */
         DirCount: {
@@ -2889,6 +2965,26 @@ export interface components {
             remaining: number;
         } & {
             [key: string]: unknown;
+        };
+        /** FamilyItem */
+        FamilyItem: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Person Count */
+            person_count: number;
+        };
+        /** FamilyMutationResponse */
+        FamilyMutationResponse: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Ok */
+            ok: boolean;
+            /** Person Count */
+            person_count?: number | null;
         };
         /** FamilyRequest */
         FamilyRequest: {
@@ -3319,10 +3415,54 @@ export interface components {
             /** Locations */
             locations: components["schemas"]["LocationSuggestion"][];
         };
+        /**
+         * MergeConflict
+         * @description A person attribute both sides had, with different values: the target's
+         *     is kept (see index.merge_persons). family_id is an int, the dates ISO text.
+         */
+        MergeConflict: {
+            /** Discarded */
+            discarded: string | number;
+            /** Field */
+            field: string;
+            /** Kept */
+            kept: string | number;
+        };
         /** MergePersonRequest */
         MergePersonRequest: {
             /** Into */
             into: number;
+        };
+        /** MergePersonResponse */
+        MergePersonResponse: {
+            /** Conflicts */
+            conflicts: components["schemas"]["MergeConflict"][];
+            /** Dropped Negatives */
+            dropped_negatives: number;
+            /** Duplicate Negatives */
+            duplicate_negatives: number;
+            /** Filled */
+            filled: string[];
+            /** Id */
+            id: number;
+            merged_from: components["schemas"]["MergedFrom"];
+            /** Merged Negatives */
+            merged_negatives: number;
+            /** Moved Faces */
+            moved_faces: number;
+            /** Moved Representatives */
+            moved_representatives: number;
+            /** Name */
+            name: string;
+            /** Widened */
+            widened: string[];
+        };
+        /** MergedFrom */
+        MergedFrom: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
         };
         /** ModelStatus */
         ModelStatus: {
@@ -3474,6 +3614,13 @@ export interface components {
             not_before?: string | null;
         } & {
             [key: string]: unknown;
+        };
+        /** PersonMutationResponse */
+        PersonMutationResponse: {
+            /** Id */
+            id: number;
+            /** Ok */
+            ok: boolean;
         };
         /** PersonNegativeSnapshot */
         PersonNegativeSnapshot: {
@@ -4216,6 +4363,26 @@ export interface components {
             /** Person Name */
             person_name?: string | null;
         };
+        /** TimeFailure */
+        TimeFailure: {
+            /** Conflict */
+            conflict?: boolean | null;
+            /** Error */
+            error: string;
+            /** Id */
+            id: number;
+        };
+        /** TimeResult */
+        TimeResult: {
+            /** Id */
+            id: number;
+            /** Photo Datetime */
+            photo_datetime: number;
+            /** Sidecar Path */
+            sidecar_path?: string | null;
+            /** Unchanged */
+            unchanged: boolean;
+        };
         /** TimeUpdate */
         TimeUpdate: {
             /** Expected */
@@ -4258,6 +4425,23 @@ export interface components {
              */
             faces: components["schemas"]["FaceSnapshot"][];
             person?: components["schemas"]["PersonSnapshot"] | null;
+        };
+        /** UndoFacesResponse */
+        UndoFacesResponse: {
+            /** Conflicts */
+            conflicts: number[];
+            /** Family Dropped */
+            family_dropped: boolean;
+            /** Not Found */
+            not_found: number[];
+            /** Person Id */
+            person_id?: number | null;
+            /** Person Id Changed */
+            person_id_changed: boolean;
+            /** Removed Person Id */
+            removed_person_id?: number | null;
+            /** Restored */
+            restored: number[];
         };
         /** UndoGeotagRequest */
         UndoGeotagRequest: {
@@ -4348,6 +4532,17 @@ export interface components {
         UpdateTimesRequest: {
             /** Updates */
             updates: components["schemas"]["TimeUpdate"][];
+        };
+        /** UpdateTimesResponse */
+        UpdateTimesResponse: {
+            /** Failed */
+            failed: components["schemas"]["TimeFailure"][];
+            /** Not Found */
+            not_found: number[];
+            /** Results */
+            results: components["schemas"]["TimeResult"][];
+            /** Written */
+            written: number[];
         };
         /** ValidationError */
         ValidationError: {
@@ -5181,7 +5376,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DedupGroupsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5210,7 +5405,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DedupPerson"][];
                 };
             };
         };
@@ -5471,7 +5666,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["UndoFacesResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5597,7 +5792,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["FamilyItem"][];
                 };
             };
         };
@@ -5621,7 +5816,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["FamilyMutationResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5652,7 +5847,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DeletedResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5687,7 +5882,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["FamilyMutationResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6280,7 +6475,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CreatePersonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6311,7 +6506,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DeletePersonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6346,7 +6541,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["PersonMutationResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6381,7 +6576,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["MergePersonResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6854,7 +7049,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["UpdateTimesResponse"];
                 };
             };
             /** @description Validation Error */

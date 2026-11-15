@@ -7,7 +7,7 @@ import react from "@vitejs/plugin-react";
 // One HTML entry per ported page. Each builds to the same URL the legacy page
 // had (/settings.html), so nav links and bookmarks keep working while pages move
 // over one at a time. Unported pages are still served from src/geotagger/web/.
-const PAGES = ["index", "settings", "data", "search", "custom-places", "map", "geocode"];
+const PAGES = ["index", "settings", "data", "search", "custom-places", "map", "geocode", "timesync", "people-manage", "representatives"];
 
 const BACKEND = `http://127.0.0.1:${process.env.GEOTAGGER_PORT ?? "8000"}`;
 

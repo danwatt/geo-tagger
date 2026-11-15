@@ -224,7 +224,12 @@ def _parse_optional_date(label: str, value: str | None) -> str | None:
     return v
 
 
-@router.patch("/api/persons/{person_id}")
+class PersonMutationResponse(BaseModel):
+    ok: bool
+    id: int
+
+
+@router.patch("/api/persons/{person_id}", response_model=PersonMutationResponse)
 async def api_update_person(person_id: int, req: UpdatePersonRequest):
     """Update a person's name, birth/not-before/not-after dates, and/or family.
     Only fields present in the request body are changed — send just the fields
@@ -274,7 +279,34 @@ class MergePersonRequest(BaseModel):
     into: int   # the person that survives; the path's person is deleted
 
 
-@router.post("/api/persons/{person_id}/merge")
+class MergedFrom(BaseModel):
+    id: int
+    name: str
+
+
+class MergeConflict(BaseModel):
+    """A person attribute both sides had, with different values: the target's
+    is kept (see index.merge_persons). family_id is an int, the dates ISO text."""
+    field: str
+    kept: str | int
+    discarded: str | int
+
+
+class MergePersonResponse(BaseModel):
+    id: int
+    name: str
+    merged_from: MergedFrom
+    moved_faces: int
+    moved_representatives: int
+    merged_negatives: int
+    duplicate_negatives: int
+    dropped_negatives: int
+    filled: list[str]
+    widened: list[str]
+    conflicts: list[MergeConflict]
+
+
+@router.post("/api/persons/{person_id}/merge", response_model=MergePersonResponse)
 async def api_merge_person(person_id: int, req: MergePersonRequest):
     """Merge person ``person_id`` into ``req.into``: every face, representative
     flag and "not this person" negative moves to the target, empty target
@@ -292,13 +324,32 @@ async def api_merge_person(person_id: int, req: MergePersonRequest):
 
 # ── Family endpoints ──
 
-@router.get("/api/families")
+class FamilyItem(BaseModel):
+    id: int
+    name: str
+    person_count: int
+
+
+class FamilyMutationResponse(BaseModel):
+    ok: bool
+    id: int
+    name: str
+    person_count: int | None = None   # create only (a new family has 0 members)
+
+
+class DeletedResponse(BaseModel):
+    ok: bool
+    id: int
+    success: bool   # legacy alias of ok
+
+
+@router.get("/api/families", response_model=list[FamilyItem])
 async def api_get_families():
     return [{"id": f["id"], "name": f["name"], "person_count": f["person_count"]}
             for f in index.get_families()]
 
 
-@router.post("/api/families")
+@router.post("/api/families", response_model=FamilyMutationResponse, response_model_exclude_unset=True)
 async def api_create_family(req: FamilyRequest):
     name = req.name.strip()
     if not name:
@@ -310,7 +361,8 @@ async def api_create_family(req: FamilyRequest):
     return {"ok": True, "id": family_id, "name": name, "person_count": 0}
 
 
-@router.patch("/api/families/{family_id}")
+@router.patch("/api/families/{family_id}", response_model=FamilyMutationResponse,
+              response_model_exclude_unset=True)
 async def api_rename_family(family_id: int, req: FamilyRequest):
     name = req.name.strip()
     if not name:
@@ -324,7 +376,7 @@ async def api_rename_family(family_id: int, req: FamilyRequest):
     return {"ok": True, "id": family_id, "name": name}
 
 
-@router.delete("/api/families/{family_id}")
+@router.delete("/api/families/{family_id}", response_model=DeletedResponse)
 async def api_delete_family(family_id: int):
     if not index.delete_family(family_id):
         raise HTTPException(404, "Family not found")
@@ -332,7 +384,13 @@ async def api_delete_family(family_id: int):
     return {"ok": True, "id": family_id, "success": True}
 
 
-@router.post("/api/persons")
+class CreatePersonResponse(BaseModel):
+    ok: bool
+    id: int
+    name: str
+
+
+@router.post("/api/persons", response_model=CreatePersonResponse)
 async def api_create_person(req: CreatePersonRequest):
     name = req.name.strip()
     if not name:
@@ -344,7 +402,11 @@ async def api_create_person(req: CreatePersonRequest):
     return {"ok": True, "id": person_id, "name": name}
 
 
-@router.delete("/api/persons/{person_id}")
+class DeletePersonResponse(DeletedResponse):
+    undo: dict[str, object]   # the FaceUndo token; see /api/faces/undo
+
+
+@router.delete("/api/persons/{person_id}", response_model=DeletePersonResponse)
 async def api_delete_person(person_id: int):
     """Delete a person; their faces become unlabeled. ``undo`` is the token
     POST /api/faces/undo takes to bring them back (same id, attributes, faces)."""
@@ -656,7 +718,17 @@ async def api_delete_manual_face(face_id: int):
     return {"ok": True, "id": face_id, "success": True, "face_id": face_id}
 
 
-@router.post("/api/faces/undo")
+class UndoFacesResponse(BaseModel):
+    restored: list[int]    # face ids
+    conflicts: list[int]   # face ids changed since; left alone
+    not_found: list[int]
+    person_id: int | None = None
+    person_id_changed: bool
+    family_dropped: bool
+    removed_person_id: int | None = None
+
+
+@router.post("/api/faces/undo", response_model=UndoFacesResponse)
 async def api_undo_faces(req: UndoFacesRequest):
     """Revert one face/person write: hand back the ``undo`` token its reply
     carried (assign, ignore, come-back, crowds/ignore-unlabeled, DELETE person).
@@ -707,17 +779,49 @@ async def api_dedup_recompute():
     return result
 
 
-@router.get("/api/faces/dedup/persons")
+class DedupPerson(BaseModel):
+    person_id: int
+    name: str
+    total: int
+    representative: int
+
+
+@router.get("/api/faces/dedup/persons", response_model=list[DedupPerson])
 async def api_dedup_persons():
     """People who currently have representative-flagged faces (from the last
     recompute) — the picker for the Representative Faces review page."""
     return [
-        {"person_id": r["id"], "name": r["name"], "total": r["total"], "representative": r["representative"]}
+        # SUM() is NULL only for an empty group, which the HAVING already rules
+        # out; guarded anyway so the model's int can't fail on it.
+        {"person_id": r["id"], "name": r["name"], "total": r["total"] or 0,
+         "representative": r["representative"] or 0}
         for r in index.get_persons_with_representatives()
     ]
 
 
-@router.get("/api/faces/dedup/groups")
+class DedupFace(BaseModel):
+    """serializers.face_item; extra="allow" carries the fields this model
+    doesn't name (bbox, location, …) through unchanged."""
+    model_config = ConfigDict(extra="allow")
+    id: int
+    photo_id: int
+    filename: str | None = None
+    person_id: int | None = None
+    person_name: str | None = None
+
+
+class DedupGroup(BaseModel):
+    representative: DedupFace
+    others: list[DedupFace]
+    size: int
+
+
+class DedupGroupsResponse(BaseModel):
+    groups: list[DedupGroup]
+    total: int   # the person's labeled faces, shown or not
+
+
+@router.get("/api/faces/dedup/groups", response_model=DedupGroupsResponse)
 async def api_dedup_groups(person_id: int = Query(...), group_limit: int = Query(49, ge=1, le=200)):
     """Representative-led review groups for one person: each stored
     representative face, paired with up to `group_limit` other labeled faces

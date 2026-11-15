@@ -43,7 +43,7 @@ def _static_client(tmp_path: Path) -> TestClient:
     web.mkdir()
     (dist / "settings.html").write_text("react settings")
     (web / "settings.html").write_text("legacy settings")
-    (web / "timesync.html").write_text("legacy timesync")
+    (web / "people.html").write_text("legacy people")
     (web / "index.html").write_text("legacy home")
     app = Starlette()
     app.mount("/", LayeredStaticFiles([dist, web], html=True))
@@ -57,7 +57,7 @@ def test_built_page_shadows_legacy_page(tmp_path):
 
 def test_unported_pages_fall_back_to_legacy_tree(tmp_path):
     client = _static_client(tmp_path)
-    assert client.get("/timesync.html").text == "legacy timesync"
+    assert client.get("/people.html").text == "legacy people"
     assert client.get("/").text == "legacy home"
     assert client.get("/missing.html").status_code == 404
 

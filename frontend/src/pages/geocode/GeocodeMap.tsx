@@ -5,7 +5,7 @@ import { cssVar } from "../../lib/cssVar";
 import { MapView } from "../../map/MapView";
 import { DrawShapeTool } from "../../map/DrawShapeTool";
 import type { Shape } from "../../map/shapes";
-import type { CameraColors } from "./cameraColors";
+import type { CameraColors } from "../../photos/cameraColors";
 import { AccuracyCircle, GuessLayer, PhotoPins, PlaceShapes, ScopeOutline, StagedPins } from "./mapLayers";
 import type { Place, ScopeDef } from "./scope";
 import type { Photo, Staged } from "./staging";

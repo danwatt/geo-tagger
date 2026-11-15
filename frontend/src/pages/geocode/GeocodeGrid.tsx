@@ -2,7 +2,7 @@ import { memo, useId } from "react";
 import { GroupHeader } from "../../photos/GroupHeader";
 import { ThumbCell } from "../../photos/PhotoGrid";
 import type { ClickModifiers } from "../../photos/selection";
-import type { CameraColors } from "./cameraColors";
+import type { CameraColors } from "../../photos/cameraColors";
 import { bandLabel, monthName, type DaySection, type GridEntry, type GridItem } from "./grouping";
 
 /* The photo grid, by day: year and month dividers, one section per calendar

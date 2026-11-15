@@ -1,4 +1,5 @@
 import type { Schemas } from "../../api/client";
+import { STAGED_SAVE_FAILED_MSG, stagedWorkStore } from "../../lib/stagedWork";
 
 /* ── Geotag staging ──
  * A drop on the map doesn't write: the point is reverse-geocoded, the photos are
@@ -130,17 +131,12 @@ export function stagedChip(e: StagedEntry): string {
  * there carries over. Version 1 record: {id, lat, lng, accuracy, loc, label,
  * ignore, remove, was}. `remove` was added without a version bump: a bump would
  * sweep (lose) records staged by the previous build, and that build simply drops
- * a remove record it can't validate. Every storage call is wrapped — blocked or
- * full storage only means the backup is skipped, never that staging stops. */
+ * a remove record it can't validate. The store itself (sweep, wrapping) is
+ * lib/stagedWork.ts, shared with Time Sync. */
 
-const STAGED_PREFIX = "geotagger.staged.";
-const STAGED_PAGE = "geocode";
-const STAGED_VERSION = 1;
-export const STAGED_KEY = `${STAGED_PREFIX}${STAGED_PAGE}.v${STAGED_VERSION}`;
-
-export const STAGED_SAVE_FAILED_MSG =
-  "Couldn't back up the staged changes in this tab (browser storage is full or blocked). " +
-  "They're still staged, but a reload or crash before you commit will lose them.";
+const store = stagedWorkStore<StagedRecord>("geocode", 1);
+export const STAGED_KEY = store.key;
+export { STAGED_SAVE_FAILED_MSG };
 
 export type StagedRecord = {
   id: number;
@@ -171,31 +167,12 @@ export function validRecord(r: StagedRecord): boolean {
 /** The saved records (integer ids only), or []. Sweeps records an older (or
  *  newer) build of this page wrote under another version's key. */
 export function loadStagedRecords(): StagedRecord[] {
-  try {
-    const stem = `${STAGED_PREFIX}${STAGED_PAGE}.v`;
-    for (let i = sessionStorage.length - 1; i >= 0; i--) {
-      const k = sessionStorage.key(i);
-      if (k && k.startsWith(stem) && k !== STAGED_KEY) sessionStorage.removeItem(k);
-    }
-    const raw = sessionStorage.getItem(STAGED_KEY);
-    if (!raw) return [];
-    const data = JSON.parse(raw) as { v?: unknown; entries?: unknown };
-    if (!data || data.v !== STAGED_VERSION || !Array.isArray(data.entries)) return [];
-    return (data.entries as StagedRecord[]).filter((r) => r && Number.isInteger(r.id));
-  } catch {
-    return [];
-  }
+  return store.load();
 }
 
 /** Replace the saved set; an empty list removes the key. False on failure. */
 export function saveStagedRecords(records: StagedRecord[]): boolean {
-  try {
-    if (!records.length) sessionStorage.removeItem(STAGED_KEY);
-    else sessionStorage.setItem(STAGED_KEY, JSON.stringify({ v: STAGED_VERSION, savedAt: Date.now(), entries: records }));
-    return true;
-  } catch {
-    return false;
-  }
+  return store.save(records);
 }
 
 /** The records to write: every live entry, plus carried records (read back at
