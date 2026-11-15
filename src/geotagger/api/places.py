@@ -3,7 +3,7 @@
 import asyncio
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from geotagger import index
 from geotagger.executor import get_executor
@@ -39,7 +39,25 @@ def _checked_bounds(kind: str, raw: str) -> str:
         raise HTTPException(400, str(e))
 
 
-@router.get("/api/places")
+class PlaceItem(BaseModel):
+    """The three stats fields are only present with ``stats=true`` (see
+    index.get_place_stats), hence response_model_exclude_unset on the route: a
+    plain listing keeps its old shape instead of growing three nulls.
+    extra="allow" so a field added to the dict reaches the pages that read it."""
+    model_config = ConfigDict(extra="allow")
+    id: int
+    name: str
+    type: str
+    bounds: str
+    bounds_valid: bool
+    created_at: float | None = None
+    representative_photo_id: int | None = None
+    photo_count: int | None = None
+    last_ts: int | None = None              # newest photo inside; None when undated
+    untagged_nearby_count: int | None = None
+
+
+@router.get("/api/places", response_model=list[PlaceItem], response_model_exclude_unset=True)
 async def api_get_places(
     stats: bool = Query(False, description="include photo_count and last_ts per place"),
 ):
@@ -73,7 +91,15 @@ async def api_get_places(
     ]
 
 
-@router.post("/api/places")
+class CreatePlaceResponse(BaseModel):
+    ok: bool
+    id: int
+    name: str
+    type: str
+    bounds: str      # the stored (normalised) JSON string
+
+
+@router.post("/api/places", response_model=CreatePlaceResponse)
 async def api_create_place(req: CreatePlaceRequest):
     """Create a new place. 400 when the bounds don't describe a valid shape."""
     bounds = _checked_bounds(req.type, req.bounds)
@@ -81,7 +107,13 @@ async def api_create_place(req: CreatePlaceRequest):
     return {"ok": True, "id": place_id, "name": req.name, "type": req.type, "bounds": bounds}
 
 
-@router.delete("/api/places/{place_id}")
+class PlaceMutationResponse(BaseModel):
+    ok: bool
+    id: int
+    success: bool    # legacy alias of ok
+
+
+@router.delete("/api/places/{place_id}", response_model=PlaceMutationResponse)
 async def api_delete_place(place_id: int):
     """Delete a place."""
     if not index.delete_place(place_id):
@@ -97,7 +129,11 @@ class UpdatePlaceRequest(BaseModel):
     _name = field_validator("name")(_clean_name)
 
 
-@router.patch("/api/places/{place_id}")
+class UpdatePlaceResponse(PlaceMutationResponse):
+    bounds: str      # the stored bounds after the update (unchanged by a rename)
+
+
+@router.patch("/api/places/{place_id}", response_model=UpdatePlaceResponse)
 async def api_update_place(place_id: int, req: UpdatePlaceRequest):
     """Update a place's bounds and/or name. New bounds are validated against the
     place's stored type (the type itself isn't editable)."""
@@ -115,7 +151,11 @@ class SetRepresentativeRequest(BaseModel):
     photo_id: int | None = None  # None clears the representative
 
 
-@router.put("/api/places/{place_id}/representative")
+class SetRepresentativeResponse(PlaceMutationResponse):
+    representative_photo_id: int | None
+
+
+@router.put("/api/places/{place_id}/representative", response_model=SetRepresentativeResponse)
 async def api_set_place_representative(place_id: int, req: SetRepresentativeRequest):
     """Set (or clear) a place's representative photo — a plain FK to photos.id."""
     if req.photo_id is not None and index.get_photo(req.photo_id) is None:

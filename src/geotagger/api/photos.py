@@ -10,10 +10,11 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from geotagger import index, thumbnails, serializers
 from geotagger.api import _media
+from geotagger.api.search import SearchPhoto
 from geotagger.executor import get_executor
 from geotagger.services import photos_service, zip_service
 from geotagger.timeutil import has_date
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.get("/api/photos")
+@router.get("/api/photos", response_model=list[SearchPhoto], response_model_exclude_unset=True)
 async def api_photos(
     geotagged: str = Query("all", pattern="^(all|yes|no)$"),
     bbox: str | None = Query(None),
@@ -61,7 +62,7 @@ class PhotosByIdsRequest(BaseModel):
     ids: list[int] = Field(max_length=500_000)
 
 
-@router.post("/api/photos/by-ids")
+@router.post("/api/photos/by-ids", response_model=list[SearchPhoto], response_model_exclude_unset=True)
 async def api_photos_by_ids(req: PhotosByIdsRequest):
     """Same as ``GET /api/photos?ids=…`` but with the ids in the body: Search's
     "Open in Geocode" can hand over more photos than fit in a request line (A3 —
@@ -71,13 +72,23 @@ async def api_photos_by_ids(req: PhotosByIdsRequest):
     return await asyncio.get_running_loop().run_in_executor(get_executor(), run)
 
 
-@router.get("/api/photos/dirs")
+class DirCount(BaseModel):
+    dir: str
+    total: int
+    untagged: int
+
+
+@router.get("/api/photos/dirs", response_model=list[DirCount])
 async def api_photo_dirs(limit: int = Query(500, ge=1, le=5000)):
     """Directories in the library, most-untagged first. Feeds the Geocode folder
-    picker, which loads one of them through /api/photos?dir=."""
+    picker, which loads one of them through /api/photos?dir=, and Search's
+    Folder facet."""
     loop = asyncio.get_running_loop()
     rows = await loop.run_in_executor(get_executor(), index.get_dir_counts, limit)
-    return [{"dir": r["dir"], "total": r["total"], "untagged": r["untagged"]} for r in rows]
+    # SUM() is NULL over zero rows; a GROUP BY group always has one, but the
+    # model is an int, so don't let a NULL through as a 500.
+    return [{"dir": r["dir"] or "", "total": r["total"] or 0, "untagged": r["untagged"] or 0}
+            for r in rows]
 
 
 def _augment_and_filter(photos_in_area: list, geotagged: str, window: int) -> list:
@@ -120,7 +131,7 @@ def _augment_and_filter(photos_in_area: list, geotagged: str, window: int) -> li
     return photos_in_area
 
 
-@router.get("/api/photos/by-area")
+@router.get("/api/photos/by-area", response_model=list[SearchPhoto], response_model_exclude_unset=True)
 async def api_photos_by_area(
     lat: float = Query(...),
     lng: float = Query(...),
@@ -175,7 +186,7 @@ async def api_photos_by_area(
     return result
 
 
-@router.get("/api/photos/by-location")
+@router.get("/api/photos/by-location", response_model=list[SearchPhoto], response_model_exclude_unset=True)
 async def api_photos_by_location(
     location_fields: str = Query(...),
     geotagged: str = Query("all", pattern="^(all|yes|no)$"),
@@ -210,7 +221,7 @@ async def api_photos_by_location(
             for r in _augment_and_filter(located, geotagged, window)]
 
 
-@router.get("/api/photos/by-bounds")
+@router.get("/api/photos/by-bounds", response_model=list[SearchPhoto], response_model_exclude_unset=True)
 async def api_photos_by_bounds(
     min_lat: float = Query(...),
     max_lat: float = Query(...),
@@ -301,8 +312,40 @@ async def api_fullsize(photo_id: int):
                     headers={"Cache-Control": "no-store"})
 
 
-@router.get("/api/photos/{photo_id:int}")
-@router.get("/api/photo/{photo_id}", deprecated=True)
+class PhotoDetailLocation(BaseModel):
+    city: str | None = None
+    sublocation: str | None = None
+    postal_code: str | None = None
+    state: str | None = None
+    county: str | None = None
+    country: str | None = None
+    country_code: str | None = None
+
+
+class PhotoDetail(BaseModel):
+    """One photo's preview-pane details. extra="allow": the legacy pages that
+    read this route predate the model."""
+    model_config = ConfigDict(extra="allow")
+    id: int
+    path: str
+    filename: str
+    media_type: str | None = None
+    ext: str | None = None
+    lat: float | None = None
+    lng: float | None = None
+    geotag_source: str | None = None
+    sidecar_path: str | None = None
+    camera: str | None = None
+    datetime: str | None = None
+    date_precision: str | None = None
+    dimensions: str | None = None
+    gps_accuracy: float | None = None
+    geocode_ignored: bool = False
+    location: PhotoDetailLocation | None = None
+
+
+@router.get("/api/photos/{photo_id:int}", response_model=PhotoDetail)
+@router.get("/api/photo/{photo_id}", deprecated=True, response_model=PhotoDetail)
 async def api_photo(photo_id: int):
     row = index.get_photo(photo_id)
     if not row:
@@ -355,7 +398,28 @@ class UpdateTimesRequest(BaseModel):
     updates: list[TimeUpdate]
 
 
-@router.post("/api/photos/update-times")
+class TimeResult(BaseModel):
+    id: int
+    photo_datetime: int
+    unchanged: bool                # already at target: nothing was written
+    sidecar_path: str | None = None
+
+
+class TimeFailure(BaseModel):
+    id: int
+    error: str
+    conflict: bool | None = None   # the photo's date moved since it was loaded
+
+
+class UpdateTimesResponse(BaseModel):
+    results: list[TimeResult]
+    written: list[int]
+    failed: list[TimeFailure]
+    not_found: list[int]
+
+
+@router.post("/api/photos/update-times", response_model=UpdateTimesResponse,
+             response_model_exclude_unset=True)
 async def api_update_times(req: UpdateTimesRequest):
     """Set photo timestamps to absolute targets (the Time Sync save). Idempotent:
     re-sending the same body after a partial failure only applies what's left.
@@ -392,7 +456,11 @@ class AssignDateRequest(BaseModel):
     month: int | None = None  # None = year precision, else month precision
 
 
-@router.post("/api/photos/assign-date")
+class AssignDateResponse(BaseModel):
+    updated: int
+
+
+@router.post("/api/photos/assign-date", response_model=AssignDateResponse)
 async def api_assign_date(req: AssignDateRequest):
     """Assign an approximate (year or month precision) date to a folder/selection
     of photos with no reliable EXIF date — see Search page's "Assign date…"."""
@@ -412,7 +480,27 @@ class GuessDatesRequest(BaseModel):
     photo_ids: list[int]
 
 
-@router.post("/api/photos/guess-dates")
+class DateGuess(BaseModel):
+    """date_guess.guess_date: precision None = exact day, else 'month'/'year'."""
+    year: int
+    month: int | None = None
+    day: int | None = None
+    precision: Literal["month", "year"] | None = None
+    source: str
+
+
+class PhotoDateGuess(BaseModel):
+    photo_id: int
+    filename: str
+    current_datetime: str | None = None
+    guess: DateGuess | None = None
+
+
+class GuessDatesResponse(BaseModel):
+    guesses: list[PhotoDateGuess]
+
+
+@router.post("/api/photos/guess-dates", response_model=GuessDatesResponse)
 async def api_guess_dates(req: GuessDatesRequest):
     """Best-effort date guess per photo (from filename/folder — see date_guess.py)
     for the Search page's "Guess dates…" staging panel. Doesn't write anything;
@@ -436,7 +524,22 @@ class CommitGuessedDatesRequest(BaseModel):
     entries: list[DateGuessEntry]
 
 
-@router.post("/api/photos/commit-guessed-dates")
+class PreviousDate(BaseModel):
+    """Output twin of DateSnapshot (below), without its input validator: a
+    sidecar's existing date must come back to the client as-is, not as a 500."""
+    photo_id: int
+    raw_datetime: str | None = None
+    photo_datetime: int | None = None
+    date_precision: str | None = None
+
+
+class CommitGuessedDatesResponse(BaseModel):
+    updated: int
+    # Opaque to the client: hand the list back to /api/photos/undo-date-commit.
+    previous: list[PreviousDate]
+
+
+@router.post("/api/photos/commit-guessed-dates", response_model=CommitGuessedDatesResponse)
 async def api_commit_guessed_dates(req: CommitGuessedDatesRequest):
     """Write a batch of staged, user-reviewed date guesses. Returns ``previous``
     snapshots (opaque to the client) — pass the whole thing back to
@@ -488,7 +591,11 @@ class UndoDateCommitRequest(BaseModel):
     previous: list[DateSnapshot]  # snapshots from a commit-guessed-dates response
 
 
-@router.post("/api/photos/undo-date-commit")
+class UndoDateCommitResponse(BaseModel):
+    reverted: int
+
+
+@router.post("/api/photos/undo-date-commit", response_model=UndoDateCommitResponse)
 async def api_undo_date_commit(req: UndoDateCommitRequest):
     """Revert exactly the batch a prior /api/photos/commit-guessed-dates call made."""
     if not req.previous:
@@ -534,7 +641,22 @@ async def _read_zip_ids(request: Request) -> list[int]:
         raise HTTPException(400, "photo_ids must be a list of integer photo ids")
 
 
-@router.post("/api/photos/download-zip")
+class ZipCheckResponse(BaseModel):
+    """?check=1's answer; without check the route streams the archive itself."""
+    count: int
+    total_bytes: int
+    skipped: int
+
+
+# The body is parsed by hand (_read_zip_ids: JSON or a form post), so FastAPI
+# can't see it; declare the JSON form for the schema so the typed client can send it.
+@router.post("/api/photos/download-zip", response_model=ZipCheckResponse,
+             openapi_extra={"requestBody": {"required": True, "content": {
+                 "application/json": {"schema": {
+                     "type": "object", "required": ["photo_ids"],
+                     "properties": {"photo_ids": {"type": "array", "items": {"type": "integer"}}},
+                 }},
+             }}})
 async def api_download_zip(request: Request, check: bool = Query(False)):
     """Bundle the selected photos' original files (full quality, RAW included
     as-is) into a ZIP archive for download.

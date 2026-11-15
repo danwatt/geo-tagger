@@ -1,0 +1,63 @@
+/* ── Month bars ──
+   Framed like the app's other timelines (the date-range picker's scrubber, the
+   geocode/search timeline): an inset panel, bars flexed to fill its width, and a
+   year-tick strip along the bottom. These bars are stacked, so segment colours
+   stay semantic (they double as legend swatches) rather than accent/track. */
+.months-bar-container {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 90px;
+  padding: 8px 8px 22px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  user-select: none;
+  overflow: hidden;
+}
+.month-bar {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  border-radius: 1px 1px 0 0;
+  overflow: hidden;   /* rounds whichever segment lands on top */
+  cursor: pointer;
+}
+/* The year label has to escape the bar's clip to sit in the tick strip. */
+.month-bar:has(> .month-year-label) { overflow: visible; }
+.month-bar:hover,
+.month-bar:focus-visible { outline: 1px solid var(--border-btn); outline-offset: 1px; }
+.month-bar > div { width: 100%; }
+
+/* Year ticks sit below the bars. Bars are bottom-aligned, so anchoring to the
+   bar's bottom edge keeps ticks on one line even in Count mode. */
+.month-year-label {
+  position: absolute;
+  bottom: -18px;
+  left: 0;
+  padding-left: 3px;
+  border-left: 1px solid var(--border-2);
+  font-size: 10px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.undated-link {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--accent-text);
+  text-decoration: none;
+}
+.undated-link:hover { text-decoration: underline; }
+
+/* Segment colours, shared with legends (.sw + same class). */
+.bar-untagged, .cov-noface { background: var(--surface-btn-hover); }
+.bar-tagged, .cov-full { background: var(--success); }
+.cov-partial { background: var(--warn); }
+.cov-none { background: var(--danger); }

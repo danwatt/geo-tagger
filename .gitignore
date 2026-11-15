@@ -22,3 +22,11 @@ data/
 /tempgeotagger-test*/
 .mcp.json
 .claude/settings.local.json
+
+# React frontend (frontend/): dependencies and the Vite build output, which
+# `npm run build` writes into the Python package and the wheel picks up as an artifact.
+node_modules/
+/src/geotagger/web_dist/
+# The bare `data/` rule above is for the downloaded datasets; don't let it swallow
+# the React Data page's source folder.
+!/frontend/src/pages/data/

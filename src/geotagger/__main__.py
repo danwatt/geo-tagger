@@ -125,6 +125,12 @@ def main():
         print("Example: uv run geotagger --scan-dir C:\\Photos", file=sys.stderr)
         sys.exit(1)
 
+    # The pages (frontend/) only exist once built; without the build their URLs 404.
+    from geotagger.static import frontend_built
+    if not frontend_built():
+        print("Warning: the React frontend is not built, so every page will 404.", file=sys.stderr)
+        print("Build it once with: npm --prefix frontend ci && npm --prefix frontend run build", file=sys.stderr)
+
     # Determine host to bind to
     if args.network:
         bind_host = "0.0.0.0"

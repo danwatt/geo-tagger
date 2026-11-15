@@ -1,0 +1,51 @@
+/* Face quick-action menu. Ported from web/face-grid.css (.face-expand,
+   .expand-btn) with raw hex swapped for theme.css tokens. Fixed-position so a
+   cell's overflow: hidden can't clip it. */
+
+.face-expand {
+  position: fixed;
+  z-index: 1000;
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  padding: 8px;
+  min-width: 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  box-shadow: var(--shadow-popup);
+}
+.expand-btn { font-size: 11px; padding: 3px 8px; white-space: nowrap; text-align: left; }
+.expand-btn:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
+/* The target the menu acts on — usually a filename, so long ones ellipsize
+   rather than stretching the menu across the grid. */
+.face-expand-heading {
+  max-width: 240px;
+  padding: 0 2px 5px;
+  border-bottom: 1px solid var(--border-2);
+  color: var(--text-faint);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.expand-btn:disabled { color: var(--text-dim); cursor: default; }
+
+/* Bottom-sheet variant for narrow / touch screens (Quick Tag on a phone): same
+   buttons, larger tap targets, anchored to the bottom edge over a backdrop. */
+.face-qa-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  background: rgba(0, 0, 0, .5);
+}
+.face-expand.as-sheet {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  min-width: 0;
+  border-radius: 16px 16px 0 0;
+  padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+  gap: 10px;
+}
+.face-expand.as-sheet .expand-btn { font-size: 16px; padding: 14px; }

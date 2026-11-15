@@ -1,0 +1,89 @@
+/* Timeline histogram strip. Ported from web/style.css (#timeline, #hist-*,
+   .hist-range) with raw hex swapped for theme.css tokens; ids became classes so
+   a page can hold more than one. */
+
+.timeline-hist {
+  position: relative;
+  height: 110px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.hist-canvas {
+  position: absolute;
+  top: 8px;
+  left: 0;
+  width: 100%;
+  height: 76px;
+  display: block;
+}
+
+/* Two overlapping range inputs sitting on the same track: only the thumbs take
+   the pointer, so each one stays grabbable where it sits. */
+.hist-range {
+  position: absolute;
+  bottom: 22px;
+  left: 0;
+  width: 100%;
+  height: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  outline: none;
+  pointer-events: none;
+}
+.hist-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  pointer-events: all;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-strong);
+  border: 2px solid var(--text-muted);
+  cursor: ew-resize;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  transition: background 0.1s, border-color 0.1s;
+}
+.hist-range::-webkit-slider-thumb:hover { border-color: var(--text); }
+.hist-range:focus-visible::-webkit-slider-thumb { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.hist-range::-moz-range-thumb {
+  pointer-events: all;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-strong);
+  border: 2px solid var(--text-muted);
+  cursor: ew-resize;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+}
+.hist-range:focus-visible::-moz-range-thumb { border-color: var(--accent); }
+
+.hist-labels {
+  position: absolute;
+  bottom: 5px;
+  left: 0;
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+  pointer-events: none;
+  padding: 0 2px;
+}
+
+.hist-tooltip {
+  position: fixed;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  pointer-events: none;
+  z-index: 9999;
+  white-space: nowrap;
+}

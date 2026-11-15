@@ -4,7 +4,10 @@
 import asyncio
 import functools
 
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, ConfigDict
 
 from geotagger import config, index
 from geotagger.search_locations import parse_fields, suggestions
@@ -13,6 +16,81 @@ from geotagger.services import faces_service, search_service
 from geotagger.services.semantic_service import SemanticUnavailable
 
 router = APIRouter()
+
+
+# ── Response models (the Search page's generated TypeScript types) ──
+
+class PhotoPlace(BaseModel):
+    city: str | None = None
+    sublocation: str | None = None
+    state: str | None = None
+    country: str | None = None
+
+
+class SearchPhoto(BaseModel):
+    """serializers.photo_to_dict, plus `score` on ranked (text / similar_to)
+    results. extra="allow": other legacy pages read this shape too."""
+    model_config = ConfigDict(extra="allow")
+    id: int
+    filename: str
+    media_type: str | None = None
+    lat: float | None = None
+    lng: float | None = None
+    geotag_source: str | None = None
+    camera: str | None = None
+    photo_datetime: int | None = None
+    gps_accuracy: float | None = None
+    geocode_ignored: bool = False
+    date_precision: str | None = None
+    dir: str | None = None
+    location: PhotoPlace | None = None
+    score: float | None = None
+
+
+class SearchHistogram(BaseModel):
+    """search_service.timeline_histogram: bucket i starts at min + i * bucket_secs."""
+    min: int
+    max: int
+    bucket_secs: int
+    counts: list[int]
+
+
+class SearchPage(BaseModel):
+    photos: list[SearchPhoto]
+    total: int
+    offset: int
+    limit: int
+    next_offset: int | None = None
+    truncated: bool
+    histogram: SearchHistogram | None = None
+
+
+class SearchIds(BaseModel):
+    """ids_only=true: every match, unpaged, in result order."""
+    ids: list[int]
+    datetimes: list[int | None]
+    total: int
+
+
+class LocationSuggestion(BaseModel):
+    """search_locations.suggestions: a saved place (id) or a photo-metadata
+    location (fields/count/level). bounds = [south, west, north, east]."""
+    model_config = ConfigDict(extra="allow")
+    kind: Literal["place", "metadata"]
+    label: str
+    id: int | None = None
+    fields: dict[str, str] | None = None
+    count: int | None = None
+    level: str | None = None
+    bounds: list[float] | None = None
+
+
+class LocationsResponse(BaseModel):
+    locations: list[LocationSuggestion]
+
+
+class CamerasResponse(BaseModel):
+    cameras: list[str]
 
 
 def _validate_location(place_id, location_fields, nearby_m):
@@ -28,12 +106,12 @@ def _validate_location(place_id, location_fields, nearby_m):
         raise HTTPException(400, "Nearby distance requires a saved place")
 
 
-@router.get("/api/search/locations")
+@router.get("/api/search/locations", response_model=LocationsResponse)
 async def api_search_locations(q: str = Query("", max_length=200)):
     return {"locations": suggestions(index.get_db(), q)}
 
 
-@router.get("/api/search/cameras")
+@router.get("/api/search/cameras", response_model=CamerasResponse)
 async def api_search_cameras():
     return {"cameras": index.get_distinct_cameras()}
 
@@ -45,7 +123,9 @@ def _parse_person_ids(person_ids: str) -> list[int]:
         raise HTTPException(400, "person_ids must be a comma-separated list of integers")
 
 
-@router.get("/api/search")
+# exclude_unset: a plain search's photos carry no `score` key at all (only ranked
+# results do), as before the model existed.
+@router.get("/api/search", response_model=SearchPage | SearchIds, response_model_exclude_unset=True)
 async def api_search(
     date_from: str | None = Query(None, description="YYYY-MM-DD, inclusive"),
     date_to: str | None = Query(None, description="YYYY-MM-DD, inclusive"),
@@ -115,7 +195,40 @@ async def api_search(
         raise HTTPException(400, str(e))
 
 
-@router.get("/api/search/untagged-faces")
+class TaggedFace(BaseModel):
+    person_id: int
+    person_name: str | None = None
+    face_id: int
+
+
+class ProposedFace(BaseModel):
+    person_id: int
+    person_name: str | None = None
+    face_id: int
+    score: float
+    bbox: list[float] | None = None
+
+
+class UntaggedCandidate(BaseModel):
+    photo: SearchPhoto
+    tagged: list[TaggedFace]
+    proposed: list[ProposedFace]
+
+
+class UntaggedFacesResponse(BaseModel):
+    mode: Literal["single", "together"]
+    threshold: float
+    total: int
+    candidates: list[UntaggedCandidate]
+    offset: int
+    limit: int
+    next_offset: int | None = None
+    truncated: bool
+    warnings: list[str] = []
+
+
+@router.get("/api/search/untagged-faces", response_model=UntaggedFacesResponse,
+            response_model_exclude_unset=True)
 async def api_search_untagged_faces(
     person_ids: str = Query(...),
     date_from: str | None = Query(None), date_to: str | None = Query(None),

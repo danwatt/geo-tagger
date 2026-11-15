@@ -79,7 +79,7 @@ def test_get_with_foreign_origin_allowed(client):
 
 
 def test_same_origin_form_post_allowed(client):
-    # search.js submits download-zip as a real <form> navigation: the browser sends
+    # The Search page submits download-zip as a real <form> navigation: the browser sends
     # Origin + Sec-Fetch-Site: same-origin and a urlencoded body.
     r = client.post("/api/photos/download-zip", data={"photo_ids": "999"}, headers={
         "Host": "127.0.0.1:8000", "Origin": "http://127.0.0.1:8000", "Sec-Fetch-Site": "same-origin"})
@@ -128,7 +128,9 @@ def test_token_cookie_flow(client, token):
     assert f"geotagger_token={TOKEN}" in set_cookie and "HttpOnly" in set_cookie
     # TestClient keeps the cookie, like a browser would.
     assert client.get(GET).status_code == 200
-    assert client.get("/").status_code == 200
+    # A static file too. Not "/": the pages are a Vite build (web_dist/) the
+    # Python test job doesn't run, while theme.css is always in web/.
+    assert client.get("/theme.css").status_code == 200
 
 
 def test_token_wrong_query_rejected(client, token):

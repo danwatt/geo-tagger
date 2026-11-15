@@ -1,0 +1,184 @@
+/* Shared date range picker (DateRangePicker.tsx): one trigger field, one
+ * popover carrying a presets rail, typed bounds, a histogram scrubber and twin
+ * day calendars. Ported from web/date-range-picker.css (which unported pages
+ * still load) with the remaining raw hex swapped for theme.css tokens. */
+
+/* ── Trigger field ──
+   .drp-control carries the field box; the trigger and the clear button are
+   siblings inside it (a button nested in a button is invalid HTML). */
+.drp { position: relative; width: 300px; max-width: 100%; }
+.drp-control {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  padding: 5px 8px; font-size: 12px;
+  background: var(--surface-input); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); color: var(--text-strong); cursor: pointer;
+}
+.drp-control:hover { background: var(--surface-btn); border-color: var(--accent); }
+.drp-control:has(.drp-trigger[aria-expanded="true"]) {
+  background: var(--accent-bg); border-color: var(--accent); color: var(--on-accent);
+}
+.drp-trigger {
+  display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;
+  padding: 0; font-size: inherit; text-align: left; color: inherit;
+  background: transparent; border: none; cursor: pointer;
+}
+.drp-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.drp-value {
+  flex: 1; min-width: 0; font-variant-numeric: tabular-nums;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.drp-value.placeholder { color: var(--text-faint); }
+/* Inert so it never steals the click from the trigger behind it. */
+.drp-caret { font-size: 9px; color: var(--text-muted); pointer-events: none; }
+.drp-clear {
+  flex: 0 0 auto; padding: 0 4px; font-size: 13px; line-height: 1; color: var(--text-muted);
+  background: transparent; border: none; border-radius: var(--radius-sm); cursor: pointer;
+}
+.drp-clear:hover { background: var(--surface-btn-hover); color: var(--danger-text); }
+.drp-compact { width: 210px; }
+.drp-disabled .drp-control { opacity: .5; cursor: default; }
+.drp-disabled .drp-control:hover {
+  background: var(--surface-input); border-color: var(--border-strong);
+}
+
+/* ── Popover panel ── */
+.drp-panel {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 70;
+  display: flex; align-items: stretch;
+  background: var(--surface-2); border: 1px solid var(--accent);
+  border-radius: 6px; box-shadow: var(--shadow-popup); overflow: hidden;
+}
+/* Flip to the right edge when the trigger sits near the viewport's right side. */
+.drp-panel.align-right { left: auto; right: 0; }
+
+/* ── Presets rail ── */
+.drp-presets {
+  flex: 0 0 148px; padding: 6px;
+  background: var(--surface-1); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.drp-preset {
+  display: block; width: 100%; padding: 5px 8px; text-align: left; font-size: 12px;
+  color: var(--text); background: transparent; border: 1px solid transparent;
+  border-radius: var(--radius); cursor: pointer;
+}
+.drp-preset:hover { background: var(--border); color: var(--text-strong); }
+.drp-preset.active {
+  background: var(--accent-bg); border-color: var(--accent);
+  color: var(--accent-text); font-weight: 600;
+}
+.drp-preset .n { float: right; font-size: 11px; font-weight: 400; color: var(--text-faint); }
+.drp-preset-sep { height: 1px; margin: 5px 2px; background: var(--border); }
+
+/* ── Main column ── */
+.drp-main { padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.drp-fields { display: flex; align-items: flex-end; gap: 8px; }
+.drp-field { display: flex; flex-direction: column; gap: 3px; }
+.drp-field label { font-size: 11px; color: var(--text-muted); }
+.drp-field input {
+  width: 112px; padding: 5px 8px; font-size: 12px; font-variant-numeric: tabular-nums;
+  background: var(--surface-input); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); color: var(--text-strong);
+}
+.drp-field input:focus { border-color: var(--accent); outline: none; }
+.drp-field.invalid input { border-color: var(--danger); color: var(--danger-text); }
+.drp-dash { padding-bottom: 6px; color: var(--text-faint); }
+.drp-hint { padding-bottom: 6px; font-size: 11px; color: var(--text-muted); }
+.drp-hint.error { color: var(--danger-text); }
+
+/* ── Histogram scrubber (one bar per month across the whole library) ── */
+.drp-hist {
+  position: relative; height: 90px; padding: 8px 8px 24px;
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: var(--radius); user-select: none; touch-action: none;
+}
+/* Inset track so band/handle percentages line up with the bars, not the padding. */
+.drp-track { position: relative; height: 100%; cursor: ew-resize; }
+.drp-bars { display: flex; align-items: flex-end; gap: 1px; height: 100%; }
+.drp-bars i { flex: 1; min-width: 0; background: var(--surface-btn); border-radius: 1px 1px 0 0; }
+.drp-bars i.in { background: var(--accent); }
+.drp-band {
+  position: absolute; top: 0; bottom: 0;
+  background: rgba(74, 144, 217, .13);
+  border-left: 1px solid var(--accent); border-right: 1px solid var(--accent);
+  pointer-events: none;
+}
+.drp-handle {
+  position: absolute; bottom: -7px; width: 14px; height: 14px; margin-left: -7px;
+  background: var(--text-strong); border: 2px solid var(--text-muted); border-radius: 50%;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .6); cursor: ew-resize;
+}
+.drp-handle:hover, .drp-handle:focus-visible { background: var(--text-strong); border-color: var(--text); outline: none; }
+.drp-ticks {
+  position: absolute; left: 8px; right: 8px; bottom: 3px;
+  display: flex; font-size: 10px; color: var(--text-faint); pointer-events: none;
+}
+/* Labels are wider than a year's slice on a long library and are allowed to
+   spill into the blank ticks either side — see axisTicks() in dateRange.ts for the thinning. */
+.drp-ticks span { text-align: center; white-space: nowrap; border-left: 1px solid var(--border-2); }
+
+/* ── Twin month calendars ── */
+.drp-cals { display: flex; gap: 16px; }
+.drp-cal { flex: 0 0 196px; min-width: 0; }
+.drp-cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.drp-cal-title { font-size: 12px; font-weight: 600; color: var(--text-strong); }
+.drp-nav {
+  padding: 1px 7px; font-size: 11px; color: var(--text);
+  background: transparent; border: 1px solid var(--border-strong);
+  border-radius: var(--radius); cursor: pointer;
+}
+.drp-nav:hover { background: var(--surface-btn); color: var(--text-strong); }
+.drp-nav[disabled] { opacity: .3; cursor: default; }
+.drp-nav[disabled]:hover { background: transparent; color: var(--text); }
+.drp-dow, .drp-week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px 0; }
+.drp-dow span { padding: 2px 0; text-align: center; font-size: 10px; color: var(--text-faint); }
+
+.drp-day {
+  position: relative; height: 24px; min-width: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-variant-numeric: tabular-nums; color: var(--text);
+  background: transparent; border: none; border-radius: var(--radius-sm); cursor: pointer;
+}
+.drp-day:hover { background: var(--surface-btn); color: var(--text-strong); }
+.drp-day.blank { visibility: hidden; }
+/* No photos that day: still selectable as a bound, but visibly dead weight. */
+.drp-day.empty { color: var(--text-dim); }
+.drp-day.in-range { background: var(--accent-bg-2); border-radius: 0; }
+.drp-day.in-range.empty { color: var(--text-faint); }
+.drp-day.in-range:hover { background: var(--accent-bg); }
+.drp-day.edge { background: var(--accent); color: var(--surface-black); font-weight: 700; }
+.drp-day.edge:hover { background: var(--accent-text); color: var(--surface-black); }
+.drp-day.edge.start { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.drp-day.edge.end { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.drp-day.edge.start.end { border-radius: var(--radius-sm); }
+.drp-day.today { box-shadow: inset 0 0 0 1px var(--accent-text); }
+.drp-day:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
+/* Density dot — present only on days that actually hold photos. */
+.drp-dot {
+  position: absolute; bottom: 2px; left: 50%; transform: translateX(-50%);
+  width: 3px; height: 3px; border-radius: 50%; background: var(--accent);
+}
+.drp-day.in-range .drp-dot { background: var(--accent-text); }
+.drp-day.edge .drp-dot { background: var(--surface-black); }
+
+/* ── Footer ── */
+.drp-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding-top: 9px; border-top: 1px solid var(--border);
+}
+.drp-count { font-size: 11px; color: var(--text-muted); }
+.drp-count b { color: var(--text-strong); font-weight: 600; }
+.drp-foot-btns { display: flex; gap: 6px; }
+
+/* Narrow viewports: one calendar, rail above the main column. */
+@media (max-width: 700px) {
+  .drp-panel { flex-direction: column; }
+  .drp-presets {
+    flex: 0 0 auto; flex-direction: row; flex-wrap: wrap;
+    border-right: none; border-bottom: 1px solid var(--border);
+  }
+  .drp-preset { width: auto; }
+  .drp-preset .n { display: none; }
+  .drp-preset-sep { display: none; }
+  .drp-cal:last-child { display: none; }
+}

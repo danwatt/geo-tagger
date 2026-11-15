@@ -1,0 +1,128 @@
+/* Home dashboard. Ported from web/home.css with raw hex swapped for theme.css
+   tokens; the card, progress bar, toggle and month-bar styles moved to src/ui. */
+
+#dashboard {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  padding: 16px;
+  align-content: start;
+}
+
+.big-number {
+  font-size: 36px;
+  font-weight: 700;
+  color: var(--text-strong);
+  line-height: 1;
+}
+.sub-line { font-size: 12px; color: var(--text-muted); }
+.stat-line { font-size: 12px; color: var(--text); }
+.stat-line strong { color: var(--text-strong); }
+.stat-line.highlight { color: var(--accent-text); }
+.hint { font-size: 11px; color: var(--danger); }
+
+.card-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+/* ── Face-coverage segmented bar ── */
+.coverage-bar {
+  display: flex;
+  height: 14px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--surface-input);
+}
+.coverage-bar > div { height: 100%; transition: width 0.3s; }
+.coverage-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text);
+}
+.coverage-legend .lg { display: inline-flex; align-items: center; gap: 5px; }
+.coverage-legend .sw { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+
+/* ── Work queue ──
+   Thumbnails + one line of identity + one button: a row is recognisable at a
+   glance and takes exactly one decision. */
+#work-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+.wq-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.wq-label { font-size: 12px; font-weight: 600; color: var(--text-strong); }
+.wq-totals { font-size: 12px; color: var(--text-muted); }
+/* Kind filter sits hard right so the row reads label → totals → filter. */
+.wq-kinds { margin-left: auto; }
+.wq-kinds .mode-toggle button { font-size: 11px; padding: 2px 8px; }
+
+/* Capped so the card can't push the rest of the dashboard off the screen. */
+#wq-list {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+}
+#wq-list ul { list-style: none; margin: 0; padding: 0; }
+.wq-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-2);
+}
+.wq-row:last-child { border-bottom: none; }
+.wq-row:hover { background: var(--surface-3); }
+.wq-thumbs { display: flex; gap: 2px; flex: none; }
+.wq-thumbs img {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  background: var(--surface-black);
+}
+/* min-width:0 lets a long path/place name ellipsize instead of stretching the row. */
+.wq-body { flex: 1; min-width: 0; }
+.wq-row-title,
+.wq-row-meta {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wq-row-title { font-size: 12px; color: var(--text-strong); }
+.wq-row-meta { font-size: 11px; color: var(--text-muted); }
+.wq-noguess { color: var(--text-faint); }
+.wq-conf { margin-left: 8px; }
+.wq-conf.good { color: var(--success); }
+.wq-conf.fair { color: var(--warn); }
+.wq-conf.weak { color: var(--text-faint); }
+.wq-count {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: right;
+  min-width: 78px;
+}
+.wq-row .button { flex: none; }
+.wq-status { padding: 10px 8px; font-size: 12px; color: var(--text-muted); }
+.wq-footer { display: flex; gap: 6px; }
+#wq-more, #wq-clear-skipped { font-size: 11px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .coverage-bar > div { transition: none; }
+}

@@ -1,0 +1,86 @@
+/* Shared UI pieces (ui.tsx). Ported from web/home.css with raw hex swapped for
+   theme.css tokens. The .card shell (background/border/radius) + h2 are in
+   theme.css. */
+
+.ui-card {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.card-full { grid-column: 1 / -1; }
+
+.card-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.error-line {
+  font-size: 11px;
+  color: var(--danger-text);
+}
+
+/* ── Progress bar ── */
+.progress-bar {
+  height: 10px;
+  background: var(--surface-input);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.3s;
+}
+.progress-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ── Segmented toggle ── */
+.mode-toggle {
+  display: flex;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.mode-toggle button {
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border: none;
+  border-radius: 0;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.mode-toggle button + button { border-left: 1px solid var(--border-strong); }
+.mode-toggle button.active { background: var(--accent-bg); color: var(--text-strong); }
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-fill { transition: none; }
+}
+
+/* ── Inline confirmation (in place of window.confirm) ── */
+.inline-confirm {
+  font-size: 12px;
+  color: var(--text-strong);
+  background: var(--surface-3);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.inline-confirm p { flex-basis: 100%; margin: 0 0 2px; line-height: 1.4; }
+.inline-confirm-list {
+  flex-basis: 100%;
+  margin: 0 0 4px 16px;
+  font-size: 11px;
+  color: var(--text-muted);
+  word-break: break-all;
+}

@@ -1,0 +1,41 @@
+/* Preview pane. Ported from web/style.css (#detail-*) with raw hex swapped for
+   theme.css tokens. */
+
+.detail-pane {
+  overflow-y: auto;
+  padding: 10px;
+  background: var(--surface-1);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.detail-placeholder { color: var(--text-dim); margin: auto; text-align: center; }
+.detail-content { display: flex; flex-direction: column; gap: 10px; }
+
+.detail-img {
+  width: 100%;
+  border-radius: var(--radius);
+  display: block;
+}
+
+/* Row of per-photo actions under the preview; buttons share the width evenly. */
+.detail-actions { display: flex; gap: 6px; }
+.detail-actions button { flex: 1; }
+
+.detail-meta {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.detail-meta th,
+.detail-meta td {
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--border-2);
+  vertical-align: top;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.detail-meta th { color: var(--text-muted); font-weight: normal; width: 40%; }

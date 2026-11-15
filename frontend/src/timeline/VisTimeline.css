@@ -1,0 +1,31 @@
+/* vis-timeline in the dark theme. Ported from timesync.css with raw hex
+   swapped for theme.css tokens. */
+
+.vis-host { position: relative; }
+/* While busy (U4) the stale items take no clicks or drags. */
+.vis-host.is-busy > * { pointer-events: none; }
+
+.vis-timeline { border: none; background: var(--surface-1); }
+.vis-panel.vis-background { background: var(--surface-1); }
+.vis-panel.vis-center,
+.vis-panel.vis-left,
+.vis-panel.vis-right,
+.vis-panel.vis-top,
+.vis-panel.vis-bottom { border-color: var(--border); }
+.vis-labelset .vis-label { background: var(--surface-3); color: var(--text); border-color: var(--border); }
+.vis-time-axis .vis-text { color: var(--text-muted); }
+.vis-time-axis .vis-grid.vis-minor { border-color: var(--border-2); }
+.vis-time-axis .vis-grid.vis-major { border-color: var(--border-strong); }
+
+.vis-item { background: transparent; border: none; border-radius: var(--radius-sm); }
+.vis-item.vis-selected { border: 2px solid var(--accent); }
+.vis-item img {
+  width: 60px;
+  height: 60px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  display: block;
+}
+/* An unsaved offset. (The legacy page put this class on the <img>, so this
+   rule never matched there; it's on the item now.) */
+.vis-item.time-shifted { opacity: 0.7; box-shadow: 0 0 8px var(--gold); }

@@ -259,3 +259,38 @@ def test_export_leaves_photo_queued_if_it_changed_during_the_write(client, tmp_p
 @pytest.mark.parametrize("body", [{"limit": 0}, {"limit": 100_000}, {"after_id": -1}])
 def test_export_rejects_out_of_range_params(client, body):
     assert client.post("/api/geocode/export-sidecars", json=body).status_code == 422
+
+
+def test_export_photo_with_embedded_gps_and_no_accuracy_tag(et_session, client, tmp_path):
+    """A camera fix with no GPSHPositioningError scans as gps_accuracy -1.0 (the
+    "unknown" sentinel read_metadata reports, kept so is_fresh doesn't re-read
+    the file). Export passed that straight to write_gps, which rejects negative
+    accuracy — so every such photo failed with "invalid gps_accuracy: -1.0"."""
+    img = tmp_path / "cam.jpg"
+    Image.new("RGB", (8, 8), "blue").save(img, "JPEG")
+    # Test fixture only: give the throwaway JPEG embedded GPS (no accuracy tag).
+    with exiftool_session.get_et_lock():
+        exiftool_session.get_et().execute(
+            "-overwrite_original", "-GPSLatitude=40.5", "-GPSLatitudeRef=N",
+            "-GPSLongitude=74.25", "-GPSLongitudeRef=W", str(img))
+    meta = sidecar.read_metadata(img)
+    assert (meta["geotag_source"], meta["gps_accuracy"]) == ("embedded", -1.0)
+    index.upsert_photo(
+        filename=img.name, dir_=str(tmp_path), ext=".jpg", media_type="image",
+        mtime=img.stat().st_mtime, size=img.stat().st_size,
+        lat=meta["lat"], lng=meta["lng"], geotag_source=meta["geotag_source"],
+        sidecar_path=None, sidecar_mtime=None, camera=meta["camera"],
+        photo_datetime=meta["photo_datetime"], gps_accuracy=meta["gps_accuracy"],
+        orientation=meta["orientation"],
+    )
+
+    r = client.post("/api/geocode/export-sidecars")
+    assert r.status_code == 200
+    body = r.json()
+    assert (body["written"], body["failed"], body["errors_sample"]) == (1, 0, [])
+
+    xmp = sidecar.sidecar_path(img)
+    tags = _xmp_tags(xmp, "XMP:GPSLatitude", "XMP:GPSLongitude", "XMP:GPSHPositioningError")
+    assert float(tags["XMP:GPSLatitude"]) == pytest.approx(40.5)
+    assert float(tags["XMP:GPSLongitude"]) == pytest.approx(-74.25)
+    assert "XMP:GPSHPositioningError" not in tags

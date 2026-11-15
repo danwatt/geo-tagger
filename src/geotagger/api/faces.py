@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from geotagger import index, faces, thumbnails, serializers, config
 from geotagger.api import _media
@@ -74,6 +74,31 @@ class ScanFacesRequest(BaseModel):
     # Accept a long run of unreadable files as really unreadable (overrides the
     # consecutive-failure guard for this one batch; see config.SCAN_FAILURE_STREAK_LIMIT).
     allow_failures: bool = False
+
+
+# Response models for Home's face cards (generated TypeScript types).
+class FacesScanResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    processed: int
+    faces_found: int
+    errors: list[str]   # "<file>: <reason>"
+    remaining: int
+    failed: int
+
+
+class RequeuedResponse(BaseModel):
+    requeued: int
+
+
+class RepresentativeCounts(BaseModel):
+    person_id: int
+    total: int
+    representative: int
+
+
+class DedupRecomputeResponse(BaseModel):
+    persons: list[RepresentativeCounts]
+
 
 class FacesByIdsRequest(BaseModel):
     # Same cap as one /api/faces page: a restored staging area (U7) is at most a
@@ -147,7 +172,21 @@ class AddManualFaceRequest(BaseModel):
     name: str | None = None
 
 
-@router.get("/api/persons")
+class PersonListItem(BaseModel):
+    """extra="allow": the legacy People pages read this list too."""
+    model_config = ConfigDict(extra="allow")
+    id: int
+    name: str
+    birth_date: str | None = None
+    not_before: str | None = None
+    not_after: str | None = None
+    created_at: float | None = None
+    family_id: int | None = None
+    family_name: str | None = None
+    face_count: int | None = None   # only with face_counts=true
+
+
+@router.get("/api/persons", response_model=list[PersonListItem], response_model_exclude_unset=True)
 async def api_get_persons(
     start_ts: int | None = Query(None),
     end_ts: int | None = Query(None),
@@ -185,7 +224,12 @@ def _parse_optional_date(label: str, value: str | None) -> str | None:
     return v
 
 
-@router.patch("/api/persons/{person_id}")
+class PersonMutationResponse(BaseModel):
+    ok: bool
+    id: int
+
+
+@router.patch("/api/persons/{person_id}", response_model=PersonMutationResponse)
 async def api_update_person(person_id: int, req: UpdatePersonRequest):
     """Update a person's name, birth/not-before/not-after dates, and/or family.
     Only fields present in the request body are changed — send just the fields
@@ -235,7 +279,34 @@ class MergePersonRequest(BaseModel):
     into: int   # the person that survives; the path's person is deleted
 
 
-@router.post("/api/persons/{person_id}/merge")
+class MergedFrom(BaseModel):
+    id: int
+    name: str
+
+
+class MergeConflict(BaseModel):
+    """A person attribute both sides had, with different values: the target's
+    is kept (see index.merge_persons). family_id is an int, the dates ISO text."""
+    field: str
+    kept: str | int
+    discarded: str | int
+
+
+class MergePersonResponse(BaseModel):
+    id: int
+    name: str
+    merged_from: MergedFrom
+    moved_faces: int
+    moved_representatives: int
+    merged_negatives: int
+    duplicate_negatives: int
+    dropped_negatives: int
+    filled: list[str]
+    widened: list[str]
+    conflicts: list[MergeConflict]
+
+
+@router.post("/api/persons/{person_id}/merge", response_model=MergePersonResponse)
 async def api_merge_person(person_id: int, req: MergePersonRequest):
     """Merge person ``person_id`` into ``req.into``: every face, representative
     flag and "not this person" negative moves to the target, empty target
@@ -253,13 +324,32 @@ async def api_merge_person(person_id: int, req: MergePersonRequest):
 
 # ── Family endpoints ──
 
-@router.get("/api/families")
+class FamilyItem(BaseModel):
+    id: int
+    name: str
+    person_count: int
+
+
+class FamilyMutationResponse(BaseModel):
+    ok: bool
+    id: int
+    name: str
+    person_count: int | None = None   # create only (a new family has 0 members)
+
+
+class DeletedResponse(BaseModel):
+    ok: bool
+    id: int
+    success: bool   # legacy alias of ok
+
+
+@router.get("/api/families", response_model=list[FamilyItem])
 async def api_get_families():
     return [{"id": f["id"], "name": f["name"], "person_count": f["person_count"]}
             for f in index.get_families()]
 
 
-@router.post("/api/families")
+@router.post("/api/families", response_model=FamilyMutationResponse, response_model_exclude_unset=True)
 async def api_create_family(req: FamilyRequest):
     name = req.name.strip()
     if not name:
@@ -271,7 +361,8 @@ async def api_create_family(req: FamilyRequest):
     return {"ok": True, "id": family_id, "name": name, "person_count": 0}
 
 
-@router.patch("/api/families/{family_id}")
+@router.patch("/api/families/{family_id}", response_model=FamilyMutationResponse,
+              response_model_exclude_unset=True)
 async def api_rename_family(family_id: int, req: FamilyRequest):
     name = req.name.strip()
     if not name:
@@ -285,7 +376,7 @@ async def api_rename_family(family_id: int, req: FamilyRequest):
     return {"ok": True, "id": family_id, "name": name}
 
 
-@router.delete("/api/families/{family_id}")
+@router.delete("/api/families/{family_id}", response_model=DeletedResponse)
 async def api_delete_family(family_id: int):
     if not index.delete_family(family_id):
         raise HTTPException(404, "Family not found")
@@ -293,7 +384,13 @@ async def api_delete_family(family_id: int):
     return {"ok": True, "id": family_id, "success": True}
 
 
-@router.post("/api/persons")
+class CreatePersonResponse(BaseModel):
+    ok: bool
+    id: int
+    name: str
+
+
+@router.post("/api/persons", response_model=CreatePersonResponse)
 async def api_create_person(req: CreatePersonRequest):
     name = req.name.strip()
     if not name:
@@ -305,7 +402,11 @@ async def api_create_person(req: CreatePersonRequest):
     return {"ok": True, "id": person_id, "name": name}
 
 
-@router.delete("/api/persons/{person_id}")
+class DeletePersonResponse(DeletedResponse):
+    undo: dict[str, object]   # the FaceUndo token; see /api/faces/undo
+
+
+@router.delete("/api/persons/{person_id}", response_model=DeletePersonResponse)
 async def api_delete_person(person_id: int):
     """Delete a person; their faces become unlabeled. ``undo`` is the token
     POST /api/faces/undo takes to bring them back (same id, attributes, faces)."""
@@ -315,7 +416,57 @@ async def api_delete_person(person_id: int):
     return {"ok": True, "id": person_id, "success": True, "undo": undo}
 
 
-@router.get("/api/faces")
+# ── Face items (serializers.face_item) ──
+# The People, Photo Faces and Quick Tag pages read these. Exact models: every
+# key face_item and the routes below set is named, so nothing is dropped.
+class FaceLocation(BaseModel):
+    """serializers.row_location."""
+    city: str | None = None
+    sublocation: str | None = None
+    state: str | None = None
+    country: str | None = None
+
+
+class FaceSuggestion(BaseModel):
+    """A recognition guess: the person and the match score (a cluster's
+    suggestion scores the share of the group that voted for them)."""
+    person_id: int
+    person_name: str | None = None
+    score: float
+
+
+class FaceItem(BaseModel):
+    """serializers.face_item, with the recognition fields /api/faces fills in."""
+    id: int
+    photo_id: int
+    filename: str | None = None
+    bbox: list[float]          # normalized [x1, y1, x2, y2], display space
+    det_score: float | None = None
+    person_id: int | None = None
+    person_name: str | None = None
+    ignored: bool
+    come_back: bool
+    photo_datetime: int | None = None
+    assigned_at: float | None = None
+    ignored_at: float | None = None
+    come_back_at: float | None = None
+    dir: str | None = None
+    location: FaceLocation | None = None
+    suggestion: FaceSuggestion | None = None
+    alternatives: list[FaceSuggestion] = []
+    negatives: list[int] = []  # person ids marked "not this face"
+
+
+class FacePage(BaseModel):
+    """_face_page's envelope."""
+    faces: list[FaceItem]
+    total: int
+    returned: int
+    offset: int
+    next_offset: int | None = None
+
+
+@router.get("/api/faces", response_model=FacePage)
 async def api_list_faces(
     scope: str = Query("unlabeled", pattern="^(unlabeled|person|ignored|come_back|suggested|recent|all)$"),
     person_id: int | None = Query(None),
@@ -438,7 +589,12 @@ def _face_page(out: list[dict], total: int, offset: int) -> dict:
             "next_offset": end if out and end < total else None}
 
 
-@router.post("/api/faces/by-ids")
+class FacesByIdsResponse(BaseModel):
+    faces: list[FaceItem]
+    missing: list[int]
+
+
+@router.post("/api/faces/by-ids", response_model=FacesByIdsResponse)
 async def api_faces_by_ids(req: FacesByIdsRequest):
     """Current state of an explicit set of faces, as face_item dicts (no
     suggestion), plus the ids that no longer exist. The People page calls it on
@@ -507,7 +663,19 @@ def _resolve_assign_target(person_id: int | None, name: str | None, clear: bool
     return person_id, name or None
 
 
-@router.post("/api/faces/assign")
+# Face writes' ``undo`` token: opaque to the client, handed back verbatim to
+# /api/faces/undo (UndoFacesRequest validates it on the way in).
+FaceUndo = dict[str, object]
+
+
+class BulkAssignResponse(BaseModel):
+    assigned: int
+    not_found: int
+    person_id: int | None = None
+    undo: FaceUndo | None = None
+
+
+@router.post("/api/faces/assign", response_model=BulkAssignResponse)
 async def api_bulk_assign(req: BulkAssignRequest):
     """Assign (person_id / name) or unassign (clear=true) faces; exactly one of
     the three. ``assigned`` is the number of faces that exist and were written
@@ -525,7 +693,13 @@ async def api_bulk_assign(req: BulkAssignRequest):
             "person_id": out["person_id"], "undo": undo}
 
 
-@router.post("/api/faces/ignore")
+class IgnoreFacesResponse(BaseModel):
+    updated: int
+    ignored: bool
+    undo: FaceUndo | None = None
+
+
+@router.post("/api/faces/ignore", response_model=IgnoreFacesResponse)
 async def api_ignore_faces(req: IgnoreFacesRequest):
     """Hide faces from the unlabeled queue (background strangers, false detections),
     or restore them with ignored=false. ``undo``: see /api/faces/undo."""
@@ -533,7 +707,13 @@ async def api_ignore_faces(req: IgnoreFacesRequest):
     return {"updated": len(req.face_ids), "ignored": req.ignored, "undo": undo}
 
 
-@router.post("/api/faces/come-back")
+class ComeBackFacesResponse(BaseModel):
+    updated: int
+    come_back: bool
+    undo: FaceUndo | None = None
+
+
+@router.post("/api/faces/come-back", response_model=ComeBackFacesResponse)
 async def api_come_back_faces(req: ComeBackFacesRequest):
     """Move faces to the come-back queue: people we know or suspect but aren't
     ready to assign yet. Distinct from /ignore (that's for strangers/false
@@ -543,7 +723,14 @@ async def api_come_back_faces(req: ComeBackFacesRequest):
     return {"updated": len(req.face_ids), "come_back": req.come_back, "undo": undo}
 
 
-@router.post("/api/faces/nuke")
+class NukeFacesResponse(BaseModel):
+    """faces_service.nuke_photo_faces."""
+    photos: int
+    faces_deleted: int
+    files_deleted: int
+
+
+@router.post("/api/faces/nuke", response_model=NukeFacesResponse)
 async def api_nuke_photo_faces(req: NukePhotoFacesRequest):
     """Nuclear option: hard-delete every face (detected, assigned, or ignored) for
     the given photos and wipe every cached rendition (thumbnail, preview, face
@@ -556,7 +743,16 @@ async def api_nuke_photo_faces(req: NukePhotoFacesRequest):
     return result
 
 
-@router.post("/api/photos/{photo_id}/faces")
+class AddManualFaceResponse(BaseModel):
+    """faces_service.add_manual_face."""
+    face_id: int
+    photo_id: int
+    person_id: int | None = None
+    embedded: bool              # false: no face found inside the box, so no recognition
+    det_score: float | None = None
+
+
+@router.post("/api/photos/{photo_id}/faces", response_model=AddManualFaceResponse)
 async def api_add_manual_face(photo_id: int, req: AddManualFaceRequest):
     """Add a hand-drawn face box to a photo, optionally already assigned to a
     person. For faces detection missed entirely. ``bbox`` is normalized 0..1 in
@@ -581,7 +777,11 @@ async def api_add_manual_face(photo_id: int, req: AddManualFaceRequest):
         raise HTTPException(500, str(e))
 
 
-@router.delete("/api/faces/{face_id}")
+class DeleteFaceResponse(DeletedResponse):
+    face_id: int
+
+
+@router.delete("/api/faces/{face_id}", response_model=DeleteFaceResponse)
 async def api_delete_manual_face(face_id: int):
     """Delete a hand-drawn face (undo for a mis-drawn box). Detected faces are not
     deletable — 400 — because the next scan would re-detect them; use ignore."""
@@ -593,7 +793,17 @@ async def api_delete_manual_face(face_id: int):
     return {"ok": True, "id": face_id, "success": True, "face_id": face_id}
 
 
-@router.post("/api/faces/undo")
+class UndoFacesResponse(BaseModel):
+    restored: list[int]    # face ids
+    conflicts: list[int]   # face ids changed since; left alone
+    not_found: list[int]
+    person_id: int | None = None
+    person_id_changed: bool
+    family_dropped: bool
+    removed_person_id: int | None = None
+
+
+@router.post("/api/faces/undo", response_model=UndoFacesResponse)
 async def api_undo_faces(req: UndoFacesRequest):
     """Revert one face/person write: hand back the ``undo`` token its reply
     carried (assign, ignore, come-back, crowds/ignore-unlabeled, DELETE person).
@@ -617,7 +827,15 @@ async def api_undo_faces(req: UndoFacesRequest):
         raise HTTPException(409, str(e))
 
 
-@router.post("/api/faces/rescan")
+class RescanFacesResponse(NukeFacesResponse):
+    """faces_service.rescan_photo_faces: the nuke counts plus the scan batch's."""
+    processed: int
+    faces_found: int
+    errors: list[str]   # "<file>: <reason>"
+    orientations_updated: int
+
+
+@router.post("/api/faces/rescan", response_model=RescanFacesResponse)
 async def api_rescan_photo_faces(req: NukePhotoFacesRequest):
     """Nuke + re-detect in one call: wipe every face and cached rendition for the
     given photos, then run detection over them again. Manual assignments for these
@@ -633,7 +851,7 @@ async def api_rescan_photo_faces(req: NukePhotoFacesRequest):
         raise HTTPException(503, e.as_detail())
 
 
-@router.post("/api/faces/dedup/recompute")
+@router.post("/api/faces/dedup/recompute", response_model=DedupRecomputeResponse)
 async def api_dedup_recompute():
     """Recompute representative-face flags for every person with enough
     labeled faces (see the Representative faces settings group). Safe to
@@ -644,17 +862,49 @@ async def api_dedup_recompute():
     return result
 
 
-@router.get("/api/faces/dedup/persons")
+class DedupPerson(BaseModel):
+    person_id: int
+    name: str
+    total: int
+    representative: int
+
+
+@router.get("/api/faces/dedup/persons", response_model=list[DedupPerson])
 async def api_dedup_persons():
     """People who currently have representative-flagged faces (from the last
     recompute) — the picker for the Representative Faces review page."""
     return [
-        {"person_id": r["id"], "name": r["name"], "total": r["total"], "representative": r["representative"]}
+        # SUM() is NULL only for an empty group, which the HAVING already rules
+        # out; guarded anyway so the model's int can't fail on it.
+        {"person_id": r["id"], "name": r["name"], "total": r["total"] or 0,
+         "representative": r["representative"] or 0}
         for r in index.get_persons_with_representatives()
     ]
 
 
-@router.get("/api/faces/dedup/groups")
+class DedupFace(BaseModel):
+    """serializers.face_item; extra="allow" carries the fields this model
+    doesn't name (bbox, location, …) through unchanged."""
+    model_config = ConfigDict(extra="allow")
+    id: int
+    photo_id: int
+    filename: str | None = None
+    person_id: int | None = None
+    person_name: str | None = None
+
+
+class DedupGroup(BaseModel):
+    representative: DedupFace
+    others: list[DedupFace]
+    size: int
+
+
+class DedupGroupsResponse(BaseModel):
+    groups: list[DedupGroup]
+    total: int   # the person's labeled faces, shown or not
+
+
+@router.get("/api/faces/dedup/groups", response_model=DedupGroupsResponse)
 async def api_dedup_groups(person_id: int = Query(...), group_limit: int = Query(49, ge=1, le=200)):
     """Representative-led review groups for one person: each stored
     representative face, paired with up to `group_limit` other labeled faces
@@ -677,7 +927,13 @@ async def api_dedup_groups(person_id: int = Query(...), group_limit: int = Query
     return {"groups": groups, "total": len(rows)}
 
 
-@router.post("/api/faces/negatives")
+class FaceNegativesResponse(BaseModel):
+    updated: int
+    person_id: int
+    negative: bool
+
+
+@router.post("/api/faces/negatives", response_model=FaceNegativesResponse)
 async def api_face_negatives(req: NegativeFacesRequest):
     """Mark faces as 'definitely not person_id' (negative=true), or lift that
     (negative=false). Removes person_id from these faces' recognition ranking so
@@ -693,7 +949,22 @@ async def api_face_negatives(req: NegativeFacesRequest):
             "negative": req.negative}
 
 
-@router.get("/api/photos/{photo_id}/faces")
+class PhotoFace(BaseModel):
+    """One face of /api/photos/{id}/faces (no photo fields: they're the page's)."""
+    id: int
+    bbox: list[float]
+    det_score: float | None = None
+    source: str | None = None   # 'manual' boxes are deletable; detected ones aren't
+    person_id: int | None = None
+    person_name: str | None = None
+    assigned_at: float | None = None
+    ignored: bool
+    come_back: bool
+    suggestion: FaceSuggestion | None = None
+    negatives: list[int]
+
+
+@router.get("/api/photos/{photo_id}/faces", response_model=list[PhotoFace])
 async def api_photo_faces(photo_id: int):
     """List faces in a photo with assigned person and a recognition suggestion."""
     photo = index.get_photo(photo_id)
@@ -741,7 +1012,15 @@ async def api_photo_faces(photo_id: int):
     return out
 
 
-@router.get("/api/photos/{photo_id}/tagged-people")
+class PhotoTaggedPerson(BaseModel):
+    id: int                     # the face
+    person_id: int
+    person_name: str | None = None
+    bbox: list[float]
+    assigned_at: float | None = None
+
+
+@router.get("/api/photos/{photo_id}/tagged-people", response_model=list[PhotoTaggedPerson])
 async def api_photo_tagged_people(photo_id: int):
     """People already committed to a face in this photo, one entry per face.
 
@@ -763,7 +1042,13 @@ async def api_photo_tagged_people(photo_id: int):
     ]
 
 
-@router.post("/api/faces/{face_id}/assign")
+class AssignFaceResponse(BaseModel):
+    face_id: int
+    person_id: int | None = None
+    undo: FaceUndo | None = None
+
+
+@router.post("/api/faces/{face_id}/assign", response_model=AssignFaceResponse)
 async def api_assign_face(face_id: int, req: AssignFaceRequest):
     """Assign (person_id / name) or unassign (clear=true) one face; exactly one
     of the three, else 400. 404 for an unknown face or person."""
@@ -774,7 +1059,7 @@ async def api_assign_face(face_id: int, req: AssignFaceRequest):
     return {"face_id": face_id, "person_id": out["person_id"], "undo": undo}
 
 
-@router.post("/api/faces/scan")
+@router.post("/api/faces/scan", response_model=FacesScanResponse)
 async def api_faces_scan(req: ScanFacesRequest):
     """Detect faces for up to `limit` not-yet-scanned photos. Repeat until
     `remaining` is 0. 503 (detail {code, message, errors}) when the batch aborted
@@ -793,7 +1078,7 @@ async def api_faces_scan(req: ScanFacesRequest):
     return result
 
 
-@router.post("/api/faces/scan/retry-failed")
+@router.post("/api/faces/scan/retry-failed", response_model=RequeuedResponse)
 async def api_faces_scan_retry_failed():
     """Put every photo whose file couldn't be read back in the detection queue.
     Those photos were never marked scanned and have no detected faces, so the
@@ -801,7 +1086,17 @@ async def api_faces_scan_retry_failed():
     return {"requeued": index.clear_face_scan_failures()}
 
 
-@router.get("/api/faces/scan/status")
+class FaceScanStatus(BaseModel):
+    remaining_photos: int
+    failed_photos: int
+    total_faces: int
+    unlabeled_faces: int
+    ignored_faces: int
+    come_back_faces: int
+    tagged_faces: int
+
+
+@router.get("/api/faces/scan/status", response_model=FaceScanStatus)
 async def api_faces_scan_status(
     start_ts: int | None = Query(None),
     end_ts: int | None = Query(None),
@@ -823,7 +1118,21 @@ async def api_faces_scan_status(
     }
 
 
-@router.get("/api/faces/clusters")
+class FaceCluster(BaseModel):
+    """faces_service.compute_clusters."""
+    size: int
+    face_ids: list[int]
+    sample: list[FaceItem]      # 24 faces, or every one with full=true
+    suggestion: FaceSuggestion | None = None
+
+
+class FaceClustersResponse(BaseModel):
+    clusters: list[FaceCluster]
+    scanned: int
+    grouped: int
+
+
+@router.get("/api/faces/clusters", response_model=FaceClustersResponse)
 async def api_face_clusters(
     threshold: float | None = Query(None, ge=0.1, le=1.0),
     min_size: int | None = Query(None, ge=2),
@@ -861,7 +1170,33 @@ class CrowdIgnoreRequest(BaseModel):
     photo_ids: list[int]
 
 
-@router.get("/api/crowds")
+class CrowdPhoto(BaseModel):
+    id: int
+    filename: str
+    dir: str | None = None
+    photo_datetime: int | None = None
+    orientation: int | None = None
+    location: FaceLocation | None = None
+    total_faces: int
+    labeled_faces: int
+    unlabeled_faces: int
+    ignored_faces: int
+    come_back_faces: int
+
+
+class CrowdGroup(BaseModel):
+    label: str
+    photos: list[CrowdPhoto]
+    total_faces: int
+    unlabeled_faces: int
+
+
+class CrowdsResponse(BaseModel):
+    groups: list[CrowdGroup]
+    photo_count: int
+
+
+@router.get("/api/crowds", response_model=CrowdsResponse)
 async def api_crowds(
     min_faces: int | None = Query(None, ge=1),
     group_gap: int = Query(86400, ge=60),
@@ -915,7 +1250,12 @@ async def api_crowds(
     return {"groups": groups, "photo_count": len(rows)}
 
 
-@router.post("/api/crowds/ignore-unlabeled")
+class CrowdIgnoreResponse(BaseModel):
+    ignored: int
+    undo: FaceUndo | None = None
+
+
+@router.post("/api/crowds/ignore-unlabeled", response_model=CrowdIgnoreResponse)
 async def api_crowds_ignore_unlabeled(req: CrowdIgnoreRequest):
     """Ignore all unlabeled faces in the given crowd photos. ``undo``: see
     /api/faces/undo."""

@@ -2,11 +2,10 @@
 
 Local web app for organizing a photo/video library: geotag photos on a map, reverse-geocode
 them offline, detect and tag faces, sync camera clocks, and search across it all. Backend +
-all data (SQLite DB, thumbnails, models) stay fully local; the only runtime network
-dependencies are the Leaflet, leaflet.markercluster and vis-timeline libraries (loaded from
-`unpkg.com` at pinned versions with Subresource Integrity hashes) and the map tiles —
-OpenStreetMap for the street basemap, Esri World Imagery for satellite/hybrid. The map UI and
-the Time Sync timeline need internet; nothing else does. Place search ("jump to location")
+all data (SQLite DB, thumbnails, models) stay fully local; the map and timeline libraries
+(Leaflet, leaflet.markercluster, vis-timeline) are bundled into the frontend build, so the only
+runtime network dependency is the map tiles — OpenStreetMap for the street basemap, Esri World
+Imagery for satellite/hybrid. The map UI needs internet; nothing else does. Place search ("jump to location")
 is offline: it matches saved places and locations already in your library, not an online
 geocoder.
 
@@ -30,6 +29,8 @@ geocoder.
   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
   ```
 - **git**, to clone this repo.
+- **[Node.js](https://nodejs.org/) 24+** (with npm), to build the web frontend once after
+  cloning or pulling (setup step 1). Not needed while the app runs.
 - Windows, for the automatic ExifTool download in setup step 2 (macOS/Linux: install ExifTool
   yourself, see that step).
 
@@ -65,6 +66,17 @@ in this doc.
 ```bash
 uv sync
 ```
+
+Then build the web frontend (re-run after pulling changes under `frontend/`):
+
+```bash
+npm --prefix frontend ci
+npm --prefix frontend run build
+```
+
+The frontend is partway through a move from plain JavaScript to React + TypeScript (see
+[Frontend development](#frontend-development)). Pages not yet moved work without the build;
+moved pages (Home, Search, Settings, Data, Named Places, Geo Data, Geocode, Time Sync, People Manager and Representatives so far) return 404 until it's done, and startup prints a warning.
 
 ### Where downloaded tools/data end up
 
@@ -564,6 +576,31 @@ live from the Settings page):
 | `GEOTAGGER_THUMB_QUALITY` | `80` webp / `85` jpeg | Encoder quality for cached renditions |
 | `GEOTAGGER_THUMB_QUALITY_HIGH` | `90` | Quality for the (uncached) face-detection rendition |
 | `GEOTAGGER_WEBP_METHOD` | `4` | libwebp effort, 0 (fast) … 6 (slowest, smallest) |
+
+## Frontend development
+
+The web UI is React + TypeScript (`frontend/`, built with Vite). Every page has moved over
+from the old plain-JavaScript pages in `src/geotagger/web/` and builds to the URL it had
+(`/settings.html`), so links and bookmarks keep working. FastAPI serves the build output
+(`src/geotagger/web_dist/`, gitignored) ahead of `web/`, which now holds only the shared
+stylesheet (`theme.css`) the pages import at build time and a static design reference.
+
+For live reload, run the backend and the Vite dev server side by side, and open
+`http://localhost:5173`. Vite serves the pages and passes everything else (the API,
+thumbnails) through to the backend on `GEOTAGGER_PORT` (default 8000):
+
+```bash
+uv run geotagger
+```
+
+```bash
+npm --prefix frontend run dev
+```
+
+Other commands, run from `frontend/`: `npm test` (Vitest), `npm run typecheck`, and
+`npm run gen:api`, which regenerates `openapi.json` and the TypeScript API types
+(`src/api/schema.d.ts`) from the FastAPI routes. Run it after changing an API route; a pytest
+check fails while the committed schema is out of date.
 
 ## Cross-platform notes
 

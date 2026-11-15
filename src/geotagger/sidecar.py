@@ -416,6 +416,15 @@ def _location_args(location: dict | None) -> list[str]:
     ]
 
 
+def known_accuracy(gps_accuracy: float | None) -> float | None:
+    """A stored photos.gps_accuracy as write_gps takes it. read_metadata reports
+    "no accuracy" as -1.0 and the scan stores that rather than NULL (NULL reads as
+    "never read" to index.is_fresh, which would re-read the file every scan), so
+    a stored value <= 0 means unknown: None here. write_gps itself keeps
+    rejecting negatives, so a bad value from any other caller still fails loudly."""
+    return gps_accuracy if gps_accuracy is not None and gps_accuracy > 0 else None
+
+
 def write_gps(image_path: Path, lat: float, lng: float, location: dict | None = None, gps_accuracy: float | None = None) -> Path:
     """Write GPS to sidecar (creating it if needed). When ``location`` is given,
     its place names are written in the same pass. Returns sidecar path.

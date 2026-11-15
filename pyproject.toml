@@ -53,6 +53,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/geotagger"]
+# The Vite build (frontend/) is gitignored, so hatch would skip it; ship it anyway.
+# Run `npm --prefix frontend run build` before building a wheel.
+artifacts = ["src/geotagger/web_dist/**"]
 
 [dependency-groups]
 dev = [
@@ -76,6 +79,7 @@ source = ["src/geotagger"]
 omit = [
     "*/geotagger/__main__.py",
     "*/geotagger/web/*",
+    "*/geotagger/web_dist/*",
 ]
 
 [tool.coverage.report]

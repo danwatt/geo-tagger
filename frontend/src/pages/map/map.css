@@ -1,0 +1,162 @@
+/* Geo Data page. Port of web/map.css with raw hex swapped for theme.css tokens.
+   Base body, #toolbar, .basemap-* switcher and #status-bar come from theme.css. */
+
+#main {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+#map {
+  position: absolute;
+  inset: 0;
+}
+
+#map-hint {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--map-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 13px;
+  color: var(--text);
+  z-index: 1000;
+  pointer-events: none;
+  display: none;
+}
+#map-hint.visible { display: block; }
+
+/* ── Overlay layers control ──
+   Leaflet ships this control light-themed (white panel, dark text, a white
+   layers icon). Restyled to match .basemap-control in theme.css, which sits in
+   the opposite corner of the same map. The control is OverlayToggles.tsx, which
+   reuses Leaflet's classes; its toggle is a real <button>. */
+.leaflet-control-layers {
+  background: var(--map-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: var(--shadow-map);
+  color: var(--text);
+}
+.overlay-toggles-inner.leaflet-control-layers-expanded { background: transparent; color: inherit; }
+.overlay-toggles .leaflet-control-layers-toggle {
+  display: block;
+  background-color: transparent;
+  border: none;
+  border-radius: 6px;
+  padding: 0;
+  cursor: pointer;
+}
+.overlay-toggles .leaflet-control-layers-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.leaflet-control-layers label input:focus-visible { outline: 2px solid var(--accent); }
+.leaflet-control-layers-toggle {
+  /* The default sprite is a dark icon meant for a white button; invert it so it
+     reads on the dark panel. */
+  filter: invert(0.85);
+}
+.leaflet-control-layers-expanded {
+  padding: 6px 10px 6px 8px;
+  font-size: 11px;
+}
+.leaflet-control-layers label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 3px 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.leaflet-control-layers label:hover { color: var(--text-strong); }
+.leaflet-control-layers-separator { border-top: 1px solid var(--border); }
+
+/* ── Place marker ── */
+.place-dot {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--gold);
+  border: 1.5px solid rgba(0,0,0,0.6);
+  box-shadow: 0 0 3px rgba(0,0,0,0.6);
+}
+
+/* ── Place popup ── */
+.map-popup-wrap .leaflet-popup-content-wrapper {
+  background: var(--surface-3);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 3px 12px rgba(0,0,0,0.6);
+}
+.map-popup-wrap .leaflet-popup-tip { background: var(--surface-3); }
+
+.map-popup { width: 170px; }
+.map-popup-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+.map-popup-region {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.map-popup-country {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+.map-popup-meta {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 4px;
+}
+
+/* Click-to-probe popup: place name header + the fields a photo here would save. */
+.map-popup-probe { width: 190px; }
+.map-popup-probe-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin: 6px 0 3px;
+}
+.map-popup-field {
+  font-size: 11px;
+  color: var(--text);
+  margin-top: 2px;
+}
+.map-popup-field-key {
+  display: inline-block;
+  min-width: 78px;
+  color: var(--text-faint);
+}
+/* ZIP-area labels: Leaflet's default tooltip is a white box with a border and
+   shadow, which reads as a popup rather than a map label — strip it back to bare
+   text so dozens of them can sit on the map at once without clutter. */
+.zcta-label {
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  color: var(--zcta-label);  /* lighter tint of --zcta — text needs more lift than a line */
+  font-size: 11px;
+  font-weight: 600;
+  /* Dark halo, so the text stays legible over both the street and satellite basemaps. */
+  text-shadow: 0 0 3px var(--surface-black), 0 0 3px var(--surface-black);
+  white-space: nowrap;
+}
+.zcta-label::before { display: none; }  /* the tooltip's little pointer arrow */
+
+/* The source whose answer became the saved city, in the candidates list. */
+.map-popup-source-win { font-weight: 600; }
+.map-popup-source-win .map-popup-field-key { color: var(--text); }
+
+/* The probe's fields are a <dl> (label → value pairs); laid out as the legacy
+   label-then-value lines. */
+.map-popup-fields { margin: 0; }
+.map-popup-field dt { font-weight: normal; }
+.map-popup-field dd { display: inline; margin: 0; }

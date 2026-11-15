@@ -11,7 +11,7 @@ import time
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from geotagger import config, index
 from geotagger.executor import get_executor, get_jobs_executor
@@ -37,7 +37,121 @@ class StreetSearchRequest(BaseModel):
     include_paths: bool = False  # also match footway/path/cycleway/track
 
 
-@router.get("/api/data/status")
+# ── Response models ──
+# Describe the JSON for the React Data page's generated types. The service dicts
+# carry diagnostics the page doesn't read (db paths, load state); extra="allow"
+# passes them through unchanged instead of response_model filtering them out.
+
+class _Open(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+
+class GeonamesFile(_Open):
+    name: str
+    present: bool
+    size: int
+
+
+class GeonamesStatus(_Open):
+    available: bool
+    files: list[GeonamesFile]
+
+
+class OsmRegion(_Open):
+    key: str   # "<group>_<slug>", what OsmDownloadRequest.regions takes
+    name: str
+
+
+class OsmRegionGroup(_Open):
+    group: str
+    label: str
+    items: list[OsmRegion]
+
+
+class OsmStatus(_Open):
+    available: bool
+    places: int
+    by_category: dict[str, int]
+    groups: list[OsmRegionGroup]
+    ingested_keys: list[str]
+
+
+class CensusStatus(_Open):
+    available: bool
+    places: int
+    by_kind: dict[str, int]
+    source: str | None
+    zctas: int
+    zip_names: int
+
+
+class ModelStatus(_Open):
+    available: bool
+    name: str
+    size_bytes: int = 0   # the semantic model reports it; the face model doesn't
+
+
+class DataStatusResponse(BaseModel):
+    geonames: GeonamesStatus
+    osm: OsmStatus
+    census: CensusStatus
+    face_model: ModelStatus
+    semantic_model: ModelStatus
+
+
+class JobStatus(_Open):
+    """A background job's polled state (services' `_*_job` dicts)."""
+    running: bool
+    queued: bool = False
+    done: bool
+    error: str | None
+    message: str
+
+
+class StartedResponse(BaseModel):
+    started: bool
+
+
+class Bbox(BaseModel):
+    min_lat: float
+    max_lat: float
+    min_lng: float
+    max_lng: float
+
+
+class CachedExtract(_Open):
+    file: str
+    label: str
+    size: int
+    bbox: Bbox | None
+
+
+class StreetsStatus(_Open):
+    available: bool
+    cache_dir: str
+    files: list[CachedExtract]
+    total_size: int
+
+
+class StreetSegment(_Open):
+    name: str
+    ref: str | None
+    highway: str | None
+    coords: list[tuple[float, float]]   # [[lat, lng], ...]
+
+
+class StreetSearchResult(_Open):
+    streets: list[StreetSegment]
+    truncated: bool
+    seconds: float
+    no_coverage: bool = False
+
+
+class StreetSearchJob(JobStatus):
+    result: StreetSearchResult | None = None
+
+
+@router.get("/api/data/status", response_model=DataStatusResponse)
 async def api_data_status():
     return {
         "geonames": data_service.geonames_status(),
@@ -55,7 +169,7 @@ async def api_data_downloads(dataset: str | None = None):
     return {"downloads": [dict(r) for r in index.get_dataset_downloads(dataset)]}
 
 
-@router.post("/api/data/geonames/download")
+@router.post("/api/data/geonames/download", response_model=StartedResponse)
 async def api_data_geonames_download(req: ForceRequest = ForceRequest()):
     started = data_service.start_geonames_download(get_jobs_executor(), req.force)
     if not started:
@@ -63,12 +177,12 @@ async def api_data_geonames_download(req: ForceRequest = ForceRequest()):
     return {"started": True}
 
 
-@router.get("/api/data/geonames/download/status")
+@router.get("/api/data/geonames/download/status", response_model=JobStatus)
 async def api_data_geonames_download_status():
     return data_service.geonames_job_status()
 
 
-@router.post("/api/data/osm/download")
+@router.post("/api/data/osm/download", response_model=StartedResponse)
 async def api_data_osm_download(req: OsmDownloadRequest):
     try:
         started = data_service.start_osm_download(get_jobs_executor(), req.regions, req.force)
@@ -79,12 +193,12 @@ async def api_data_osm_download(req: OsmDownloadRequest):
     return {"started": True}
 
 
-@router.get("/api/data/osm/download/status")
+@router.get("/api/data/osm/download/status", response_model=JobStatus)
 async def api_data_osm_download_status():
     return data_service.osm_job_status()
 
 
-@router.post("/api/data/census/download")
+@router.post("/api/data/census/download", response_model=StartedResponse)
 async def api_data_census_download(req: ForceRequest = ForceRequest()):
     started = data_service.start_census_download(get_jobs_executor(), req.force)
     if not started:
@@ -92,21 +206,21 @@ async def api_data_census_download(req: ForceRequest = ForceRequest()):
     return {"started": True}
 
 
-@router.get("/api/data/census/download/status")
+@router.get("/api/data/census/download/status", response_model=JobStatus)
 async def api_data_census_download_status():
     return data_service.census_job_status()
 
 
 # ── Street search (reads the cached .osm.pbf extracts directly, no DB) ──
 
-@router.get("/api/data/streets/status")
+@router.get("/api/data/streets/status", response_model=StreetsStatus)
 async def api_data_streets_status():
     """Which raw GeoFabrik extracts are still cached — the street search only works
     while they are, since nothing about streets is ingested into a database."""
     return streets_service.streets_status()
 
 
-@router.post("/api/data/streets/search")
+@router.post("/api/data/streets/search", response_model=StartedResponse)
 async def api_data_streets_search(req: StreetSearchRequest):
     try:
         min_lng, min_lat, max_lng, max_lat = map(float, req.bbox.split(","))
@@ -127,12 +241,12 @@ async def api_data_streets_search(req: StreetSearchRequest):
     return {"started": True}
 
 
-@router.get("/api/data/streets/search/status")
+@router.get("/api/data/streets/search/status", response_model=StreetSearchJob)
 async def api_data_streets_search_status():
     return streets_service.search_job_status()
 
 
-@router.post("/api/data/face-model/download")
+@router.post("/api/data/face-model/download", response_model=StartedResponse)
 async def api_data_face_model_download(req: ForceRequest = ForceRequest()):
     started = data_service.start_face_model_download(get_jobs_executor(), req.force)
     if not started:
@@ -140,7 +254,7 @@ async def api_data_face_model_download(req: ForceRequest = ForceRequest()):
     return {"started": True}
 
 
-@router.get("/api/data/face-model/download/status")
+@router.get("/api/data/face-model/download/status", response_model=JobStatus)
 async def api_data_face_model_download_status():
     return data_service.face_model_job_status()
 

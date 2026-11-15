@@ -1,0 +1,24 @@
+/* Location autocomplete. Ported from web/location-picker.css with raw hex
+   swapped for theme.css tokens. Positioned against the caller's field wrapper,
+   which must be position: relative. */
+
+.location-suggestions {
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 0;
+  width: 100%;
+  max-height: 300px;
+  overflow-y: auto;
+  z-index: 60;
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  box-shadow: var(--shadow-popup);
+  font-size: 12px;
+  color: var(--text);
+  padding: 4px;
+}
+.location-option { padding: 9px 8px; cursor: pointer; overflow-wrap: anywhere; }
+.location-option strong { display: block; color: var(--text-strong); font-weight: 500; }
+.location-option span { display: block; margin-top: 3px; font-size: 11px; color: var(--text-muted); }
+.location-option:hover, .location-option[aria-selected="true"] { background: var(--accent-bg); }

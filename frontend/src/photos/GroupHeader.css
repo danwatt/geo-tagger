@@ -1,0 +1,31 @@
+/* Group header bar. Ported from web/face-grid.css (.face-group-header) with
+   raw hex swapped for theme.css tokens; the section shell and tints
+   (.face-group-section, .group-tint-*) come from theme.css. */
+
+.face-group-header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--accent-bg-2);
+  border-bottom: 1px solid var(--accent-bg);
+  user-select: none;
+  flex-wrap: wrap;
+}
+.face-group-label { font-size: 12px; font-weight: 600; color: var(--accent-text); }
+.face-group-meta { color: var(--text-faint); font-weight: 400; }
+.face-group-btns { display: flex; align-items: center; gap: 6px; flex-shrink: 0; flex-wrap: wrap; }
+.face-group-header button { padding: 3px 10px; font-size: 11px; flex-shrink: 0; }
+.face-group-header button.icon-btn { padding: 2px 7px; font-size: 14px; line-height: 1.2; }
+.face-group-header button.icon-btn.active { background: var(--accent-bg); border-color: var(--accent); }
+/* Staged, not-yet-saved groups (face-grid.css .amber, via the warn family). */
+.face-group-header.amber { background: var(--warn-bg); border-bottom-color: var(--warn); }
+.face-group-header.amber .face-group-label { color: var(--warn); }
+.face-group-header.green { background: var(--surface-2); border-bottom-color: var(--success); }
+.face-group-header.green .face-group-label { color: var(--success); }
+.face-group-header.blue { background: var(--accent-bg-2); border-bottom-color: var(--accent-bg); }
+.face-group-header.blue .face-group-label { color: var(--accent-text); }
+.face-group-header.grey { background: var(--surface-1); border-bottom-color: var(--surface-btn); }
+.face-group-header.grey .face-group-label { color: var(--text-muted); }

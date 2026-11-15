@@ -7,11 +7,11 @@ Guidance for work in repo. Read `README.md` for setup/usage; this file about
 ## What this is
 
 Local web app, geotag photo/video library. Python (FastAPI)
-backend + vanilla-JS/Leaflet frontend served static files. No build step, no Node. Backend +
-all data (SQLite DB, thumbnails, models) fully local; only runtime network
-dependencies: map libraries from `unpkg.com` + map tiles from `tile.openstreetmap.org` /
-`server.arcgisonline.com` (full list under Hard constraints) — map UI and timeline need
-internet, rest don't.
+backend + React + TypeScript web frontend (`frontend/`, Vite build; Node needed to build,
+not to run). Backend + all data (SQLite DB, thumbnails, models) fully local; JS libraries
+(Leaflet, markercluster, vis-timeline) bundled as npm deps. Only runtime network dependency:
+map tiles from `tile.openstreetmap.org` / `server.arcgisonline.com` (see Hard constraints) —
+map UI needs internet, rest don't.
 
 ## Stack & tooling
 
@@ -21,7 +21,10 @@ internet, rest don't.
 - **src layout**: package `src/geotagger/`, built with hatchling. Import as `from geotagger …`.
 - Backend: **FastAPI + uvicorn**. DB: stdlib **`sqlite3`** (no ORM). Metadata I/O: **ExifTool**
   via `pyexiftool`. Faces: **InsightFace + onnxruntime + numpy**. Thumbnails: **Pillow / pillow-heif / av**.
-- Frontend: **vanilla JS + Leaflet**, plain `<script>` tags. No framework, no bundler, no npm.
+- Frontend: **React 19 + TypeScript + Vite** under `frontend/`, data via
+  **TanStack Query** + **openapi-fetch** with types generated from the FastAPI schema. Tests:
+  **Vitest + Testing Library** (`npm --prefix frontend test`). Build output goes to
+  `src/geotagger/web_dist/` (gitignored, shipped in the wheel).
 - **Tests**: `uv run pytest` (suite under `tests/`, incl. `TestClient` endpoint smoke tests via
   `client` fixture in `conftest.py`). `network_test.py` separate manual probe script.
   Still worth running app to exercise UI changes tests don't cover.
@@ -39,15 +42,11 @@ internet, rest don't.
   box uses `/api/search/locations` (saved places + library photo locations, with `bounds`).
   Downloading a dataset is a one-shot admin action (`scripts/get_*.py` + Data Management
   page), never a per-lookup fetch.
-- **Sanctioned runtime network deps — only these, don't add more:**
-  - `unpkg.com`: Leaflet 1.9.4, leaflet.markercluster 1.5.3 (JS + 2 CSS), vis-timeline 7.7.3
-    (`timesync.html`). Every tag pins exact version and carries
-    `integrity="sha384-…" crossorigin="anonymous"`; bumping a version means recomputing hash
-    (`curl -s <url> | openssl dgst -sha384 -binary | openssl base64 -A`). Load from CDN, not
-    vendored locally.
-  - Map tiles: OSM (`{s}.tile.openstreetmap.org`) and Esri World Imagery + World Boundaries
-    and Places reference overlay (`server.arcgisonline.com`, satellite/hybrid basemaps in
-    `basemaps.js`). Tiles are images; no SRI possible.
+- **Sanctioned runtime network deps — only these, don't add more:** map tiles from OSM
+  (`{s}.tile.openstreetmap.org`) and Esri World Imagery + World Boundaries and Places
+  reference overlay (`server.arcgisonline.com`, satellite/hybrid basemaps in
+  `frontend/src/map/basemaps.ts`). Tiles are images; no SRI possible. No CDN scripts or
+  stylesheets: JS libraries are npm deps, pinned to exact versions, bundled by Vite.
 
 ## Python conventions
 
@@ -89,7 +88,10 @@ internet, rest don't.
   module import light. Intentional; keep doing for same cases.
 - **Type hints** everywhere, modern syntax: `int | None`, `list[int]`, `dict[str, float]`,
   `tuple[int, int, list[str]]`. Pydantic `BaseModel`s for request bodies, defined inline near
-  route.
+  route. Routes a React page calls also declare `response_model=` (models inline near the
+  route), so the generated TypeScript types describe the response; then run
+  `npm --prefix frontend run gen:api` and commit `frontend/openapi.json` + `schema.d.ts`
+  (`tests/test_frontend_contract.py` fails while they're stale).
 - **Error handling in routes**: wrap in `try/except`; re-raise `HTTPException` before catching
   generic `Exception` (so deliberate 4xx not swallowed into 500); surface `ValueError` as
   `HTTPException(400, …)`.
@@ -114,21 +116,30 @@ internet, rest don't.
   for non-Latin paths/place names; pre-1970 dates use `calendar.timegm` (not
   `datetime.timestamp()`, raises `OSError` on Windows).
 
-## Frontend conventions
+## Frontend conventions — React (`frontend/`)
 
-- Each view **`name.html` + `name.css` + `name.js` triple** under `web/`. Pages share
-  `style.css` (dark theme, hex colors, reset at top) and `nav.js`.
-- Top nav data-driven: `nav.js` renders `ITEMS` array into
-  `<div id="app-nav" data-active="…">`. To add page, add `ITEMS` entry and set `data-active`
-  on new page's nav div.
-- Vanilla DOM only: `getElementById`, `createElement`, `innerHTML` with template literals. Shared
-  page scripts wrap in **IIFE** (`(function(){ … })()`); per-page scripts run at top level.
-- Data access is `fetch()` + `async/await`: check `res.ok`, `throw new Error(\`HTTP ${res.status}\`)`,
-  then `res.json()`. POST JSON with `headers: {"Content-Type": "application/json"}` and
-  `JSON.stringify(body)`.
+- **Adding a page**: add `frontend/<name>.html` (just `<div id="root">` + module script),
+  `src/pages/<name>/main.tsx` calling `mountPage(<Page />)`, add `<name>` to `PAGES` in
+  `vite.config.ts`. It builds to `/<name>.html`; `static.LayeredStaticFiles` serves `web_dist/`
+  ahead of `web/` (which now holds only `theme.css` and the static `design-artifacts.html`).
+- Every page renders inside `<AppShell active="<nav key>">` (nav, scan banner); pages with a
+  status line render `<StatusBar>` last. Nav entries live in `src/shell/navItems.ts`.
+- **Styling**: `src/geotagger/web/theme.css` (imported by `mountPage`) stays the design system — its
+  tokens, controls and chrome ids/classes (`#toolbar`, `.settings-group`, `.button`). Page CSS
+  sits next to the page (`src/pages/<name>/<name>.css`) and uses `var(--token)`, never raw hex.
+- **Data**: `api.GET/POST/…` from `src/api/client.ts` wrapped in `unwrap()` (throws `ApiError`
+  with the server's `detail`), inside `useQuery` / `useMutation`. After a mutation, patch the
+  cache with `setQueryData` or `invalidateQueries` — no manual refetch plumbing.
+- **Accessibility is required** (audit Y1–Y4): real `<button>`/`<a>` for anything
+  clickable, labels tied to inputs, `aria-expanded` on toggles, `aria-live` status, visible focus.
+- **Tests**: Vitest + Testing Library next to the component (`X.test.tsx`). Test behaviour
+  through roles/labels; pull pure logic (e.g. `bannerView`) into exported functions and test
+  those directly.
+- No `innerHTML` / `dangerouslySetInnerHTML` (`tests/test_web_assets.py` guards it); no
+  `confirm()` / `prompt()` / `alert()` — use `Dialog` / `ConfirmDialog` / inline confirmation.
 - **Long-running server work driven as client loop**: POST batch with `limit`, read
-  `remaining` from response, repeat until `0`, updating button label as you go (see
-  `runBackfill` / `runFacesScan` in `home.js`). Match this pattern for new batch operations.
+  `remaining` from response, repeat until `0`, updating button label as you go
+  (`lib/useBatchLoop.ts`). Match this pattern for new batch operations.
 - **`StaticFiles` mount must be applied last in `create_app()`** (`app.mount("/", …)`), after
   every `app.include_router(...)`; SPA catch-all shadows API routes registered after it.
 
@@ -136,6 +147,8 @@ internet, rest don't.
 
 - Larger features handed off via self-contained `*_PLAN.md` docs; `IDEAS.md` backlog.
   If asked implement from plan, follow that doc.
-- After nontrivial change, **run `uv run pytest`** and, for UI-affecting work, **run app and
+- After nontrivial change, **run `uv run pytest`** (and for `frontend/` changes
+  `npm --prefix frontend run typecheck` + `npm --prefix frontend test`) and, for UI-affecting
+  work, **build (`npm --prefix frontend run build`), run app and
   exercise affected route/UI**. Server binds `127.0.0.1:8000` by default; live test boot
   should use random port other than 8000.
