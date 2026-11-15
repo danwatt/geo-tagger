@@ -172,7 +172,21 @@ class AddManualFaceRequest(BaseModel):
     name: str | None = None
 
 
-@router.get("/api/persons")
+class PersonListItem(BaseModel):
+    """extra="allow": the legacy People pages read this list too."""
+    model_config = ConfigDict(extra="allow")
+    id: int
+    name: str
+    birth_date: str | None = None
+    not_before: str | None = None
+    not_after: str | None = None
+    created_at: float | None = None
+    family_id: int | None = None
+    family_name: str | None = None
+    face_count: int | None = None   # only with face_counts=true
+
+
+@router.get("/api/persons", response_model=list[PersonListItem], response_model_exclude_unset=True)
 async def api_get_persons(
     start_ts: int | None = Query(None),
     end_ts: int | None = Query(None),
@@ -532,7 +546,19 @@ def _resolve_assign_target(person_id: int | None, name: str | None, clear: bool
     return person_id, name or None
 
 
-@router.post("/api/faces/assign")
+# Face writes' ``undo`` token: opaque to the client, handed back verbatim to
+# /api/faces/undo (UndoFacesRequest validates it on the way in).
+FaceUndo = dict[str, object]
+
+
+class BulkAssignResponse(BaseModel):
+    assigned: int
+    not_found: int
+    person_id: int | None = None
+    undo: FaceUndo | None = None
+
+
+@router.post("/api/faces/assign", response_model=BulkAssignResponse)
 async def api_bulk_assign(req: BulkAssignRequest):
     """Assign (person_id / name) or unassign (clear=true) faces; exactly one of
     the three. ``assigned`` is the number of faces that exist and were written
@@ -550,7 +576,13 @@ async def api_bulk_assign(req: BulkAssignRequest):
             "person_id": out["person_id"], "undo": undo}
 
 
-@router.post("/api/faces/ignore")
+class IgnoreFacesResponse(BaseModel):
+    updated: int
+    ignored: bool
+    undo: FaceUndo | None = None
+
+
+@router.post("/api/faces/ignore", response_model=IgnoreFacesResponse)
 async def api_ignore_faces(req: IgnoreFacesRequest):
     """Hide faces from the unlabeled queue (background strangers, false detections),
     or restore them with ignored=false. ``undo``: see /api/faces/undo."""
@@ -558,7 +590,13 @@ async def api_ignore_faces(req: IgnoreFacesRequest):
     return {"updated": len(req.face_ids), "ignored": req.ignored, "undo": undo}
 
 
-@router.post("/api/faces/come-back")
+class ComeBackFacesResponse(BaseModel):
+    updated: int
+    come_back: bool
+    undo: FaceUndo | None = None
+
+
+@router.post("/api/faces/come-back", response_model=ComeBackFacesResponse)
 async def api_come_back_faces(req: ComeBackFacesRequest):
     """Move faces to the come-back queue: people we know or suspect but aren't
     ready to assign yet. Distinct from /ignore (that's for strangers/false
@@ -702,7 +740,13 @@ async def api_dedup_groups(person_id: int = Query(...), group_limit: int = Query
     return {"groups": groups, "total": len(rows)}
 
 
-@router.post("/api/faces/negatives")
+class FaceNegativesResponse(BaseModel):
+    updated: int
+    person_id: int
+    negative: bool
+
+
+@router.post("/api/faces/negatives", response_model=FaceNegativesResponse)
 async def api_face_negatives(req: NegativeFacesRequest):
     """Mark faces as 'definitely not person_id' (negative=true), or lift that
     (negative=false). Removes person_id from these faces' recognition ranking so
@@ -788,7 +832,13 @@ async def api_photo_tagged_people(photo_id: int):
     ]
 
 
-@router.post("/api/faces/{face_id}/assign")
+class AssignFaceResponse(BaseModel):
+    face_id: int
+    person_id: int | None = None
+    undo: FaceUndo | None = None
+
+
+@router.post("/api/faces/{face_id}/assign", response_model=AssignFaceResponse)
 async def api_assign_face(face_id: int, req: AssignFaceRequest):
     """Assign (person_id / name) or unassign (clear=true) one face; exactly one
     of the three, else 400. 404 for an unknown face or person."""

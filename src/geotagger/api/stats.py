@@ -377,7 +377,16 @@ async def api_stats_bounds():
         raise HTTPException(500, str(e))
 
 
-@router.get("/api/stats/dates")
+class DayCount(BaseModel):
+    date: str    # YYYY-MM-DD
+    count: int
+
+
+class DatesResponse(BaseModel):
+    dates: list[DayCount]
+
+
+@router.get("/api/stats/dates", response_model=DatesResponse)
 async def api_stats_dates(year: int | None = Query(None), month: int | None = Query(None)):
     """Get photo counts grouped by date, optionally filtered by year/month."""
     try:

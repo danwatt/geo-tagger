@@ -3,7 +3,7 @@
 import asyncio
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from geotagger import index
 from geotagger.executor import get_executor
@@ -39,7 +39,20 @@ def _checked_bounds(kind: str, raw: str) -> str:
         raise HTTPException(400, str(e))
 
 
-@router.get("/api/places")
+class PlaceItem(BaseModel):
+    """extra="allow": ``stats=true`` adds per-place photo_count / last_ts, which
+    the legacy Custom Places page reads."""
+    model_config = ConfigDict(extra="allow")
+    id: int
+    name: str
+    type: str
+    bounds: str
+    bounds_valid: bool
+    created_at: float | None = None
+    representative_photo_id: int | None = None
+
+
+@router.get("/api/places", response_model=list[PlaceItem])
 async def api_get_places(
     stats: bool = Query(False, description="include photo_count and last_ts per place"),
 ):

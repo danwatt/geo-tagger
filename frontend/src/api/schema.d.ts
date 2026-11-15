@@ -1531,7 +1531,8 @@ export interface paths {
         /**
          * Api Photo Dirs
          * @description Directories in the library, most-untagged first. Feeds the Geocode folder
-         *     picker, which loads one of them through /api/photos?dir=.
+         *     picker, which loads one of them through /api/photos?dir=, and Search's
+         *     Folder facet.
          */
         get: operations["api_photo_dirs_api_photos_dirs_get"];
         put?: never;
@@ -2363,6 +2364,11 @@ export interface components {
             /** Year */
             year: number;
         };
+        /** AssignDateResponse */
+        AssignDateResponse: {
+            /** Updated */
+            updated: number;
+        };
         /** AssignFaceRequest */
         AssignFaceRequest: {
             /**
@@ -2374,6 +2380,17 @@ export interface components {
             name?: string | null;
             /** Person Id */
             person_id?: number | null;
+        };
+        /** AssignFaceResponse */
+        AssignFaceResponse: {
+            /** Face Id */
+            face_id: number;
+            /** Person Id */
+            person_id?: number | null;
+            /** Undo */
+            undo?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** BackfillResponse */
         BackfillResponse: {
@@ -2436,6 +2453,19 @@ export interface components {
             /** Person Id */
             person_id?: number | null;
         };
+        /** BulkAssignResponse */
+        BulkAssignResponse: {
+            /** Assigned */
+            assigned: number;
+            /** Not Found */
+            not_found: number;
+            /** Person Id */
+            person_id?: number | null;
+            /** Undo */
+            undo?: {
+                [key: string]: unknown;
+            } | null;
+        };
         /** CachedExtract */
         CachedExtract: {
             bbox: components["schemas"]["Bbox"] | null;
@@ -2447,6 +2477,11 @@ export interface components {
             size: number;
         } & {
             [key: string]: unknown;
+        };
+        /** CamerasResponse */
+        CamerasResponse: {
+            /** Cameras */
+            cameras: string[];
         };
         /** CensusStatus */
         CensusStatus: {
@@ -2482,10 +2517,28 @@ export interface components {
             /** Face Ids */
             face_ids: number[];
         };
+        /** ComeBackFacesResponse */
+        ComeBackFacesResponse: {
+            /** Come Back */
+            come_back: boolean;
+            /** Undo */
+            undo?: {
+                [key: string]: unknown;
+            } | null;
+            /** Updated */
+            updated: number;
+        };
         /** CommitGuessedDatesRequest */
         CommitGuessedDatesRequest: {
             /** Entries */
             entries: components["schemas"]["DateGuessEntry"][];
+        };
+        /** CommitGuessedDatesResponse */
+        CommitGuessedDatesResponse: {
+            /** Previous */
+            previous: components["schemas"]["PreviousDate"][];
+            /** Updated */
+            updated: number;
         };
         /**
          * CommittedState
@@ -2529,6 +2582,22 @@ export interface components {
             osm: components["schemas"]["OsmStatus"];
             semantic_model: components["schemas"]["ModelStatus"];
         };
+        /**
+         * DateGuess
+         * @description date_guess.guess_date: precision None = exact day, else 'month'/'year'.
+         */
+        DateGuess: {
+            /** Day */
+            day?: number | null;
+            /** Month */
+            month?: number | null;
+            /** Precision */
+            precision?: ("month" | "year") | null;
+            /** Source */
+            source: string;
+            /** Year */
+            year: number;
+        };
         /** DateGuessEntry */
         DateGuessEntry: {
             /** Day */
@@ -2559,10 +2628,31 @@ export interface components {
             /** Raw Datetime */
             raw_datetime?: string | null;
         };
+        /** DatesResponse */
+        DatesResponse: {
+            /** Dates */
+            dates: components["schemas"]["DayCount"][];
+        };
+        /** DayCount */
+        DayCount: {
+            /** Count */
+            count: number;
+            /** Date */
+            date: string;
+        };
         /** DedupRecomputeResponse */
         DedupRecomputeResponse: {
             /** Persons */
             persons: components["schemas"]["RepresentativeCounts"][];
+        };
+        /** DirCount */
+        DirCount: {
+            /** Dir */
+            dir: string;
+            /** Total */
+            total: number;
+            /** Untagged */
+            untagged: number;
         };
         /** ExportSidecarsRequest */
         ExportSidecarsRequest: {
@@ -2633,6 +2723,15 @@ export interface components {
             created_at: number;
             /** Person Id */
             person_id: number;
+        };
+        /** FaceNegativesResponse */
+        FaceNegativesResponse: {
+            /** Negative */
+            negative: boolean;
+            /** Person Id */
+            person_id: number;
+            /** Updated */
+            updated: number;
         };
         /** FaceSnapshot */
         FaceSnapshot: {
@@ -2796,6 +2895,11 @@ export interface components {
             /** Photo Ids */
             photo_ids: number[];
         };
+        /** GuessDatesResponse */
+        GuessDatesResponse: {
+            /** Guesses */
+            guesses: components["schemas"]["PhotoDateGuess"][];
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -2810,6 +2914,17 @@ export interface components {
              * @default true
              */
             ignored: boolean;
+        };
+        /** IgnoreFacesResponse */
+        IgnoreFacesResponse: {
+            /** Ignored */
+            ignored: boolean;
+            /** Undo */
+            undo?: {
+                [key: string]: unknown;
+            } | null;
+            /** Updated */
+            updated: number;
         };
         /**
          * JobStatus
@@ -2831,6 +2946,39 @@ export interface components {
             running: boolean;
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * LocationSuggestion
+         * @description search_locations.suggestions: a saved place (id) or a photo-metadata
+         *     location (fields/count/level). bounds = [south, west, north, east].
+         */
+        LocationSuggestion: {
+            /** Bounds */
+            bounds?: number[] | null;
+            /** Count */
+            count?: number | null;
+            /** Fields */
+            fields?: {
+                [key: string]: string;
+            } | null;
+            /** Id */
+            id?: number | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "place" | "metadata";
+            /** Label */
+            label: string;
+            /** Level */
+            level?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** LocationsResponse */
+        LocationsResponse: {
+            /** Locations */
+            locations: components["schemas"]["LocationSuggestion"][];
         };
         /** MergePersonRequest */
         MergePersonRequest: {
@@ -2949,6 +3097,32 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /**
+         * PersonListItem
+         * @description extra="allow": the legacy People pages read this list too.
+         */
+        PersonListItem: {
+            /** Birth Date */
+            birth_date?: string | null;
+            /** Created At */
+            created_at?: number | null;
+            /** Face Count */
+            face_count?: number | null;
+            /** Family Id */
+            family_id?: number | null;
+            /** Family Name */
+            family_name?: string | null;
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Not After */
+            not_after?: string | null;
+            /** Not Before */
+            not_before?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
         /** PersonNegativeSnapshot */
         PersonNegativeSnapshot: {
             /** Created At */
@@ -2978,10 +3152,129 @@ export interface components {
             /** Not Before */
             not_before?: string | null;
         };
+        /** PhotoDateGuess */
+        PhotoDateGuess: {
+            /** Current Datetime */
+            current_datetime?: string | null;
+            /** Filename */
+            filename: string;
+            guess?: components["schemas"]["DateGuess"] | null;
+            /** Photo Id */
+            photo_id: number;
+        };
+        /**
+         * PhotoDetail
+         * @description One photo's preview-pane details. extra="allow": the legacy pages that
+         *     read this route predate the model.
+         */
+        PhotoDetail: {
+            /** Camera */
+            camera?: string | null;
+            /** Date Precision */
+            date_precision?: string | null;
+            /** Datetime */
+            datetime?: string | null;
+            /** Dimensions */
+            dimensions?: string | null;
+            /** Ext */
+            ext?: string | null;
+            /** Filename */
+            filename: string;
+            /**
+             * Geocode Ignored
+             * @default false
+             */
+            geocode_ignored: boolean;
+            /** Geotag Source */
+            geotag_source?: string | null;
+            /** Gps Accuracy */
+            gps_accuracy?: number | null;
+            /** Id */
+            id: number;
+            /** Lat */
+            lat?: number | null;
+            /** Lng */
+            lng?: number | null;
+            location?: components["schemas"]["PhotoDetailLocation"] | null;
+            /** Media Type */
+            media_type?: string | null;
+            /** Path */
+            path: string;
+            /** Sidecar Path */
+            sidecar_path?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** PhotoDetailLocation */
+        PhotoDetailLocation: {
+            /** City */
+            city?: string | null;
+            /** Country */
+            country?: string | null;
+            /** Country Code */
+            country_code?: string | null;
+            /** County */
+            county?: string | null;
+            /** Postal Code */
+            postal_code?: string | null;
+            /** State */
+            state?: string | null;
+            /** Sublocation */
+            sublocation?: string | null;
+        };
+        /** PhotoPlace */
+        PhotoPlace: {
+            /** City */
+            city?: string | null;
+            /** Country */
+            country?: string | null;
+            /** State */
+            state?: string | null;
+            /** Sublocation */
+            sublocation?: string | null;
+        };
         /** PhotosByIdsRequest */
         PhotosByIdsRequest: {
             /** Ids */
             ids: number[];
+        };
+        /**
+         * PlaceItem
+         * @description extra="allow": ``stats=true`` adds per-place photo_count / last_ts, which
+         *     the legacy Custom Places page reads.
+         */
+        PlaceItem: {
+            /** Bounds */
+            bounds: string;
+            /** Bounds Valid */
+            bounds_valid: boolean;
+            /** Created At */
+            created_at?: number | null;
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Representative Photo Id */
+            representative_photo_id?: number | null;
+            /** Type */
+            type: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * PreviousDate
+         * @description Output twin of DateSnapshot (below), without its input validator: a
+         *     sidecar's existing date must come back to the client as-is, not as a 500.
+         */
+        PreviousDate: {
+            /** Date Precision */
+            date_precision?: string | null;
+            /** Photo Datetime */
+            photo_datetime?: number | null;
+            /** Photo Id */
+            photo_id: number;
+            /** Raw Datetime */
+            raw_datetime?: string | null;
         };
         /** Proposal */
         Proposal: {
@@ -3008,6 +3301,19 @@ export interface components {
              * @default 3600
              */
             window: number;
+        };
+        /** ProposedFace */
+        ProposedFace: {
+            /** Bbox */
+            bbox?: number[] | null;
+            /** Face Id */
+            face_id: number;
+            /** Person Id */
+            person_id: number;
+            /** Person Name */
+            person_name?: string | null;
+            /** Score */
+            score: number;
         };
         /** RemoveGeotagRequest */
         RemoveGeotagRequest: {
@@ -3120,6 +3426,87 @@ export interface components {
             total: number;
             /** Warnings */
             warnings: number;
+        };
+        /**
+         * SearchHistogram
+         * @description search_service.timeline_histogram: bucket i starts at min + i * bucket_secs.
+         */
+        SearchHistogram: {
+            /** Bucket Secs */
+            bucket_secs: number;
+            /** Counts */
+            counts: number[];
+            /** Max */
+            max: number;
+            /** Min */
+            min: number;
+        };
+        /**
+         * SearchIds
+         * @description ids_only=true: every match, unpaged, in result order.
+         */
+        SearchIds: {
+            /** Datetimes */
+            datetimes: (number | null)[];
+            /** Ids */
+            ids: number[];
+            /** Total */
+            total: number;
+        };
+        /** SearchPage */
+        SearchPage: {
+            histogram?: components["schemas"]["SearchHistogram"] | null;
+            /** Limit */
+            limit: number;
+            /** Next Offset */
+            next_offset?: number | null;
+            /** Offset */
+            offset: number;
+            /** Photos */
+            photos: components["schemas"]["SearchPhoto"][];
+            /** Total */
+            total: number;
+            /** Truncated */
+            truncated: boolean;
+        };
+        /**
+         * SearchPhoto
+         * @description serializers.photo_to_dict, plus `score` on ranked (text / similar_to)
+         *     results. extra="allow": other legacy pages read this shape too.
+         */
+        SearchPhoto: {
+            /** Camera */
+            camera?: string | null;
+            /** Date Precision */
+            date_precision?: string | null;
+            /** Dir */
+            dir?: string | null;
+            /** Filename */
+            filename: string;
+            /**
+             * Geocode Ignored
+             * @default false
+             */
+            geocode_ignored: boolean;
+            /** Geotag Source */
+            geotag_source?: string | null;
+            /** Gps Accuracy */
+            gps_accuracy?: number | null;
+            /** Id */
+            id: number;
+            /** Lat */
+            lat?: number | null;
+            /** Lng */
+            lng?: number | null;
+            location?: components["schemas"]["PhotoPlace"] | null;
+            /** Media Type */
+            media_type?: string | null;
+            /** Photo Datetime */
+            photo_datetime?: number | null;
+            /** Score */
+            score?: number | null;
+        } & {
+            [key: string]: unknown;
         };
         /** SemanticScanRequest */
         SemanticScanRequest: {
@@ -3362,6 +3749,15 @@ export interface components {
             people: components["schemas"]["SummaryPeople"];
             photos: components["schemas"]["SummaryPhotos"];
         };
+        /** TaggedFace */
+        TaggedFace: {
+            /** Face Id */
+            face_id: number;
+            /** Person Id */
+            person_id: number;
+            /** Person Name */
+            person_name?: string | null;
+        };
         /** TimeUpdate */
         TimeUpdate: {
             /** Expected */
@@ -3385,6 +3781,11 @@ export interface components {
             /** Previous */
             previous: components["schemas"]["DateSnapshot"][];
         };
+        /** UndoDateCommitResponse */
+        UndoDateCommitResponse: {
+            /** Reverted */
+            reverted: number;
+        };
         /**
          * UndoFacesRequest
          * @description The ``undo`` token a face/person write returned, handed back verbatim
@@ -3404,6 +3805,41 @@ export interface components {
         UndoGeotagRequest: {
             /** Previous */
             previous: components["schemas"]["GeotagSnapshot"][];
+        };
+        /** UntaggedCandidate */
+        UntaggedCandidate: {
+            photo: components["schemas"]["SearchPhoto"];
+            /** Proposed */
+            proposed: components["schemas"]["ProposedFace"][];
+            /** Tagged */
+            tagged: components["schemas"]["TaggedFace"][];
+        };
+        /** UntaggedFacesResponse */
+        UntaggedFacesResponse: {
+            /** Candidates */
+            candidates: components["schemas"]["UntaggedCandidate"][];
+            /** Limit */
+            limit: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "single" | "together";
+            /** Next Offset */
+            next_offset?: number | null;
+            /** Offset */
+            offset: number;
+            /** Threshold */
+            threshold: number;
+            /** Total */
+            total: number;
+            /** Truncated */
+            truncated: boolean;
+            /**
+             * Warnings
+             * @default []
+             */
+            warnings: string[];
         };
         /** UpdatePersonRequest */
         UpdatePersonRequest: {
@@ -3471,6 +3907,18 @@ export interface components {
             total_photos: number;
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * ZipCheckResponse
+         * @description ?check=1's answer; without check the route streams the archive itself.
+         */
+        ZipCheckResponse: {
+            /** Count */
+            count: number;
+            /** Skipped */
+            skipped: number;
+            /** Total Bytes */
+            total_bytes: number;
         };
     };
     responses: never;
@@ -4085,7 +4533,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["BulkAssignResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4187,7 +4635,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ComeBackFacesResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4292,7 +4740,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["IgnoreFacesResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4325,7 +4773,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["FaceNegativesResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4575,7 +5023,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["AssignFaceResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5285,7 +5733,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["PersonListItem"][];
                 };
             };
             /** @description Validation Error */
@@ -5450,7 +5898,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["PhotoDetail"];
                 };
             };
             /** @description Validation Error */
@@ -5553,7 +6001,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["AssignDateResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5725,7 +6173,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CommitGuessedDatesResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5756,7 +6204,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DirCount"][];
                 };
             };
             /** @description Validation Error */
@@ -5779,7 +6227,13 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    photo_ids: number[];
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -5787,7 +6241,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ZipCheckResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5820,7 +6274,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GuessDatesResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5853,7 +6307,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["UndoDateCommitResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5917,7 +6371,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["PhotoDetail"];
                 };
             };
             /** @description Validation Error */
@@ -6110,7 +6564,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["PlaceItem"][];
                 };
             };
             /** @description Validation Error */
@@ -6412,7 +6866,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SearchPage"] | components["schemas"]["SearchIds"];
                 };
             };
             /** @description Validation Error */
@@ -6441,7 +6895,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CamerasResponse"];
                 };
             };
         };
@@ -6463,7 +6917,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["LocationsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6505,7 +6959,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["UntaggedFacesResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6716,7 +7170,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DatesResponse"];
                 };
             };
             /** @description Validation Error */

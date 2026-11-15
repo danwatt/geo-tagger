@@ -128,7 +128,7 @@ def main():
     # Ported pages (frontend/) only exist once built; without the build their URLs 404.
     from geotagger.static import frontend_built
     if not frontend_built():
-        print("Warning: the React frontend is not built, so ported pages (Home, Settings, Data) will 404.", file=sys.stderr)
+        print("Warning: the React frontend is not built, so ported pages (Home, Search, Settings, Data) will 404.", file=sys.stderr)
         print("Build it once with: npm --prefix frontend ci && npm --prefix frontend run build", file=sys.stderr)
 
     # Determine host to bind to

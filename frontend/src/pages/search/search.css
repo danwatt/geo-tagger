@@ -1,0 +1,374 @@
+/* Search page. Ported from web/search.css, the Search half of
+   workspace-layout.css and the pane rules of style.css, with raw hex swapped
+   for theme.css tokens. Shared pieces carry their own CSS (PhotoGrid,
+   PhotoPreviewPane, DateRangePicker, LocationPicker, TimelineHistogram, Dialog). */
+
+/* ── Filter form ── */
+#search-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.search-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  position: relative;
+}
+
+.search-field label,
+.search-field .field-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.search-field input[type="text"],
+.search-field input[type="search"],
+.search-field input[type="number"],
+.search-field select {
+  padding: 5px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-input);
+  color: var(--text-strong);
+  font-size: 12px;
+}
+.search-field input:focus-visible,
+.search-field select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Text ("describe the photo") search — first and widest field: it's the query. */
+.search-field-text { width: 340px; max-width: 100%; }
+#text-input { width: 100%; }
+#text-help { font-size: 11px; color: var(--text-muted); max-width: 340px; }
+
+.search-field-location { width: 290px; max-width: 100%; }
+#location-input { width: 100%; }
+#location-help { font-size: 11px; color: var(--text-muted); max-width: 310px; }
+/* Under the input, over the help line. */
+#location-input-suggest { top: 48px; }
+
+/* The date range picker brings its own field box, so the form only sizes it.
+   overflow stays visible here — the popover escapes the field. */
+.search-field-dates { width: 260px; max-width: 100%; }
+.search-field-dates .drp { width: 100%; }
+
+.checkbox-label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.checkbox-label input[type="checkbox"] { margin: 0; }
+
+.search-field-actions {
+  flex-direction: row;
+  gap: 6px;
+  padding-top: 17px;
+}
+
+/* ── People picker ── */
+.search-field-people { min-width: 220px; }
+
+.person-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  list-style: none;
+}
+.person-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px 2px 9px;
+  border-radius: 12px;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent);
+  color: var(--on-accent);
+  font-size: 11px;
+}
+.person-chip button {
+  border: none;
+  background: none;
+  color: var(--on-accent);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+  line-height: 1;
+}
+.person-chip button:hover { color: var(--text-strong); background: none; }
+.person-chip button:focus-visible { outline: 2px solid var(--accent-text); }
+
+.person-suggest {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 50;
+  margin-top: 2px;
+  width: 220px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  box-shadow: var(--shadow-popup);
+}
+.person-suggest-item {
+  padding: 6px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.person-suggest-item:hover,
+.person-suggest-item.hl { background: var(--accent-bg); }
+.person-suggest-empty {
+  padding: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ── Scope line + panes ── */
+.workspace-scope {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  flex-shrink: 0;
+  background: var(--surface-1);
+}
+#workspace-scope-text { flex: 1; color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
+#preview-toggle { white-space: nowrap; }
+
+/* Grid-pane | divider | preview. Column widths come from usePaneLayout. */
+#main {
+  display: grid;
+  grid-auto-rows: minmax(0, 1fr);
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+#grid-pane {
+  position: relative;
+  background: var(--surface-1);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Results nav: sticky over the scrolling grid so the paging banner (below) can't
+ * scroll out of sight; wraps so the banner gets its own full-width row. */
+#grid-nav {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 5px 8px;
+  background: var(--surface-3);
+  border-bottom: 1px solid var(--border);
+}
+#grid-nav .toolbar-group { flex-wrap: wrap; }
+#grid-nav button { white-space: nowrap; }
+
+#search-summary { font-size: 12px; color: var(--text-muted); }
+#selection-count, #date-undo-count { font-size: 12px; color: var(--text); }
+
+/* Paging banner (A3) — same look as People's #grid-paging (U5): warning-toned
+ * full-width row, so a truncated result is impossible to miss. */
+#search-paging {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+}
+#search-paging-text { flex: 1; min-width: 200px; }
+#search-paging button:disabled { opacity: .6; cursor: default; }
+#search-paging .inline-confirm { flex-basis: 100%; }
+
+/* Loading pill over the emptied grid (U4). */
+.grid-busy {
+  position: absolute;
+  left: 50%;
+  top: 120px;
+  transform: translateX(-50%);
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-panel);
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+#detail-similar { margin: 8px 0; }
+
+/* ── Untagged-face results: one row per photo, grouped like the plain grid.
+ * Each row is the photo thumbnail (click → the preview pane) followed by its
+ * tagged/proposed faces, wrapping to new lines. ── */
+.untagged-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+}
+.untagged-confirm { grid-column: 1 / -1; padding: 6px; }
+
+.photo-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px;
+  border-radius: var(--radius);
+}
+.photo-row:hover { background: rgba(255, 255, 255, 0.03); }
+
+.photo-row-thumb-wrap {
+  flex-shrink: 0;
+  width: 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.photo-row-thumb { width: 120px; }
+
+.photo-row-loc {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.photo-row-faces {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.untagged-face-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 120px;
+}
+
+/* A face cell: crop + overlaid chip (ported from face-grid.css). A div, not a
+   button: its chip and menu buttons are the controls. */
+.search-face-cell {
+  position: relative;
+  width: 120px;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  border: 2px solid transparent;
+  background: var(--surface-black);
+}
+.search-face-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.search-face-cell .face-label {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: rgba(0, 0, 0, .6);
+  color: var(--text-strong);
+  font-size: 10px;
+  padding: 2px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.search-face-cell .face-suggest {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  display: flex;
+  align-items: stretch;
+  background: rgba(42, 74, 110, .85);
+  font-size: 10px;
+}
+.search-face-cell .face-suggest:hover { background: rgba(42, 74, 110, 1); }
+.search-face-cell .face-suggest button {
+  background: none;
+  border: none;
+  border-radius: 0;
+  font-size: 10px;
+  padding: 2px 4px;
+  color: var(--on-accent);
+}
+.search-face-cell .face-suggest button:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
+.search-face-cell .sug-confirm { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; text-align: left; }
+.search-face-cell .sug-check { font-weight: bold; color: var(--success); }
+.search-face-cell .sug-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.search-face-cell .sug-reject { flex-shrink: 0; font-weight: bold; color: var(--danger-text) !important; }
+.search-face-cell .sug-reject:hover { color: var(--danger) !important; }
+/* The keyboard way into the quick-action menu (right-click opens it too). */
+.face-menu-btn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  padding: 0 5px;
+  font-size: 12px;
+  line-height: 1.3;
+  background: rgba(0, 0, 0, .65);
+  border-color: rgba(255, 255, 255, .25);
+  color: var(--text-strong);
+  opacity: 0;
+}
+.search-face-cell:hover .face-menu-btn,
+.face-menu-btn:focus-visible,
+.face-menu-btn[aria-expanded="true"] { opacity: 1; }
+
+/* ── Dialog contents ── */
+.dialog-summary { color: var(--text-muted); margin-bottom: 16px; }
+.dialog-error { color: var(--danger-text); font-size: 12px; margin: 8px 0; }
+.dialog-confirm { margin-top: 12px; }
+.modal-content .search-field { margin-bottom: 10px; }
+.dialog-actions { margin-top: 14px; }
+.guess-dates-table-wrap { max-height: 50vh; overflow-y: auto; }
+.guess-dates-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.guess-dates-table th {
+  text-align: left; color: var(--text-muted); font-weight: normal;
+  padding: 4px 8px; border-bottom: 1px solid var(--border-strong);
+}
+.guess-dates-table td { padding: 5px 8px; border-bottom: 1px solid var(--border-2); }
+.guess-dates-table tr.no-guess td { color: var(--text-faint); font-style: italic; }
+.guess-dates-table .guess-source { color: var(--text-muted); font-size: 11px; }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (max-width: 850px) {
+  .workspace-scope { align-items: flex-start; }
+  #search-form { gap: 8px; }
+}

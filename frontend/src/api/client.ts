@@ -18,9 +18,11 @@ export const api = createClient<paths>({
 });
 
 /** GET a JSON route by a runtime path (openapi-fetch needs a literal path for its
- *  types). For generic helpers like useJob; prefer `api.GET` elsewhere. */
-export async function getJson<T>(path: string): Promise<T> {
-  const res = await globalThis.fetch(path);
+ *  types). For generic helpers like useJob, and for callers that must replay an
+ *  exact query string (Search's Load more); prefer `api.GET` elsewhere. `init`
+ *  carries an AbortSignal for latest-only loaders. */
+export async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await globalThis.fetch(path, init);
   const body: unknown = await res.json().catch(() => null);
   if (!res.ok) throw new ApiError(res.status, body);
   return body as T;

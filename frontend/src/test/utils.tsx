@@ -11,12 +11,16 @@ export function renderWithQuery(ui: ReactNode) {
 
 type Route = (req: { url: string; method: string; query: URLSearchParams; body?: unknown }) => unknown;
 
-/** Stub global fetch with a map of "METHOD /path" → handler returning a JSON body,
- *  or a Response for non-200s. Unmatched requests fail the test loudly. */
+/** Stub global fetch with a map of "METHOD /path" → handler returning a JSON body
+ *  (or a promise of one), or a Response for non-200s. Unmatched requests fail the test loudly. */
 export function mockApi(routes: Record<string, Route>) {
   const calls: { method: string; url: string; query: URLSearchParams; body?: unknown }[] = [];
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const req = input instanceof Request ? input : new Request(new URL(String(input), "http://localhost"), init);
+    // The signal is dropped: jsdom's AbortSignal isn't the one Node's Request
+    // accepts. Loaders check `signal.aborted` themselves after every await.
+    const { signal: _signal, ...rest } = init ?? {};
+    void _signal;
+    const req = input instanceof Request ? input : new Request(new URL(String(input), "http://localhost"), rest);
     const parsed = new URL(req.url);
     const url = parsed.pathname;
     const query = parsed.searchParams;
@@ -26,7 +30,9 @@ export function mockApi(routes: Record<string, Route>) {
     calls.push({ method, url, query, body });
     const handler = routes[`${method} ${url}`];
     if (!handler) throw new Error(`Unmocked request: ${method} ${url}`);
-    const out = handler({ url, method, query, body });
+    // Handlers may return a promise, so a test can hold a response back
+    // (latest-only supersession).
+    const out = await handler({ url, method, query, body });
     if (out instanceof Response) return out;
     return new Response(JSON.stringify(out), { status: 200, headers: { "Content-Type": "application/json" } });
   });

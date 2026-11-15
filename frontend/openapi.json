@@ -71,6 +71,19 @@
         "title": "AssignDateRequest",
         "type": "object"
       },
+      "AssignDateResponse": {
+        "properties": {
+          "updated": {
+            "title": "Updated",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "updated"
+        ],
+        "title": "AssignDateResponse",
+        "type": "object"
+      },
       "AssignFaceRequest": {
         "properties": {
           "clear": {
@@ -102,6 +115,42 @@
           }
         },
         "title": "AssignFaceRequest",
+        "type": "object"
+      },
+      "AssignFaceResponse": {
+        "properties": {
+          "face_id": {
+            "title": "Face Id",
+            "type": "integer"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          },
+          "undo": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Undo"
+          }
+        },
+        "required": [
+          "face_id"
+        ],
+        "title": "AssignFaceResponse",
         "type": "object"
       },
       "BackfillResponse": {
@@ -284,6 +333,47 @@
         "title": "BulkAssignRequest",
         "type": "object"
       },
+      "BulkAssignResponse": {
+        "properties": {
+          "assigned": {
+            "title": "Assigned",
+            "type": "integer"
+          },
+          "not_found": {
+            "title": "Not Found",
+            "type": "integer"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          },
+          "undo": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Undo"
+          }
+        },
+        "required": [
+          "assigned",
+          "not_found"
+        ],
+        "title": "BulkAssignResponse",
+        "type": "object"
+      },
       "CachedExtract": {
         "additionalProperties": true,
         "properties": {
@@ -317,6 +407,22 @@
           "bbox"
         ],
         "title": "CachedExtract",
+        "type": "object"
+      },
+      "CamerasResponse": {
+        "properties": {
+          "cameras": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Cameras",
+            "type": "array"
+          }
+        },
+        "required": [
+          "cameras"
+        ],
+        "title": "CamerasResponse",
         "type": "object"
       },
       "CensusStatus": {
@@ -402,6 +508,36 @@
         "title": "ComeBackFacesRequest",
         "type": "object"
       },
+      "ComeBackFacesResponse": {
+        "properties": {
+          "come_back": {
+            "title": "Come Back",
+            "type": "boolean"
+          },
+          "undo": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Undo"
+          },
+          "updated": {
+            "title": "Updated",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "updated",
+          "come_back"
+        ],
+        "title": "ComeBackFacesResponse",
+        "type": "object"
+      },
       "CommitGuessedDatesRequest": {
         "properties": {
           "entries": {
@@ -416,6 +552,27 @@
           "entries"
         ],
         "title": "CommitGuessedDatesRequest",
+        "type": "object"
+      },
+      "CommitGuessedDatesResponse": {
+        "properties": {
+          "previous": {
+            "items": {
+              "$ref": "#/components/schemas/PreviousDate"
+            },
+            "title": "Previous",
+            "type": "array"
+          },
+          "updated": {
+            "title": "Updated",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "updated",
+          "previous"
+        ],
+        "title": "CommitGuessedDatesResponse",
         "type": "object"
       },
       "CommittedState": {
@@ -542,6 +699,62 @@
         "title": "DataStatusResponse",
         "type": "object"
       },
+      "DateGuess": {
+        "description": "date_guess.guess_date: precision None = exact day, else 'month'/'year'.",
+        "properties": {
+          "day": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Day"
+          },
+          "month": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Month"
+          },
+          "precision": {
+            "anyOf": [
+              {
+                "enum": [
+                  "month",
+                  "year"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Precision"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "year": {
+            "title": "Year",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "year",
+          "source"
+        ],
+        "title": "DateGuess",
+        "type": "object"
+      },
       "DateGuessEntry": {
         "properties": {
           "day": {
@@ -644,6 +857,40 @@
         "title": "DateSnapshot",
         "type": "object"
       },
+      "DatesResponse": {
+        "properties": {
+          "dates": {
+            "items": {
+              "$ref": "#/components/schemas/DayCount"
+            },
+            "title": "Dates",
+            "type": "array"
+          }
+        },
+        "required": [
+          "dates"
+        ],
+        "title": "DatesResponse",
+        "type": "object"
+      },
+      "DayCount": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "count"
+        ],
+        "title": "DayCount",
+        "type": "object"
+      },
       "DedupRecomputeResponse": {
         "properties": {
           "persons": {
@@ -658,6 +905,29 @@
           "persons"
         ],
         "title": "DedupRecomputeResponse",
+        "type": "object"
+      },
+      "DirCount": {
+        "properties": {
+          "dir": {
+            "title": "Dir",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "untagged": {
+            "title": "Untagged",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dir",
+          "total",
+          "untagged"
+        ],
+        "title": "DirCount",
         "type": "object"
       },
       "ExportSidecarsRequest": {
@@ -825,6 +1095,29 @@
           "created_at"
         ],
         "title": "FaceNegativeSnapshot",
+        "type": "object"
+      },
+      "FaceNegativesResponse": {
+        "properties": {
+          "negative": {
+            "title": "Negative",
+            "type": "boolean"
+          },
+          "person_id": {
+            "title": "Person Id",
+            "type": "integer"
+          },
+          "updated": {
+            "title": "Updated",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "updated",
+          "person_id",
+          "negative"
+        ],
+        "title": "FaceNegativesResponse",
         "type": "object"
       },
       "FaceSnapshot": {
@@ -1238,6 +1531,22 @@
         "title": "GuessDatesRequest",
         "type": "object"
       },
+      "GuessDatesResponse": {
+        "properties": {
+          "guesses": {
+            "items": {
+              "$ref": "#/components/schemas/PhotoDateGuess"
+            },
+            "title": "Guesses",
+            "type": "array"
+          }
+        },
+        "required": [
+          "guesses"
+        ],
+        "title": "GuessDatesResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1270,6 +1579,36 @@
           "face_ids"
         ],
         "title": "IgnoreFacesRequest",
+        "type": "object"
+      },
+      "IgnoreFacesResponse": {
+        "properties": {
+          "ignored": {
+            "title": "Ignored",
+            "type": "boolean"
+          },
+          "undo": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Undo"
+          },
+          "updated": {
+            "title": "Updated",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "updated",
+          "ignored"
+        ],
+        "title": "IgnoreFacesResponse",
         "type": "object"
       },
       "JobStatus": {
@@ -1312,6 +1651,107 @@
           "message"
         ],
         "title": "JobStatus",
+        "type": "object"
+      },
+      "LocationSuggestion": {
+        "additionalProperties": true,
+        "description": "search_locations.suggestions: a saved place (id) or a photo-metadata\nlocation (fields/count/level). bounds = [south, west, north, east].",
+        "properties": {
+          "bounds": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bounds"
+          },
+          "count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Count"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fields"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "kind": {
+            "enum": [
+              "place",
+              "metadata"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "level": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Level"
+          }
+        },
+        "required": [
+          "kind",
+          "label"
+        ],
+        "title": "LocationSuggestion",
+        "type": "object"
+      },
+      "LocationsResponse": {
+        "properties": {
+          "locations": {
+            "items": {
+              "$ref": "#/components/schemas/LocationSuggestion"
+            },
+            "title": "Locations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "locations"
+        ],
+        "title": "LocationsResponse",
         "type": "object"
       },
       "MergePersonRequest": {
@@ -1594,6 +2034,103 @@
         "title": "OsmStatus",
         "type": "object"
       },
+      "PersonListItem": {
+        "additionalProperties": true,
+        "description": "extra=\"allow\": the legacy People pages read this list too.",
+        "properties": {
+          "birth_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Birth Date"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "face_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Count"
+          },
+          "family_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Family Id"
+          },
+          "family_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Family Name"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "not_after": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Not After"
+          },
+          "not_before": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Not Before"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "PersonListItem",
+        "type": "object"
+      },
       "PersonNegativeSnapshot": {
         "properties": {
           "created_at": {
@@ -1694,6 +2231,339 @@
         "title": "PersonSnapshot",
         "type": "object"
       },
+      "PhotoDateGuess": {
+        "properties": {
+          "current_datetime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Datetime"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "guess": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DateGuess"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "photo_id": {
+            "title": "Photo Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "photo_id",
+          "filename"
+        ],
+        "title": "PhotoDateGuess",
+        "type": "object"
+      },
+      "PhotoDetail": {
+        "additionalProperties": true,
+        "description": "One photo's preview-pane details. extra=\"allow\": the legacy pages that\nread this route predate the model.",
+        "properties": {
+          "camera": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Camera"
+          },
+          "date_precision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Precision"
+          },
+          "datetime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Datetime"
+          },
+          "dimensions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dimensions"
+          },
+          "ext": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ext"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "geocode_ignored": {
+            "default": false,
+            "title": "Geocode Ignored",
+            "type": "boolean"
+          },
+          "geotag_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Geotag Source"
+          },
+          "gps_accuracy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gps Accuracy"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "lat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lat"
+          },
+          "lng": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lng"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PhotoDetailLocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "media_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Type"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "sidecar_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sidecar Path"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "filename"
+        ],
+        "title": "PhotoDetail",
+        "type": "object"
+      },
+      "PhotoDetailLocation": {
+        "properties": {
+          "city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country"
+          },
+          "country_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Code"
+          },
+          "county": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "County"
+          },
+          "postal_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Postal Code"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "sublocation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sublocation"
+          }
+        },
+        "title": "PhotoDetailLocation",
+        "type": "object"
+      },
+      "PhotoPlace": {
+        "properties": {
+          "city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "sublocation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sublocation"
+          }
+        },
+        "title": "PhotoPlace",
+        "type": "object"
+      },
       "PhotosByIdsRequest": {
         "properties": {
           "ids": {
@@ -1709,6 +2579,110 @@
           "ids"
         ],
         "title": "PhotosByIdsRequest",
+        "type": "object"
+      },
+      "PlaceItem": {
+        "additionalProperties": true,
+        "description": "extra=\"allow\": ``stats=true`` adds per-place photo_count / last_ts, which\nthe legacy Custom Places page reads.",
+        "properties": {
+          "bounds": {
+            "title": "Bounds",
+            "type": "string"
+          },
+          "bounds_valid": {
+            "title": "Bounds Valid",
+            "type": "boolean"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "representative_photo_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Representative Photo Id"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "bounds",
+          "bounds_valid"
+        ],
+        "title": "PlaceItem",
+        "type": "object"
+      },
+      "PreviousDate": {
+        "description": "Output twin of DateSnapshot (below), without its input validator: a\nsidecar's existing date must come back to the client as-is, not as a 500.",
+        "properties": {
+          "date_precision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Precision"
+          },
+          "photo_datetime": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Photo Datetime"
+          },
+          "photo_id": {
+            "title": "Photo Id",
+            "type": "integer"
+          },
+          "raw_datetime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Datetime"
+          }
+        },
+        "required": [
+          "photo_id"
+        ],
+        "title": "PreviousDate",
         "type": "object"
       },
       "Proposal": {
@@ -1761,6 +2735,54 @@
           "ids"
         ],
         "title": "ProposeRequest",
+        "type": "object"
+      },
+      "ProposedFace": {
+        "properties": {
+          "bbox": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bbox"
+          },
+          "face_id": {
+            "title": "Face Id",
+            "type": "integer"
+          },
+          "person_id": {
+            "title": "Person Id",
+            "type": "integer"
+          },
+          "person_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Name"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          }
+        },
+        "required": [
+          "person_id",
+          "face_id",
+          "score"
+        ],
+        "title": "ProposedFace",
         "type": "object"
       },
       "RemoveGeotagRequest": {
@@ -2085,6 +3107,277 @@
           "finished_at"
         ],
         "title": "ScanStatusResponse",
+        "type": "object"
+      },
+      "SearchHistogram": {
+        "description": "search_service.timeline_histogram: bucket i starts at min + i * bucket_secs.",
+        "properties": {
+          "bucket_secs": {
+            "title": "Bucket Secs",
+            "type": "integer"
+          },
+          "counts": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Counts",
+            "type": "array"
+          },
+          "max": {
+            "title": "Max",
+            "type": "integer"
+          },
+          "min": {
+            "title": "Min",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "min",
+          "max",
+          "bucket_secs",
+          "counts"
+        ],
+        "title": "SearchHistogram",
+        "type": "object"
+      },
+      "SearchIds": {
+        "description": "ids_only=true: every match, unpaged, in result order.",
+        "properties": {
+          "datetimes": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Datetimes",
+            "type": "array"
+          },
+          "ids": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Ids",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ids",
+          "datetimes",
+          "total"
+        ],
+        "title": "SearchIds",
+        "type": "object"
+      },
+      "SearchPage": {
+        "properties": {
+          "histogram": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SearchHistogram"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "next_offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Offset"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "photos": {
+            "items": {
+              "$ref": "#/components/schemas/SearchPhoto"
+            },
+            "title": "Photos",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "photos",
+          "total",
+          "offset",
+          "limit",
+          "truncated"
+        ],
+        "title": "SearchPage",
+        "type": "object"
+      },
+      "SearchPhoto": {
+        "additionalProperties": true,
+        "description": "serializers.photo_to_dict, plus `score` on ranked (text / similar_to)\nresults. extra=\"allow\": other legacy pages read this shape too.",
+        "properties": {
+          "camera": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Camera"
+          },
+          "date_precision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Precision"
+          },
+          "dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dir"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "geocode_ignored": {
+            "default": false,
+            "title": "Geocode Ignored",
+            "type": "boolean"
+          },
+          "geotag_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Geotag Source"
+          },
+          "gps_accuracy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gps Accuracy"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "lat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lat"
+          },
+          "lng": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lng"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PhotoPlace"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "media_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Type"
+          },
+          "photo_datetime": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Photo Datetime"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          }
+        },
+        "required": [
+          "id",
+          "filename"
+        ],
+        "title": "SearchPhoto",
         "type": "object"
       },
       "SemanticScanRequest": {
@@ -2736,6 +4029,35 @@
         "title": "SummaryResponse",
         "type": "object"
       },
+      "TaggedFace": {
+        "properties": {
+          "face_id": {
+            "title": "Face Id",
+            "type": "integer"
+          },
+          "person_id": {
+            "title": "Person Id",
+            "type": "integer"
+          },
+          "person_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Name"
+          }
+        },
+        "required": [
+          "person_id",
+          "face_id"
+        ],
+        "title": "TaggedFace",
+        "type": "object"
+      },
       "TimeUpdate": {
         "properties": {
           "expected": {
@@ -2798,6 +4120,19 @@
         "title": "UndoDateCommitRequest",
         "type": "object"
       },
+      "UndoDateCommitResponse": {
+        "properties": {
+          "reverted": {
+            "title": "Reverted",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "reverted"
+        ],
+        "title": "UndoDateCommitResponse",
+        "type": "object"
+      },
       "UndoFacesRequest": {
         "description": "The ``undo`` token a face/person write returned, handed back verbatim\n(see face_undo_service). Client input on the way back, so validated.",
         "properties": {
@@ -2849,6 +4184,103 @@
           "previous"
         ],
         "title": "UndoGeotagRequest",
+        "type": "object"
+      },
+      "UntaggedCandidate": {
+        "properties": {
+          "photo": {
+            "$ref": "#/components/schemas/SearchPhoto"
+          },
+          "proposed": {
+            "items": {
+              "$ref": "#/components/schemas/ProposedFace"
+            },
+            "title": "Proposed",
+            "type": "array"
+          },
+          "tagged": {
+            "items": {
+              "$ref": "#/components/schemas/TaggedFace"
+            },
+            "title": "Tagged",
+            "type": "array"
+          }
+        },
+        "required": [
+          "photo",
+          "tagged",
+          "proposed"
+        ],
+        "title": "UntaggedCandidate",
+        "type": "object"
+      },
+      "UntaggedFacesResponse": {
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/UntaggedCandidate"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "mode": {
+            "enum": [
+              "single",
+              "together"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "next_offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Offset"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "threshold": {
+            "title": "Threshold",
+            "type": "number"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "warnings": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "mode",
+          "threshold",
+          "total",
+          "candidates",
+          "offset",
+          "limit",
+          "truncated"
+        ],
+        "title": "UntaggedFacesResponse",
         "type": "object"
       },
       "UpdatePersonRequest": {
@@ -3080,6 +4512,30 @@
           "tail_photos"
         ],
         "title": "WorkQueueResponse",
+        "type": "object"
+      },
+      "ZipCheckResponse": {
+        "description": "?check=1's answer; without check the route streams the archive itself.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "skipped": {
+            "title": "Skipped",
+            "type": "integer"
+          },
+          "total_bytes": {
+            "title": "Total Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "total_bytes",
+          "skipped"
+        ],
+        "title": "ZipCheckResponse",
         "type": "object"
       }
     }
@@ -3879,7 +5335,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/BulkAssignResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4076,7 +5534,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ComeBackFacesResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4199,7 +5659,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/IgnoreFacesResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4236,7 +5698,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FaceNegativesResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4552,7 +6016,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AssignFaceResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5660,7 +7126,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PersonListItem"
+                  },
+                  "title": "Response Api Get Persons Api Persons Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -5864,7 +7336,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/PhotoDetail"
+                }
               }
             },
             "description": "Successful Response"
@@ -6074,7 +7548,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AssignDateResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6387,7 +7863,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CommitGuessedDatesResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6408,7 +7886,7 @@
     },
     "/api/photos/dirs": {
       "get": {
-        "description": "Directories in the library, most-untagged first. Feeds the Geocode folder\npicker, which loads one of them through /api/photos?dir=.",
+        "description": "Directories in the library, most-untagged first. Feeds the Geocode folder\npicker, which loads one of them through /api/photos?dir=, and Search's\nFolder facet.",
         "operationId": "api_photo_dirs_api_photos_dirs_get",
         "parameters": [
           {
@@ -6428,7 +7906,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DirCount"
+                  },
+                  "title": "Response Api Photo Dirs Api Photos Dirs Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -6463,11 +7947,34 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "photo_ids": {
+                    "items": {
+                      "type": "integer"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "photo_ids"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ZipCheckResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6504,7 +8011,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/GuessDatesResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6541,7 +8050,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/UndoDateCommitResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6615,7 +8126,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/PhotoDetail"
+                }
               }
             },
             "description": "Successful Response"
@@ -6866,7 +8379,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PlaceItem"
+                  },
+                  "title": "Response Api Get Places Api Places Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -7516,7 +9035,17 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SearchPage"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SearchIds"
+                    }
+                  ],
+                  "title": "Response Api Search Api Search Get"
+                }
               }
             },
             "description": "Successful Response"
@@ -7542,7 +9071,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CamerasResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7571,7 +9102,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LocationsResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7771,7 +9304,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/UntaggedFacesResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -8023,7 +9558,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DatesResponse"
+                }
               }
             },
             "description": "Successful Response"

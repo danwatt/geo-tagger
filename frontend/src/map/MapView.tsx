@@ -31,7 +31,6 @@ export function MapView({ id, className, center = [39, -96], zoom = 4, mapRef, c
   );
 }
 
-/** A theme.css token's current value, for Leaflet options that need a concrete colour. */
-export function cssVar(name: string, fallback: string): string {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
-}
+// Kept importable from here for the map pages; lives in lib so non-map code
+// (canvas charts) can use it without pulling in Leaflet.
+export { cssVar } from "../lib/cssVar";

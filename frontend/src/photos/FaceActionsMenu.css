@@ -1,0 +1,19 @@
+/* Face quick-action menu. Ported from web/face-grid.css (.face-expand,
+   .expand-btn) with raw hex swapped for theme.css tokens. Fixed-position so a
+   cell's overflow: hidden can't clip it. */
+
+.face-expand {
+  position: fixed;
+  z-index: 1000;
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  padding: 8px;
+  min-width: 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  box-shadow: var(--shadow-popup);
+}
+.expand-btn { font-size: 11px; padding: 3px 8px; white-space: nowrap; text-align: left; }
+.expand-btn:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }

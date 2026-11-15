@@ -1,0 +1,91 @@
+/* Photo grid cells. Ported from web/style.css (#grid, .thumb-cell) and
+   search.css (.thumb-score) with raw hex swapped for theme.css tokens. The cell
+   is a <button> now, so it also resets theme.css's button look. */
+
+.photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 4px;
+  padding: 6px;
+}
+
+.grid-empty {
+  grid-column: 1 / -1;
+  padding: 24px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.thumb-cell {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  background: var(--surface-black);
+  border: 2px solid transparent;
+  transition: border-color 0.1s;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.thumb-cell:hover { background: var(--surface-black); }
+.thumb-cell img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  pointer-events: none;
+}
+.thumb-cell.selected { border-color: var(--accent); }
+.thumb-cell:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
+.thumb-cell.tagged::after {
+  content: "📍";
+  position: absolute;
+  bottom: 2px;
+  right: 3px;
+  font-size: 12px;
+  line-height: 1;
+  text-shadow: 0 0 3px rgba(0, 0, 0, 1);
+}
+.thumb-cell.geo-ignored img { opacity: 0.55; }
+.thumb-cell.geo-ignored::before {
+  content: "🚫";
+  position: absolute;
+  top: 2px;
+  left: 3px;
+  font-size: 11px;
+  line-height: 1;
+  text-shadow: 0 0 3px rgba(0, 0, 0, 1);
+}
+.thumb-cell .thumb-name {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, .55);
+  color: var(--text-strong);
+  font-size: 10px;
+  padding: 2px 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.thumb-cell:hover .thumb-name,
+.thumb-cell:focus-visible .thumb-name { opacity: 1; }
+.thumb-cell .thumb-score {
+  position: absolute; top: 3px; right: 3px;
+  background: rgba(0, 0, 0, .65); color: var(--text-strong);
+  font-size: 10px; font-variant-numeric: tabular-nums;
+  padding: 1px 4px; border-radius: var(--radius-sm); pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thumb-cell, .thumb-cell .thumb-name { transition: none; }
+}
