@@ -10,9 +10,28 @@ import { ApiError } from "./errors";
 export type Schemas = components["schemas"];
 
 export const api = createClient<paths>({
+  // Absolute: openapi-fetch builds a Request, and Node's Request (used under
+  // Vitest/jsdom) rejects relative URLs that browsers would resolve.
+  baseUrl: globalThis.location.origin,
   // Resolve fetch at call time (not at module load) so tests can stub it.
   fetch: (request) => globalThis.fetch(request),
 });
+
+/** GET a JSON route by a runtime path (openapi-fetch needs a literal path for its
+ *  types). For generic helpers like useJob; prefer `api.GET` elsewhere. */
+export async function getJson<T>(path: string): Promise<T> {
+  const res = await globalThis.fetch(path);
+  const body: unknown = await res.json().catch(() => null);
+  if (!res.ok) throw new ApiError(res.status, body);
+  return body as T;
+}
+
+/** For "start a background job" POSTs: OK, or 409 = one is already running
+ *  (fine, the caller polls it either way); anything else throws. */
+export function acceptStarted(result: { error?: unknown; response: Response }): void {
+  if (result.response.ok || result.response.status === 409) return;
+  throw new ApiError(result.response.status, result.error);
+}
 
 /** Unwrap an openapi-fetch result: the data, or throw ApiError with the
  *  server's message. Mirrors common.js fetchJson's "check res.ok first". */

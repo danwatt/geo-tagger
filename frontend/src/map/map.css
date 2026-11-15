@@ -1,0 +1,8 @@
+/* Leaflet's panes and controls are light-themed by default; on the dark app the
+   white attribution strip glares, so tone it down for every map. */
+.map-view { background: var(--surface-black); }
+.map-view .leaflet-control-attribution {
+  background: rgba(0, 0, 0, .6);
+  color: var(--text-faint);
+}
+.map-view .leaflet-control-attribution a { color: var(--text-muted); }

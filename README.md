@@ -77,7 +77,7 @@ npm --prefix frontend run build
 
 The frontend is partway through a move from plain JavaScript to React + TypeScript (see
 [Frontend development](#frontend-development)). Pages not yet moved work without the build;
-moved pages (Settings so far) return 404 until it's done, and startup prints a warning.
+moved pages (Settings and Data so far) return 404 until it's done, and startup prints a warning.
 
 ### Where downloaded tools/data end up
 

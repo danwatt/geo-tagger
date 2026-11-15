@@ -5,13 +5,14 @@ api/search.py) so they combine with every other filter."""
 import asyncio
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from geotagger import index, serializers
 from geotagger.executor import get_executor, get_jobs_executor
 from geotagger.services import semantic_service
 from geotagger.scan_failures import BatchAborted
 from geotagger.services.semantic_service import SemanticUnavailable
+from geotagger.api.data import JobStatus, StartedResponse
 
 router = APIRouter()
 
@@ -26,9 +27,32 @@ class ForceRequest(BaseModel):
     force: bool = False
 
 
+# ── Response models (React Data page types; see api/data.py for the job ones) ──
+
+class SemanticScanResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    processed: int
+    errors: list[str]   # "<file>: <reason>" for photos that couldn't be read
+    remaining: int
+    failed: int
+
+
+class RetryFailedResponse(BaseModel):
+    requeued: int
+
+
+class SemanticStatusResponse(BaseModel):
+    model: str
+    available: bool
+    total: int
+    embedded: int
+    failed: int
+    remaining: int
+
+
 # ── Indexing ──
 
-@router.post("/api/semantic/scan")
+@router.post("/api/semantic/scan", response_model=SemanticScanResponse)
 async def api_semantic_scan(req: SemanticScanRequest = SemanticScanRequest()):
     """Embed up to `limit` not-yet-indexed photos. Repeat until `remaining` is 0.
     409 when the model isn't downloaded; 503 (detail {code, message, errors}) when
@@ -43,7 +67,7 @@ async def api_semantic_scan(req: SemanticScanRequest = SemanticScanRequest()):
         raise HTTPException(503, e.as_detail())
 
 
-@router.post("/api/semantic/retry-failed")
+@router.post("/api/semantic/retry-failed", response_model=RetryFailedResponse)
 async def api_semantic_retry_failed():
     """Queue the photos whose file couldn't be read (stored as a NULL vector) for
     indexing again."""
@@ -51,7 +75,7 @@ async def api_semantic_retry_failed():
     return await loop.run_in_executor(get_executor(), semantic_service.retry_failed)
 
 
-@router.get("/api/semantic/status")
+@router.get("/api/semantic/status", response_model=SemanticStatusResponse)
 async def api_semantic_status():
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(get_executor(), semantic_service.status)
@@ -64,14 +88,14 @@ async def api_data_semantic_model():
     return semantic_service.model_status()
 
 
-@router.post("/api/data/semantic-model/download")
+@router.post("/api/data/semantic-model/download", response_model=StartedResponse)
 async def api_data_semantic_model_download(req: ForceRequest = ForceRequest()):
     if not semantic_service.start_model_download(get_jobs_executor(), req.force):
         raise HTTPException(409, "Text search model download already in progress")
     return {"started": True}
 
 
-@router.get("/api/data/semantic-model/download/status")
+@router.get("/api/data/semantic-model/download/status", response_model=JobStatus)
 async def api_data_semantic_model_download_status():
     return semantic_service.model_job_status()
 

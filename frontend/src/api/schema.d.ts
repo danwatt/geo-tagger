@@ -2375,6 +2375,17 @@ export interface components {
             /** Person Id */
             person_id?: number | null;
         };
+        /** Bbox */
+        Bbox: {
+            /** Max Lat */
+            max_lat: number;
+            /** Max Lng */
+            max_lng: number;
+            /** Min Lat */
+            min_lat: number;
+            /** Min Lng */
+            min_lng: number;
+        };
         /** BulkAssignRequest */
         BulkAssignRequest: {
             /**
@@ -2388,6 +2399,37 @@ export interface components {
             name?: string | null;
             /** Person Id */
             person_id?: number | null;
+        };
+        /** CachedExtract */
+        CachedExtract: {
+            bbox: components["schemas"]["Bbox"] | null;
+            /** File */
+            file: string;
+            /** Label */
+            label: string;
+            /** Size */
+            size: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** CensusStatus */
+        CensusStatus: {
+            /** Available */
+            available: boolean;
+            /** By Kind */
+            by_kind: {
+                [key: string]: number;
+            };
+            /** Places */
+            places: number;
+            /** Source */
+            source: string | null;
+            /** Zctas */
+            zctas: number;
+            /** Zip Names */
+            zip_names: number;
+        } & {
+            [key: string]: unknown;
         };
         /** ClearScanErrorsResponse */
         ClearScanErrorsResponse: {
@@ -2442,6 +2484,14 @@ export interface components {
         CrowdIgnoreRequest: {
             /** Photo Ids */
             photo_ids: number[];
+        };
+        /** DataStatusResponse */
+        DataStatusResponse: {
+            census: components["schemas"]["CensusStatus"];
+            face_model: components["schemas"]["ModelStatus"];
+            geonames: components["schemas"]["GeonamesStatus"];
+            osm: components["schemas"]["OsmStatus"];
+            semantic_model: components["schemas"]["ModelStatus"];
         };
         /** DateGuessEntry */
         DateGuessEntry: {
@@ -2581,6 +2631,26 @@ export interface components {
              */
             limit: number;
         };
+        /** GeonamesFile */
+        GeonamesFile: {
+            /** Name */
+            name: string;
+            /** Present */
+            present: boolean;
+            /** Size */
+            size: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** GeonamesStatus */
+        GeonamesStatus: {
+            /** Available */
+            available: boolean;
+            /** Files */
+            files: components["schemas"]["GeonamesFile"][];
+        } & {
+            [key: string]: unknown;
+        };
         /** GeotagRequest */
         GeotagRequest: {
             /** Gps Accuracy */
@@ -2650,10 +2720,45 @@ export interface components {
              */
             ignored: boolean;
         };
+        /**
+         * JobStatus
+         * @description A background job's polled state (services' `_*_job` dicts).
+         */
+        JobStatus: {
+            /** Done */
+            done: boolean;
+            /** Error */
+            error: string | null;
+            /** Message */
+            message: string;
+            /**
+             * Queued
+             * @default false
+             */
+            queued: boolean;
+            /** Running */
+            running: boolean;
+        } & {
+            [key: string]: unknown;
+        };
         /** MergePersonRequest */
         MergePersonRequest: {
             /** Into */
             into: number;
+        };
+        /** ModelStatus */
+        ModelStatus: {
+            /** Available */
+            available: boolean;
+            /** Name */
+            name: string;
+            /**
+             * Size Bytes
+             * @default 0
+             */
+            size_bytes: number;
+        } & {
+            [key: string]: unknown;
         };
         /** NegativeFacesRequest */
         NegativeFacesRequest: {
@@ -2681,6 +2786,43 @@ export interface components {
             force: boolean;
             /** Regions */
             regions: string[];
+        };
+        /** OsmRegion */
+        OsmRegion: {
+            /** Key */
+            key: string;
+            /** Name */
+            name: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** OsmRegionGroup */
+        OsmRegionGroup: {
+            /** Group */
+            group: string;
+            /** Items */
+            items: components["schemas"]["OsmRegion"][];
+            /** Label */
+            label: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** OsmStatus */
+        OsmStatus: {
+            /** Available */
+            available: boolean;
+            /** By Category */
+            by_category: {
+                [key: string]: number;
+            };
+            /** Groups */
+            groups: components["schemas"]["OsmRegionGroup"][];
+            /** Ingested Keys */
+            ingested_keys: string[];
+            /** Places */
+            places: number;
+        } & {
+            [key: string]: unknown;
         };
         /** PersonNegativeSnapshot */
         PersonNegativeSnapshot: {
@@ -2745,6 +2887,11 @@ export interface components {
         ResetSettingsResponse: {
             /** Reset */
             reset: string[];
+        };
+        /** RetryFailedResponse */
+        RetryFailedResponse: {
+            /** Requeued */
+            requeued: number;
         };
         /** ScanErrorOut */
         ScanErrorOut: {
@@ -2837,6 +2984,34 @@ export interface components {
              */
             limit: number;
         };
+        /** SemanticScanResponse */
+        SemanticScanResponse: {
+            /** Errors */
+            errors: string[];
+            /** Failed */
+            failed: number;
+            /** Processed */
+            processed: number;
+            /** Remaining */
+            remaining: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** SemanticStatusResponse */
+        SemanticStatusResponse: {
+            /** Available */
+            available: boolean;
+            /** Embedded */
+            embedded: number;
+            /** Failed */
+            failed: number;
+            /** Model */
+            model: string;
+            /** Remaining */
+            remaining: number;
+            /** Total */
+            total: number;
+        };
         /** SetGeocodeIgnoredRequest */
         SetGeocodeIgnoredRequest: {
             /** Ids */
@@ -2885,6 +3060,30 @@ export interface components {
             /** Settings */
             settings: components["schemas"]["SettingOut"][];
         };
+        /** StartedResponse */
+        StartedResponse: {
+            /** Started */
+            started: boolean;
+        };
+        /** StreetSearchJob */
+        StreetSearchJob: {
+            /** Done */
+            done: boolean;
+            /** Error */
+            error: string | null;
+            /** Message */
+            message: string;
+            /**
+             * Queued
+             * @default false
+             */
+            queued: boolean;
+            result?: components["schemas"]["StreetSearchResult"] | null;
+            /** Running */
+            running: boolean;
+        } & {
+            [key: string]: unknown;
+        };
         /** StreetSearchRequest */
         StreetSearchRequest: {
             /** Bbox */
@@ -2898,6 +3097,51 @@ export interface components {
             limit?: number | null;
             /** Query */
             query: string;
+        };
+        /** StreetSearchResult */
+        StreetSearchResult: {
+            /**
+             * No Coverage
+             * @default false
+             */
+            no_coverage: boolean;
+            /** Seconds */
+            seconds: number;
+            /** Streets */
+            streets: components["schemas"]["StreetSegment"][];
+            /** Truncated */
+            truncated: boolean;
+        } & {
+            [key: string]: unknown;
+        };
+        /** StreetSegment */
+        StreetSegment: {
+            /** Coords */
+            coords: [
+                number,
+                number
+            ][];
+            /** Highway */
+            highway: string | null;
+            /** Name */
+            name: string;
+            /** Ref */
+            ref: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** StreetsStatus */
+        StreetsStatus: {
+            /** Available */
+            available: boolean;
+            /** Cache Dir */
+            cache_dir: string;
+            /** Files */
+            files: components["schemas"]["CachedExtract"][];
+            /** Total Size */
+            total_size: number;
+        } & {
+            [key: string]: unknown;
         };
         /** TimeUpdate */
         TimeUpdate: {
@@ -3132,7 +3376,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["StartedResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3161,7 +3405,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JobStatus"];
                 };
             };
         };
@@ -3216,7 +3460,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["StartedResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3245,7 +3489,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JobStatus"];
                 };
             };
         };
@@ -3269,7 +3513,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["StartedResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3298,7 +3542,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JobStatus"];
                 };
             };
         };
@@ -3322,7 +3566,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["StartedResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3351,7 +3595,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JobStatus"];
                 };
             };
         };
@@ -3395,7 +3639,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["StartedResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3424,7 +3668,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["JobStatus"];
                 };
             };
         };
@@ -3444,7 +3688,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DataStatusResponse"];
                 };
             };
         };
@@ -3468,7 +3712,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["StartedResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3497,7 +3741,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["StreetSearchJob"];
                 };
             };
         };
@@ -3517,7 +3761,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["StreetsStatus"];
                 };
             };
         };
@@ -6047,7 +6291,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["RetryFailedResponse"];
                 };
             };
         };
@@ -6071,7 +6315,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SemanticScanResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6100,7 +6344,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SemanticStatusResponse"];
                 };
             };
         };

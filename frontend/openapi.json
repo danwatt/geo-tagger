@@ -104,6 +104,34 @@
         "title": "AssignFaceRequest",
         "type": "object"
       },
+      "Bbox": {
+        "properties": {
+          "max_lat": {
+            "title": "Max Lat",
+            "type": "number"
+          },
+          "max_lng": {
+            "title": "Max Lng",
+            "type": "number"
+          },
+          "min_lat": {
+            "title": "Min Lat",
+            "type": "number"
+          },
+          "min_lng": {
+            "title": "Min Lng",
+            "type": "number"
+          }
+        },
+        "required": [
+          "min_lat",
+          "max_lat",
+          "min_lng",
+          "max_lng"
+        ],
+        "title": "Bbox",
+        "type": "object"
+      },
       "BulkAssignRequest": {
         "properties": {
           "clear": {
@@ -145,6 +173,90 @@
           "face_ids"
         ],
         "title": "BulkAssignRequest",
+        "type": "object"
+      },
+      "CachedExtract": {
+        "additionalProperties": true,
+        "properties": {
+          "bbox": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Bbox"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "file": {
+            "title": "File",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "file",
+          "label",
+          "size",
+          "bbox"
+        ],
+        "title": "CachedExtract",
+        "type": "object"
+      },
+      "CensusStatus": {
+        "additionalProperties": true,
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "by_kind": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Kind",
+            "type": "object"
+          },
+          "places": {
+            "title": "Places",
+            "type": "integer"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "zctas": {
+            "title": "Zctas",
+            "type": "integer"
+          },
+          "zip_names": {
+            "title": "Zip Names",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "available",
+          "places",
+          "by_kind",
+          "source",
+          "zctas",
+          "zip_names"
+        ],
+        "title": "CensusStatus",
         "type": "object"
       },
       "ClearScanErrorsResponse": {
@@ -291,6 +403,34 @@
           "photo_ids"
         ],
         "title": "CrowdIgnoreRequest",
+        "type": "object"
+      },
+      "DataStatusResponse": {
+        "properties": {
+          "census": {
+            "$ref": "#/components/schemas/CensusStatus"
+          },
+          "face_model": {
+            "$ref": "#/components/schemas/ModelStatus"
+          },
+          "geonames": {
+            "$ref": "#/components/schemas/GeonamesStatus"
+          },
+          "osm": {
+            "$ref": "#/components/schemas/OsmStatus"
+          },
+          "semantic_model": {
+            "$ref": "#/components/schemas/ModelStatus"
+          }
+        },
+        "required": [
+          "geonames",
+          "osm",
+          "census",
+          "face_model",
+          "semantic_model"
+        ],
+        "title": "DataStatusResponse",
         "type": "object"
       },
       "DateGuessEntry": {
@@ -641,6 +781,52 @@
         "title": "GeocodeBackfillRequest",
         "type": "object"
       },
+      "GeonamesFile": {
+        "additionalProperties": true,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "present": {
+            "title": "Present",
+            "type": "boolean"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "present",
+          "size"
+        ],
+        "title": "GeonamesFile",
+        "type": "object"
+      },
+      "GeonamesStatus": {
+        "additionalProperties": true,
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/GeonamesFile"
+            },
+            "title": "Files",
+            "type": "array"
+          }
+        },
+        "required": [
+          "available",
+          "files"
+        ],
+        "title": "GeonamesStatus",
+        "type": "object"
+      },
       "GeotagRequest": {
         "properties": {
           "gps_accuracy": {
@@ -834,6 +1020,48 @@
         "title": "IgnoreFacesRequest",
         "type": "object"
       },
+      "JobStatus": {
+        "additionalProperties": true,
+        "description": "A background job's polled state (services' `_*_job` dicts).",
+        "properties": {
+          "done": {
+            "title": "Done",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "queued": {
+            "default": false,
+            "title": "Queued",
+            "type": "boolean"
+          },
+          "running": {
+            "title": "Running",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "running",
+          "done",
+          "error",
+          "message"
+        ],
+        "title": "JobStatus",
+        "type": "object"
+      },
       "MergePersonRequest": {
         "properties": {
           "into": {
@@ -845,6 +1073,30 @@
           "into"
         ],
         "title": "MergePersonRequest",
+        "type": "object"
+      },
+      "ModelStatus": {
+        "additionalProperties": true,
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "size_bytes": {
+            "default": 0,
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "available",
+          "name"
+        ],
+        "title": "ModelStatus",
         "type": "object"
       },
       "NegativeFacesRequest": {
@@ -908,6 +1160,95 @@
           "regions"
         ],
         "title": "OsmDownloadRequest",
+        "type": "object"
+      },
+      "OsmRegion": {
+        "additionalProperties": true,
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "name"
+        ],
+        "title": "OsmRegion",
+        "type": "object"
+      },
+      "OsmRegionGroup": {
+        "additionalProperties": true,
+        "properties": {
+          "group": {
+            "title": "Group",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OsmRegion"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "group",
+          "label",
+          "items"
+        ],
+        "title": "OsmRegionGroup",
+        "type": "object"
+      },
+      "OsmStatus": {
+        "additionalProperties": true,
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "by_category": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Category",
+            "type": "object"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/OsmRegionGroup"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "ingested_keys": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Ingested Keys",
+            "type": "array"
+          },
+          "places": {
+            "title": "Places",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "available",
+          "places",
+          "by_category",
+          "groups",
+          "ingested_keys"
+        ],
+        "title": "OsmStatus",
         "type": "object"
       },
       "PersonNegativeSnapshot": {
@@ -1101,6 +1442,19 @@
           "reset"
         ],
         "title": "ResetSettingsResponse",
+        "type": "object"
+      },
+      "RetryFailedResponse": {
+        "properties": {
+          "requeued": {
+            "title": "Requeued",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requeued"
+        ],
+        "title": "RetryFailedResponse",
         "type": "object"
       },
       "ScanErrorOut": {
@@ -1348,6 +1702,76 @@
         "title": "SemanticScanRequest",
         "type": "object"
       },
+      "SemanticScanResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "processed": {
+            "title": "Processed",
+            "type": "integer"
+          },
+          "remaining": {
+            "title": "Remaining",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "processed",
+          "errors",
+          "remaining",
+          "failed"
+        ],
+        "title": "SemanticScanResponse",
+        "type": "object"
+      },
+      "SemanticStatusResponse": {
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "embedded": {
+            "title": "Embedded",
+            "type": "integer"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "remaining": {
+            "title": "Remaining",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "model",
+          "available",
+          "total",
+          "embedded",
+          "failed",
+          "remaining"
+        ],
+        "title": "SemanticStatusResponse",
+        "type": "object"
+      },
       "SetGeocodeIgnoredRequest": {
         "properties": {
           "ids": {
@@ -1508,6 +1932,70 @@
         "title": "SettingsResponse",
         "type": "object"
       },
+      "StartedResponse": {
+        "properties": {
+          "started": {
+            "title": "Started",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "started"
+        ],
+        "title": "StartedResponse",
+        "type": "object"
+      },
+      "StreetSearchJob": {
+        "additionalProperties": true,
+        "properties": {
+          "done": {
+            "title": "Done",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "queued": {
+            "default": false,
+            "title": "Queued",
+            "type": "boolean"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StreetSearchResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "running": {
+            "title": "Running",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "running",
+          "done",
+          "error",
+          "message"
+        ],
+        "title": "StreetSearchJob",
+        "type": "object"
+      },
       "StreetSearchRequest": {
         "properties": {
           "bbox": {
@@ -1542,6 +2030,126 @@
           "query"
         ],
         "title": "StreetSearchRequest",
+        "type": "object"
+      },
+      "StreetSearchResult": {
+        "additionalProperties": true,
+        "properties": {
+          "no_coverage": {
+            "default": false,
+            "title": "No Coverage",
+            "type": "boolean"
+          },
+          "seconds": {
+            "title": "Seconds",
+            "type": "number"
+          },
+          "streets": {
+            "items": {
+              "$ref": "#/components/schemas/StreetSegment"
+            },
+            "title": "Streets",
+            "type": "array"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "streets",
+          "truncated",
+          "seconds"
+        ],
+        "title": "StreetSearchResult",
+        "type": "object"
+      },
+      "StreetSegment": {
+        "additionalProperties": true,
+        "properties": {
+          "coords": {
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Coords",
+            "type": "array"
+          },
+          "highway": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Highway"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          }
+        },
+        "required": [
+          "name",
+          "ref",
+          "highway",
+          "coords"
+        ],
+        "title": "StreetSegment",
+        "type": "object"
+      },
+      "StreetsStatus": {
+        "additionalProperties": true,
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "cache_dir": {
+            "title": "Cache Dir",
+            "type": "string"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/CachedExtract"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "total_size": {
+            "title": "Total Size",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "available",
+          "cache_dir",
+          "files",
+          "total_size"
+        ],
+        "title": "StreetsStatus",
         "type": "object"
       },
       "TimeUpdate": {
@@ -2049,7 +2657,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/StartedResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2075,7 +2685,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -2148,7 +2760,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/StartedResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2174,7 +2788,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -2202,7 +2818,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/StartedResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2228,7 +2846,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -2254,7 +2874,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/StartedResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2280,7 +2902,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -2324,7 +2948,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/StartedResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2350,7 +2976,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -2366,7 +2994,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DataStatusResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2392,7 +3022,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/StartedResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2418,7 +3050,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/StreetSearchJob"
+                }
               }
             },
             "description": "Successful Response"
@@ -2435,7 +3069,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/StreetsStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -6508,7 +7144,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RetryFailedResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6538,7 +7176,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SemanticScanResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6564,7 +7204,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SemanticStatusResponse"
+                }
               }
             },
             "description": "Successful Response"
