@@ -1,7 +1,7 @@
 import { StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-// The legacy design system, shared with unported pages until the migration ends:
+// The design system (it predates the React pages, hence its home under web/):
 // tokens, reset, form controls, #toolbar / #status-bar / nav / scan-banner chrome.
 import "../../../src/geotagger/web/theme.css";
 import "./page.css";

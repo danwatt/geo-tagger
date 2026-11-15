@@ -1,4 +1,4 @@
-import { api, unwrap } from "../api/client";
+import { api, unwrap, type Schemas } from "../api/client";
 
 /* ── Face undo tokens ── Port of common.js faceUndoable / undoFaceToken.
  * Every one-click face/person write (POST /api/faces/assign, /faces/{id}/assign,
@@ -16,8 +16,11 @@ export function faceUndoable(token: FaceUndoToken | null | undefined): token is 
   return !!t && ((t.faces?.length ?? 0) > 0 || !!t.person || t.created_person_id != null);
 }
 
-/** POST the token; resolves to the outcome line (and whether it's a failure). */
-export async function undoFaceToken(token: FaceUndoToken): Promise<{ message: string; isError: boolean }> {
+export type FaceUndoResult = { message: string; isError: boolean; out: Schemas["UndoFacesResponse"] };
+
+/** POST the token; resolves to the outcome line (and whether it's a failure),
+ *  plus the server's reply (`out.restored`: the faces actually put back). */
+export async function undoFaceToken(token: FaceUndoToken): Promise<FaceUndoResult> {
   // The token is opaque here and validated by the server on the way back in.
   const body = token as never;
   const out = unwrap(await api.POST("/api/faces/undo", { body }));
@@ -40,5 +43,5 @@ export async function undoFaceToken(token: FaceUndoToken): Promise<{ message: st
   } else {
     message = `Not undone — ${total === 1 ? "that face has" : "those faces have"} changed since.`;
   }
-  return { message, isError: !t.person && n === 0 && c > 0 };
+  return { message, isError: !t.person && n === 0 && c > 0, out };
 }

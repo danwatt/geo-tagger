@@ -4,13 +4,14 @@ import "./GroupHeader.css";
 /* A grid group's header bar: title, a quieter meta line, and optional group
  * buttons on the right. Port of face-grid.js faceGroupHeader. */
 
-/** `variant` recolours the bar (face-grid.js's tint classes); "amber" marks
- *  staged, not-yet-saved groups. */
+/** `variant` recolours the bar (face-grid.js's tint classes): "amber" marks
+ *  staged, not-yet-saved groups (and Crowds / Come Back); Photo Faces colours
+ *  its sections green (tagged), blue (suggested) and grey (ignored). */
 export function GroupHeader({ id, title, meta, variant, children }: {
   id?: string;
   title: string;
   meta?: string;
-  variant?: "amber";
+  variant?: "amber" | "green" | "blue" | "grey";
   children?: ReactNode;
 }) {
   return (

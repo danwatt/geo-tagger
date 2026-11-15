@@ -1,10 +1,10 @@
-"""Static frontend serving during the React migration.
+"""Static frontend serving.
 
-Two trees serve the same URL space: `web_dist/` (the Vite build of pages already
-ported to React, see frontend/) and `web/` (the legacy vanilla-JS pages). A ported
-page builds to the URL its legacy page had (/settings.html), so lookups try
-`web_dist/` first and fall back to `web/`. When the last page is ported, `web/`
-goes away and this collapses to a plain StaticFiles."""
+Two trees serve the same URL space: `web_dist/` (the Vite build of the React
+pages, see frontend/) and `web/` (hand-written files outside the build: the
+shared theme.css, which the build also imports, and the static
+design-artifacts.html reference). Lookups try `web_dist/` first and fall back to
+`web/`, so a built page always wins over a same-named source file."""
 
 from pathlib import Path
 
@@ -23,7 +23,7 @@ def frontend_built() -> bool:
 class LayeredStaticFiles(StaticFiles):
     """StaticFiles over several directories, first match wins. Starlette already
     looks up a path in each of `all_directories` in order (that's how `packages=`
-    works); this just puts the build output ahead of the legacy tree."""
+    works); this just puts the build output ahead of web/."""
 
     def __init__(self, directories: list[Path], **kwargs) -> None:
         existing = [d for d in directories if d.is_dir()]

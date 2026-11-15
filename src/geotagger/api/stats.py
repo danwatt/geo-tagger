@@ -149,7 +149,11 @@ async def api_stats_months():
         raise HTTPException(500, str(e))
 
 
-@router.get("/api/stats/years")
+class YearsResponse(BaseModel):
+    years: list[int]   # newest first
+
+
+@router.get("/api/stats/years", response_model=YearsResponse)
 async def api_stats_years():
     """Distinct years with a dated photo, newest first — the People page's Year
     Focus dropdown used to get this by fetching /api/stats/months and picking out

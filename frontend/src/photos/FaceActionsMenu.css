@@ -30,3 +30,22 @@
   white-space: nowrap;
 }
 .expand-btn:disabled { color: var(--text-dim); cursor: default; }
+
+/* Bottom-sheet variant for narrow / touch screens (Quick Tag on a phone): same
+   buttons, larger tap targets, anchored to the bottom edge over a backdrop. */
+.face-qa-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  background: rgba(0, 0, 0, .5);
+}
+.face-expand.as-sheet {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  min-width: 0;
+  border-radius: 16px 16px 0 0;
+  padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+  gap: 10px;
+}
+.face-expand.as-sheet .expand-btn { font-size: 16px; padding: 14px; }

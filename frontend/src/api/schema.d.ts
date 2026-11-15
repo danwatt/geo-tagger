@@ -2355,6 +2355,22 @@ export interface components {
             /** Person Id */
             person_id?: number | null;
         };
+        /**
+         * AddManualFaceResponse
+         * @description faces_service.add_manual_face.
+         */
+        AddManualFaceResponse: {
+            /** Det Score */
+            det_score?: number | null;
+            /** Embedded */
+            embedded: boolean;
+            /** Face Id */
+            face_id: number;
+            /** Person Id */
+            person_id?: number | null;
+            /** Photo Id */
+            photo_id: number;
+        };
         /** AssignDateRequest */
         AssignDateRequest: {
             /** Month */
@@ -2661,10 +2677,61 @@ export interface components {
             /** Type */
             type: string;
         };
+        /** CrowdGroup */
+        CrowdGroup: {
+            /** Label */
+            label: string;
+            /** Photos */
+            photos: components["schemas"]["CrowdPhoto"][];
+            /** Total Faces */
+            total_faces: number;
+            /** Unlabeled Faces */
+            unlabeled_faces: number;
+        };
         /** CrowdIgnoreRequest */
         CrowdIgnoreRequest: {
             /** Photo Ids */
             photo_ids: number[];
+        };
+        /** CrowdIgnoreResponse */
+        CrowdIgnoreResponse: {
+            /** Ignored */
+            ignored: number;
+            /** Undo */
+            undo?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** CrowdPhoto */
+        CrowdPhoto: {
+            /** Come Back Faces */
+            come_back_faces: number;
+            /** Dir */
+            dir?: string | null;
+            /** Filename */
+            filename: string;
+            /** Id */
+            id: number;
+            /** Ignored Faces */
+            ignored_faces: number;
+            /** Labeled Faces */
+            labeled_faces: number;
+            location?: components["schemas"]["FaceLocation"] | null;
+            /** Orientation */
+            orientation?: number | null;
+            /** Photo Datetime */
+            photo_datetime?: number | null;
+            /** Total Faces */
+            total_faces: number;
+            /** Unlabeled Faces */
+            unlabeled_faces: number;
+        };
+        /** CrowdsResponse */
+        CrowdsResponse: {
+            /** Groups */
+            groups: components["schemas"]["CrowdGroup"][];
+            /** Photo Count */
+            photo_count: number;
         };
         /** DataStatusResponse */
         DataStatusResponse: {
@@ -2782,6 +2849,17 @@ export interface components {
             /** Persons */
             persons: components["schemas"]["RepresentativeCounts"][];
         };
+        /** DeleteFaceResponse */
+        DeleteFaceResponse: {
+            /** Face Id */
+            face_id: number;
+            /** Id */
+            id: number;
+            /** Ok */
+            ok: boolean;
+            /** Success */
+            success: boolean;
+        };
         /** DeletePersonResponse */
         DeletePersonResponse: {
             /** Id */
@@ -2862,6 +2940,28 @@ export interface components {
             /** Partial */
             partial: number;
         };
+        /**
+         * FaceCluster
+         * @description faces_service.compute_clusters.
+         */
+        FaceCluster: {
+            /** Face Ids */
+            face_ids: number[];
+            /** Sample */
+            sample: components["schemas"]["FaceItem"][];
+            /** Size */
+            size: number;
+            suggestion?: components["schemas"]["FaceSuggestion"] | null;
+        };
+        /** FaceClustersResponse */
+        FaceClustersResponse: {
+            /** Clusters */
+            clusters: components["schemas"]["FaceCluster"][];
+            /** Grouped */
+            grouped: number;
+            /** Scanned */
+            scanned: number;
+        };
         /** FaceExpect */
         FaceExpect: {
             /** Assigned At */
@@ -2883,6 +2983,66 @@ export interface components {
             /** Person Id */
             person_id?: number | null;
         };
+        /**
+         * FaceItem
+         * @description serializers.face_item, with the recognition fields /api/faces fills in.
+         */
+        FaceItem: {
+            /**
+             * Alternatives
+             * @default []
+             */
+            alternatives: components["schemas"]["FaceSuggestion"][];
+            /** Assigned At */
+            assigned_at?: number | null;
+            /** Bbox */
+            bbox: number[];
+            /** Come Back */
+            come_back: boolean;
+            /** Come Back At */
+            come_back_at?: number | null;
+            /** Det Score */
+            det_score?: number | null;
+            /** Dir */
+            dir?: string | null;
+            /** Filename */
+            filename?: string | null;
+            /** Id */
+            id: number;
+            /** Ignored */
+            ignored: boolean;
+            /** Ignored At */
+            ignored_at?: number | null;
+            location?: components["schemas"]["FaceLocation"] | null;
+            /**
+             * Negatives
+             * @default []
+             */
+            negatives: number[];
+            /** Person Id */
+            person_id?: number | null;
+            /** Person Name */
+            person_name?: string | null;
+            /** Photo Datetime */
+            photo_datetime?: number | null;
+            /** Photo Id */
+            photo_id: number;
+            suggestion?: components["schemas"]["FaceSuggestion"] | null;
+        };
+        /**
+         * FaceLocation
+         * @description serializers.row_location.
+         */
+        FaceLocation: {
+            /** City */
+            city?: string | null;
+            /** Country */
+            country?: string | null;
+            /** State */
+            state?: string | null;
+            /** Sublocation */
+            sublocation?: string | null;
+        };
         /** FaceNegativeSnapshot */
         FaceNegativeSnapshot: {
             /** Created At */
@@ -2898,6 +3058,39 @@ export interface components {
             person_id: number;
             /** Updated */
             updated: number;
+        };
+        /**
+         * FacePage
+         * @description _face_page's envelope.
+         */
+        FacePage: {
+            /** Faces */
+            faces: components["schemas"]["FaceItem"][];
+            /** Next Offset */
+            next_offset?: number | null;
+            /** Offset */
+            offset: number;
+            /** Returned */
+            returned: number;
+            /** Total */
+            total: number;
+        };
+        /** FaceScanStatus */
+        FaceScanStatus: {
+            /** Come Back Faces */
+            come_back_faces: number;
+            /** Failed Photos */
+            failed_photos: number;
+            /** Ignored Faces */
+            ignored_faces: number;
+            /** Remaining Photos */
+            remaining_photos: number;
+            /** Tagged Faces */
+            tagged_faces: number;
+            /** Total Faces */
+            total_faces: number;
+            /** Unlabeled Faces */
+            unlabeled_faces: number;
         };
         /** FaceSnapshot */
         FaceSnapshot: {
@@ -2940,10 +3133,30 @@ export interface components {
              */
             representative: boolean;
         };
+        /**
+         * FaceSuggestion
+         * @description A recognition guess: the person and the match score (a cluster's
+         *     suggestion scores the share of the group that voted for them).
+         */
+        FaceSuggestion: {
+            /** Person Id */
+            person_id: number;
+            /** Person Name */
+            person_name?: string | null;
+            /** Score */
+            score: number;
+        };
         /** FacesByIdsRequest */
         FacesByIdsRequest: {
             /** Face Ids */
             face_ids: number[];
+        };
+        /** FacesByIdsResponse */
+        FacesByIdsResponse: {
+            /** Faces */
+            faces: components["schemas"]["FaceItem"][];
+            /** Missing */
+            missing: number[];
         };
         /** FacesMonthsResponse */
         FacesMonthsResponse: {
@@ -3524,6 +3737,18 @@ export interface components {
             /** Person Id */
             person_id: number;
         };
+        /**
+         * NukeFacesResponse
+         * @description faces_service.nuke_photo_faces.
+         */
+        NukeFacesResponse: {
+            /** Faces Deleted */
+            faces_deleted: number;
+            /** Files Deleted */
+            files_deleted: number;
+            /** Photos */
+            photos: number;
+        };
         /** NukePhotoFacesRequest */
         NukePhotoFacesRequest: {
             /** Photo Ids */
@@ -3721,6 +3946,33 @@ export interface components {
             /** Sublocation */
             sublocation?: string | null;
         };
+        /**
+         * PhotoFace
+         * @description One face of /api/photos/{id}/faces (no photo fields: they're the page's).
+         */
+        PhotoFace: {
+            /** Assigned At */
+            assigned_at?: number | null;
+            /** Bbox */
+            bbox: number[];
+            /** Come Back */
+            come_back: boolean;
+            /** Det Score */
+            det_score?: number | null;
+            /** Id */
+            id: number;
+            /** Ignored */
+            ignored: boolean;
+            /** Negatives */
+            negatives: number[];
+            /** Person Id */
+            person_id?: number | null;
+            /** Person Name */
+            person_name?: string | null;
+            /** Source */
+            source?: string | null;
+            suggestion?: components["schemas"]["FaceSuggestion"] | null;
+        };
         /** PhotoPlace */
         PhotoPlace: {
             /** City */
@@ -3731,6 +3983,19 @@ export interface components {
             state?: string | null;
             /** Sublocation */
             sublocation?: string | null;
+        };
+        /** PhotoTaggedPerson */
+        PhotoTaggedPerson: {
+            /** Assigned At */
+            assigned_at?: number | null;
+            /** Bbox */
+            bbox: number[];
+            /** Id */
+            id: number;
+            /** Person Id */
+            person_id: number;
+            /** Person Name */
+            person_name?: string | null;
         };
         /** PhotosByIdsRequest */
         PhotosByIdsRequest: {
@@ -3898,6 +4163,26 @@ export interface components {
         RequeuedResponse: {
             /** Requeued */
             requeued: number;
+        };
+        /**
+         * RescanFacesResponse
+         * @description faces_service.rescan_photo_faces: the nuke counts plus the scan batch's.
+         */
+        RescanFacesResponse: {
+            /** Errors */
+            errors: string[];
+            /** Faces Deleted */
+            faces_deleted: number;
+            /** Faces Found */
+            faces_found: number;
+            /** Files Deleted */
+            files_deleted: number;
+            /** Orientations Updated */
+            orientations_updated: number;
+            /** Photos */
+            photos: number;
+            /** Processed */
+            processed: number;
         };
         /** ResetSettingsRequest */
         ResetSettingsRequest: {
@@ -4606,6 +4891,11 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** YearsResponse */
+        YearsResponse: {
+            /** Years */
+            years: number[];
+        };
         /** ZctaSource */
         ZctaSource: {
             /** Postal City */
@@ -4658,7 +4948,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CrowdsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4691,7 +4981,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CrowdIgnoreResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5209,7 +5499,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["FacePage"];
                 };
             };
             /** @description Validation Error */
@@ -5275,7 +5565,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["FacesByIdsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5311,7 +5601,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["FaceClustersResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5515,7 +5805,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["NukeFacesResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5548,7 +5838,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["RescanFacesResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5633,7 +5923,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["FaceScanStatus"];
                 };
             };
             /** @description Validation Error */
@@ -5697,7 +5987,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DeleteFaceResponse"];
                 };
             };
             /** @description Validation Error */
@@ -7111,7 +7401,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["PhotoFace"][];
                 };
             };
             /** @description Validation Error */
@@ -7146,7 +7436,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["AddManualFaceResponse"];
                 };
             };
             /** @description Validation Error */
@@ -7241,7 +7531,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["PhotoTaggedPerson"][];
                 };
             };
             /** @description Validation Error */
@@ -7988,7 +8278,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["YearsResponse"];
                 };
             };
         };

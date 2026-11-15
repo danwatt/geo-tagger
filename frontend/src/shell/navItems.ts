@@ -1,6 +1,6 @@
-/* Top nav entries. Same list as the legacy web/nav.js ITEMS: keep the two in
- * step until every page is ported and nav.js is deleted. A flat entry is a
- * link; an entry with children is a dropdown group. */
+/* Top nav entries (ported from the legacy web/nav.js ITEMS, which no page
+ * loads any more). A flat entry is a link; an entry with children is a
+ * dropdown group. */
 
 export type NavLink = { key: string; label: string; href: string };
 export type NavGroup = { key: string; label: string; children: NavLink[] };

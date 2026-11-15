@@ -579,15 +579,15 @@ live from the Settings page):
 
 ## Frontend development
 
-The web UI is moving from plain JavaScript (`src/geotagger/web/`) to React + TypeScript
-(`frontend/`, built with Vite), one page at a time. A moved page builds to the same URL it had
-(`/settings.html`), so links between old and new pages keep working. FastAPI serves the build
-output (`src/geotagger/web_dist/`, gitignored) ahead of `web/`, so a built page replaces its
-old version.
+The web UI is React + TypeScript (`frontend/`, built with Vite). Every page has moved over
+from the old plain-JavaScript pages in `src/geotagger/web/` and builds to the URL it had
+(`/settings.html`), so links and bookmarks keep working. FastAPI serves the build output
+(`src/geotagger/web_dist/`, gitignored) ahead of `web/`, which now holds only the shared
+stylesheet (`theme.css`) the pages import at build time and a static design reference.
 
 For live reload, run the backend and the Vite dev server side by side, and open
-`http://localhost:5173`. Vite serves the moved pages and passes everything else (the API,
-pages not yet moved, thumbnails) through to the backend on `GEOTAGGER_PORT` (default 8000):
+`http://localhost:5173`. Vite serves the pages and passes everything else (the API,
+thumbnails) through to the backend on `GEOTAGGER_PORT` (default 8000):
 
 ```bash
 uv run geotagger

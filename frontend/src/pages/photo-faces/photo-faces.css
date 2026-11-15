@@ -1,0 +1,148 @@
+/* Photo Faces. Ported from web/photo-faces.css with raw hex swapped for
+   theme.css tokens. */
+
+#cr-main { display: flex; flex: 1; overflow: hidden; min-height: 0; }
+
+/* ── Left: face sections ── */
+#cr-faces {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-right: 1px solid var(--border);
+}
+#cr-empty { color: var(--text-faint); padding: 20px; font-size: 13px; }
+.cr-section > .face-group-header { border-radius: 4px 4px 0 0; }
+
+/* ── Right: the photo ── */
+#cr-photo-pane {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface-black);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px;
+  gap: 10px;
+}
+#photo-meta { width: 100%; max-width: 600px; border-collapse: collapse; font-size: 11px; color: var(--text-muted); }
+#photo-meta th, #photo-meta td { padding: 2px 8px; text-align: left; font-weight: 400; }
+#photo-meta th { color: var(--text-faint); white-space: nowrap; width: 80px; }
+#photo-meta td { color: var(--text); word-break: break-all; }
+
+/* The container shrink-wraps the image so the overlay aligns exactly. */
+#photo-container { position: relative; width: fit-content; max-width: 100%; line-height: 0; flex-shrink: 0; }
+#photo-full { display: block; max-width: 100%; max-height: calc(100vh - 52px); }
+#bbox-overlay { position: absolute; inset: 0; touch-action: none; }
+
+.face-bbox {
+  position: absolute;
+  border: 2px solid var(--accent);
+  cursor: pointer;
+  transition: border-color 0.1s, border-width 0.1s;
+}
+.face-bbox:hover { filter: brightness(1.4); }
+.face-bbox.box-tagged { border-color: var(--success); }
+.face-bbox.box-ignored { border-color: var(--border-btn); opacity: .35; }
+.face-bbox.box-come-back { border-color: var(--warn); opacity: .6; }
+.face-bbox.box-suggested { border-color: var(--accent); }
+.face-bbox.box-unknown { border-color: var(--draw-active); }
+@media (prefers-reduced-motion: reduce) { .face-bbox, .face-card { transition: none; } }
+
+/* "Add face": crosshair, and existing boxes stop swallowing the press. */
+#photo-container.draw-mode { cursor: crosshair; }
+#photo-container.draw-mode .face-bbox { pointer-events: none; }
+.face-bbox.draft-bbox { border: 2px dashed var(--gold); background: rgba(224, 160, 64, 0.12); opacity: 1; }
+
+.bbox-label {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: rgba(30, 80, 30, 0.82);
+  color: var(--text-strong);
+  font-size: 9px;
+  padding: 1px 3px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+}
+.face-bbox.bbox-highlighted { border-color: var(--gold); border-width: 3px; z-index: 10; opacity: 1; }
+
+/* ── Face strips and cards ── */
+.face-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--face-size), 1fr));
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border-2);
+  border-top: none;
+  border-radius: 0 0 5px 5px;
+}
+.face-card {
+  position: relative;
+  border: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  transition: border-color 0.1s;
+}
+.face-card:hover { border-color: var(--border-btn); }
+.face-card.card-highlighted { border-color: var(--gold); box-shadow: 0 0 0 2px var(--gold); }
+.face-card-btn { display: block; width: 100%; padding: 0; border: none; border-radius: 1px; background: var(--surface-black); }
+.face-card-btn:hover { background: var(--surface-black); }
+.face-card-btn:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
+.face-card img { border-radius: 1px; background: var(--surface-black); }
+.labeled-card { border-color: var(--success); }
+.ignored-card { opacity: 0.45; }
+.ignored-card:hover, .ignored-card:focus-within { opacity: 0.7; }
+.come-back-card { opacity: 0.75; }
+.come-back-card:hover, .come-back-card:focus-within { opacity: 1; }
+
+.face-name-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2px;
+  padding: 2px 4px;
+  background: var(--surface-2);
+  color: var(--success);
+  font-size: 10px;
+  line-height: 1.3;
+  overflow: hidden;
+}
+.face-name-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip-unassign { flex-shrink: 0; background: none; border: none; color: var(--danger-text); font-size: 12px; line-height: 1; padding: 0 2px; }
+.chip-unassign:hover { background: none; color: var(--danger); }
+.face-score-chip {
+  position: absolute;
+  top: 2px; right: 2px;
+  background: rgba(0, 0, 0, .65);
+  color: var(--on-accent);
+  font-size: 9px;
+  padding: 1px 3px;
+  border-radius: 2px;
+  pointer-events: none;
+}
+.face-ignored-chip { text-align: center; padding: 2px 4px; background: var(--surface-2); color: var(--text-dim); font-size: 10px; }
+.face-come-back-chip { text-align: center; padding: 2px 4px; background: var(--warn-bg); color: var(--warn); font-size: 10px; font-style: italic; }
+
+.suggested-group {
+  background: var(--group-card-bg);
+  border: 1px solid var(--group-card-border);
+  border-radius: 5px;
+  margin: 2px 0;
+}
+.suggested-group .face-strip { border: none; border-top: 1px solid var(--group-card-border); background: var(--surface-black); }
+
+.filename-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

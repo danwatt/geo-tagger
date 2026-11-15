@@ -1,0 +1,461 @@
+/* People page. Ported from web/people.css, face-grid.css and the grid/detail
+   parts of web/style.css, with raw hex swapped for theme.css tokens (overlay
+   chips keep their translucent rgba: they sit over photos, not the theme). */
+
+/* ── Layout: list | grid | divider | detail ── The detail width is a variable
+   the divider moves; the grid takes the rest. */
+#people-main {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr) 6px var(--detail-pane-w, 340px);
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+#people-main.pane-resizing { cursor: col-resize; user-select: none; }
+.pane-divider { position: relative; }
+
+#suggested-only-label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+#suggested-only-label.dimmed { opacity: .45; }
+#suggested-only-label input { margin: 0; }
+
+#focus-group label { color: var(--text-muted); font-size: 12px; }
+#focus-group select { max-width: 240px; }
+#focus-group select.focus-active { border-color: var(--accent); background: var(--accent-bg-2); }
+#focus-note { color: var(--success); font-size: 11px; font-style: italic; }
+
+/* ── Left: people list ── */
+#people-pane {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-1);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+.people-list { overflow-y: auto; flex: 1; padding: 6px; }
+.person-item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-bottom: 3px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+}
+.person-item:hover { background: var(--surface-2); }
+.person-item.active { background: var(--accent-bg); border-color: var(--accent); color: var(--on-accent); }
+.person-item .person-pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px;
+  background: none;
+  border: none;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+}
+.person-item .person-pick:hover { background: none; }
+.person-item .person-pick:focus-visible,
+.person-item .person-edit:focus-visible,
+.person-item .person-del:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
+.person-item .person-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.person-item .person-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--surface-btn);
+  border-radius: 10px;
+  padding: 1px 7px;
+}
+.person-item.active .person-count { background: var(--accent-bg-2); color: var(--on-accent); }
+.person-item .person-birth { color: var(--text-faint); font-size: 10px; font-weight: 400; }
+.person-item.active .person-birth { color: var(--accent-text); }
+/* Hover-only controls stay reachable: they show on keyboard focus too. */
+.person-item .person-edit,
+.person-item .person-del {
+  flex-shrink: 0;
+  opacity: 0;
+  padding: 0 4px;
+  background: none;
+  border: none;
+}
+.person-item .person-edit { color: var(--accent-text); }
+.person-item .person-del { color: var(--danger-text); font-weight: bold; }
+.person-item:hover .person-edit, .person-item:hover .person-del,
+.person-item:focus-within .person-edit, .person-item:focus-within .person-del { opacity: 1; }
+.people-sep { height: 1px; background: var(--border); margin: 6px 4px; }
+.people-empty { color: var(--text-faint); padding: 8px; font-size: 11px; }
+.family-group-header {
+  padding: 10px 8px 2px;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--text-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  user-select: none;
+}
+.people-add { margin: 6px; flex-shrink: 0; }
+
+/* ── Centre: grid pane ── */
+#grid-pane {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--surface-1);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+#grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--face-size), 1fr));
+  gap: 4px;
+  padding: 6px;
+}
+.grid-year-divider, .grid-month-divider {
+  grid-column: 1 / -1;
+  padding: 4px 4px 2px;
+  user-select: none;
+}
+.grid-year-divider { font-size: 13px; font-weight: 700; color: var(--accent-text); border-bottom: 1px solid var(--accent-bg); margin-top: 6px; }
+.grid-month-divider { font-size: 11px; font-weight: 500; color: var(--text-muted); border-bottom: 1px solid var(--border-2); margin-top: 4px; }
+
+/* Sticky control bar pinned to the top of the scrolling pane. */
+#grid-nav {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  background: var(--surface-3);
+  border-bottom: 1px solid var(--border);
+}
+#grid-nav label { color: var(--text-muted); font-size: 12px; }
+#grid-nav-person, #grid-nav-crowds, #grid-nav-unlabeled, #grid-nav-hierarchy, #grid-nav-sort, #grid-nav-discover, #grid-nav-selection {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+#grid-nav .check-label { display: inline-flex; align-items: center; gap: 4px; }
+#grid-nav .crowd-min { width: 60px; }
+#discover-stale-note { color: var(--warn); font-size: 12px; }
+#grid-nav-unlabeled select { max-width: 240px; }
+/* The selection bar acts on the *selection*; the near-identical buttons in each
+   group header act on *that group*. They sit a few pixels apart and share icons,
+   so they're styled as opposites: this one a raised pill with a live count, the
+   group rows left-packed ghost buttons behind a "this group:" chip. */
+#grid-nav-selection {
+  margin-left: auto;
+  gap: 6px;
+  padding: 3px 4px 3px 8px;
+  background: var(--surface-input);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+}
+#selection-count { font-size: 11px; font-weight: 600; color: var(--accent-text); white-space: nowrap; }
+#grid-nav-selection.empty #selection-count { color: var(--text-faint); font-weight: 400; }
+#grid-nav-selection button:disabled { opacity: .4; cursor: default; }
+/* Paging banner (U5): its own full-width row, in the warning tone. */
+#grid-paging {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+}
+#grid-paging-text { flex: 1; min-width: 200px; }
+#grid-paging button:disabled { opacity: .6; cursor: default; }
+
+/* Group-header actions: left-packed against their title, flat ghost buttons. */
+#grid .face-group-header { justify-content: flex-start; }
+#grid .face-group-header .face-group-btns { margin-left: 4px; }
+#grid .face-group-header button { background: transparent; border-color: rgba(255, 255, 255, .16); }
+#grid .face-group-header button:hover { background: rgba(255, 255, 255, .1); }
+#grid .face-group-header button.primary { background: transparent; border-color: var(--accent); color: var(--accent-text); }
+#grid .face-group-header button.primary:hover { background: var(--accent-bg-2); }
+#grid .face-group-header button.danger { background: transparent; }
+.face-group-scope { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; opacity: .65; padding-right: 1px; }
+
+/* ── Face cells ── A cell is a box (the chips over it are buttons of their own),
+   with a button filling it for selection. Off-screen cells skip style, layout
+   and paint (content-visibility): a load can be thousands of cells. */
+.thumb-cell {
+  position: relative;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--surface-black);
+  border: 2px solid transparent;
+  transition: border-color 0.1s;
+}
+#grid .thumb-cell { content-visibility: auto; contain-intrinsic-size: auto var(--face-size); }
+.thumb-cell.selected { border-color: var(--accent); }
+.face-cell-btn {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  cursor: pointer;
+}
+.face-cell-btn:hover { background: none; }
+.face-cell-btn:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
+.thumb-cell img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .thumb-cell { transition: none; } }
+
+.thumb-cell .face-score {
+  position: absolute;
+  top: 2px; right: 3px;
+  font-size: 9px;
+  color: var(--text);
+  background: rgba(0, 0, 0, .5);
+  border-radius: var(--radius-sm);
+  padding: 0 3px;
+  pointer-events: none;
+}
+.thumb-cell .face-label {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: rgba(0, 0, 0, .6);
+  color: var(--text-strong);
+  font-size: 10px;
+  padding: 2px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.thumb-cell .sug-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Blue "suggested person" chip: confirm, or ✕ to reject the guess. */
+.thumb-cell .face-suggest, .thumb-cell .face-alt {
+  display: flex;
+  align-items: stretch;
+  font-size: 10px;
+}
+.thumb-cell .face-suggest {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: rgba(42, 74, 110, .85);
+  color: var(--on-accent);
+}
+.thumb-cell .face-suggest:hover { background: rgba(42, 74, 110, 1); }
+.thumb-cell .face-alt { background: rgba(140, 92, 20, .9); color: #ffe2b8; }
+.thumb-cell .face-alt:hover { background: rgba(170, 112, 24, 1); }
+.thumb-cell .sug-confirm, .thumb-cell .sug-reject, .thumb-cell .face-untag {
+  background: none;
+  border: none;
+  border-radius: 0;
+  color: inherit;
+  font: inherit;
+  padding: 2px 4px;
+}
+.thumb-cell .sug-confirm { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; text-align: left; }
+.thumb-cell .sug-confirm:hover, .thumb-cell .sug-reject:hover { background: none; }
+.thumb-cell .sug-check { font-weight: bold; color: var(--success); }
+.thumb-cell .alt-arrow { font-weight: bold; color: var(--gold); }
+.thumb-cell .sug-reject { flex-shrink: 0; font-weight: bold; color: var(--danger-text); padding: 0 4px; }
+.thumb-cell .sug-reject:hover { color: var(--danger); }
+.thumb-cell .face-chips { position: absolute; bottom: 0; left: 0; right: 0; display: flex; flex-direction: column; }
+.thumb-cell .face-chips .face-suggest { position: static; }
+/* Ambiguous faces get an amber ring among the confident guesses. */
+.thumb-cell.ambiguous { box-shadow: inset 0 0 0 2px var(--gold); }
+/* Recently tagged: the name is a one-click un-tag. */
+.thumb-cell .face-untag {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: rgba(0, 0, 0, .6);
+  color: var(--text-strong);
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+.thumb-cell .face-untag:hover { background: rgba(122, 32, 32, .92); color: var(--text-strong); }
+.thumb-cell .face-untag .untag-x { flex-shrink: 0; font-weight: bold; color: var(--danger-text); }
+.thumb-cell.ignored img { opacity: 0.4; filter: grayscale(0.6); }
+.thumb-cell .face-label.ignored-label { background: rgba(80, 80, 80, .8); color: var(--text); font-style: italic; }
+/* Come back: a deliberate "not yet", tinted amber rather than greyed out. */
+.thumb-cell.come-back img { opacity: 0.75; filter: sepia(0.35); }
+.thumb-cell .face-label.come-back-label { background: rgba(130, 95, 15, .85); color: #ffd699; font-style: italic; }
+
+/* Unlabeled: each suggested-person run is its own wrapping row, so the whole
+   run gets one hover background. */
+.person-runs { display: flex; flex-direction: column; gap: 4px; padding-top: 4px; }
+.person-run { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: var(--radius); }
+.person-run:hover { background: rgba(255, 255, 255, 0.06); }
+.person-run .thumb-cell { flex: 0 0 var(--face-size); width: var(--face-size); }
+
+.person-scope-header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 4px 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.person-scope-label { font-size: 12px; color: var(--text-muted); }
+
+/* ── Discover: cluster cards ── */
+.cluster-card {
+  grid-column: 1 / -1;
+  background: var(--group-card-bg);
+  border: 1px solid var(--group-card-border);
+  border-radius: 6px;
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+.cluster-faces {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--face-size), 1fr));
+  gap: 4px;
+  padding: 8px 10px;
+}
+.cluster-face {
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--surface-black);
+  overflow: hidden;
+  display: block;
+}
+.cluster-face img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+.cluster-face:hover { border-color: var(--border-btn); background: var(--surface-black); }
+.cluster-face.focused { border-color: var(--accent); }
+.cluster-face:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
+.cluster-more { color: var(--text-muted); font-size: 11px; padding: 6px 4px; }
+
+/* ── Crowds ── */
+.crowd-group-card { background: var(--warn-bg); border-color: var(--warn); }
+.crowd-photos { display: flex; flex-wrap: wrap; gap: 10px; padding: 8px 10px; }
+.crowd-photo-cell {
+  width: 140px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.crowd-photo-open { padding: 0; border: none; border-radius: 0; background: var(--surface-black); }
+.crowd-photo-open img { width: 140px; height: 105px; object-fit: cover; display: block; }
+.crowd-photo-open:hover img { opacity: 0.85; }
+.crowd-photo-open:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
+.crowd-badge { font-size: 10px; color: var(--text-muted); padding: 3px 6px; background: var(--surface-3); line-height: 1.3; }
+.crowd-photo-actions { display: flex; gap: 4px; padding: 4px 6px; background: var(--surface-3); border-top: 1px solid var(--border); }
+.crowd-photo-actions button, .crowd-photo-actions .button { flex: 1; font-size: 10px; padding: 2px 4px; text-align: center; text-decoration: none; }
+.crowds-done { grid-column: 1 / -1; color: var(--text-faint); padding: 16px; font-size: 12px; }
+
+/* ── Right: detail ── */
+#detail-pane {
+  overflow-y: auto;
+  padding: 10px;
+  background: var(--surface-1);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+#detail-placeholder { color: var(--text-dim); margin: auto; text-align: center; }
+#detail-content { display: flex; flex-direction: column; gap: 10px; }
+#face-photo-wrap { position: relative; line-height: 0; }
+#face-photo-wrap img { width: 100%; border-radius: var(--radius); display: block; }
+#face-box {
+  position: absolute;
+  border: 2px solid var(--accent-text);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, .5);
+  border-radius: 2px;
+  pointer-events: none;
+}
+/* Another tagged face in the same photo, while its chip is hovered. */
+#photo-people-box { position: absolute; border: 2px dashed var(--success); border-radius: 2px; pointer-events: none; }
+#photo-people { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; }
+#photo-people .pp-label { color: var(--text-muted); font-size: 11px; width: 100%; }
+#photo-people .pp-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 2px 10px 2px 2px;
+  color: var(--text);
+}
+#photo-people .pp-chip.pp-self { background: var(--accent-bg-2); border-color: var(--accent-bg); color: var(--on-accent); }
+#photo-people .pp-chip img { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; background: var(--surface-black); }
+
+#face-assign-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  background: var(--surface-3);
+  border-radius: 5px;
+  border: 1px solid var(--surface-btn);
+}
+.face-assign-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+#face-suggestion {
+  font-size: 12px;
+  color: var(--on-accent);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#face-suggestion .sug-primary { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+#face-suggestion .sug-text { color: var(--text-muted); }
+#face-suggestion .sug-text b { color: var(--on-accent); }
+#face-suggestion .sug-alts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  border-top: 1px solid rgba(255, 255, 255, .12);
+  padding-top: 8px;
+}
+#face-suggestion .sug-alts-label { color: var(--gold); }
+#face-suggestion .sug-alt-group { display: flex; align-items: center; gap: 2px; }
+#face-suggestion .alt-btn { background: var(--warn-bg); border: 1px solid var(--warn); color: var(--text-strong); padding: 3px 8px; font-size: 11px; }
+#face-suggestion .alt-not-btn { padding: 3px 6px; background: transparent; color: var(--danger-text); }
+#face-suggestion .alt-not-btn:hover { background: var(--danger-bg); }
+#face-negatives {
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#face-negatives .neg-title { color: var(--danger-text); font-size: 11px; }
+#face-negatives .neg-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+#face-negatives .neg-undo-btn { background: transparent; color: var(--text-muted); padding: 2px 8px; font-size: 11px; }
+#detail-meta { width: 100%; border-collapse: collapse; font-size: 12px; }
+#detail-meta th, #detail-meta td { padding: 3px 6px; border-bottom: 1px solid var(--border-2); vertical-align: top; text-align: left; }
+#detail-meta th { color: var(--text-muted); width: 40%; font-weight: 400; }
+#detail-meta .meta-ignored { color: var(--text-muted); }
+#detail-meta .meta-come-back { color: var(--warn); }
+#detail-meta .meta-unassigned { color: var(--text-faint); }
+#detail-meta .meta-staged { color: var(--warn); }
+
+/* Birth-date dialog */
+.birth-form { display: flex; flex-direction: column; gap: 8px; }
+.birth-form label { color: var(--text-muted); font-size: 12px; }
+.birth-error { color: var(--danger-text); font-size: 12px; }

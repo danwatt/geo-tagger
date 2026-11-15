@@ -33,4 +33,7 @@
 .pp-new { background: var(--accent-bg); border-color: var(--accent); color: var(--on-accent); }
 /* The Create row is blue already, so its keyboard highlight needs a ring. */
 .pp-new.pp-hl { outline: 2px solid var(--accent-text); outline-offset: -2px; }
+/* A typo-distance match ("Jon" for John): listed, but marked as only similar. */
+.pp-item.pp-similar { border-style: dashed; }
+.pp-item.pp-similar .pp-name::after { content: " · similar"; color: var(--text-muted); font-size: 11px; }
 .pp-empty { color: var(--text-muted); text-align: center; padding: 14px; font-size: 12px; }

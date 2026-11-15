@@ -43,7 +43,7 @@ def _static_client(tmp_path: Path) -> TestClient:
     web.mkdir()
     (dist / "settings.html").write_text("react settings")
     (web / "settings.html").write_text("legacy settings")
-    (web / "people.html").write_text("legacy people")
+    (web / "design-artifacts.html").write_text("legacy design reference")
     (web / "index.html").write_text("legacy home")
     app = Starlette()
     app.mount("/", LayeredStaticFiles([dist, web], html=True))
@@ -55,9 +55,11 @@ def test_built_page_shadows_legacy_page(tmp_path):
     assert client.get("/settings.html").text == "react settings"
 
 
-def test_unported_pages_fall_back_to_legacy_tree(tmp_path):
+def test_files_only_in_legacy_tree_fall_back_to_it(tmp_path):
+    # Every page is built now, but web/ still serves what the build doesn't
+    # have (theme.css, the design reference page).
     client = _static_client(tmp_path)
-    assert client.get("/people.html").text == "legacy people"
+    assert client.get("/design-artifacts.html").text == "legacy design reference"
     assert client.get("/").text == "legacy home"
     assert client.get("/missing.html").status_code == 404
 

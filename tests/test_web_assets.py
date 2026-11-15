@@ -1,43 +1,41 @@
-"""Static guards for the frontend's shared XSS helper (web/common.js).
+"""Static guards for the frontend's XSS posture.
 
-The frontend has no JS test harness, so these cheap checks keep the escaping
-contract from silently rotting: every page must load common.js, and no page
-script may grow back its own (weaker) copy of the helper.
+React escapes everything it renders, so the only way to put unescaped markup on
+the page is to bypass it. These cheap checks keep that door shut: no React source
+may write raw HTML (photo filenames, place and person names all come from the
+library and from user input). If one ever genuinely needs it, sanitise first and
+make the exception explicit here.
 """
 import re
 from pathlib import Path
 
-WEB = Path(__file__).resolve().parents[1] / "src" / "geotagger" / "web"
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "frontend" / "src"
+WEB = ROOT / "src" / "geotagger" / "web"
 
-# design-artifacts.html is a static design reference with no page scripts.
-PAGES = sorted(p for p in WEB.glob("*.html") if p.name != "design-artifacts.html")
-
-
-def test_common_js_defines_quote_safe_escape_helper():
-    src = (WEB / "common.js").read_text(encoding="utf-8")
-    assert "function escapeHtml" in src
-    # Quotes must be escaped: values land inside title="…" attributes.
-    assert '"&quot;"' in src or "&quot;" in src
-    assert "&#39;" in src
+RAW_HTML = re.compile(r"dangerouslySetInnerHTML|\.(inner|outer)HTML\s*=|insertAdjacentHTML")
 
 
-def test_every_page_loads_common_js_before_its_own_scripts():
-    assert PAGES, "no pages found"
-    for page in PAGES:
-        html = page.read_text(encoding="utf-8")
-        # Ignore commented-out tags (a page may park a disabled script in a comment).
-        html = re.sub(r"<!--.*?-->", "", html, flags=re.S)
-        scripts = re.findall(r'<script src="([^"]+)"', html)
-        local = [s for s in scripts if not s.startswith("http")]
-        assert "common.js" in local, f"{page.name} does not load common.js"
-        assert local[0] == "common.js", f"{page.name}: common.js must be the first local script"
+def _sources():
+    return [p for p in SRC.rglob("*") if p.suffix in {".ts", ".tsx"} and p.name != "schema.d.ts"]
 
 
-def test_no_page_script_redefines_the_escape_helper():
-    pattern = re.compile(r"function\s+(escHtml|escapeHtml)\s*\(")
-    for js in WEB.glob("*.js"):
-        if js.name == "common.js":
-            continue
-        assert not pattern.search(js.read_text(encoding="utf-8")), (
-            f"{js.name} defines its own escape helper; use common.js's escapeHtml"
-        )
+def test_frontend_sources_exist():
+    assert _sources(), f"no TypeScript sources under {SRC}"
+
+
+def test_no_frontend_source_writes_raw_html():
+    offenders = [
+        f"{p.relative_to(ROOT)}:{n}"
+        for p in _sources()
+        for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
+        if RAW_HTML.search(line)
+    ]
+    assert not offenders, "raw HTML sink(s): " + ", ".join(offenders)
+
+
+def test_no_legacy_page_scripts_remain():
+    # Every page is a React build now; web/ keeps only the shared theme and the
+    # static design reference. A vanilla-JS page coming back would bypass the
+    # guard above.
+    assert not list(WEB.glob("*.js")), "legacy page scripts are back in web/"

@@ -5,8 +5,10 @@ from geotagger.api import (status, stats, photos, geotag, geocode, places,
                            faces, search, data, work_queue, semantic)
 
 # Road Trip mode is disabled for now: geotagger/api/roadtrip.py and its service
-# still exist, but the router isn't mounted (and the Geocode page doesn't load
-# roadtrip.js/.css). Re-enable by importing roadtrip and adding roadtrip.router.
+# still exist, but the router isn't mounted. Its vanilla-JS UI (web/roadtrip.js/.css)
+# was dropped with the React migration (it's in git history); re-enabling means
+# porting that UI into the Geocode page, then importing roadtrip and adding
+# roadtrip.router.
 ROUTERS = [status.router, stats.router, photos.router, geotag.router,
            geocode.router, places.router, faces.router,
            search.router, data.router, work_queue.router, semantic.router]

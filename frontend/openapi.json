@@ -39,6 +39,52 @@
         "title": "AddManualFaceRequest",
         "type": "object"
       },
+      "AddManualFaceResponse": {
+        "description": "faces_service.add_manual_face.",
+        "properties": {
+          "det_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Det Score"
+          },
+          "embedded": {
+            "title": "Embedded",
+            "type": "boolean"
+          },
+          "face_id": {
+            "title": "Face Id",
+            "type": "integer"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          },
+          "photo_id": {
+            "title": "Photo Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "face_id",
+          "photo_id",
+          "embedded"
+        ],
+        "title": "AddManualFaceResponse",
+        "type": "object"
+      },
       "AssignDateRequest": {
         "properties": {
           "month": {
@@ -942,6 +988,37 @@
         "title": "CreatePlaceResponse",
         "type": "object"
       },
+      "CrowdGroup": {
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "photos": {
+            "items": {
+              "$ref": "#/components/schemas/CrowdPhoto"
+            },
+            "title": "Photos",
+            "type": "array"
+          },
+          "total_faces": {
+            "title": "Total Faces",
+            "type": "integer"
+          },
+          "unlabeled_faces": {
+            "title": "Unlabeled Faces",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "label",
+          "photos",
+          "total_faces",
+          "unlabeled_faces"
+        ],
+        "title": "CrowdGroup",
+        "type": "object"
+      },
       "CrowdIgnoreRequest": {
         "properties": {
           "photo_ids": {
@@ -956,6 +1033,138 @@
           "photo_ids"
         ],
         "title": "CrowdIgnoreRequest",
+        "type": "object"
+      },
+      "CrowdIgnoreResponse": {
+        "properties": {
+          "ignored": {
+            "title": "Ignored",
+            "type": "integer"
+          },
+          "undo": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Undo"
+          }
+        },
+        "required": [
+          "ignored"
+        ],
+        "title": "CrowdIgnoreResponse",
+        "type": "object"
+      },
+      "CrowdPhoto": {
+        "properties": {
+          "come_back_faces": {
+            "title": "Come Back Faces",
+            "type": "integer"
+          },
+          "dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dir"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "ignored_faces": {
+            "title": "Ignored Faces",
+            "type": "integer"
+          },
+          "labeled_faces": {
+            "title": "Labeled Faces",
+            "type": "integer"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FaceLocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "orientation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orientation"
+          },
+          "photo_datetime": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Photo Datetime"
+          },
+          "total_faces": {
+            "title": "Total Faces",
+            "type": "integer"
+          },
+          "unlabeled_faces": {
+            "title": "Unlabeled Faces",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "filename",
+          "total_faces",
+          "labeled_faces",
+          "unlabeled_faces",
+          "ignored_faces",
+          "come_back_faces"
+        ],
+        "title": "CrowdPhoto",
+        "type": "object"
+      },
+      "CrowdsResponse": {
+        "properties": {
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/CrowdGroup"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "photo_count": {
+            "title": "Photo Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "groups",
+          "photo_count"
+        ],
+        "title": "CrowdsResponse",
         "type": "object"
       },
       "DataStatusResponse": {
@@ -1321,6 +1530,34 @@
         "title": "DedupRecomputeResponse",
         "type": "object"
       },
+      "DeleteFaceResponse": {
+        "properties": {
+          "face_id": {
+            "title": "Face Id",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "success",
+          "face_id"
+        ],
+        "title": "DeleteFaceResponse",
+        "type": "object"
+      },
       "DeletePersonResponse": {
         "properties": {
           "id": {
@@ -1509,6 +1746,72 @@
         "title": "FaceBuckets",
         "type": "object"
       },
+      "FaceCluster": {
+        "description": "faces_service.compute_clusters.",
+        "properties": {
+          "face_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Face Ids",
+            "type": "array"
+          },
+          "sample": {
+            "items": {
+              "$ref": "#/components/schemas/FaceItem"
+            },
+            "title": "Sample",
+            "type": "array"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          },
+          "suggestion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FaceSuggestion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "size",
+          "face_ids",
+          "sample"
+        ],
+        "title": "FaceCluster",
+        "type": "object"
+      },
+      "FaceClustersResponse": {
+        "properties": {
+          "clusters": {
+            "items": {
+              "$ref": "#/components/schemas/FaceCluster"
+            },
+            "title": "Clusters",
+            "type": "array"
+          },
+          "grouped": {
+            "title": "Grouped",
+            "type": "integer"
+          },
+          "scanned": {
+            "title": "Scanned",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "clusters",
+          "scanned",
+          "grouped"
+        ],
+        "title": "FaceClustersResponse",
+        "type": "object"
+      },
       "FaceExpect": {
         "properties": {
           "assigned_at": {
@@ -1569,6 +1872,229 @@
         "title": "FaceExpect",
         "type": "object"
       },
+      "FaceItem": {
+        "description": "serializers.face_item, with the recognition fields /api/faces fills in.",
+        "properties": {
+          "alternatives": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/FaceSuggestion"
+            },
+            "title": "Alternatives",
+            "type": "array"
+          },
+          "assigned_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned At"
+          },
+          "bbox": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Bbox",
+            "type": "array"
+          },
+          "come_back": {
+            "title": "Come Back",
+            "type": "boolean"
+          },
+          "come_back_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Come Back At"
+          },
+          "det_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Det Score"
+          },
+          "dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dir"
+          },
+          "filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filename"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "ignored": {
+            "title": "Ignored",
+            "type": "boolean"
+          },
+          "ignored_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ignored At"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FaceLocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "negatives": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Negatives",
+            "type": "array"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          },
+          "person_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Name"
+          },
+          "photo_datetime": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Photo Datetime"
+          },
+          "photo_id": {
+            "title": "Photo Id",
+            "type": "integer"
+          },
+          "suggestion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FaceSuggestion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "photo_id",
+          "bbox",
+          "ignored",
+          "come_back"
+        ],
+        "title": "FaceItem",
+        "type": "object"
+      },
+      "FaceLocation": {
+        "description": "serializers.row_location.",
+        "properties": {
+          "city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "sublocation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sublocation"
+          }
+        },
+        "title": "FaceLocation",
+        "type": "object"
+      },
       "FaceNegativeSnapshot": {
         "properties": {
           "created_at": {
@@ -1608,6 +2134,92 @@
           "negative"
         ],
         "title": "FaceNegativesResponse",
+        "type": "object"
+      },
+      "FacePage": {
+        "description": "_face_page's envelope.",
+        "properties": {
+          "faces": {
+            "items": {
+              "$ref": "#/components/schemas/FaceItem"
+            },
+            "title": "Faces",
+            "type": "array"
+          },
+          "next_offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Offset"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "returned": {
+            "title": "Returned",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "faces",
+          "total",
+          "returned",
+          "offset"
+        ],
+        "title": "FacePage",
+        "type": "object"
+      },
+      "FaceScanStatus": {
+        "properties": {
+          "come_back_faces": {
+            "title": "Come Back Faces",
+            "type": "integer"
+          },
+          "failed_photos": {
+            "title": "Failed Photos",
+            "type": "integer"
+          },
+          "ignored_faces": {
+            "title": "Ignored Faces",
+            "type": "integer"
+          },
+          "remaining_photos": {
+            "title": "Remaining Photos",
+            "type": "integer"
+          },
+          "tagged_faces": {
+            "title": "Tagged Faces",
+            "type": "integer"
+          },
+          "total_faces": {
+            "title": "Total Faces",
+            "type": "integer"
+          },
+          "unlabeled_faces": {
+            "title": "Unlabeled Faces",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "remaining_photos",
+          "failed_photos",
+          "total_faces",
+          "unlabeled_faces",
+          "ignored_faces",
+          "come_back_faces",
+          "tagged_faces"
+        ],
+        "title": "FaceScanStatus",
         "type": "object"
       },
       "FaceSnapshot": {
@@ -1705,6 +2317,36 @@
         "title": "FaceStateSnapshot",
         "type": "object"
       },
+      "FaceSuggestion": {
+        "description": "A recognition guess: the person and the match score (a cluster's\nsuggestion scores the share of the group that voted for them).",
+        "properties": {
+          "person_id": {
+            "title": "Person Id",
+            "type": "integer"
+          },
+          "person_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Name"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          }
+        },
+        "required": [
+          "person_id",
+          "score"
+        ],
+        "title": "FaceSuggestion",
+        "type": "object"
+      },
       "FacesByIdsRequest": {
         "properties": {
           "face_ids": {
@@ -1720,6 +2362,30 @@
           "face_ids"
         ],
         "title": "FacesByIdsRequest",
+        "type": "object"
+      },
+      "FacesByIdsResponse": {
+        "properties": {
+          "faces": {
+            "items": {
+              "$ref": "#/components/schemas/FaceItem"
+            },
+            "title": "Faces",
+            "type": "array"
+          },
+          "missing": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Missing",
+            "type": "array"
+          }
+        },
+        "required": [
+          "faces",
+          "missing"
+        ],
+        "title": "FacesByIdsResponse",
         "type": "object"
       },
       "FacesMonthsResponse": {
@@ -3317,6 +3983,30 @@
         "title": "NegativeFacesRequest",
         "type": "object"
       },
+      "NukeFacesResponse": {
+        "description": "faces_service.nuke_photo_faces.",
+        "properties": {
+          "faces_deleted": {
+            "title": "Faces Deleted",
+            "type": "integer"
+          },
+          "files_deleted": {
+            "title": "Files Deleted",
+            "type": "integer"
+          },
+          "photos": {
+            "title": "Photos",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "photos",
+          "faces_deleted",
+          "files_deleted"
+        ],
+        "title": "NukeFacesResponse",
+        "type": "object"
+      },
       "NukePhotoFacesRequest": {
         "properties": {
           "photo_ids": {
@@ -3992,6 +4682,111 @@
         "title": "PhotoDetailLocation",
         "type": "object"
       },
+      "PhotoFace": {
+        "description": "One face of /api/photos/{id}/faces (no photo fields: they're the page's).",
+        "properties": {
+          "assigned_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned At"
+          },
+          "bbox": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Bbox",
+            "type": "array"
+          },
+          "come_back": {
+            "title": "Come Back",
+            "type": "boolean"
+          },
+          "det_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Det Score"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "ignored": {
+            "title": "Ignored",
+            "type": "boolean"
+          },
+          "negatives": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Negatives",
+            "type": "array"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          },
+          "person_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Name"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "suggestion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FaceSuggestion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "bbox",
+          "ignored",
+          "come_back",
+          "negatives"
+        ],
+        "title": "PhotoFace",
+        "type": "object"
+      },
       "PhotoPlace": {
         "properties": {
           "city": {
@@ -4040,6 +4835,54 @@
           }
         },
         "title": "PhotoPlace",
+        "type": "object"
+      },
+      "PhotoTaggedPerson": {
+        "properties": {
+          "assigned_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned At"
+          },
+          "bbox": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Bbox",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "person_id": {
+            "title": "Person Id",
+            "type": "integer"
+          },
+          "person_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Name"
+          }
+        },
+        "required": [
+          "id",
+          "person_id",
+          "bbox"
+        ],
+        "title": "PhotoTaggedPerson",
         "type": "object"
       },
       "PhotosByIdsRequest": {
@@ -4530,6 +5373,53 @@
           "requeued"
         ],
         "title": "RequeuedResponse",
+        "type": "object"
+      },
+      "RescanFacesResponse": {
+        "description": "faces_service.rescan_photo_faces: the nuke counts plus the scan batch's.",
+        "properties": {
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "faces_deleted": {
+            "title": "Faces Deleted",
+            "type": "integer"
+          },
+          "faces_found": {
+            "title": "Faces Found",
+            "type": "integer"
+          },
+          "files_deleted": {
+            "title": "Files Deleted",
+            "type": "integer"
+          },
+          "orientations_updated": {
+            "title": "Orientations Updated",
+            "type": "integer"
+          },
+          "photos": {
+            "title": "Photos",
+            "type": "integer"
+          },
+          "processed": {
+            "title": "Processed",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "photos",
+          "faces_deleted",
+          "files_deleted",
+          "processed",
+          "faces_found",
+          "errors",
+          "orientations_updated"
+        ],
+        "title": "RescanFacesResponse",
         "type": "object"
       },
       "ResetSettingsRequest": {
@@ -6675,6 +7565,22 @@
         "title": "WorkQueueResponse",
         "type": "object"
       },
+      "YearsResponse": {
+        "properties": {
+          "years": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Years",
+            "type": "array"
+          }
+        },
+        "required": [
+          "years"
+        ],
+        "title": "YearsResponse",
+        "type": "object"
+      },
       "ZctaSource": {
         "additionalProperties": true,
         "properties": {
@@ -6817,7 +7723,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CrowdsResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6854,7 +7762,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CrowdIgnoreResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7499,7 +8409,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FacePage"
+                }
               }
             },
             "description": "Successful Response"
@@ -7575,7 +8487,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FacesByIdsResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7698,7 +8612,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FaceClustersResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7946,7 +8862,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/NukeFacesResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7983,7 +8901,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RescanFacesResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -8102,7 +9022,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FaceScanStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -8179,7 +9101,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteFaceResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -10455,7 +11379,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PhotoFace"
+                  },
+                  "title": "Response Api Photo Faces Api Photos  Photo Id  Faces Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -10501,7 +11431,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AddManualFaceResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -10627,7 +11559,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PhotoTaggedPerson"
+                  },
+                  "title": "Response Api Photo Tagged People Api Photos  Photo Id  Tagged People Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -11962,7 +12900,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/YearsResponse"
+                }
               }
             },
             "description": "Successful Response"

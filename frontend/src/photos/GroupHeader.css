@@ -23,3 +23,9 @@
 /* Staged, not-yet-saved groups (face-grid.css .amber, via the warn family). */
 .face-group-header.amber { background: var(--warn-bg); border-bottom-color: var(--warn); }
 .face-group-header.amber .face-group-label { color: var(--warn); }
+.face-group-header.green { background: var(--surface-2); border-bottom-color: var(--success); }
+.face-group-header.green .face-group-label { color: var(--success); }
+.face-group-header.blue { background: var(--accent-bg-2); border-bottom-color: var(--accent-bg); }
+.face-group-header.blue .face-group-label { color: var(--accent-text); }
+.face-group-header.grey { background: var(--surface-1); border-bottom-color: var(--surface-btn); }
+.face-group-header.grey .face-group-label { color: var(--text-muted); }

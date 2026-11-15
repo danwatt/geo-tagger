@@ -17,7 +17,7 @@ export type FaceMenuItem = {
   disabled?: boolean;
 };
 
-export function FaceActionsMenu({ anchor, label, items, onClose, point, heading }: {
+export function FaceActionsMenu({ anchor, label, items, onClose, point, heading, sheet }: {
   anchor: HTMLElement;
   label: string;
   items: FaceMenuItem[];
@@ -27,6 +27,9 @@ export function FaceActionsMenu({ anchor, label, items, onClose, point, heading 
   point?: { x: number; y: number };
   /** A non-interactive first line naming the target (Geocode's photo menu). */
   heading?: string;
+  /** Bottom sheet over a backdrop instead of a popup (narrow / touch screens:
+   *  Quick Tag on a phone). Same items, larger tap targets. */
+  sheet?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
@@ -37,6 +40,10 @@ export function FaceActionsMenu({ anchor, label, items, onClose, point, heading 
   // leave the viewport.
   const px = point?.x, py = point?.y;
   useLayoutEffect(() => {
+    if (sheet) {
+      ref.current?.querySelector<HTMLElement>("[role=menuitem]:not([disabled])")?.focus();
+      return;
+    }
     const m = ref.current?.getBoundingClientRect();
     const w = m?.width ?? 200, h = m?.height ?? 200;
     let left: number, top: number;
@@ -51,7 +58,7 @@ export function FaceActionsMenu({ anchor, label, items, onClose, point, heading 
     }
     setPos({ left, top });
     ref.current?.querySelector<HTMLElement>("[role=menuitem]:not([disabled])")?.focus();
-  }, [anchor, px, py]);
+  }, [anchor, px, py, sheet]);
 
   useEffect(() => {
     const onDown = (e: PointerEvent) => {
@@ -76,9 +83,12 @@ export function FaceActionsMenu({ anchor, label, items, onClose, point, heading 
     } else if (e.key === "Tab") { close(); }
   }
 
+  const style = sheet ? undefined : pos ? { left: pos.left, top: pos.top } : { visibility: "hidden" as const };
   return (
-    <div ref={ref} className="face-expand" role="menu" aria-label={label} onKeyDown={onKeyDown}
-      style={pos ? { left: pos.left, top: pos.top } : { visibility: "hidden" }}>
+    <>
+    {sheet && <div className="face-qa-backdrop" aria-hidden="true" />}
+    <div ref={ref} className={`face-expand${sheet ? " as-sheet" : ""}`} role="menu" aria-label={label} onKeyDown={onKeyDown}
+      style={style}>
       {heading && <div className="face-expand-heading" title={heading}>{heading}</div>}
       {items.map((it) => (
         <button key={it.label} type="button" role="menuitem" title={it.title} disabled={it.disabled}
@@ -88,5 +98,6 @@ export function FaceActionsMenu({ anchor, label, items, onClose, point, heading 
         </button>
       ))}
     </div>
+    </>
   );
 }
